@@ -200,9 +200,10 @@ Collision follows a turned mover: the hash and the brush queries take ABrush
 ToWorld of `collisionValues`, whose Location and Rotation read the live pose.
 The renderer poses a rotated mover's group with `brushMatrix` of the live
 Location and Rotation, and keeps the translation-only offset path for
-movers at their authored rotation. Moving lights (`moving-lights.mjs`) still
-receive only a mover's translation; on a rotated mover they light the
-authored orientation, and the world notes say so.
+movers at their authored rotation. A mover's light maps, and the moving
+lights on them (`moving-lights.mjs`), follow its live pose since 2026-10-28:
+SetupForSurf's cache header builds them again on the brush tracker's facet
+([static lighting](static-lighting.md#mover-surfaces-in-setupforsurf-2026-10-17)).
 
 ### Validation
 

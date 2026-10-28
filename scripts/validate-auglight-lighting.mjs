@@ -23,9 +23,14 @@ const assets = new AssetStore(files), asset = await assets.get('00_Training'), m
 const world = await createWorld(map, asset, assets);
 const game = await createGame(map, asset, assets, { randomSeed: 1, onLightingChanged: changes => world.updateLighting(changes) });
 const input = createPlayerInputFixture(game, { tickSeconds: 1 / 120 });
-// Play's mover states (sim-session.mjs): name and collider offset.
-const frame = () => world.syncMovingLights(game.movingLights(),
-  game.collision.movers.map(mover => ({ name: mover.name, offset: mover.collider.offset })));
+// Play's mover states (sim-session.mjs movers) place the movers and their light maps (no tracker here: brush matrices)
+// before the moving lights.
+const frame = () => {
+  world.syncMovers(game.collision.movers.map(mover => ({ name: mover.name, values: mover.values, position: [...mover.position],
+    rotation: mover.rotation ? [...mover.rotation] : null, offset: [...mover.collider.offset] })));
+  world.relightMovers(null);
+  return world.syncMovingLights(game.movingLights());
+};
 
 input.tick(60);
 const before = game.movingLights();

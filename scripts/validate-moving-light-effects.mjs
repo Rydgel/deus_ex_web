@@ -85,7 +85,10 @@ synthetic.forEach((light, k) => Object.assign(light, { levelBrightness, flickerK
 const frameCount = Number(flag('frames', 8));
 const times = [2.5, 2.5 + 1 / 60, 2.5 + 2 / 60, 2.5 + 2 / 60, 9.25, 9.25 + 1 / 35, 9.25 + 2 / 35, 30.125].slice(0, frameCount).map(f);
 const noise = createLightNoise(createNativeRng(0x5ca1ab1e).frand);
-const movers = game.collision.movers.map(mover => ({ name: mover.name, offset: mover.collider.offset }));
+// Play's mover states (sim-session.mjs movers), placed with their light maps (no tracker here: brush matrices).
+world.syncMovers(game.collision.movers.map(mover => ({ name: mover.name, values: mover.values, position: [...mover.position],
+  rotation: mover.rotation ? [...mover.rotation] : null, offset: [...mover.collider.offset] })));
+world.relightMovers(null);
 const frames = [];
 for (const [frameIndex, timeSeconds] of times.entries()) {
   noise.update(timeSeconds);
@@ -93,7 +96,7 @@ for (const [frameIndex, timeSeconds] of times.entries()) {
   const lights = [...authored, ...synthetic.map(light => ({ ...light,
     values: light.turn ? { ...light.values, Rotation: [-6000, (frameIndex * 1638) & 0xffff, 0] } : light.values }))];
   world.beginLightFrame({ timeSeconds, noise: snapshot });
-  world.syncMovingLights(lights, movers);
+  world.syncMovingLights(lights);
   frames.push(frameData({ time: timeSeconds, A: snapshot.A, W: snapshot.W, lights, records: world.movingLightRecords() }));
 }
 const native = runChain(root, { levelBrightness, frames });

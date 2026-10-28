@@ -76,6 +76,10 @@ if(lightKernelParam)globalThis.DEUS_EX_LIGHT_KERNEL=lightKernelParam;
 // (moving-lights.mjs); ?movingLights=full keeps the whole-frame recompute.
 const movingLightsParam=new URLSearchParams(location.search).get('movingLights');
 if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
+// Measurement only: ?moverRelight=off keeps every mover's light maps as the
+// world built them (no SetupForSurf cache header, world.relightMovers), the
+// A arm of its cost (docs/static-lighting.md "Mover surfaces in SetupForSurf").
+const moverRelight=new URLSearchParams(location.search).get('moverRelight')!=='off';
 // The render scan (script-vm-render.mjs) filters Level.Actors in Rust for
 // the moving lights, sprites, mesh admission and Galaxy's ambient scan;
 // ?renderScan=js keeps the JavaScript loops, ?renderScan=verify checks every
@@ -2396,10 +2400,22 @@ function drawFrame(snap, time) {
   // Without listed polygons, the light maps in the main frustum or a camera's.
   const lightFrustum = frameSurfaces && drawnLightMaps ? null
     : viewFrustum && viewportPasses.length ? [viewFrustum, ...viewportPasses.map(viewportFrustum)] : viewFrustum;
+  // The time so far stays the light animation's; `lighting` is the movers' light-map rebuild.
+  phase('lightAnimation');
+  // SetupForSurf's static cache header for the movers' light maps (docs/static-lighting.md "Mover surfaces in
+  // SetupForSurf"): the polygons every pass draws, on the brush tracker's facets (null without the tracker: every mover at
+  // its brush matrix), before their moving lights.
+  if (visible && moverRelight) {
+    const passItems = pass => [pass.moverItems, ...(pass.frames ?? []).map(child => child.moverItems)];
+    const lists = [visible, ...viewportPasses.map(command => command.pass.visibility).filter(Boolean)].flatMap(passItems);
+    try { world.relightMovers(visible.moverItems ? lists.filter(Boolean).flat() : null); }
+    catch (error) { pauseForRuntimeError(error); }
+  }
+  phase('lighting');
   // The frame's moving lights (docs/dynamic-lighting.md), on the drawn light
   // maps, before the texture animation that shares their light frame.
   if (playing && frame?.lights) {
-    try { world.syncMovingLights(frame.lights, frame.movers, { frustum: lightFrustum, drawn: drawnLightMaps }); }
+    try { world.syncMovingLights(frame.lights, { frustum: lightFrustum, drawn: drawnLightMaps }); }
     catch (error) { pauseForRuntimeError(error); }
   }
   // The worker's snapshot animates textures at its frame's post time;

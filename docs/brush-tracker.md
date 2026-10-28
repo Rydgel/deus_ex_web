@@ -271,6 +271,13 @@ draw item in a bFogZone zone gets its own fog map over its tracker
 surface's lattice (`surfaceFacet`), drawn over that item's fragments
 (`nodePolygon`; [volumetric fog](volumetric-fog.md), "Play").
 
+**Light maps (2026-10-28).** SetupForSurf's static cache header (Region.iLeaf,
+Location, Rotation) is compared for every brush-tracker surface it draws; on a
+miss, the light map is built again on the facet DrawFrame takes from the
+tracker. `world.relightMovers` does this for each mover draw item of every
+pass, on `surfaceFacet`
+([static lighting](static-lighting.md#mover-surfaces-in-setupforsurf-2026-10-17), "Every mover").
+
 **Line checks (2026-10-16).** Every `UModel::FastLineCheck` of the game reads `XLevel->Model`, so the fragments block
 those lines as they block the renderer's: CheckHearSound's sound obstruction, MakeNoise, FastTrace, the pawn natives and
 Galaxy's occlusion in Update. sim-host.mjs gives the level's model `trackedLineNodes()` while the tracker lives (the node

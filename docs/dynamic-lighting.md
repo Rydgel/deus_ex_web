@@ -173,17 +173,24 @@ contributions, added in light order with `min(127/255, texel + addend)` into a
 float. The incremental mode keeps, per light (by name), the signature of its
 location, light fields and level brightness, its contribution and the records
 it reaches. A light map is recomposed only when a contribution it had or now
-has changes: a light changed, appeared or left, or the mover owning a brush
-light map changed its offset. The recomposition re-adds every contribution of
+has changes: a light changed, appeared or left, or a brush light map was
+placed again (its mover's cache header changed: lighting.mjs `takeReposed`,
+[static lighting](static-lighting.md#mover-surfaces-in-setupforsurf-2026-10-17)).
+Brush light maps take the facet and grid their static texels were built on
+(`geometryFor`); until 2026-10-28 they took the authored facet plus the mover's
+offset, read once from the live group matrix, which counted the offset twice
+for a light map first reached after its mover moved and kept a turned mover's
+authored orientation. The recomposition re-adds every contribution of
 that light map in the same light order, so its float operations are the full
 mode's. Each contribution also caches its per-texel addends, so an unchanged
 light's addends are re-added without evaluating the spatial function again;
 a light that leaves and comes back unchanged (the flicker) gets its cached
-contribution back, unless a mover moved meanwhile. If the remaining lights
+contribution back, unless a brush light map was placed again meanwhile. If the remaining lights
 change their relative order, every light map is recomputed, as before.
 
 `scripts/validate-moving-lights-incremental.mjs` runs both modes on two worlds
-of one map with the same lights and mover offsets every frame, and requires
+of one map with the same lights and mover states every frame (syncMovers and
+relightMovers place the brush light maps), and requires
 identical moving light maps, float texels, static copies, moving regions and
 light-atlas bytes after every frame. Workloads: Training with the original
 AugLight path (F12) while turning, and Island and Airfield with their authored
@@ -424,9 +431,11 @@ memory.
 * The 2048-surface `NumDynLightSurfs` cap and its traversal order.
 * The light-map grid (start and steps) comes from `lightmapBasis`, not from
   `FCoords::Inverse`; the oracle compares the spatial body on identical grids.
-* Mover polygons: the brush tracker's insertion into the level BSP is not
-  recovered. Mover light maps take Filter's straddle test on their own plane,
-  follow translation offsets only, and use a float facet.
+* Mover polygons: the brush tracker is recovered ([brush tracker](brush-tracker.md)),
+  but FDynamicLight::Filter does not walk its fragment nodes yet: mover light
+  maps take Filter's straddle test on their own plane. Their facet is the one
+  their static texels were built on, the tracker's when drawn
+  ([static lighting](static-lighting.md#mover-surfaces-in-setupforsurf-2026-10-17)).
 * What effects the shipped content reaches, on which kind of light, and which are not
   reached: [light effects](light-effects.md).
 * Class 2 lights use the original bodies for every effect the shipped content

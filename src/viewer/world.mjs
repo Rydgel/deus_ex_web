@@ -49,7 +49,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   // Identity, never moved: no auto-update cascade (main.mjs, the scene).
   root.matrixAutoUpdate = false;
-  const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map(), rotatedMovers = new Set();
+  const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   // The script-VM kernel runs the animated light-map merge (light.rs) and
   // the volumetric fog loop (fog.rs) when it loads.
   let scriptKernel = null;
@@ -367,9 +367,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       root.add(group);
       if (values.bDynamicLightMover) lighting.dynamicLightMover(actor.name, { specialLit: values.bSpecialLit });
       await addModel(model, triangles, group, actor.name, group.matrix);
-      // Its light maps start from the leaf SetActorZone gives its authored Location; Play's frames then send Region.iLeaf.
+      // A bDynamicLightMover's light maps start from the leaf SetActorZone gives its authored Location; Play's frames then
+      // send Region.iLeaf. An ordinary mover's were built at the authored place, with no leaf in their header (relightMovers).
       if (values.bDynamicLightMover) relightMover(actor.name, pointRegion(map.model, actor.values.Location, {}, []).leaf,
         actor.values.Location, actor.values.Rotation ?? [0, 0, 0], group.matrix);
+      else lighting.markMoverHeader(actor.name, -1, actor.values.Location, actor.values.Rotation ?? [0, 0, 0]);
       // The group's and its meshes' world matrices now; syncMovers redoes
       // this on a change (nothing cascades from the root).
       group.updateMatrixWorld(true);
@@ -420,17 +422,25 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
     return { ...update, uploaded: update.lightmaps.length };
   }
-  /** A bDynamicLightMover's light maps at its pose (lighting.mjs relightMover) when its leaf, Location or Rotation
-   * changed; `matrix` is its brush matrix in three's axes. The rebuilt tiles upload on the next flushLighting. */
+  /** A mover's light maps at its pose (lighting.mjs relightMover) when its leaf, Location or Rotation changed; `matrix` is
+   * its brush matrix in three's axes. The rebuilt tiles upload on the next flushLighting. */
   function relightMover(name, leaf, location, rotation, matrix) {
-    if (!lighting.moverHeaderChanged(name, leaf, location, rotation)) return;
+    if (!lighting.moverHeaderChanged(name, leaf, location, rotation)) return 0;
     const placed = matrix.clone(), normal = new THREE.Matrix3().getNormalMatrix(placed);
     const records = lighting.relightMover(name, { leaf, location, rotation,
       transform: p => fromView(new THREE.Vector3(...toView(p)).applyMatrix4(placed).toArray()),
       transformNormal: n => fromView(new THREE.Vector3(...toView(n)).applyMatrix3(normal).toArray()) });
     for (const record of records) lightAtlas.update(record, { partial: true });
+    return records.length;
   }
   const moverMatrix = new THREE.Matrix4(), NO_ROTATION = Object.freeze([0, 0, 0]);
+  // Each mover's state from the last syncMovers (sim-session.mjs movers), whose leaf, Location and Rotation are the cache
+  // header SetupForSurf compares (relightMovers).
+  const moverStates = new Map(), moverLighting = { rebuilt: 0, ms: 0, calls: 0, totalRebuilt: 0, totalMs: 0 };
+  /** A mover state's cache header words: Region.iLeaf (sent for a bDynamicLightMover only; an ordinary mover's rebuild reads
+   * no leaf, and SetActorZone gives a new leaf only with a new Location, so −1 stands for it), Location and Rotation. */
+  const moverHeader = mover => ({ leaf: mover.leaf ?? -1, location: mover.position,
+    rotation: mover.rotation ?? mover.values?.Rotation ?? NO_ROTATION });
   // The vertices a mover's meshes project (docs/frame-projection.md "Movers"),
   // in Unreal's axes: the brush tracker's points once the simulation sends
   // them (`setMoverPoints`), else the group matrix's product with the rest
@@ -482,20 +492,43 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
-        if (moverGroupMatrix(mover, group.userData.baseMatrix, moverMatrix) && !rotatedMovers.has(mover.name)) {
-          rotatedMovers.add(mover.name);
-          const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
-          if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
-        }
-        // A bDynamicLightMover's state carries its Region.iLeaf (sim-session.mjs).
-        if (mover.leaf !== undefined) relightMover(mover.name, mover.leaf, mover.position, mover.rotation ?? mover.values.Rotation ?? NO_ROTATION,
-          moverMatrix);
+        moverGroupMatrix(mover, group.userData.baseMatrix, moverMatrix);
+        moverStates.set(mover.name, mover);
         if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
         group.matrix.copy(moverMatrix);
         group.updateMatrixWorld(true);
         if (!trackedMovers || !trackerVertices) poseFromMatrix(group);
       }
     },
+    /** SetupForSurf's static cache header for the movers' light maps (docs/static-lighting.md "Mover surfaces in
+     * SetupForSurf"), against each mover's last syncMovers state. With the brush tracker, `items` are the frame's mover
+     * draw items, every pass's (sim-session.mjs moverItems): SetupForSurf runs for drawn surfaces only, so a drawn
+     * polygon whose header differs is built again on the facet the tracker holds for it. Without it (`items` null),
+     * every mover whose header differs is built again at its brush matrix. The rebuilt tiles upload on the next
+     * flushLighting. Returns how many light maps were built again. */
+    relightMovers(items) {
+      const start = performance.now();
+      let rebuilt = 0;
+      if (items) {
+        for (const item of items) {
+          const mover = item.facet ? moverStates.get(item.mover) : null;
+          if (!mover) continue;
+          const records = lighting.relightPolygon(item.mover, item.polygon, { ...moverHeader(mover), facet: item.facet });
+          for (const record of records) lightAtlas.update(record, { partial: true });
+          rebuilt += records.length;
+        }
+      } else {
+        for (const [name, mover] of moverStates) {
+          const group = moverGroups.get(name), { leaf, location, rotation } = moverHeader(mover);
+          if (group) rebuilt += relightMover(name, leaf, location, rotation, group.matrix);
+        }
+      }
+      moverLighting.rebuilt = rebuilt; moverLighting.ms = performance.now() - start;
+      moverLighting.calls++; moverLighting.totalRebuilt += rebuilt; moverLighting.totalMs += moverLighting.ms;
+      return rebuilt;
+    },
+    /** The last relightMovers (light maps built again, ms) and the sums over every call (measurement). */
+    moverLighting,
     /** Validation (main.mjs moverVertexProbe): for each `{name, points}` mover, how many mesh vertices
      * hold exactly the tracker's point (as float bits), the largest distance of a vertex from the group
      * matrix's product with its rest position, and the number of vertices. */
@@ -576,15 +609,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       lightFrameBegun = simFed = true;
       return lightFrame;
     },
-    /** Play's per-frame moving lights (game.movingLights()) over the current
-     * mover offsets, with this frame's light animation inputs when
-     * beginLightFrame supplied them; with `drawn` (the level surfaces
-     * OccludeBsp's frame draws) or a `frustum`, the light maps not drawn
-     * wait. Changed tiles upload on the next flushLighting. */
-    syncMovingLights(lights, movers = [], { frustum = null, drawn = null } = {}) {
+    /** Play's per-frame moving lights (game.movingLights()) over the mover
+     * light maps where relightMovers placed them, with this frame's light
+     * animation inputs when beginLightFrame supplied them; with `drawn` (the
+     * level surfaces OccludeBsp's frame draws) or a `frustum`, the light maps
+     * not drawn wait. Changed tiles upload on the next flushLighting. */
+    syncMovingLights(lights, { frustum = null, drawn = null } = {}) {
       // `frustum` may be a list (the main frame's and a ViewportWindow
       // frame's): a light map in any of them is drawn.
-      const offsets = new Map(movers.map(mover => [mover.name, mover.offset]));
       // The drawn light maps, as for the light animation below.
       const visible = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
         : frustum ? record => record.owner || inFrustum(frustum, record) : null;
@@ -592,7 +624,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // (brush light maps are always drawn).
       const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
       if (drawn) for (const surfaceIndex of drawn) for (const record of lighting.recordsFor(map.model, surfaceIndex)) drawnRecords.push(record);
-      const changed = movingLights.update(lights, offsets, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
+      const changed = movingLights.update(lights, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
       for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
       return { lightmaps: changed.length, surfaces: movingLights.surfaces };

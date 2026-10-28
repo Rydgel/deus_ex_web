@@ -268,12 +268,11 @@ That leaf has 17 permeating lights, among them Light55 at (40, −1201, −88).
   ([mover move](mover-move.md)). No script writes bDynamicLightMover:
   Mover.uc only declares it. So the flag is read once, from the actor's
   values.
-- **Rebuild.** `world.syncMovers` hands each such mover's leaf, Location,
-  Rotation and current brush matrix to `relightMover`. It rebuilds the
-  mover's light maps when that header differs from the last build's. The
-  light list is the leaf's permeating lights that pass the facet test (the
-  facet from the current matrix) and the bSpecialLit test. They are merged
-  with `staticLightMap` with no shadow bits, so the illumination is `0x7f`.
+- **Rebuild.** A light map whose header differs from the mover's leaf,
+  Location and Rotation is built again (`world.relightMovers`, below "Every
+  mover"). The light list is the leaf's permeating lights that pass the facet
+  test and the bSpecialLit test. They are merged with `staticLightMap` with
+  no shadow bits, so the illumination is `0x7f`.
 - **Before the first frame.** The world build starts each such mover at the
   leaf of `PointRegion(Location)`, which is what SetActorZone gives it at
   begin play. Inspect, which has no simulation, keeps that.
@@ -313,17 +312,104 @@ Evidence:
     maps are the page's in both). Only the holder drew, at texel 0, so pure
     black.
 
+**Every mover (2026-10-28).** The cache header holds for every brush-tracker
+surface, so an ordinary mover's light maps are built again too. The rebuild
+is the static path above: the brush's own light list from `iLightActors`,
+with its shadow masks, at the facet's current world place. The masks stay the
+ones the editor computed at the authored place; the original does not
+recompute them either.
+- **One header per light map.** Each mover light map (a `lighting.mjs` record)
+  keeps the header it was built for, as each cache item does. The world build
+  builds them at the authored place, under the authored header
+  (`markMoverHeader`).
+- **Leaf word.** The simulation sends Region.iLeaf only for a
+  bDynamicLightMover. For an ordinary mover the word stays −1: its rebuild
+  reads no leaf, and SetActorZone takes the leaf from PointRegion(Location),
+  so a new leaf never comes without a new Location.
+- **Drawn polygons, on the tracker's facets.** SetupForSurf runs only for
+  drawn surfaces, and DrawFrame's facet is the brush tracker's: SetupDynamics
+  updates a moved mover before OccludeBsp ([brush tracker](brush-tracker.md)).
+  - Every frame, `world.relightMovers` takes the mover draw items of every
+    pass: the main frame, its child frames (with child frames on) and the
+    ViewportWindow passes (`sim-session.mjs` `moverItems`, each with the
+    tracker's `surfaceFacet`).
+  - A drawn polygon whose mover's state differs from its light map's header
+    is built again on that facet (`relightPolygon`). The grid is
+    `lightmapBasis` on the facet, as the fog pass builds its lattice (checked
+    against the running original on the Ship's lockers,
+    [volumetric fog](volumetric-fog.md)).
+  - A light map still on its load-time transform is built again on its facet
+    when first drawn, as the original builds its first cache item from the
+    facet.
+- **Without the tracker** (`?moverTracker=off`), every mover whose header
+  differs is built again at its brush matrix (`relightMover`). Inspect keeps
+  the load-time maps. bDynamicLightMover movers take the same two paths, with
+  their lights from the leaf.
+- **Moving lights** use the facet and grid the static texels were built on
+  (`geometryFor`), and recompose the light maps placed again
+  (`takeReposed`). They used to take the authored facet plus the mover's
+  offset, read once from the live group matrix: a light map first reached
+  after its mover moved counted the offset twice, and a turned mover kept its
+  authored orientation.
+- `?moverRelight=off` skips the rebuild; it exists only as the A arm of the
+  cost measurement.
+
+Evidence:
+- `validate-mover-light-maps` (Node: the map data and the Rust tracker) on
+  Training Combat's DeusExMover26, a door slid by KeyPos[1] (0, −56, 0), 6
+  light maps with 9 listed lights, and Ship Fan's DeusExMover1, a fan turned
+  by 5000 yaw units, 48 light maps with 392 listed lights:
+  - the authored header builds nothing again;
+  - at the new pose every light map is built again, lists the brush's
+    lights, and equals a cold build at that pose bit for bit (2 of 6 and 16
+    of 48 change with the pose); back at the authored pose they equal the
+    authored build;
+  - the tracker's facets after Update at PC24 lie within 5.9e−7 (door) and
+    3.7e−5 units (fan) of the matrix pose and give the same texels; the same
+    header and facet build nothing again, and a new Location does;
+  - a probe moving light composes the texels of a cold build at the new pose,
+    whether it lit the mover before the move or only after it.
+- The moving lights before this change (`git show 5e516ab8:src/viewer/moving-lights.mjs`),
+  under `world.mjs`'s live group matrix: for the door slid first and lit after,
+  the facet was already at y −56 and the offset was added again; 5 of its 6
+  light maps differed from the cold build.
+- `validate-mover-light-maps-play` (Chromium, worker mode):
+  - The door, seen face on: its drawn light map is built on its tracker facet
+    under the authored header. Slid by KeyPos[1], it is built again once, on a
+    facet moved by (0, −56, 0), and its texels change. Back at the authored
+    Location, it equals the settled texels.
+  - The fan spins on its own (RotationRate, bFixedRotationDir): 36 of its 48
+    light maps were built on facets; 167 were built again over 70 frames, at
+    most 10 in one.
+- `validate-dynamic-light-mover`, `validate-moving-lights-incremental`,
+  `validate-auglight-lighting`, `validate-moving-light-effects`,
+  `validate-light-spatial`, `validate-texel-sphere` and
+  `validate-scene-matrices` pass.
+- Cost, measured on the Linux host (Chromium, worker mode, 1440×960). The
+  view faced Ship Fan's spinning DeusExMover1 from 200 units. Runs were 4
+  interleaved pairs of 600 frames, against `?moverRelight=off`.
+  - The rebuild's own phase (`lighting` in `framePhases`) is 0.41 ms per frame
+    median, against 0.001.
+  - The page's total is 7.37 against 7.22 ms median, inside the runs' spread
+    (5.3 to 8.3 ms).
+  - A rebuilt light map costs about 0.055 ms (the Play check: 167 over 70
+    frames, 0.13 ms per frame).
+  - A door costs this only on the frames it moves. A spinning fan in view
+    costs it every frame, as in the original. The rebuild is JavaScript
+    (`staticLightMap`); the Rust core is where it would move if a measured
+    view needs it.
+- Not compared with the original game for these movers: no Wine capture of a
+  moving door's or fan's light map was taken. The contract is the listing
+  above.
+
 Open:
-- **Ordinary movers.** The cache header applies to every mover. A mover
-  without the flag rebuilds its static map from its brush list (with shadow
-  masks) wherever it moves. Play still builds those once, at the authored
-  place.
 - **Zone ambient.** A mover's zone (the ambient and the cache ID's zone byte)
-  is still the zone of its brush centre at the authored place. The draw
-  item's zone comes from the brush tracker's node, which is not recovered.
-- **Rotated movers.** Moving lights on a rotated mover keep its authored
-  orientation, as before. The rebuilt static map uses the full current
-  matrix.
+  is still the zone of its brush centre at the authored place, one light map
+  per polygon. The draw items carry the tracker node's zone (`moverItems`
+  `zone`), which a polygon drawn in two zones would need as two cache items.
+- **Child frames.** Without child frames on, the mirror and sky passes have no
+  draw items, so a mover polygon drawn only in a mirror waits for the main
+  frame or a ViewportWindow to draw it.
 - **Class and leaf −1.** A class 2 light in a leaf's list is left out with a
   note, as for static lists. The moving lights (`moving-lights.mjs`) do not
   yet treat a bDynamicLightMover's Actor-set AddLight (every light class 2)

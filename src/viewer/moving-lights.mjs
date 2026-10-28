@@ -3,7 +3,7 @@ import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLight
 import { lightTypeBrightness, spotLightSpatial } from '../runtime/static-lighting.mjs';
 import { fcoordsAxes } from '../runtime/script-pawn-locomotion.mjs';
 
-const MAX = 127 / 255, ORIGIN = [0, 0, 0], TWO_52 = 4503599627370496, f = Math.fround;
+const MAX = 127 / 255, TWO_52 = 4503599627370496, f = Math.fround;
 // The effect table at 0x10b2a0f0 (docs/static-lighting.md): the normal body
 // 0x10b03360 for None, the three wavers, Warp and Unused; the spot body
 // 0x10b04f80 for StaticSpot and Spotlight; NonIncidence 0x10b054e0; Shell
@@ -17,7 +17,6 @@ const MODULATED = new Set([1, 2, 3]);
 // LightTypes GlobalLighting leaves at the brightness: Steady (0x10b05a00 is
 // `ret`), BackdropLight, and the untranslated texture-palette types.
 const STEADY_TYPES = new Set([1, 6, 8, 9]);
-const add = (a, b) => a.map((v, i) => v + b[i]);
 const union = rects => rects.length ? {
   minU: Math.min(...rects.map(r => r.minU)), maxU: Math.max(...rects.map(r => r.maxU)),
   minV: Math.min(...rects.map(r => r.minV)), maxV: Math.max(...rects.map(r => r.maxV)) } : null;
@@ -36,7 +35,7 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
  * the effect row's spatial body, and the merge 0x10b03040 from index 0,
  * which modulates the wavers' bytes with the frame's light noise.
  *
- * `update(lights, moverOffsets, frame, visible, drawnRecords)` takes the frame's light
+ * `update(lights, frame, visible, drawnRecords)` takes the frame's light
  * animation inputs (static-lighting.mjs createLightFrame: Level.TimeSeconds,
  * the noise tables, the shared strobe state and the modulation tables);
  * without one every light is taken steady and unmodulated, with a note.
@@ -52,7 +51,7 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
  * texels depend only on its static copy and its contributions, applied in
  * light order. A contribution keeps the spatial bytes of its rectangle
  * while the light's location and fields (and, for brush light maps, the
- * mover's offset) stay the same; its per-texel addends are rebuilt when its
+ * light map's pose) stay the same; its per-texel addends are rebuilt when its
  * colour or modulation changes (a LightType function, a new noise frame).
  * The incremental mode recomposes a light map only when one of its
  * contributions changes; a change in the relative order of the remaining
@@ -63,25 +62,14 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
   const spatial = lighting.spatial?.ready ? lighting.spatial : null;
   let signature = null, active = new Set(), frameIndex = -1;
 
-  function geometry(record, offset) {
-    if (!record.movingGeometry) {
-      const { model: owner, surface, basis, transform, transformNormal, lightMap } = record;
-      const base = owner.points[surface.base], vectors = owner.vectors;
-      const origin = transform(base), along = vector => transform(add(base, vector)).map((v, i) => v - origin[i]);
-      const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
-      // Level surfaces keep their serialized float facet; brushes move with the mover.
-      const world = !record.owner;
-      record.movingGeometry = {
-        facet: { origin, axisU: world ? vectors[surface.textureU] : along(vectors[surface.textureU]),
-          axisV: world ? vectors[surface.textureV] : along(vectors[surface.textureV]),
-          normal: world ? vectors[surface.normal] : transformNormal(vectors[surface.normal]),
-          pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
-        start: p00, stepU: p10.map((v, i) => Math.fround(v - p00[i])), stepV: p01.map((v, i) => Math.fround(v - p00[i])),
-      };
-    }
-    const { facet, start, stepU, stepV } = record.movingGeometry;
-    return { facet: { ...facet, origin: add(facet.origin, offset) },
-      grid: { start: add(start, offset).map(Math.fround), stepU, stepV } };
+  /** The facet and grid SetupForSurf takes for both a light map's static
+   * cache and its moving lights: the one its static texels were built on
+   * (lighting.mjs geometryFor; a mover's light map is placed again on a new
+   * cache header). `movingGeometry` keeps them for validation. */
+  function geometry(record) {
+    const placed = lighting.geometryFor(record), { facet, grid } = placed;
+    if (record.movingGeometry?.facet !== facet) record.movingGeometry = { facet, start: grid.start, stepU: grid.stepU, stepV: grid.stepV };
+    return placed;
   }
 
   /** The rectangle's spatial bytes of one contribution (row-major, the
@@ -261,47 +249,46 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     return item;
   }
 
-  /** One contribution of `item` to `record` at the mover `offset`, or null
-   * for an empty rectangle: a straddled surface whose rectangle is empty
-   * receives no texel, so its per-frame light map equals the static one. */
-  function reachRecord(record, item, offset) {
-    const { facet, grid } = geometry(record, offset);
+  /** One contribution of `item` to `record`, or null for an empty
+   * rectangle: a straddled surface whose rectangle is empty receives no
+   * texel, so its per-frame light map equals the static one. */
+  function reachRecord(record, item) {
+    const { facet, grid } = geometry(record);
     const rect = movingLightRect(item.location, item.constants.radius, facet);
     if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) return null;
     const incidence = item.kind === 'normal' || item.kind === 'spot' ? normalLightIncidence(item.location, facet, item.constants.rradius) : null;
     return { item, rect, grid, incidence, spatial: null, addends: null };
   }
-  /** Mover polygons join the level BSP through the brush tracker, which is
-   * not recovered; they take Filter's node-plane straddle test alone. */
-  function reachOwned(record, item, offset) {
+  /** Mover polygons join the level BSP through the brush tracker, whose
+   * fragment nodes Filter does not walk here yet; they take Filter's
+   * node-plane straddle test alone, on the light map's current facet. */
+  function reachOwned(record, item) {
     if (Boolean(record.surface.flags & 0x100000) !== Boolean(item.values.bSpecialLit)) return null;
-    const radius = item.constants.radius, origin = record.surfaceOrigin ??= record.transform(
-      record.model.points[record.surface.base]), [nx, ny, nz] = record.normal, [lx, ly, lz] = item.location;
-    const distance = (lx - origin[0] - offset[0]) * nx + (ly - origin[1] - offset[1]) * ny + (lz - origin[2] - offset[2]) * nz;
-    return -radius < distance && distance < radius ? reachRecord(record, item, offset) : null;
+    const radius = item.constants.radius, { origin } = geometry(record).facet, [nx, ny, nz] = record.normal, [lx, ly, lz] = item.location;
+    const distance = (lx - origin[0]) * nx + (ly - origin[1]) * ny + (lz - origin[2]) * nz;
+    return -radius < distance && distance < radius ? reachRecord(record, item) : null;
   }
   /** Every contribution of one light: the level surfaces FDynamicLight::Filter
    * reaches, then the brush surfaces. */
-  function reachLight(item, moverOffsets, visit) {
+  function reachLight(item, visit) {
     const { radius } = item.constants, specialLit = Boolean(item.values.bSpecialLit);
     for (const surfaceIndex of filterMovingLight(model, item.location, radius, specialLit))
       for (const record of lighting.recordsFor(model, surfaceIndex)) {
-        const entry = reachRecord(record, item, ORIGIN);
+        const entry = reachRecord(record, item);
         if (entry) visit(record, entry);
       }
     for (const record of lighting.ownedRecords()) {
-      const entry = reachOwned(record, item, moverOffsets.get(record.owner) ?? ORIGIN);
+      const entry = reachOwned(record, item);
       if (entry) visit(record, entry);
     }
   }
 
   /** Recompose one record from its contributions (light order) and report
    * its dirty rectangle: the old and new moving texels. */
-  function recompose(record, contributions, moverOffsets, changed) {
+  function recompose(record, contributions, changed) {
     const previous = record.movingRegion ?? null;
     const region = contributions && union(contributions.map(entry => entry.rect));
     const dirty = union([previous, region].filter(Boolean));
-    record.movingOffset = record.owner ? moverOffsets.get(record.owner) ?? ORIGIN : null;
     record.movingTexels = 0;
     // Validation: the light frame this composition used.
     record.movingFrame = frameIndex;
@@ -310,7 +297,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     if (previous || record.movingTexels) changed.push({ lightmap: record, region: dirty });
   }
 
-  function updateFull(lights, moverOffsets = new Map(), frame = null) {
+  function updateFull(lights, frame = null) {
     frameIndex = frame?.frameIndex ?? -1;
     const items = lights.map(light => {
       const item = contribution(light);
@@ -318,30 +305,30 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       return item;
     });
     const next = JSON.stringify([lights.map(light => [light.location, light.values, light.levelBrightness]),
-      items.map(item => item?.colour.token ?? null), [...moverOffsets]]);
+      items.map(item => item?.colour.token ?? null), lighting.poseCount]);
     if (next === signature) return [];
     signature = next;
     const touched = new Map();
     for (const item of items) {
       if (!item) continue;
-      reachLight(item, moverOffsets, (record, entry) => {
+      reachLight(item, (record, entry) => {
         if (!touched.has(record)) touched.set(record, []);
         touched.get(record).push(entry);
       });
     }
     const changed = [];
     for (const record of new Set([...active, ...touched.keys()]))
-      recompose(record, touched.get(record) ?? null, moverOffsets, changed);
+      recompose(record, touched.get(record) ?? null, changed);
     active = new Set(touched.keys());
     return changed;
   }
 
   // Incremental state: per light key (its name; a repeated name adds its
-  // occurrence), its signature, contribution and reached records; per mover
-  // name, the offset last applied. A light that leaves the list (an
-  // ElectricityEmitter's LightType flicker) is parked, and comes back with its
-  // contributions when its signature and every mover are unchanged.
-  const lightStates = new Map(), parked = new Map(), moverStates = new Map();
+  // occurrence), its signature, contribution and reached records. A light
+  // that leaves the list (an ElectricityEmitter's LightType flicker) is
+  // parked, and comes back with its contributions when its signature is
+  // unchanged and no mover light map was placed again meanwhile.
+  const lightStates = new Map(), parked = new Map();
   let order = [];
   const lightKeys = lights => {
     const seen = new Map();
@@ -369,21 +356,15 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     return count === Object.keys(x).length;
   }
   let updates = 0;
-  const sameOffset = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
   // Light maps whose recomposition from the lights waits until they are drawn.
   const pending = new Set();
-  function updateIncremental(lights, moverOffsets = new Map(), frame = null, visible = null, drawnRecords = null) {
+  function updateIncremental(lights, frame = null, visible = null, drawnRecords = null) {
     frameIndex = frame?.frameIndex ?? -1;
     const stamp = ++updates;
     const keys = lightKeys(lights), present = new Set(keys);
-    // Movers whose offset changed (a vanished entry counts as changed).
-    const moved = new Set();
-    for (const [name, offset] of moverOffsets) {
-      const last = moverStates.get(name);
-      if (!last || !sameOffset(last, offset)) { moved.add(name); moverStates.set(name, [offset[0], offset[1], offset[2]]); }
-    }
-    for (const name of [...moverStates.keys()]) if (!moverOffsets.has(name)) { moved.add(name); moverStates.delete(name); }
+    // The mover light maps placed again (a new cache header) since the last update.
+    const moved = lighting.takeReposed();
     if (moved.size) parked.clear();
     // The kept lights must keep their relative order, or a light map's
     // contribution order may change: every light map is recomputed then.
@@ -393,8 +374,8 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       for (const record of active) dirty.add(record);
       lightStates.clear(); parked.clear();
     }
-    // A mover that moved invalidates parked brush contributions, including
-    // those of a light leaving now.
+    // A light map placed again invalidates parked brush contributions,
+    // including those of a light leaving now.
     for (const [key, state] of lightStates) if (!present.has(key)) {
       for (const record of state.reach.keys()) dirty.add(record);
       lightStates.delete(key);
@@ -413,17 +394,14 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
         const item = contribution(light), reach = new Map();
         if (item) {
           item.colour = colourOf(item, frame);
-          reachLight(item, moverOffsets, (record, entry) => { reach.set(record, entry); dirty.add(record); });
+          reachLight(item, (record, entry) => { reach.set(record, entry); dirty.add(record); });
         }
         lightStates.set(key, state = { inputs: inputsOf(light), item, reach });
         continue;
       } else if (moved.size && state.item) {
-        for (const record of state.reach.keys()) if (record.owner && moved.has(record.owner)) {
-          state.reach.delete(record); dirty.add(record);
-        }
-        for (const record of lighting.ownedRecords()) {
-          if (!moved.has(record.owner)) continue;
-          const entry = reachOwned(record, state.item, moverOffsets.get(record.owner) ?? ORIGIN);
+        for (const record of state.reach.keys()) if (moved.has(record)) { state.reach.delete(record); dirty.add(record); }
+        for (const record of moved) {
+          const entry = reachOwned(record, state.item);
           if (entry) { state.reach.set(record, entry); dirty.add(record); }
         }
       }
@@ -444,7 +422,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       return contributions;
     };
     const compose = (record, contributions) => {
-      recompose(record, contributions.length ? contributions : null, moverOffsets, changed);
+      recompose(record, contributions.length ? contributions : null, changed);
       if (contributions.length) active.add(record); else active.delete(record);
       record.movingTimeVarying = contributions.some(entry => entry.item.timeVarying);
     };

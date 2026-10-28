@@ -1,7 +1,8 @@
 /** Moving lights' incremental recomposition against the whole-frame
  * reference (src/viewer/moving-lights.mjs, docs/dynamic-lighting.md "Host
  * work"): two worlds of one map, one per mode, take the same lights and
- * mover offsets every frame. After every frame both must have the same
+ * mover states every frame (the movers' light maps placed again on a new
+ * cache header, lighting.mjs relightMover). After every frame both must have the same
  * moving light maps, every light map either one ever recomposed must hold
  * the same float bits, static copy and moving region, and every light-atlas
  * byte must match.
@@ -123,14 +124,18 @@ function lightsFor(frame) {
   return lights;
 }
 function moversFor() {
-  // Play's mover states (sim-session.mjs): name and collider offset.
-  const movers = game.collision.movers.map(mover => ({ name: mover.name, offset: mover.collider.offset }));
-  if (!perturbed) return movers;
-  if (rand() < 0.05 && movers.length) moverDeltas.set(pick(movers).name, [rand() * 64 - 32, rand() * 64 - 32, rand() * 16 - 8]);
-  if (rand() < 0.05 && moverDeltas.size) moverDeltas.delete(pick([...moverDeltas.keys()]));
-  return movers.map(mover => ({ name: mover.name,
-    offset: mover.offset.map((v, i) => v + (moverDeltas.get(mover.name)?.[i] ?? 0)) }));
+  // Play's mover states (sim-session.mjs movers), each offset by its seeded delta; syncMovers and relightMovers place the
+  // movers' light maps (brush matrices: no tracker here) before the moving lights.
+  const movers = game.collision.movers;
+  if (perturbed && rand() < 0.05 && movers.length) moverDeltas.set(pick(movers).name, [rand() * 64 - 32, rand() * 64 - 32, rand() * 16 - 8]);
+  if (perturbed && rand() < 0.05 && moverDeltas.size) moverDeltas.delete(pick([...moverDeltas.keys()]));
+  return movers.map(mover => {
+    const offset = mover.collider.offset.map((v, i) => Math.fround(v + (moverDeltas.get(mover.name)?.[i] ?? 0)));
+    return { name: mover.name, values: mover.values, rotation: mover.rotation ? [...mover.rotation] : null, offset,
+      position: mover.values.Location.map((v, i) => Math.fround(v + offset[i])) };
+  });
 }
+const placeMovers = (world, movers) => { world.syncMovers(movers); world.relightMovers(null); };
 
 const keyOf = record => `${record.owner ?? ''}|${record.surfaceIndex}|${record.zone}`;
 const seen = [new Map(), new Map()];
@@ -146,7 +151,8 @@ function frame(index) {
   const light = { timeSeconds: Math.fround(timeSeconds), noise: lightNoiseSnapshot(lightNoise) };
   const results = [full, incremental].map(world => {
     world.beginLightFrame(light);
-    const result = world.syncMovingLights(lights, movers);
+    placeMovers(world, movers);
+    const result = world.syncMovingLights(lights);
     world.updateTextureAnimation(index / 60, { timeSeconds });
     return result;
   });
@@ -158,7 +164,8 @@ function frame(index) {
   const hashed = sphere => ((Math.floor(sphere.center.x) * 73856093 ^ Math.floor(sphere.center.y) * 19349663 ^ index * 83492791) >>> 5) % 3 === 0;
   const frustum = index % 2 ? null : { intersectsSphere: hashed };
   gated.beginLightFrame(light);
-  gated.syncMovingLights(lights, movers, frustum ? { frustum } : { drawn });
+  placeMovers(gated, movers);
+  gated.syncMovingLights(lights, frustum ? { frustum } : { drawn });
   gated.updateTextureAnimation(index / 60, { timeSeconds, ...(frustum ? { frustum } : { drawn }) });
   for (const record of gated.movingLightRecords()) seenGated.set(keyOf(record), record);
   for (const [key, a] of seen[0]) {
