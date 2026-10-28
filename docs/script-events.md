@@ -275,6 +275,9 @@ stayed 0, which `probing_name` reads as a name outside the probe range: a call b
 validator's own `js_call_resolve` writes the word, so only `DISPATCH_VERIFY=1` saw the difference (a stale-slot error on the probe word).
 `callResolve` now writes it. bench-sim's state digests (300 ticks, with and without `SCRIPT_VM_CHECK`, `STATE_VERIFY`, `DISPATCH_VERIFY` and
 `RECEIVER_VERIFY`) are unchanged on the Island, Training and the 747: within those ticks the gate on cached calls changes no state there.
+The club-door scene above (the 940-tick capture with the doors', triggers' and pawns' `Touching` slots watched, tag `perc10`) replays
+57 of 57 actors equal for 940 ticks both with this fix and with the earlier `script-vm-events.mjs` (served by `.work/tools/serve-variant.mjs`):
+the door's gated `A.Trigger()` there is not begun from the call cache.
 
 ## Boundaries left unresolved
 
