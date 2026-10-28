@@ -15,7 +15,9 @@ if [ "$(uname)" = Darwin ]; then
   export DX_GAME=${DX_GAME:-$HOME/Library/Application Support/CrossOver/Bottles/$CX_BOTTLE/drive_c/Deus Ex GOTY Edition}
 else
   LOCK=${DX_LOCK:-/home/rydgel/projects/deus_ex_web/.work/wine-deusex.lock}
-  export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine} DX_HYPRLAND=${DX_HYPRLAND:-1}
+  # The game runs in the prefix's Wine virtual desktop (original-game.mjs launch, as live-original.sh): Hyprland then sees one
+  # explorer.exe window, not the game's, and cannot tile the game to another size, so there is no window to place (DX_HYPRLAND 0).
+  export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine} DX_DESKTOP=${DX_DESKTOP-1400x860} DX_HYPRLAND=${DX_HYPRLAND:-0}
   export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
 fi
 cd "$ROOT" || exit 1

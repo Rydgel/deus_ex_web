@@ -53,7 +53,14 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
   if (list.length) {
     if (!commands) throw new Error('viewProbe: the console command chain needs the window host');
     runtime.writeNamed(player, 'bCheatsEnabled', true);
-    list.forEach((command, k) => { tickWindows(k); output.push(commands.consoleCommand(player, command)); });
+    list.forEach((command, k) => {
+      tickWindows(k);
+      // `@rng <hex>`: the shared stream's state before the next command (visual-acceptance.mjs --cmd), as the original's
+      // `dx-live-win.exe rngpin` writes it at the next ULevel::SpawnActor (nothing between the console line and the spawn draws).
+      const rng = /^@rng ([0-9a-f]{1,8})$/i.exec(command);
+      if (rng) { game.random.seed(parseInt(rng[1], 16) >>> 0); output.push(null); return; }
+      output.push(commands.consoleCommand(player, command));
+    });
   }
   tickWindows(list.length);
   if (location) {

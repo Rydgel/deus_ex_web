@@ -85,7 +85,12 @@ to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
   for the window rectangle, and a rectangle past the screen edge fails
   (`DDERR_INVALIDPARAMS`) with a black frame. After it places the window, it
   takes one throwaway shot, because the first frame after a resize is
-  stale.
+  stale. Since the prefix runs the game in a Wine virtual desktop
+  (`DX_DESKTOP`, 2026-10-20, [Linux host](linux-host.md)) Hyprland sees only
+  the desktop's `explorer.exe` window, the game window inside it keeps its
+  size, and `scripts/original-views.sh` sets `DX_DESKTOP=1400x860` and
+  `DX_HYPRLAND=0` (2026-10-28; with `DX_HYPRLAND=1` the run stops at once,
+  "no deusex.exe window").
 - Play's are captured at Brightness 0.4, whose display ramp
   (`pow(x, 1/(2.5·0.4))`) is the identity. The scene canvas is pinned to
   1280×720 at the page origin, and the page UI is hidden.

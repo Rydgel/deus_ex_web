@@ -1,13 +1,32 @@
 import { inRenderPass, renderPassControl } from '../runtime/render-precision.mjs';
 import { buildWindowSceneFrame } from '../runtime/script-window-scene-frame.mjs';
 import { setX87Precision } from '../runtime/script-vm.mjs';
+import { identityOfHandle } from '../runtime/script-object-handles.mjs';
 /** Validation only (scripts/validate-decals-play.mjs): stand the player a few
  * metres from a ScriptedPawn looking at its feet (`place`), or read that
  * pawn's Shadow and the level's FDecal state, on whichever side runs the
  * simulation (sim-worker.mjs `call`, or the page with ?sim=inline). */
-export function decalProbe(game, { place = false, pawn = null } = {}) {
+export function decalProbe(game, { place = false, pawn = null, state = false } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (a, n) => runtime.readNamed(a, n), level = runtime.levelFor(player);
+  // `state` (visual-acceptance.mjs --decal-state): every live decal but the
+  // Shadows, with its FDecal entries as `dump-actor-win.exe <name>
+  // FDecals:0:decals` reads them from the original: per SurfList surface the
+  // entries' actors in TArray order, and this decal's own (index, Vertices
+  // bits, Nodes, MoverRotation).
+  if (state) {
+    const store = level.decals?.store, hex = b => (b >>> 0).toString(16).padStart(8, '0');
+    const isA = (a, key) => { for (let c = runtime.instance(a)?.cls; c; c = c.base) if (c.record?.key === key) return true; return false; };
+    return level.actors.filter(a => a && isA(a, 'engine.decal') && !isA(a, 'deusex.shadow')).map(actor => ({
+      name: actor.name, cls: runtime.instance(actor).cls.record.key, location: read(actor, 'Location'), rotation: read(actor, 'Rotation'),
+      drawScale: read(actor, 'DrawScale'), texture: read(actor, 'Texture')?.key ?? null, lastRendered: read(actor, 'LastRenderedTime'),
+      surfaces: [...read(actor, 'SurfList')].map(s => {
+        const entries = store ? store.surfaceDecals(s) : [];
+        return { surface: s, order: entries.map(e => identityOfHandle(e.actor)?.name ?? null), own: entries.flatMap((e, k) =>
+          identityOfHandle(e.actor) === actor ? [{ index: k, vertices: e.verticesBits.flat().map(hex), nodes: e.nodes, mover: e.moverRotation }] : []) };
+      }),
+    }));
+  }
   if (place) {
     const isA = (a, key) => { for (let c = runtime.instance(a)?.cls; c; c = c.base) if (c.record?.key === key) return true; return false; };
     const pawns = level.actors.filter(a => a && isA(a, 'deusex.scriptedpawn') && read(a, 'Shadow') && !read(a, 'bHidden'));

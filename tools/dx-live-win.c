@@ -58,9 +58,12 @@
  *       which frame stamps an actor's LastRenderTime (Render.dll 0x10b25161): per stamp of a listed actor its name and the
  *       frame's Recursion, iSurf, Mirror and parent (the main frame has recursion 0, a mirror's child 1 or more)
  *
- *   wine dx-live-win.exe rngpin <seconds> <hex state>
+ *   wine dx-live-win.exe rngpin <seconds> <hex state> [hex address [hits]]
  *       every URender::SetupDynamics run (Render.dll 0x10b22d90) starts from that CRT rand state for <seconds>: a frame whose render
- *       iterators draw from the shared stream (a laser's last item) is the same frame whenever it is taken
+ *       iterators draw from the shared stream (a laser's last item) is the same frame whenever it is taken. With an address (an
+ *       Engine.dll or Render.dll instruction at its preferred base) the state is written there instead, and with `hits` the pin
+ *       ends after that many: `rngpin 30 1234abcd 10394f60 1` starts the next ULevel::SpawnActor from the state (a summoned
+ *       ScorchMark's texture draw and AttachDecal's random direction, visual-acceptance.mjs `--cmd '@rng <hex>'`)
  *
  *   wine dx-live-win.exe weapon <seconds>
  *       Render.dll's third-person weapon draw (docs/weapon-attachment.md): breakpoints at the Pawn.Weapon read in DrawActorSprite
@@ -1264,30 +1267,32 @@ static int do_stamps(int seconds, const char *names) {
  * so a frame taken while this runs is the same frame whenever it is taken: Play pins the same state at its own SetupDynamics runs
  * (visual-acceptance.mjs --rng-pin, view-probe.mjs rngPin). Prints the number of runs pinned. */
 #define SETUP_DYNAMICS 0x10b22d90u
-static int do_rngpin(int seconds, unsigned state) {
+static int do_rngpin(int seconds, unsigned state, uintptr_t address, long max_hits) {
   QueryPerformanceFrequency(&qpf);
   pid = find_pid("DeusEx.exe");
   if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
   process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
   core_base = module_base("Core.dll");
-  uintptr_t render = module_base("Render.dll");
-  if (!process || !core_base || render != 0x10b00000u) { fprintf(stderr, "cannot read DeusEx.exe or Render.dll is at 0x%lx\n", (unsigned long)render); return 1; }
+  uintptr_t render = module_base("Render.dll"), engine = module_base("Engine.dll");
+  if (!process || !core_base || render != 0x10b00000u || engine != 0x10300000u) {
+    fprintf(stderr, "cannot read DeusEx.exe, or Render.dll is at 0x%lx and Engine.dll at 0x%lx\n", (unsigned long)render, (unsigned long)engine); return 1;
+  }
   if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
   DebugSetProcessKillOnExit(FALSE);
-  Breakpoint b; bp_arm(&b, SETUP_DYNAMICS);
+  Breakpoint b; bp_arm(&b, address);
   DWORD pending_tid = 0; int pending = 0;
   uintptr_t ptd = 0; DWORD ptd_tid = 0;
   ULONGLONG until = GetTickCount64() + (ULONGLONG)seconds * 1000;
   long hits = 0;
   DEBUG_EVENT ev;
-  while (GetTickCount64() < until) {
+  while (GetTickCount64() < until && (!max_hits || hits < max_hits || pending)) {
     if (!WaitForDebugEvent(&ev, 100)) continue;
     DWORD status = DBG_CONTINUE;
     if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
       DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
       uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
       HANDLE th = thread_of(ev.dwThreadId);
-      if (code == EXCEPTION_BREAKPOINT && where == SETUP_DYNAMICS && th) {
+      if (code == EXCEPTION_BREAKPOINT && where == address && th) {
         CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; GetThreadContext(th, &ctx);
         if (!ptd || ptd_tid != ev.dwThreadId) {
           Ptd ptds[8]; int n = find_ptds_of(ev.dwThreadId, ptds, 8);
@@ -1315,13 +1320,13 @@ static int do_rngpin(int seconds, unsigned state) {
     quiet = 0; DWORD status = DBG_CONTINUE;
     if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
       DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode; uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress; HANDLE th = thread_of(ev.dwThreadId);
-      if (code == EXCEPTION_BREAKPOINT && where == SETUP_DYNAMICS && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
+      if (code == EXCEPTION_BREAKPOINT && where == address && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
       else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
     }
     ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
   }
   DebugActiveProcessStop(pid);
-  fprintf(stderr, "%ld SetupDynamics runs pinned to 0x%08x in %d s\n", hits, state, seconds);
+  fprintf(stderr, "%ld runs of 0x%08lx pinned to 0x%08x in %d s\n", hits, (unsigned long)address, state, seconds);
   return 0;
 }
 
@@ -1384,8 +1389,10 @@ static int do_weapon(int seconds) {
   if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
   process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
   core_base = module_base("Core.dll");
-  uintptr_t render = module_base("Render.dll");
-  if (!process || !core_base || render != 0x10b00000u) { fprintf(stderr, "cannot read DeusEx.exe or Render.dll is at 0x%lx\n", (unsigned long)render); return 1; }
+  uintptr_t render = module_base("Render.dll"), engine = module_base("Engine.dll");
+  if (!process || !core_base || render != 0x10b00000u || engine != 0x10300000u) {
+    fprintf(stderr, "cannot read DeusEx.exe, or Render.dll is at 0x%lx and Engine.dll at 0x%lx\n", (unsigned long)render, (unsigned long)engine); return 1;
+  }
   names_table = read_u32(core_base + OFF_NAMES_DATA);
   if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
   DebugSetProcessKillOnExit(FALSE);
@@ -1915,7 +1922,8 @@ int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
   if (!strcmp(argv[1], "weapon")) return argc > 2 ? do_weapon(atoi(argv[2])) : 2;
-  if (!strcmp(argv[1], "rngpin")) return argc > 3 ? do_rngpin(atoi(argv[2]), (unsigned)strtoul(argv[3], NULL, 16)) : 2;
+  if (!strcmp(argv[1], "rngpin")) return argc > 3 ? do_rngpin(atoi(argv[2]), (unsigned)strtoul(argv[3], NULL, 16),
+    argc > 4 ? (uintptr_t)strtoul(argv[4], NULL, 16) : SETUP_DYNAMICS, argc > 5 ? atol(argv[5]) : 0) : 2;
   if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
   if (!strcmp(argv[1], "galaxy")) {

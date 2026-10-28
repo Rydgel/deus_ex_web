@@ -1238,8 +1238,12 @@ fn clip_decal(coords: &[f32; 12], uncoords: &[f32; 12], base: [f32; 3], normal: 
 /// The decal block over one OccludeBsp result: `frame` the 64 frame words
 /// (Coords at 0, Uncoords at 48), `stream` the occlusion's output stream run
 /// with saved points (option 0x100). Writes fragments to `out` as [actor,
-/// surface, count, count x (world x, y, z, U dot, V dot)] in stream order and
-/// returns the words written; u32::MAX when `cap` words are not enough.
+/// surface, count, count x (world x, y, z, U dot, V dot)] and returns the
+/// words written; u32::MAX when `cap` words are not enough. The draw items in
+/// stream order; within one, DrawFrame's order (Render.dll 0x10b1b0ed..
+/// 0x10b1b34d): each FDecal of the surface in TArray order, then each saved
+/// polygon of the item in list order (0x10b1b1c7..0x10b1b2b0), which is the
+/// order its DrawGouraudPolygon calls draw them.
 #[no_mangle]
 pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u32, words: u32, out: u32, cap: u32) -> u32 {
     unsafe {
@@ -1272,43 +1276,50 @@ pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u
             let surf = rd(i + 2);
             let polys = rd(i + 6);
             i += 7;
-            let has = surf < st.surf_count() && st.head(surf) >= 0;
+            let first = i;
             for _ in 0..polys {
-                let node = rd(i);
-                let count = rd(i + 1) as usize;
-                let points_at = i + 2;
-                i += 2 + 7 * count as u32;
-                if !has || count == 0 {
-                    continue;
-                }
-                if count > 24 {
-                    set_io(53, FAULT_CLIP_ASSERT);
+                i += 2 + 7 * rd(i + 1);
+            }
+            if surf >= st.surf_count() || st.head(surf) < 0 {
+                continue;
+            }
+            let s = match m.surf(surf) {
+                Ok(s) => s,
+                Err(code) => {
+                    set_io(53, code);
                     return u32::MAX - 1;
                 }
-                for k in 0..count {
-                    let p = points_at + 7 * k as u32;
-                    poly[k] = [f32::from_bits(rd(p)), f32::from_bits(rd(p + 1)), f32::from_bits(rd(p + 2))];
+            };
+            let (base, normal) = match (m.point(s.base), m.vector(s.normal)) {
+                (Ok(b), Ok(n)) => (fv(b), fv(n)),
+                _ => {
+                    set_io(53, FAULT_MODEL);
+                    return u32::MAX - 1;
                 }
-                let s = match m.surf(surf) {
-                    Ok(s) => s,
-                    Err(code) => {
-                        set_io(53, code);
-                        return u32::MAX - 1;
+            };
+            let mut r = st.head(surf);
+            while r >= 0 {
+                let at = st.rec(r);
+                let nodes = word(at + 76);
+                let mut p_at = first;
+                for _ in 0..polys {
+                    let node = rd(p_at);
+                    let count = rd(p_at + 1) as usize;
+                    let points_at = p_at + 2;
+                    p_at += 2 + 7 * count as u32;
+                    if count == 0 {
+                        continue;
                     }
-                };
-                let (base, normal) = match (m.point(s.base), m.vector(s.normal)) {
-                    (Ok(b), Ok(n)) => (fv(b), fv(n)),
-                    _ => {
-                        set_io(53, FAULT_MODEL);
-                        return u32::MAX - 1;
-                    }
-                };
-                let mut r = st.head(surf);
-                while r >= 0 {
-                    let at = st.rec(r);
-                    let nodes = word(at + 76);
                     let listed = nodes == 0 || (0..nodes).any(|k| word(at + 80 + 4 * k) == node);
                     if listed {
+                        if count > 24 {
+                            set_io(53, FAULT_CLIP_ASSERT);
+                            return u32::MAX - 1;
+                        }
+                        for k in 0..count {
+                            let p = points_at + 7 * k as u32;
+                            poly[k] = [f32::from_bits(rd(p)), f32::from_bits(rd(p + 1)), f32::from_bits(rd(p + 2))];
+                        }
                         let vb = st.vertices(r);
                         let verts = [fv(vb[0]), fv(vb[1]), fv(vb[2]), fv(vb[3])];
                         // A Mover's surface: FRotator(Surf.Actor->Rotation -
@@ -1343,8 +1354,8 @@ pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u
                             }
                         }
                     }
-                    r = st.next(r);
                 }
+                r = st.next(r);
             }
         }
         written
