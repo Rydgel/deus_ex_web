@@ -29,10 +29,10 @@ const SUITE = ['`npx playwright test`', 'the 7.x validators'];
 add('7.1.1', 'Chrome, macOS, worker mode', 'H', 'PARTIAL', {decision: 'D1', proof: SUITE, machine: MAC,
   weak: 'the Mac has not run the suite since early October; on Linux it runs (7.1.2)'});
 add('7.1.2', 'Chrome, Linux, worker mode', 'H', 'PARTIAL', {decision: 'D1', proof: ['the same, `--project chromium`'], machine: LINUX,
-  weak: 'the suite on 2026-10-28: 40 of 41 pass, the one failure Playwright\'s synthetic Escape (pointer-lock.spec:6); the 7.x validators are not run as a set'});
+  weak: 'the suite on 2026-10-28: 41 of 41 (39 in the whole run, its two failures run again: a fixed race and one unexplained instructor-conversation failure that passed three reruns); the 7.x validators are not run as a set'});
 add('7.1.3', 'Firefox, macOS and Linux, inline mode', 'H', 'PARTIAL', {decision: 'D1', machine: `${MAC}, ${LINUX}`,
   proof: ['the suite, `--project firefox`', 'validate-inline-restore-play', 'validate-context-loss-play --browser firefox'],
-  weak: 'the suite on 2026-10-28 (Linux): 33 of 41 pass, after the two Play bugs it found were fixed (the wheel counted a notch 2.5 times; the default start\'s Saves and CRT buttons never showed in inline mode); the 8 failures are 7 Playwright\'s synthetic input (the menus\' cursor under the pointer lock, Escape) and 1 Chromium\'s Keyboard Lock, so saving, loading and the start through the menus are not covered in Firefox. The Mac not run'});
+  weak: 'the suite on 2026-10-28 (Linux): 41 of 41, after four Firefox Play bugs it found were fixed (the wheel; the inline Saves and CRT buttons; the pointer after Alt+Enter; later saves held by the persist() prompt) and its menu specs got a portable cursor driver; the Mac not run'});
 add('7.1.4', 'Safari, macOS', 'H', 'MISSING', {decision: 'D1', machine: MAC,
   proof: ['the suite under Playwright\'s WebKit as a stand-in (`--project webkit`, on the Mac)', 'the session in real Safari (by hand or safaridriver)'],
   need: 'never run; Playwright\'s Linux WebKit is an Ubuntu build that this host\'s libraries do not run (ICU 74, libxml2.so.2, flite); Safari\'s storage eviction, no Keyboard Lock, no `showDirectoryPicker`'});
@@ -83,10 +83,10 @@ add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s pl
 // 7.6 Window and input ------------------------------------------------------------------------------------------------------------------
 add('7.6.1', 'the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up', 'H', 'PARTIAL',
   {machine: ALL, proof: ['browser-tests/pointer-lock.spec.mjs'],
-    weak: 'a blur freezes Play and it resumes without catch-up in Chrome\'s worker mode and Firefox\'s inline mode (2026-10-28, Linux); the Escape half cannot run under Playwright (a synthetic Escape does not reach the browser\'s release of the lock); WebKit and the Mac not run'});
+    weak: 'a blur freezes Play and it resumes without catch-up, and a lost lock lets go of the held movement, in Chrome\'s worker mode and Firefox\'s inline mode (2026-10-28, Linux); a real Escape (the browser\'s own release) is not exercised under Playwright; WebKit and the Mac not run'});
 add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari)', 'O, H', 'PARTIAL',
   {machine: ALL, proof: ['browser-tests/original-start-input.spec.mjs', 'input-bindings.spec.mjs'],
-    weak: 'passes in Chromium; in Firefox the spec cannot drive the menu (Playwright\'s pointer-lock motion) and the Keyboard Lock check is Chromium\'s API; Firefox\'s fullscreen without it has no check'});
+    weak: 'passes in Chromium and Firefox on Linux (2026-10-28): Keyboard Lock where the browser has it, and in Firefox Alt+Enter takes the fullscreen and the pointer without it (the pointer asked again at fullscreenchange, which Firefox needs); a held Escape and F11 in a real browser are not exercised; WebKit and the Mac not run'});
 add('7.6.3', 'resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error', 'H', 'MISSING',
   {machine: `${LINUX}, ${MAC}`, proof: ['a new spec: resizes during Play, pixels against a fresh load at the final size'], need: 'the spec; nothing tests a resize during Play'});
 add('7.6.4', 'a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows', 'H', 'PARTIAL',
@@ -107,7 +107,7 @@ add('7.8.1', 'the game folder opens through the gate\'s picker in every supporte
     weak: 'the picker opens the folder in Chromium and Firefox headless (`setInputFiles`; viewer.spec passes in both, 2026-10-28); a real picker is not run'});
 add('7.8.2', 'saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running', 'H', 'PARTIAL',
   {machine: ALL, proof: ['browser-tests/save-game.spec.mjs', 'save-folder.spec.mjs', 'test/save-store.test.mjs', 'test/save-persistence.test.mjs'],
-    weak: 'passes in Chromium; in Firefox the Saves window imports and exports (save-folder.spec.mjs:212), but the specs that save or load stop at a menu button the cursor cannot reach under Playwright\'s pointer lock; the unit tests use a fake store'});
+    weak: 'the save, load and Saves window specs pass in Chromium and Firefox on Linux (2026-10-28; Firefox\'s persist() prompt no longer holds the later saves); a real persistence prompt\'s answer is not observed; the unit tests use a fake store'});
 add('7.8.3', 'in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads', 'H, O', 'MISSING',
   {machine: `${MAC}, ${LINUX}`, proof: ['save-folder.spec.mjs headed with a real folder', 'validate-save-game.mjs'],
     need: '[save storage](save-storage.md) says a headed Chromium with a real folder was not run'});
@@ -129,9 +129,9 @@ add('7.9.3', 'a graphics device that never comes back: the page says so, and a r
 add('7.10.1', 'the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`)', 'P', 'FAIL',
   {machine: `${LINUX}, with the Mac's stores`, proof: ['run-validators.mjs'],
     weak: 'fails: six reds on a clean head on 2026-10-27 (host-services-play, world-batch-gpu, texture-sampling, lodmesh-lod-play, master-frame-play, conversations-census timeout)'});
-add('7.10.2', 'the browser suite passes in every supported browser', 'P', 'FAIL',
+add('7.10.2', 'the browser suite passes in every supported browser', 'P', 'PARTIAL',
   {machine: `${MAC}, ${LINUX}`, proof: ['`npx playwright test` (projects chromium, firefox, webkit)', 'SUITE_RUN, `--suite`'],
-    weak: 'fails: on 2026-10-28 (Linux) Chromium 40 of 41 and Firefox 33 of 41; the failures are Playwright\'s synthetic input and Firefox\'s lack of Keyboard Lock, which the specs have yet to work around; WebKit runs on the Mac only'});
+    weak: 'Chromium and Firefox 41 of 41 on Linux (2026-10-28, with two Chromium reruns); WebKit and the Mac not run'});
 add('7.10.3', 'the Stage 4, 5 and 6 gates pass on the closing commit', 'P, O', 'MISSING',
   {machine: `${LINUX}, ${MAC}`, proof: ['validate-stage4-acceptance.mjs', 'validate-stage5-acceptance.mjs', 'stage6-criteria.mjs'],
     need: 'a run on one commit (last runs: Stage 4 on 2026-10-17, Stage 5 on 2026-10-21, Stage 6\'s rows by 2026-10-26)'});
@@ -155,48 +155,48 @@ export const SUITE_CAUSES = Object.freeze({
   play: 'a Play bug in that browser or simulation mode',
 });
 export const SUITE_RUN = {
-  date: '2026-10-28', machine: 'the Linux host (AMD, Arch), headless but pointer-lock.spec, served from a frozen worktree of 5e516ab8 (DX_SUITE_TREE)', tests: 41,
-  rerun: 'The second whole run of the day, after the stale specs, the races and the Firefox bugs were fixed; training-walk.spec, which stopped short of the key or selected the trainer door\'s other panel in Firefox, ran again (three times in each browser) after its route was fixed',
+  date: '2026-10-28', machine: 'the Linux host (AMD, Arch), headless but pointer-lock.spec, at f2d01365', tests: 41,
+  rerun: 'The third whole run of the day; its two Chromium failures ran again, three times each, from a frozen worktree (DX_SUITE_TREE): gameplay.spec after its settle and jump checks were fixed, instructor-conversation.spec as it was (it failed once in the whole run, no speaker within 8 s, and passed the three reruns; not explained)',
   browsers: {
-    chromium: {version: '153.0.8010.12', sim: 'worker', passed: 40, minutes: 19},
-    firefox: {version: '155.0', sim: 'inline', passed: 33, minutes: 33},
+    chromium: {version: '153.0.8010.12', sim: 'worker', passed: 41, minutes: 23},
+    firefox: {version: '155.0', sim: 'inline', passed: 41, minutes: 19},
     webkit: {notRun: 'Playwright\'s Linux WebKit needs Ubuntu\'s libraries (ICU 74, libxml2.so.2, flite); it runs on the Mac'},
   },
   failures: [
-    {test: 'input-bindings.spec.mjs:104', chromium: 'pass', firefox: 'api',
-      note: 'Keyboard Lock (`navigator.keyboard.lock`) is Chromium\'s; Firefox\'s fullscreen without it needs its own expectation ([input bindings](input-bindings.md))'},
-    {test: 'original-start-input.spec.mjs:13', chromium: 'pass', firefox: 'harness',
-      note: 'the original menus\' cursor follows relative motion; under Playwright\'s Firefox pointer lock `movementX/Y` is a synthetic point\'s offset from a fixed point (-465 for a 25-pixel step), so the cursor never reaches Training. A real mouse in Firefox is not measured'},
-    {test: 'original-start-load-game.spec.mjs:11', chromium: 'pass', firefox: 'harness', note: 'the same motion: the click lands off Load Game'},
-    {test: 'load-game.spec.mjs:60', chromium: 'pass', firefox: 'harness', note: 'imports the slots, then the Load Game screen\'s Load button is not reached (the same motion)'},
-    {test: 'save-folder.spec.mjs:165', chromium: 'pass', firefox: 'harness', note: 'the folder\'s saves list with their pictures, then the Load button is not reached (the same motion)'},
-    {test: 'save-game.spec.mjs:63', chromium: 'pass', firefox: 'harness', note: 'MenuMain\'s Training button is not reached (the same motion)'},
-    {test: 'save-game.spec.mjs:178', chromium: 'pass', firefox: 'harness', note: 'the same'},
-    {test: 'pointer-lock.spec.mjs:6', chromium: 'harness', firefox: 'harness',
-      note: 'the browser\'s own Escape rule releases the lock, and a synthetic Escape does not reach it (original-start-input.spec.mjs\'s note)'},
-    // fixed on 2026-10-28; the first run's causes
+    // every one fixed on 2026-10-28; the first run's causes
+    {test: 'original-start-input.spec.mjs:14', chromium: 'pass', firefox: 'pass', note: 'harness (Firefox): under Playwright\'s Firefox pointer lock `movementX/Y` is an offset from a fixed point, so the menus\' cursor never reached Training; then play: Alt+Enter back into fullscreen left Firefox without the pointer (a lock asked in the same event as the fullscreen is refused, NotAllowedError)',
+      fixed: 'browser-tests/menu-cursor.mjs dispatches the steps outside Chromium; the page asks for the lock again at fullscreenchange'},
+    {test: 'original-start-load-game.spec.mjs:12', chromium: 'pass', firefox: 'pass', note: 'harness (Firefox): the same motion', fixed: 'menu-cursor.mjs'},
+    {test: 'load-game.spec.mjs:61', chromium: 'pass', firefox: 'pass', note: 'play then harness (Firefox): the Saves button in inline mode, then the motion', fixed: 'the inline game answers `windowMouseGrabbed`; menu-cursor.mjs'},
+    {test: 'save-folder.spec.mjs:166', chromium: 'pass', firefox: 'pass', note: 'play then harness (Firefox): the same', fixed: 'the same'},
+    {test: 'save-folder.spec.mjs:213', chromium: 'pass', firefox: 'pass', note: 'play (Firefox): the Saves button in inline mode', fixed: 'the inline game answers `windowMouseGrabbed`'},
+    {test: 'save-game.spec.mjs:71', chromium: 'pass', firefox: 'pass',
+      note: 'harness then play (Firefox): the motion; then the first save\'s `navigator.storage.persist()` prompt, which Firefox leaves pending until the player answers, held every later save in the storage queue (the second was never written), and took the pointer lock back',
+      fixed: 'menu-cursor.mjs; persist() is no longer awaited (save-persistence.mjs); the spec\'s cursor reaches the menu at the pointer\'s own position while the lock is gone'},
+    {test: 'save-game.spec.mjs:186', chromium: 'pass', firefox: 'pass', note: 'harness (Firefox): the motion', fixed: 'menu-cursor.mjs'},
+    {test: 'input-bindings.spec.mjs:106', chromium: 'pass', firefox: 'pass', note: 'api (Firefox): Keyboard Lock is Chromium\'s', fixed: 'checked where the browser has it; without it, Alt+Enter takes the fullscreen and the pointer and calls nothing'},
+    {test: 'pointer-lock.spec.mjs:10', chromium: 'pass', firefox: 'pass', note: 'harness: a synthetic Escape never reaches the browser\'s own release of the lock',
+      fixed: 'the spec releases the lock as that rule does (exitPointerLock) and checks the page\'s part: the lost lock lets go of the held movement'},
     {test: 'input-bindings.spec.mjs:17', chromium: 'pass', firefox: 'pass', note: 'play (Firefox): a tickless `wheelDeltaY` is -round(3 × `deltaY`) in Gecko, and a notch counted 2.5',
       fixed: '`wheelUnits(event, {gecko})` takes that value by the pixel rule'},
-    {test: 'save-folder.spec.mjs:212', chromium: 'pass', firefox: 'pass', note: 'play (Firefox): the Saves and CRT buttons never showed in inline mode', fixed: 'the inline game answers `windowMouseGrabbed`'},
-    {test: 'pointer-lock.spec.mjs:16', chromium: 'pass', firefox: 'pass', note: 'race (Chromium): the frozen state was read before the posts made before the blur landed',
+    {test: 'pointer-lock.spec.mjs:27', chromium: 'pass', firefox: 'pass', note: 'race (Chromium): the frozen state was read before the posts made before the blur landed',
       fixed: 'the frozen state is the first status the next one repeats'},
-    {test: 'gameplay.spec.mjs:22', chromium: 'pass', firefox: 'pass', note: 'race (Chromium): `settled` took the spawn a tick before the walk lifts the player (z -82.50, then -80.20)',
-      fixed: 'settled is the simulation\'s own location (viewProbe), unchanged over a poll and shown by status()'},
+    {test: 'gameplay.spec.mjs:23', chromium: 'pass', firefox: 'pass',
+      note: 'race (Chromium): `settled` took the spawn while its first ticks still moved it; the jump\'s top was missed between worker-mode statuses; the spawn\'s resting height varies with the first ticks\' frame times (-80.40 or -80.20)',
+      fixed: 'settled is the simulation\'s own location unchanged over 0.1 s of its time; the jump is read from viewProbe; the reload is compared in x and y, and in z within 0.5'},
     {test: 'viewer.spec.mjs:12', chromium: 'pass', firefox: 'pass', note: 'race (Chromium): the draw calls were read before worker mode drew after Player start',
-      fixed: 'it waits for a draw, and holds W until the inspection camera has moved 100 units (it moves at most 0.05 s a frame, slower on a software renderer)'},
-    {test: 'viewer.spec.mjs:54', chromium: 'pass', firefox: 'pass', note: 'stale: only Wasm was allowed after the folder is chosen',
-      fixed: 'the build\'s own scripts and Wasm (same-origin GETs under /assets/) are; the game files are never sent'},
+      fixed: 'it waits for a draw, and holds W until the inspection camera has moved 100 units'},
+    {test: 'viewer.spec.mjs:54', chromium: 'pass', firefox: 'pass', note: 'stale: only Wasm was allowed after the folder is chosen', fixed: 'the build\'s own scripts and Wasm (same-origin GETs under /assets/) are'},
     {test: 'native-math.spec.mjs:4', chromium: 'pass', firefox: 'pass', note: 'stale: the sine table\'s hash from before entry 8192 became the hardware x87\'s', fixed: 'b8d75604..., as test/coords.test.mjs'},
-    {test: 'lodmesh-wasm.spec.mjs:7', chromium: 'pass', firefox: 'pass', note: 'stale: it checked a JavaScript pose fallback the Rust core replaced',
-      fixed: 'it checks what a refused WebAssembly does now: inspection only, Play disabled, "Play mode unavailable" in the debugging page\'s notes (the default start still says nothing, 7.7.2)'},
-    {test: 'runtime-error.spec.mjs:14', chromium: 'pass', firefox: 'pass', note: 'stale: it waited for a deferred Plant7.PushSound, which plays now', fixed: 'the push is Plant7\'s Location (liveProbe)'},
+    {test: 'lodmesh-wasm.spec.mjs:7', chromium: 'pass', firefox: 'pass', note: 'stale: a JavaScript pose fallback the Rust core replaced',
+      fixed: 'it checks what a refused WebAssembly does now (inspection only, Play disabled, "Play mode unavailable" in the debugging page\'s notes; the default start still says nothing, 7.7.2)'},
+    {test: 'runtime-error.spec.mjs:14', chromium: 'pass', firefox: 'pass', note: 'stale: a deferred Plant7.PushSound, which plays now', fixed: 'the push is Plant7\'s Location (liveProbe)'},
     {test: 'runtime-error.spec.mjs:49', chromium: 'pass', firefox: 'pass', note: 'stale: F for use, and the page\'s old use counter', fixed: 'the right mouse button, and the door\'s mover'},
-    {test: 'instructor-conversation.spec.mjs:12', chromium: 'pass', firefox: 'pass', note: 'stale: it patched main.mjs source that no longer exists and read the page\'s game; F for use',
-      fixed: 'rewritten on the simulation\'s probes (placeProbe, conversationProbe, liveProbe) and the right mouse button; the subtitle tree and the decoded speech are left to validate-instructor-conversation.mjs'},
+    {test: 'instructor-conversation.spec.mjs:12', chromium: 'pass', firefox: 'pass', note: 'stale: it patched main.mjs source that no longer exists; F for use',
+      fixed: 'rewritten on the simulation\'s probes and the right mouse button (one unexplained Chromium failure in the third run, then three passes)'},
     {test: 'training-walk.spec.mjs:12', chromium: 'pass', firefox: 'pass', note: 'stale: the same source patch; F for use',
-      fixed: 'rewritten on the probes, with the player\'s place from viewProbe (status() lags in worker mode), a straight walk to the key and the view swept across the trainer\'s door until its panel is selected'},
-    {test: 'input-bindings-table.spec.mjs:16', chromium: 'pass', firefox: 'pass', note: 'stale: its QuickSave case expected native 3011 unimplemented (Firefox stopped first at the wheel)',
-      fixed: 'QuickSave runs in Play (the headless validator\'s game, without a travelling session, keeps the 3011 boundary)'},
+      fixed: 'rewritten on the probes, with the player\'s place from viewProbe, a straight walk to the key and the view swept across the trainer\'s door'},
+    {test: 'input-bindings-table.spec.mjs:16', chromium: 'pass', firefox: 'pass', note: 'stale: its QuickSave case expected native 3011 unimplemented', fixed: 'QuickSave runs in Play (the headless validator keeps the 3011 boundary)'},
   ],
 };
 for (const [name, run] of Object.entries(SUITE_RUN.browsers)) if (!run.notRun) {
@@ -215,7 +215,8 @@ function suiteMarkdown() {
     if (b.notRun) { lines.push(`- ${n}: not run. ${b.notRun}.`); continue; }
     const count = {};
     for (const f of SUITE_RUN.failures) if (f[n] !== 'pass') count[f[n]] = (count[f[n]] ?? 0) + 1;
-    lines.push(`- ${n} ${b.version} (${b.sim} mode): ${b.passed} pass, ${SUITE_RUN.tests - b.passed} fail (${Object.entries(count).map(([c, k]) => `${k} ${c}`).join(', ')}), ${b.minutes} min.`);
+    const causes = Object.entries(count).map(([c, k]) => `${k} ${c}`).join(', ');
+    lines.push(`- ${n} ${b.version} (${b.sim} mode): ${b.passed} pass, ${SUITE_RUN.tests - b.passed} fail${causes ? ` (${causes})` : ''}, ${b.minutes} min.`);
   }
   lines.push('', `Causes: ${Object.entries(SUITE_CAUSES).map(([c, text]) => `**${c}**, ${text}`).join('; ')}. A test not listed passed in every browser that ran.`, '');
   lines.push(`| Test | ${ran.join(' | ')} | Why |`, `| --- | ${ran.map(() => '---').join(' | ')} | --- |`);
