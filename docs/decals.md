@@ -169,6 +169,39 @@ destroys decals not drawn for a second) and draws with PolyFlags exactly
 - **Texture.** `Actor->Texture->Get(time)`, None → the level's
   DefaultTexture; consecutive decals with one texture share a Lock.
 
+### Draw order
+
+Decals are the one place in a frame where the order of two modulated draws
+shows: each `2·tex·dst` is rounded and clamped to the 8-bit target, so two
+overlapping fragments of different textures leave a different pixel in each
+order (`dst = 200`, texels 190 then 76: 255 then 152; 76 then 190: 119 then
+177). Where the draws come from, in Render.dll:
+
+- **Surfaces.** DrawFrame copies the frame's three draw lists
+  (`Frame->Draw[0..2]` at `+0x98`, linked through `+0x38`; SDK
+  `UnRender.h`: portals, occluding, non-occluding) into arrays
+  (`0x10b1a404..0x10b1a434`), reverses the first (`0x10b1a436..0x10b1a45a`),
+  sorts the second by `FBspDrawList.Key` (`0x10b1a45f`, thunk `0x10b01028` →
+  `0x10b20570`) and walks the three in turn (`0x10b1a4c1..0x10b1b46a`). Each
+  item's surface is drawn (the device call at `0x10b1b057`) and its decal
+  block follows at once (`0x10b1b0ca`).
+- **Decals of one surface.** The block's outer loop is the FDecal TArray
+  (`0x10b1b0ed`, `Num` read again each turn), the inner one the item's saved
+  polygons in list order (`0x10b1b1c7..0x10b1b2b0`): decal by decal, and for
+  each decal polygon by polygon. InsertDecal makes the TArray group by
+  texture, the groups in the order their first decal attached, newest first
+  within a group: a scorch mark attached before two bullet holes on a wall
+  draws first; on a door that took a bullet hole first, after both.
+
+`validate-decal-order.mjs` runs the block unchanged under Unicorn (the
+oracle's block mode, below) on 103 draw items of Training and the Island
+(333 FDecals, 2 to 5 on a surface, Nodes lists that admit one polygon or
+none) and requires the port's fragments in the order and with the point
+counts of the original's 282 DrawGouraudPolygon calls. In 18 of the items a
+decal draws on two polygons with another decal after it, so a walk polygon
+by polygon gives another order; the port walked so until 2026-10-28 and
+fails the check that way (Training's item on surface 2038 first).
+
 `scripts/native-decal-render-oracle.py` runs the unchanged ClipDecal, the
 D3D DrawGouraudPolygon against a recording device and the whole decal block
 on frames built by the original CreateMasterFrame and OccludeBsp.
@@ -176,9 +209,9 @@ on frames built by the original CreateMasterFrame and OccludeBsp.
 **Port.** `clip_decal` in decal.rs is ClipDecal in binary32 (the render
 pass's precision), operation for operation. `decal_clip_frame` walks the
 main frame's OccludeBsp output with its saved points (option `0x100`): for
-each draw item whose surface holds FDecals, each decal in TArray order and
-each saved polygon its Nodes admit, it writes the fragment's world points and
-the U and V dot products. `validate-decal-render.mjs` asks the oracle for
+each draw item whose surface holds FDecals, each decal in TArray order and,
+for it, each saved polygon its Nodes admit, it writes the fragment's world
+points and the U and V dot products, in the block's order ("Draw order"). `validate-decal-render.mjs` asks the oracle for
 frames (Training at random cameras and its mirror floor, Island, the Paris
 club tunnel's mirrors) with synthetic decals and compares every ClipDecal:
 762 cases, 286 nonempty, 1,192 points bit-equal in camera-space position, U
@@ -200,14 +233,18 @@ is reachable (see "Movers").
   it. Each nonempty fragment stamps its actor's `LastRenderedTime` with
   Level.TimeSeconds. The fragments become view-space triangles (a fan per
   fragment) with `tu = f(f(U / DrawScale) · f(1 / f(USize · Scale)))`, V
-  likewise, grouped by texture (the actor's Texture, the viewer's Sprite
-  when set, else the level's DefaultTexture), and travel in the frame's
-  `visibility` record.
-- **Page** (`src/viewer/decal-scene.mjs`): one mesh per texture, blend
+  likewise, in the decal block's order, as runs of one texture (the actor's
+  Texture, the viewer's Sprite when set, else the level's DefaultTexture),
+  and travel in the frame's `visibility` record.
+- **Page** (`src/viewer/decal-scene.mjs`): one mesh per run, each drawn
+  after the one before it (render orders −1 + k·2⁻²⁰), blend
   DST_COLOR/SRC_COLOR, no depth write, LEQUAL, no culling, linear
   filtering with nearest mip selection and a −0.5 LOD bias, drawn before the
   translucent world surfaces. Decals sit on their own three.js layer
-  (`render-layers.mjs`), which the mirror and sky cameras leave out.
+  (`render-layers.mjs`), which the mirror and sky cameras leave out. Until
+  2026-10-28 the page drew one mesh per texture, in the order the page first
+  met the textures, so overlapping decals of two textures blended in that
+  order whatever their surface's TArray said (below, "Combat decals").
 - **Camera frames.** A ViewportWindow's DrawWorld runs the decal block on its
   own frame (docs/script-window-viewport.md "Camera pass"): its OccludeBsp
   saves the points, the fragments travel in the plan and the page draws them
@@ -234,10 +271,12 @@ Host choices, noted:
   `fpView`, then ClipDecal's tail, including the screen clamp of a point its
   outcode flags (`0x10b1c660..0x10b1c825`), then D3DDrv's vertex. The oracle
   checks it on 1,192 fragment points bit for bit (`validate-decal-render`).
-- The fragment order is the occlusion stream's, not DrawFrame's pass order
-  (the occluding list is key-sorted there); modulated blends commute up to
-  the framebuffer's rounding, and every decal is drawn before the
-  translucent surfaces.
+- The draw items come in the occlusion stream's order, not DrawFrame's
+  three lists (portals reversed, occluding sorted by Key, non-occluding as
+  linked: "Draw order"); within an item the order is the original's. Two
+  items' fragments overlap on screen only where coplanar surfaces overlap,
+  and every decal is drawn before the translucent surfaces, where the
+  original draws a non-occluding surface's decals among that list.
 - Mirror child frames draw no decals, as the original's ClipDecal returns
   nothing there; sky child frames draw none either, where the original
   would (unexercised).
@@ -373,15 +412,77 @@ GL's blend), not measured further, and against CrossOver's D3D on the M2, not a 
 Tooling: `visual-acceptance.mjs --decal-state` (both sides: `dump-actor-win.exe Shadow` in the original, Shadow.lastLocation +0x32c and
 bHasDecal +0x338 mask 1 by the linked properties, `liveProbe` in Play; `compare --decal-state`), `play --camera-transit`, `--cmd` in the gate,
 and `compare --contribution` for an effect that darkens (its own pixels are those at least one level darker; the haze reads as before).
-Not in a frame: bullet holes, scorch marks and blood, which need combat. Weak: two views of one gallery, and the two walkers are held, not matched.
+Not in a frame: bullet holes, scorch marks and blood, which need combat (bullet holes and scorch marks since: "Combat decals against the
+original" below). Weak: two views of one gallery, and the two walkers are held, not matched.
 
 ```bash
 scripts/original-views.sh 00_Training --view shadow2:211,1266,-33:62500,61567,0 --view shadow3:61,1326,-23:61166,59067,0 --view shadow2-base:211,1266,-33:62500,61567,0 --view shadow3-base:61,1326,-23:61166,59067,0 --brightness 0.666667 --cmd 'set MIB Orders Standing' --cmd 'set ScientistMale Orders Standing' --unfreeze --base-cmd 'set WinDrv.WindowsClient Decals False' --pre-shot-cmd 'set ScriptedPawn bHidden True' --pre-shot-cmd 'set LevelInfo bPlayersOnly True' --decal-state
 node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.15$'
 ```
 
+## Combat decals against the original (2026-10-28)
+
+Bullet holes and scorch marks in frames of the original (Linux host, Wine 11.20, the game in the prefix's 1400×860 virtual desktop,
+Brightness 2/3 so the Shot is the framebuffer) and of Play (headless Chromium, ANGLE GL, worker mode, Brightness 0.4) at one camera
+and one held level time (101.295 s).
+
+**The scene** (`scripts/combat-decal-views.sh`): 00_Training's start doors, with decals placed by the original's own console
+`summon` in both programs, not by combat, whose aim draws from a stream the programs do not share. PlayerPawn.Summon spawns at
+`Location + (CollisionRadius + Default.CollisionRadius + 30)·Vector(Rotation) + 15 z`, 50 units ahead for JC and a decal: the ghost
+stands 34 units behind the face, facing it from behind (Rotation (0,0,0), set with ViewRotation), so the decal spawns 16 units in
+front and its trace back meets the face. BulletHole.BeginPlay attaches with `AttachDecal(32, (0.1,0.1,0))`, which draws nothing.
+ScorchMark.BeginPlay draws `FRand() < 0.5` for FlatFXTex39 and Decal.BeginPlay's `AttachDecal(100)` a random direction, so both
+programs start that summon from CRT rand state `0x11223344` (`--cmd '@rng 11223344'`: in the original `dx-live-win.exe rngpin`
+writes it at the next `ULevel::SpawnActor`, Engine `0x10394f60`, one hit; in Play viewProbe seeds the shared stream before the
+line; nothing between the line and the spawn draws). The first draw is 0.970, so FlatFXTex38. On the wall (surface 88, x −1184) a
+scorch then two bullet holes over it: TArray `[ScorchMark0, BulletHole1, BulletHole0]`. On DeusExMover49's leaf (the tracker's
+surface 5348, x −1188) a bullet hole, the scorch, a bullet hole: `[BulletHole3, BulletHole2, ScorchMark1]`. The two surfaces draw
+their textures in opposite orders, so one mesh per texture draws one of them in the wrong order, whichever texture it puts first.
+Views `wide` (−1010,800,−80), `wall` (−1134,716,−80) and `door` (−1138,800,−80), all yaw 32768; each `-base` is the original after
+`set WinDrv.WindowsClient Decals False` (DrawFrame's gate) and Play with its decal layer hidden.
+
+**State.** `--decal-state` reads every BulletHole and ScorchMark after each shot: in the original `dump-actor-win.exe <class> ...
+FDecals:0:decals` (SurfList, then through XLevel → Model → Surfs each surface's FDecal TArray), in Play `decalProbe({state})`. All
+six are equal in both programs, compared bit for bit: Location, Rotation, DrawScale, Texture, SurfList, the TArray order of each
+surface, and each entry's Vertices, Nodes (`[1081]` on the wall, none on the tracker surface) and MoverRotation ((0,−16384,0), the
+door's Rotation, on the mover).
+
+**Result** (the frame less its frame without decals is the contribution; samples are the 2,764,800 channel values of a frame):
+
+| | wide | wall | door |
+| --- | ---: | ---: | ---: |
+| Frame: mean abs. difference, edge recall / precision | 0.01, 0.999 / 1 | 0, 1 / 1 | 0, 1 / 1 |
+| Samples the decals change (either program) | 84,878 | 548,361 | 525,344 |
+| Contribution: correlation, residual, Play's sum over the original's | 1.0, 0.001, 1.0 | 1.0, 0, 1.0 | 1.0, 0, 1.0 |
+| Samples whose contribution differs | 202 (194 by one level, 8 by two) | 26 (one level) | 29 (one level) |
+| Samples the frames differ in, with decals / without | 7,444 / 7,250 | 183 / 201 | 97 / 118 |
+| Before the order fix: samples whose contribution differs | 215 | 26 | 650 |
+| Samples the order fix changed in Play's frame | 52 | 0 | 621 |
+
+The page used to draw the scorch texture's mesh first: right for the wall, wrong for the door, where the original draws both bullet
+holes before the scorch. With the decal block's order (decal.rs, decal-draw.mjs runs, decal-scene.mjs) the door's contribution
+differs in 29 samples instead of 650. Play's frames before the fix came from a first run without the held clock; the wall view, which
+the fix leaves alone, is the same sample for sample in both runs, so the scene held still. The frames' other differences are the
+scene's (the frames without decals differ as much: up to 7 levels in `wide`, along the doorway's outline). The remaining
+one-level differences are not measured further: the bilinear weights and the blend's rounding of wined3d's GL against Chromium's
+WebGL on the same GPU, as in the Shadow comparison above.
+
+Weak: the start room is dark (no framebuffer value above 32 of 255 in these views), so no `2·tex·dst` reaches the clamp here and
+a wrong order shows only as a level's rounding. Blood (BloodSplat, BloodPool) is not in a frame.
+
+```bash
+scripts/combat-decal-views.sh play
+scripts/combat-decal-views.sh original
+scripts/combat-decal-views.sh play
+scripts/combat-decal-views.sh compare
+node scripts/validate-decal-order.mjs
+```
+
 ## Open
 
-- Bullet holes, scorch marks and blood in a frame against the original (they need combat).
+- DrawFrame's order of the draw items: Play draws decals item by item in the occlusion stream's order, DrawFrame in its three lists'
+  ("Draw order"); it shows only where coplanar surfaces overlap on screen, and the non-occluding list's decals are drawn with the
+  occluding ones. The lists and the Key sort are the subject of DrawFrame's draw order as a whole.
+- A combat decal where `2·tex·dst` clamps (a bright wall), and blood, in a frame against the original.
 - Decals in sky child frames.
 - The game-thread control word (above).

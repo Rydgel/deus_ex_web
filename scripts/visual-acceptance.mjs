@@ -35,6 +35,9 @@
 //   to the view, the original's against Play's (flashMap below; held flash states through --pre-shot-cmd, docs/screen-flash.md).
 //   `--decal-state` (both sides): after each shot, the level's Shadow decals and their owners as the frame had them (<view>-decals.json from the
 //   running original, <view>-play-decals.json from Play); `compare --decal-state` matches them by owner (decalState below, docs/decals.md).
+//   The combat decals too (`--decal-classes`, default BulletHole,ScorchMark), with each one's FDecal entries, compared bit for bit by name.
+//   `--cmd '@rng <hex>'` is no console line: both programs start the next line's ULevel::SpawnActor from that CRT rand state (the original
+//   through dx-live-win.exe `rngpin` at 0x10394f60, Play through viewProbe), for a summoned ScorchMark (scripts/combat-decal-views.sh).
 //   `play --camera-transit` places each camera as the original's console does: Location, frames, then ViewRotation.
 //
 // Frames are raw: the original's Shot bitmaps are its framebuffer before the
@@ -146,6 +149,19 @@ const DECAL_FIELDS = ['Owner:0x3c:obj', 'Location:0x114:f3', 'Rotation:0x120:i3'
   'Surfaces:0x324:u32', 'LastRenderTime:0x34:f', 'LastRenderedTime:0x31c:f', 'LevelTime:0xa8:pf:0x478', 'OwnerX:0x3c:pf:0x114', 'OwnerY:0x3c:pf:0x118',
   'OwnerZ:0x3c:pf:0x11c', 'OwnerVX:0x3c:pf:0x144', 'OwnerVY:0x3c:pf:0x148', 'OwnerVZ:0x3c:pf:0x14c', 'OwnerLastRenderTime:0x3c:pf:0x34'];
 const SHADOW_PROPS = ['Owner', 'Location', 'Rotation', 'DrawScale', 'bHasDecal', 'lastLocation', 'SurfList', 'LastRenderTime', 'LastRenderedTime'];
+// The combat decals' (BulletHole, ScorchMark): Texture +0x16c, LastRenderedTime +0x31c, SurfList.Num +0x324 and the FDecal entries.
+const COMBAT_DECAL_FIELDS = ['Location:0x114:f3', 'Rotation:0x120:i3', 'DrawScale:0x17c:f', 'Texture:0x16c:obj', 'LastRenderedTime:0x31c:f',
+  'LevelTime:0xa8:pf:0x478', 'FDecals:0:decals'];
+// dump-actor-win's `decals` text, `<s>[a,b|k:v.v...:n<node>.<node>:m<p>.<y>.<r>];...`, as decal-probe.mjs `state` gives Play's.
+const parseFDecals = text => text.split(';').filter(Boolean).map(part => {
+  const m = /^(\d+)\[([^|\]]*)((?:\|[^|\]]*)*)\]$/.exec(part);
+  if (!m) throw new Error(`FDecals: cannot read ${part}`);
+  return {surface: Number(m[1]), order: m[2] ? m[2].split(',') : [], own: m[3].split('|').filter(Boolean).map(entry => {
+    const [index, vertices, nodes, mover] = entry.split(':');
+    return {index: Number(index), vertices: vertices.split('.'), nodes: nodes.slice(1) ? nodes.slice(1).split('.').map(Number) : [],
+      mover: mover.slice(1).split('.').map(Number)};
+  })};
+});
 
 // Views from a start Location: the four axis yaws level, and one looking
 // down the start yaw. Integers, so both consoles get the same floats.
@@ -319,7 +335,8 @@ async function play() {
           writeFileSync(path.join(dir, `${view.name}-play-decals.json`), JSON.stringify({map, view: view.name, shadows: actors.map(row => ({name: row.name, owner: row.Owner,
             location: row.Location, rotation: row.Rotation, drawScale: row.DrawScale, hasDecal: row.bHasDecal, lastLocation: row.lastLocation, surfaces: row.SurfList.length,
             lastRenderTime: row.LastRenderTime, lastRenderedTime: row.LastRenderedTime, time, ownerLocation: read[row.Owner]?.Location ?? null,
-            ownerVelocity: read[row.Owner]?.Velocity ?? null, ownerLastRenderTime: read[row.Owner]?.LastRenderTime ?? null}))}, null, 1));
+            ownerVelocity: read[row.Owner]?.Velocity ?? null, ownerLastRenderTime: read[row.Owner]?.LastRenderTime ?? null})),
+            decals: await page.evaluate(() => window.deusExViewer.decalProbe({state: true}))}, null, 1));
         }
         if (baseKind) {
           // The same view without the effect (--base fog|detail): <view>-play-base.png.
@@ -401,6 +418,25 @@ async function original() {
     writeFileSync(file, lines.join('\n') + '\n');
     game.run(file, timeout);
   };
+  // The --cmd lines, typed. `@rng <hex>` is no console line: tools/dx-live-win.c `rngpin` attaches and writes that CRT rand state at the
+  // next ULevel::SpawnActor (Engine.dll 0x10394f60, one hit), so the next line's summon draws what Play's does after its own `@rng`
+  // (view-probe.mjs): a ScorchMark's texture and AttachDecal's random direction (docs/decals.md "Combat decals against the original").
+  let pinning = null;
+  const typeCommands = async lines => {
+    let chunk = [];
+    for (const line of lines) {
+      const rng = /^@rng ([0-9a-f]{1,8})$/i.exec(line);
+      if (!rng) { chunk.push(`cmd ${line}`, 'sleep 300'); continue; }
+      if (chunk.length) post(chunk);
+      chunk = [];
+      if (pinning) await pinning;
+      const child = spawn(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'rngpin', '60', rng[1], '10394f60', '1'], {env: process.env, stdio: ['ignore', 'inherit', 'inherit']});
+      pinning = new Promise(resolve => child.on('close', resolve));
+      execFileSync('sleep', ['6']);   // the debugger attaches before the summon is typed
+    }
+    if (chunk.length) post(chunk);
+    if (pinning) { await pinning; pinning = null; }
+  };
   const loadWait = Number(option('load-wait', 25000));
   let current = option('current', null);
   for (const map of maps) {
@@ -435,9 +471,9 @@ async function original() {
       // --brightness b: the original's Brightness setting. Shot bakes a ramp of it into the bitmap (the framebuffer to the 1/(1.5 b));
       // 0.666667 makes the Shot the framebuffer (docs/visual-acceptance.md "Security cameras", item 6). Not set by default.
       post([...(option('brightness', null) ? [`cmd set WinDrv.WindowsClient Brightness ${option('brightness')}`, 'sleep 600'] : []),
-        'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300',
-        ...consoleCommands.flatMap(command => [`cmd ${command}`, 'sleep 300']),
-        `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
+        'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300']);
+      await typeCommands(consoleCommands);
+      post([`cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
       // The held level time, through the live player's Level (old levels'
       // LevelInfo objects can linger until garbage collection).
       const readLive = () => execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale',
@@ -479,7 +515,7 @@ async function original() {
       for (let retry = 0, off = checkCmds(); off.length; retry++, off = checkCmds()) {
         if (retry === 3) throw new Error(`${map}: the --cmd lines did not take (${off.map(c => c.join(' ')).join(', ')})`);
         console.log(map, `${off.map(c => c.join(' ')).join(', ')} reads otherwise: the --cmd lines again`);
-        post(consoleCommands.flatMap(command => [`cmd ${command}`, 'sleep 300']));
+        await typeCommands(consoleCommands);
       }
       if (live.length !== 1) throw new Error(`${map}: ${live.length} live players in the original`);
       if (Math.abs(Number(live[0][3]) - HELD_DILATION) > 1e-6) throw new Error(`${map}: the original's dilation is ${live[0][3]}, not ${HELD_DILATION}`);
@@ -698,7 +734,21 @@ async function original() {
               ownerLocation: owned ? [row.OwnerX, row.OwnerY, row.OwnerZ] : null, ownerVelocity: owned ? [row.OwnerVX, row.OwnerVY, row.OwnerVZ] : null,
               ownerLastRenderTime: owned ? row.OwnerLastRenderTime : null});
           }
-          writeFileSync(path.join(dir, `${view.name}-decals.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], shadows}, null, 1));
+          // The other decals (--decal-classes, default BulletHole and ScorchMark) with their FDecal entries (dump-actor-win `decals`): per SurfList
+          // surface the TArray's actors in order and this decal's own entries (Vertices bits, Nodes, MoverRotation).
+          const decals = [];
+          for (const cls of option('decal-classes', 'BulletHole,ScorchMark').split(',')) {
+            const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), cls, ...COMBAT_DECAL_FIELDS], {encoding: 'utf8', env: process.env});
+            for (const line of text.split(/\r?\n/)) {
+              const m = new RegExp(`^${cls} (\\S+) (.*)$`).exec(line.trim());
+              if (!m) continue;
+              const row = {};
+              for (const part of m[2].matchAll(/(\w+)=(\([^)]*\)|\S*)/g)) row[part[1]] = part[2].startsWith('(') ? part[2].slice(1, -1).split(',').map(Number) : Number.isNaN(Number(part[2])) ? part[2] : Number(part[2]);
+              decals.push({name: m[1], cls, location: row.Location, rotation: row.Rotation, drawScale: row.DrawScale, texture: row.Texture,
+                lastRendered: row.LastRenderedTime, time: row.LevelTime, surfaces: parseFDecals(String(row.FDecals ?? ''))});
+            }
+          }
+          writeFileSync(path.join(dir, `${view.name}-decals.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], shadows, decals}, null, 1));
         }
       }
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height} at ${readFileSync(timeFile(map, view.name), 'utf8').trim()}` : 'NO SHOT');
@@ -907,7 +957,44 @@ function decalState(dir, name) {
     if (off.length) differing.push(`${o.owner}: ${off.join(', ')}`);
   }
   return {shadows: O.length, matched, unmatched, attached: [O.filter(s => s.surfaces).length, P.filter(s => s.surfaces).length], drawn: [drawn(O), drawn(P)], differing,
-    maxLocation: +maxLocation.toPrecision(3), maxDrawScale: +maxDrawScale.toPrecision(3), maxOwnerLocation: +maxOwnerLocation.toPrecision(3)};
+    maxLocation: +maxLocation.toPrecision(3), maxDrawScale: +maxDrawScale.toPrecision(3), maxOwnerLocation: +maxOwnerLocation.toPrecision(3),
+    ...combatDecalState(files)};
+}
+// The combat decals (BulletHole, ScorchMark), matched by name: Location, Rotation, DrawScale and Texture, and per surface the FDecal TArray's actors
+// in order (the order the decal block draws them in) and the decal's own entries, Vertices bit for bit with Nodes and MoverRotation.
+function combatDecalState(files) {
+  const [O, P] = files.map(f => JSON.parse(readFileSync(f, 'utf8')).decals ?? []);
+  if (!O.length && !P.length) return {};
+  const texture = t => String(t ?? 'None').split('.').pop().toLowerCase(), byName = new Map(P.map(d => [d.name.toLowerCase(), d]));
+  const same32 = (a, b) => a && b && a.length === b.length && a.every((v, i) => Math.fround(v) === Math.fround(b[i]));
+  const differing = [];
+  let matched = 0, entries = 0, entriesEqual = 0;
+  for (const o of O) {
+    const p = byName.get(o.name.toLowerCase());
+    if (!p) { differing.push(`${o.name}: not in Play`); continue; }
+    matched++;
+    const off = [];
+    if (!same32(o.location, p.location)) off.push(`Location ${o.location}/${p.location}`);
+    if (o.rotation.some((v, i) => v !== p.rotation[i])) off.push(`Rotation ${o.rotation}/${p.rotation}`);
+    if (!same32([o.drawScale], [p.drawScale])) off.push(`DrawScale ${o.drawScale}/${p.drawScale}`);
+    if (texture(o.texture) !== texture(p.texture)) off.push(`Texture ${o.texture}/${p.texture}`);
+    if (o.surfaces.map(s => s.surface).join() !== p.surfaces.map(s => s.surface).join())
+      off.push(`SurfList ${o.surfaces.map(s => s.surface)}/${p.surfaces.map(s => s.surface)}`);
+    for (const os of o.surfaces) {
+      const ps = p.surfaces.find(s => s.surface === os.surface);
+      if (!ps) continue;
+      if (os.order.map(n => n.toLowerCase()).join() !== ps.order.map(n => String(n).toLowerCase()).join()) off.push(`surface ${os.surface} order ${os.order}/${ps.order}`);
+      for (const oe of os.own) {
+        entries++;
+        const pe = ps.own.find(e => e.index === oe.index);
+        if (pe && oe.vertices.join() === pe.vertices.join() && oe.nodes.join() === pe.nodes.join() && oe.mover.join() === pe.mover.join()) entriesEqual++;
+        else off.push(`surface ${os.surface} entry ${oe.index} differs`);
+      }
+    }
+    if (off.length) differing.push(`${o.name}: ${off.join(', ')}`);
+  }
+  for (const p of P) if (!O.some(o => o.name.toLowerCase() === p.name.toLowerCase())) differing.push(`${p.name}: not in the original`);
+  return {combatDecals: {original: O.length, play: P.length, matched, entries, entriesEqual, differing}};
 }
 
 // compare --beams: the laser beams' geometry. A beam is the only strongly red thing in the Island doorways, so a pixel's beam energy is its red excess

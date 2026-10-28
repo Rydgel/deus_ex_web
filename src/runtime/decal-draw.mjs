@@ -8,13 +8,18 @@
  * D3D texture coordinates `tu = U · f(1/f(USize·Scale))`, U the in-plane
  * distance over DrawScale.
  *
- * Host choices, noted: fragments are drawn from their world points (the
- * page projects them; ClipDecal's screen clamp for points flagged outside
- * the view is not applied, and the clipped fragments lie inside the saved,
- * view-clipped polygons); the fragment order is the occlusion stream's
- * (DrawFrame sorts the occluding list; modulated blends commute up to the
- * framebuffer's rounding); mirror and sky child frames draw no decals
- * (mirrors never do; sky children are not run). */
+ * The fragments keep the decal block's order (decal.rs decal_clip_frame:
+ * within a draw item each FDecal in TArray order, then each saved polygon)
+ * and travel as runs of one texture, which the page draws one after another:
+ * `2·texel·dst` rounds and clamps on the 8-bit target, so two overlapping
+ * decals of different textures do not commute.
+ *
+ * Host choices, noted: the draw items come in the occlusion stream's order,
+ * not DrawFrame's three lists (portals reversed, occluding sorted by Key,
+ * non-occluding as linked: 0x10b1a404..0x10b1a45f); fragments of different
+ * items overlap on screen only where coplanar surfaces overlap. Mirror and
+ * sky child frames draw no decals (mirrors never do; sky children are not
+ * run). */
 import { toView } from '../unreal/geometry.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 import { identityOfHandle } from './script-object-handles.mjs';
@@ -49,8 +54,9 @@ export function createDecalDraw(runtime, kernel) {
       return Boolean(level?.decals && level.decals.store.count > 0 && level.engine?.client?.decals);
     },
     /** One frame: `stream` the occlusion's output (`{at, words}`), `framePtr`
-     * its frame words, `viewer` the viewport actor. Returns the texture
-     * groups ({texture, positions, uvs}, view space, triangles). */
+     * its frame words, `viewer` the viewport actor. Returns the runs of one
+     * texture in draw order ({texture, positions, uvs}, view space,
+     * triangles). */
     frame(level, viewer, framePtr, stream) {
       // The tracker came after the first AttachDecal: its model now.
       const decals = level.decalSource !== level.decals.source ? levelDecals(level) : level.decals, info = level.actors[0];
@@ -70,7 +76,8 @@ export function createDecalDraw(runtime, kernel) {
       const time = f(read(info, 'TimeSeconds'));
       const sprite = (() => { try { return read(viewer, 'Sprite'); } catch { return null; } })();
       const defaultTexture = read(info, 'DefaultTexture');
-      const groups = new Map(), stamped = new Set();
+      const runs = [], stamped = new Set();
+      let run = null;
       for (let i = 0; i < words;) {
         const handle = data[i], count = data[i + 2];
         const at = i + 3;
@@ -82,18 +89,16 @@ export function createDecalDraw(runtime, kernel) {
         const reference = sprite ?? read(actor, 'Texture') ?? defaultTexture;
         if (!reference) continue;
         const tex = textureInfo(reference), drawScale = f(read(actor, 'DrawScale'));
-        let group = groups.get(tex.key);
-        if (!group) groups.set(tex.key, group = { texture: tex.texture, positions: [], uvs: [] });
+        if (run?.key !== tex.key) runs.push(run = { key: tex.key, texture: tex.texture, positions: [], uvs: [] });
         const vertex = k => {
           const o = at + 5 * k;
-          group.positions.push(...toView([num(data[o]), num(data[o + 1]), num(data[o + 2])]));
-          group.uvs.push(f(f(num(data[o + 3]) / drawScale) * tex.uMult), f(f(num(data[o + 4]) / drawScale) * tex.vMult));
+          run.positions.push(...toView([num(data[o]), num(data[o + 1]), num(data[o + 2])]));
+          run.uvs.push(f(f(num(data[o + 3]) / drawScale) * tex.uMult), f(f(num(data[o + 4]) / drawScale) * tex.vMult));
         };
         // D3DPT_TRIANGLEFAN of the ClipDecal points in order.
         for (let k = 1; k + 1 < count; k++) { vertex(0); vertex(k); vertex(k + 1); }
       }
-      return [...groups.values()].map(g => ({ texture: g.texture, positions: Float32Array.from(g.positions),
-        uvs: Float32Array.from(g.uvs) }));
+      return runs.map(r => ({ texture: r.texture, positions: Float32Array.from(r.positions), uvs: Float32Array.from(r.uvs) }));
     },
     dispose() { if (out) kernel.free(out); out = 0; cap = 0; },
   };

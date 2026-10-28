@@ -6,6 +6,7 @@
  *
  * Types: f (float), f3 (three floats), i3 (three ints), u8, u32,
  * bit (u32 at offset & mask), obj (UObject* -> its name), name (FName -> text),
+ * decals (a Decal's FDecal entries on its SurfList's surfaces; the offset is unused, e.g. FDecals:0:decals),
  * pf (the float at <mask> inside the object the pointer at <offset> names,
  * e.g. LevelTime:0xa8:pf:0x478 for Level.TimeSeconds).
  * Offsets are the linked UProperty offsets (UProperty +0x48; bool masks
@@ -105,6 +106,38 @@ int main(int argc, char **argv) {
         if (p) read_mem(p + strtoul(mask ? mask : "0", NULL, 0), &v, 4);
         printf(" %s=%.9g", field, v);
       } else if (!strcmp(type, "name")) { char text[256]; name_text(read_u32(at), text, sizeof(text)); printf(" %s=%s", field, text); }
+      else if (!strcmp(type, "decals")) {
+        /* A Decal's FDecal entries (docs/decals.md "Authority"): for each surface of its SurfList (TArray +0x320), through
+         * XLevel (+0xac) -> Model (ULevel +0x98) -> Surfs (UModel +0x98, FBspSurf stride 0x40, Decals TArray +0x28), every entry in
+         * array order as <its actor's name>, and this decal's own entries with Vertices[4] (+0, float bits), Nodes (+0x34) and
+         * MoverRotation (+0x40), with no spaces: <s>[a,b,...|k:v0x.v0y.v0z.v1x...:n<node>.<node>:m<pitch>.<yaw>.<roll>], ";" between surfaces */
+        uintptr_t surfs = read_u32(read_u32(read_u32(obj + 0xac) + 0x98) + 0x98), list = read_u32(obj + 0x320);
+        int count = (int)read_u32(obj + 0x324);
+        printf(" %s=", field);
+        for (int i = 0; i < count && i < 64; i++) {
+          unsigned s = read_u32(list + 4 * i);
+          uintptr_t surf = surfs + 0x40u * s, decals = read_u32(surf + 0x28);
+          int n = (int)read_u32(surf + 0x2c);
+          printf("%s%u[", i ? ";" : "", s);
+          for (int k = 0; k < n && k < 256; k++) {
+            char text[256] = "None"; uintptr_t actor = read_u32(decals + 0x4cu * k + 0x30);
+            if (actor) name_text(read_u32(actor + OFF_OBJECT_NAME), text, sizeof(text));
+            printf("%s%s", k ? "," : "", text);
+          }
+          for (int k = 0; k < n && k < 256; k++) {
+            uintptr_t d = decals + 0x4cu * k;
+            if (read_u32(d + 0x30) != obj) continue;
+            unsigned v[12], rot[3]; read_mem(d, v, 48); read_mem(d + 0x40, rot, 12);
+            printf("|%d:", k);
+            for (int j = 0; j < 12; j++) printf("%s%08x", j ? "." : "", v[j]);
+            int nodes = (int)read_u32(d + 0x38); uintptr_t nd = read_u32(d + 0x34);
+            printf(":n");
+            for (int j = 0; j < nodes && j < 64; j++) printf("%s%u", j ? "." : "", read_u32(nd + 4 * j));
+            printf(":m%d.%d.%d", (int)rot[0], (int)rot[1], (int)rot[2]);
+          }
+          printf("]");
+        }
+      }
     }
     printf("\n");
   }
