@@ -109,6 +109,25 @@ function lightReferences(model, lightMap) {
   throw new Error('Unterminated surface light list');
 }
 
+/** Leaves[leaf].iPermeating's run of the level's Lights list, up to its zero
+ * (as coronas.mjs leafPermeatingLights); none for leaf −1. */
+function leafLights(model, leaf) {
+  const start = leaf >= 0 ? model.leaves[leaf]?.permeating ?? -1 : -1, refs = [];
+  if (start < 0) return refs;
+  for (let index = start; index < model.lights.length && model.lights[index]; index++) refs.push(model.lights[index]);
+  return refs;
+}
+
+/** SetupForSurf's facet test for a bDynamicLightMover surface
+ * (0x10b06f7c..0x10b06fb2): `((L − O)·Z)` at the render pass's 24-bit
+ * precision, in its order (z and y terms summed first), FCOMP against 0.0
+ * at 0x10b2a5f0; the light passes only when the sum is greater. */
+function inFrontOfFacet(location, origin, normal) {
+  const f = Math.fround, [lx, ly, lz] = location.map(f), [ox, oy, oz] = origin.map(f), [zx, zy, zz] = normal.map(f);
+  const z = f(lz - oz), y = f(ly - oy), x = f(lx - ox);
+  return f(f(f(y * zy) + f(z * zz)) + f(x * zx)) > 0;
+}
+
 function changeValues(values) {
   if (values == null) return null;
   if (typeof values !== 'object' || Array.isArray(values)) throw new TypeError('Light change values must be an object');
@@ -177,6 +196,8 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
   const spatialKernel = (chosenKernel ?? scriptVmKernel)?.spatial ?? null;
   if (spatialKernel && !spatialKernel.ready) spatialKernel.tables(squareRootTable(), normalLightTable());
   let movingApplier = null;
+  // The bDynamicLightMover brushes (dynamicLightMover): owner → its bSpecialLit, light-map records and last cache header.
+  const dynamicMovers = new Map();
 
   // Moving lights (docs/dynamic-lighting.md) add onto a copy of the static
   // texels, as SetupForSurf's per-frame pass copies the static cache item.
@@ -202,10 +223,11 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
 
   /** The light map's facet and texel grid as SetupForSurf sees them: a level
    * surface keeps its serialized float facet; a brush surface moves with its
-   * transform (as moving-lights.mjs). */
+   * transform (as moving-lights.mjs), a bDynamicLightMover's with its
+   * current pose (`relightMover`). */
   function geometry(result) {
     if (!result.staticGeometry) {
-      const { model, surface, basis, transform, transformNormal, lightMap, owner } = result;
+      const { model, surface, basis, lightMap, owner } = result, { transform, transformNormal } = result.pose ?? result;
       const base = model.points[surface.base], vectors = model.vectors, origin = transform(base);
       const along = vector => transform(base.map((v, i) => v + vector[i])).map((v, i) => v - origin[i]);
       const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
@@ -234,7 +256,10 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       return { values, location: (values.Location ?? [0, 0, 0]).map(Math.fround), ref };
     });
     const { facet, grid } = geometry(result), animated = [];
-    result.baseTexels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights, shadowBits: model.lightBits,
+    // A bDynamicLightMover's lights go to AddLight with no shadow mask: the
+    // illumination is 0x7f everywhere (0x10b06fc4).
+    result.baseTexels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights,
+      shadowBits: result.dynamicLight ? null : model.lightBits,
       shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv, animated, spatial: spatialKernel,
       timeSeconds: lightFrame?.timeSeconds ?? 0 });
     result.animated = animated;
@@ -294,6 +319,43 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       else result.staticPixels = null;
     },
     recordsFor(model, surfaceIndex) { return bySurface.get(model)?.get(surfaceIndex) ?? []; },
+    /** Mark `owner`'s brush as a bDynamicLightMover (Mover +0x38c bit 0x10) before its surfaces are made: SetupForSurf
+     * lights its surfaces from the level leaf the mover is in (relightMover), not from the brush's own light lists. */
+    dynamicLightMover(owner, { specialLit = false } = {}) {
+      dynamicMovers.set(owner, { specialLit: Boolean(specialLit), records: [], header: null });
+    },
+    /** Whether a bDynamicLightMover's light maps would be built again: its cache item holds the mover's Region.iLeaf,
+     * Location and Rotation (0x10b07f4a..0x10b07f86), and a hit is reused only when all of them match
+     * (0x10b07e39..0x10b07ebe: FCOMP's equality for Location, so a NaN never matches; CMP for the leaf and Rotation).
+     * Nothing is allocated: Play asks every frame. */
+    moverHeaderChanged(owner, leaf, location, rotation) {
+      const mover = dynamicMovers.get(owner), last = mover?.header, f = Math.fround;
+      if (!mover) return false;
+      return !last || last[0] !== (leaf | 0) || last[1] !== f(location[0]) || last[2] !== f(location[1]) || last[3] !== f(location[2])
+        || last[4] !== (rotation[0] | 0) || last[5] !== (rotation[1] | 0) || last[6] !== (rotation[2] | 0);
+    },
+    /** SetupForSurf's bDynamicLightMover branch (0x10b06efe..0x10b06fd5, docs/static-lighting.md), for a new cache header
+     * (moverHeaderChanged): each light map's lights are those of Leaves[leaf].iPermeating in the level's Lights list that
+     * lie in front of its facet and share the mover's bSpecialLit, unshadowed; leaf −1 lists none. `transform` and
+     * `transformNormal` (Unreal axes) place the brush at `location`/`rotation`. Returns the records built again. */
+    relightMover(owner, { leaf, location, rotation, transform, transformNormal }) {
+      const mover = dynamicMovers.get(owner);
+      if (!mover) return [];
+      mover.header = [leaf | 0, ...location.map(Math.fround), ...rotation.map(n => n | 0)];
+      const candidates = leafLights(map.model, leaf), placed = { transform, transformNormal };
+      for (const result of mover.records) {
+        result.pose = placed; result.staticGeometry = null;
+        const { facet } = geometry(result);
+        const refs = candidates.filter(ref => {
+          const values = actors.get(ref);
+          if (!values) throw new Error(`Unprepared light ${ref}`);
+          return inFrontOfFacet(values.Location ?? [0, 0, 0], facet.origin, facet.normal) && Boolean(values.bSpecialLit) === mover.specialLit;
+        });
+        result.lightEntries = refs.map(ref => ({ ref })); result.lightRefs = new Set(refs);
+        refill(result);
+      }
+      return mover.records;
+    },
     /** SetupForSurf's per-frame class 1 merge for every light map with an
      * animated light (`frame` from static-lighting.mjs createLightFrame,
      * advanced once per drawn frame); returns the records whose texels
@@ -344,14 +406,17 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
       // A texel's world point is transform(basis.point(x, y)), computed where needed (world.mjs texelSphere), not kept per texel
       // (docs/live-heap.md, step 1).
-      const refs = lightReferences(model, lm), pitch = (width + 7) >> 3;
+      // A bDynamicLightMover's surface lists no lights until relightMover gives it its leaf's.
+      const dynamicMover = owner !== null ? dynamicMovers.get(owner) ?? null : null;
+      const refs = dynamicMover ? [] : lightReferences(model, lm), pitch = (width + 7) >> 3;
       if (refs.length && lm.dataOffset + refs.length * pitch * height > model.lightBits.length)
         throw new Error('Shadow mask outside serialized lighting data');
       const lightEntries = refs.map(ref => ({ ref }));
       stats.shadowMasks += lightEntries.length;
       const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
         model, surfaceIndex, surface, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,
-        basis, lightMap: lm, owner, staticPixels: null, moving: null };
+        basis, lightMap: lm, owner, staticPixels: null, moving: null, dynamicLight: Boolean(dynamicMover), pose: null };
+      dynamicMover?.records.push(result);
       refill(result);
       cache.set(key, result); cacheRecords.add(result); stats.lightmaps++;
       if (!bySurface.has(model)) bySurface.set(model, new Map());

@@ -216,16 +216,118 @@ view space.
   lights instead come from the **level's** leaf
   (`Leaves[iLeaf].iPermeating` into `Model.Lights`, `0x10b06f0b..0x10b06fd8`).
   - A light passes only if it is in front of the facet:
-    `(L − Origin)·Z` against the constant at `0x10b2a5f0`.
-  - Its `+0x1ec` bit 0 must equal the actor's.
-  - It goes to AddLight with no shadow mask.
-  - The leaf's dynamic lights follow the same way (`0x10b06fd8..`).
+    `(L − Origin)·Z` against the constant at `0x10b2a5f0`, which is the
+    double 0.0. The sum is `(y·Zy + z·Zz) + x·Zx` of the three differences,
+    at the render pass's 24-bit precision; FCOMP with `test ah, 0x41`
+    rejects "less" and "equal", so only a sum above zero passes
+    (`0x10b06f7c..0x10b06fb2`).
+  - Its `+0x1ec` bit 0 (bSpecialLit) must equal the actor's.
+  - It goes to AddLight with Actor NULL (`push 0`, `0x10b06fc8`), so AddLight
+    classes it as it classes a static-list light. No shadow mask is set: the
+    static path writes the mask pointer after AddLight (`0x10b070f1`), and this
+    branch does not. Its illumination is therefore `0x7f` everywhere.
+  - The leaf's dynamic lights follow (`Draw->SurfLights`, `0x10b06fd8..`), but
+    go to AddLight with Actor set to the mover (`push esi`, `0x10b06ffb`).
+    With a non-null Actor, AddLight (`0x10b08b72`) makes any light class 2.
+  - With Region.iLeaf −1, or a level with no leaves (`0x10b06f0b..0x10b06f2b`),
+    the branch jumps past every light, dynamic ones included.
+- **The cache header** (every brush-tracker surface, not only
+  bDynamicLightMover). The static map's cache ID is
+  `(Actor index << 32) + (iLightMap << 16 | zone << 8 | 0x18)`
+  (`0x10b07d27..0x10b07d66`; Actor is null for a level surface). The item
+  starts with the actor's Region.iLeaf, Location and Rotation
+  (`0x10b07f4a..0x10b07f86`). On a hit, the item is reused only when all
+  seven words match (`0x10b07e39..0x10b07ebe`: Location by FCOMP equality,
+  the leaf and Rotation by CMP). Otherwise, and when AddLight saw a light
+  with `+0x28` bit 0x400 (bLightChanged, `0x10b08c3c`), the map is built
+  again from the actor's current place.
 
   93 of the 2,075 movers on the single-player maps set it, among them
   Training Combat's BreakableGlass0..3, Island's DeusExMover1 and Battery
   Park's DeusExMover0, 8, 39 and 40.
-  **Play does not model this branch**: it lights every mover from its brush's
-  light maps.
+
+**Play (2026-10-28).** Play lights a bDynamicLightMover through this branch
+(`relightMover` in `src/unreal/lighting.mjs`). The bug that found it:
+00_TrainingCombat's shooting-range targets were invisible in Play, in both
+Firefox (inline) and Chromium (worker); only their holders drew, pure black.
+Each target is a BreakableGlass. Its paper is one PF_Translucent|PF_TwoSided
+polygon (Uob_Target_F) whose blend adds `texture × light`. It hangs from a
+DeusExMover holder, and all eight range movers set bDynamicLightMover. Their
+brushes were built at y −3280, inside solid space (leaf −1). So every brush
+light map lists no light (`iLightActors` −1, no shadow bits), and its texels
+are the zone ambient: 0 here, since every zone is the LevelInfo's. Play lit
+movers from those lists alone and never rebuilt them. The black paper
+therefore added nothing to the frame.
+
+The original lights the paper from leaf 1715 at the firing position (y −1216).
+That leaf has 17 permeating lights, among them Light55 at (40, −1201, −88).
+
+- **Leaf.** The simulation sends the mover's Region.iLeaf with its state
+  (`sim-session.mjs` movers, only for a mover that sets the flag). SetActorZone
+  sets that leaf after every MoveActor commit
+  ([mover move](mover-move.md)). No script writes bDynamicLightMover:
+  Mover.uc only declares it. So the flag is read once, from the actor's
+  values.
+- **Rebuild.** `world.syncMovers` hands each such mover's leaf, Location,
+  Rotation and current brush matrix to `relightMover`. It rebuilds the
+  mover's light maps when that header differs from the last build's. The
+  light list is the leaf's permeating lights that pass the facet test (the
+  facet from the current matrix) and the bSpecialLit test. They are merged
+  with `staticLightMap` with no shadow bits, so the illumination is `0x7f`.
+- **Before the first frame.** The world build starts each such mover at the
+  leaf of `PointRegion(Location)`, which is what SetActorZone gives it at
+  begin play. Inspect, which has no simulation, keeps that.
+
+Evidence:
+- `validate-dynamic-light-mover` checks BreakableGlass0 and DeusExMover4 on
+  the map data:
+  - at leaf −1, ambient only;
+  - slid in by KeyPos[1], leaf 1715, and each light map lists exactly the
+    in-front lights with the same bSpecialLit (10 on the paper, 1 to 16 on
+    the holder's polygons), unshadowed and lit;
+  - an unchanged header builds nothing again, and a moved Location does.
+- The original under Wine on the Linux host: `open 00_TrainingCombat`,
+  `ghost`, `causeevent guntarget1` and `rifletarget1`, then 7 s, then two
+  cameras ((0, −910, −110) and (992, −910, −110), Pitch 65059, Yaw 49152),
+  each taken with the game's Shot.
+  - The live actors (`dump-actor-win`) read back BreakableGlass0 at
+    (0, −1216, −84) with Region.iLeaf 0x6b3 (1715), the leaf Play computes.
+    BreakableGlass2 is at (992, −1216, −84) with leaf 0x779. The untriggered
+    BreakableGlass1 and 3 stay at y −3280 with leaf −1. Bit 0x10 of +0x38c
+    reads 1 on all four, which confirms the field.
+  - Both frames show the paper lit, with the holder's bar dark above it.
+- Play at the same cameras, framed as `visual-acceptance.mjs play` frames
+  it (1280×720, Brightness 0.4, no detail textures), draws the targets in
+  the same place.
+  - Firefox inline and worker, and Chromium worker and inline, give
+    identical frames, with no runtime error.
+  - Mean levels over the paper (120×170 at 580, 272) are 40.0, 42.2, 47.5
+    against the original's 33.3, 35.3, 40.1. Over a wall patch they are
+    28.4, 30.3, 37.1 against 22.3, 24.0, 30.0. Play is brighter by the same
+    factor on both, about 1.2 to 1.27: this is the known uniform brightness
+    gap under Wine ([visual acceptance](visual-acceptance.md), 1.13 to 1.46
+    elsewhere). The paper is 1.41 times the wall in Play and 1.49 times in
+    the original.
+  - Before the change, the paper's polygon added nothing in Firefox inline
+    and in Chromium worker (the swapped modes were not run then; the light
+    maps are the page's in both). Only the holder drew, at texel 0, so pure
+    black.
+
+Open:
+- **Ordinary movers.** The cache header applies to every mover. A mover
+  without the flag rebuilds its static map from its brush list (with shadow
+  masks) wherever it moves. Play still builds those once, at the authored
+  place.
+- **Zone ambient.** A mover's zone (the ambient and the cache ID's zone byte)
+  is still the zone of its brush centre at the authored place. The draw
+  item's zone comes from the brush tracker's node, which is not recovered.
+- **Rotated movers.** Moving lights on a rotated mover keep its authored
+  orientation, as before. The rebuilt static map uses the full current
+  matrix.
+- **Class and leaf −1.** A class 2 light in a leaf's list is left out with a
+  note, as for static lists. The moving lights (`moving-lights.mjs`) do not
+  yet treat a bDynamicLightMover's Actor-set AddLight (every light class 2)
+  or the leaf −1 skip.
 
 ## Singular light-map bases
 

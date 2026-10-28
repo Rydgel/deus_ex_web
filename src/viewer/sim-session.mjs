@@ -249,8 +249,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   const moverValues = new Map(game.collision.movers.map(mover => [mover.name, {
     MainScale: mover.values.MainScale, PostScale: mover.values.PostScale, PrePivot: mover.values.PrePivot,
     Rotation: mover.values.Rotation }]));
+  // A bDynamicLightMover (no script writes it: Mover.uc only declares it) also sends its Region.iLeaf, which SetupForSurf
+  // reads (+0xcc) for its surfaces' lights (lighting.mjs relightMover).
+  const dynamicLightMovers = new Set(game.collision.movers.filter(mover => mover.values.bDynamicLightMover).map(mover => mover.name));
+  const leafOf = mover => runtime.readNamed(mover, 'Region')?.['engine.actor.pointregion.ileaf'] ?? -1;
   const movers = () => game.collision.movers.map(mover => ({ name: mover.name, values: moverValues.get(mover.name),
-    position: [...mover.position], rotation: mover.rotation ? [...mover.rotation] : null, offset: [...mover.collider.offset] }));
+    position: [...mover.position], rotation: mover.rotation ? [...mover.rotation] : null, offset: [...mover.collider.offset],
+    leaf: dynamicLightMovers.has(mover.name) ? leafOf(mover) : undefined }));
   const plainView = view => ({ location: [...view.location], rotation: [...view.rotation], fov: view.fov });
   const plainLight = light => ({ handle: handleOf(light.actor), name: light.name, location: light.location,
     values: light.values, levelBrightness: light.levelBrightness, flickerKey: light.flickerKey });

@@ -5,6 +5,7 @@ import { buildSurfaceGeometry, POLY, toView, fromView } from '../unreal/geometry
 import { brushMatrix } from './transforms.mjs';
 import { moverGroupMatrix } from './mover-matrix.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
+import { pointRegion } from '../runtime/zone.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { readPolys, moverModelFromPolys } from '../unreal/polys.mjs';
@@ -356,15 +357,19 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   }
   for (const actor of moverActors) {
     try {
-      const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush);
+      const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush), values = await classDefaults.forActor(asset, actor);
       // The brush tracker's surfaces: one per polygon (polys.mjs).
       const { model, triangles } = moverModelFromPolys(rawModel, readPolys(asset.pkg, asset.bytes, rawModel.polygons),
-        { specialLit: Boolean((await classDefaults.forActor(asset, actor)).bSpecialLit) });
+        { specialLit: Boolean(values.bSpecialLit) });
       const group = new THREE.Group();
       group.matrix.copy(brushMatrix(actor.values)); group.matrixAutoUpdate = false;
       group.userData.baseMatrix = group.matrix.clone(); moverGroups.set(actor.name, group);
       root.add(group);
+      if (values.bDynamicLightMover) lighting.dynamicLightMover(actor.name, { specialLit: values.bSpecialLit });
       await addModel(model, triangles, group, actor.name, group.matrix);
+      // Its light maps start from the leaf SetActorZone gives its authored Location; Play's frames then send Region.iLeaf.
+      if (values.bDynamicLightMover) relightMover(actor.name, pointRegion(map.model, actor.values.Location, {}, []).leaf,
+        actor.values.Location, actor.values.Rotation ?? [0, 0, 0], group.matrix);
       // The group's and its meshes' world matrices now; syncMovers redoes
       // this on a change (nothing cascades from the root).
       group.updateMatrixWorld(true);
@@ -415,7 +420,17 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
     return { ...update, uploaded: update.lightmaps.length };
   }
-  const moverMatrix = new THREE.Matrix4();
+  /** A bDynamicLightMover's light maps at its pose (lighting.mjs relightMover) when its leaf, Location or Rotation
+   * changed; `matrix` is its brush matrix in three's axes. The rebuilt tiles upload on the next flushLighting. */
+  function relightMover(name, leaf, location, rotation, matrix) {
+    if (!lighting.moverHeaderChanged(name, leaf, location, rotation)) return;
+    const placed = matrix.clone(), normal = new THREE.Matrix3().getNormalMatrix(placed);
+    const records = lighting.relightMover(name, { leaf, location, rotation,
+      transform: p => fromView(new THREE.Vector3(...toView(p)).applyMatrix4(placed).toArray()),
+      transformNormal: n => fromView(new THREE.Vector3(...toView(n)).applyMatrix3(normal).toArray()) });
+    for (const record of records) lightAtlas.update(record, { partial: true });
+  }
+  const moverMatrix = new THREE.Matrix4(), NO_ROTATION = Object.freeze([0, 0, 0]);
   // The vertices a mover's meshes project (docs/frame-projection.md "Movers"),
   // in Unreal's axes: the brush tracker's points once the simulation sends
   // them (`setMoverPoints`), else the group matrix's product with the rest
@@ -472,6 +487,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
           if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
         }
+        // A bDynamicLightMover's state carries its Region.iLeaf (sim-session.mjs).
+        if (mover.leaf !== undefined) relightMover(mover.name, mover.leaf, mover.position, mover.rotation ?? mover.values.Rotation ?? NO_ROTATION,
+          moverMatrix);
         if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
         group.matrix.copy(moverMatrix);
         group.updateMatrixWorld(true);
