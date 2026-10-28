@@ -296,6 +296,35 @@ of change can therefore shorten them:
   on the escalated slices; TOO_MUCH_MALLOC counts malloc'd memory such as ArrayBuffers
   made per frame.
 
+## Chromium on a loaded machine (2026-10-28)
+
+The user feels GC pauses in Chrome on the Mac when the machine is already busy. The Linux host is fast enough to hide them, so
+the browser was pinned to two cores (`taskset -c 0,1`: the page, the worker, the GPU process and V8's GC helper threads share them)
+to stand in for a loaded machine. Each run is 120 s of Play on master `d746241a`: `hitch-run.mjs --mode roam --trace`, with
+`--worker-profile` where marked, Chromium worker mode, from 5 s after the map.
+
+| Map | Cores | Gaps over 50 ms | Over 100 ms | Longest | Worker major GCs | Worker heap after a major GC |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| UNATCO Island | 16 | 0 | 0 | 50 ms | 2 | 680, 687 MB |
+| UNATCO Island | 2 | 10 | 4 | 300 ms | 2 | 668, 667 MB |
+| UNATCO Island, profiled | 2 | 9 | 2 | 300 ms | 1 | 671 MB |
+| WanChai Underworld | 16 | 0 | 0 | 50 ms | 1 | 645 MB |
+| WanChai Underworld | 2 | 6 | 2 | 350 ms | 1 | 635 MB |
+
+**Where the long frames go.** The long gaps are long worker frames, in pairs. The worker's CPU profile puts most of each in the
+garbage collector: 212 of 273 ms and 185 of 255 ms on the Island, 263 of 315 ms and 84 of 138 ms in WanChai. The trace of the
+Island pair shows one major GC cycle of the worker's heap. V8's background marking ran 1.4 s on the helper threads (one stretch
+457 ms), could not keep up on two cores, and the rest fell to the worker thread: 68 incremental marking steps (378 ms) and a 37 ms
+finalization. With all cores the same cycle stays in the background and no frame is late. The page's major GCs (3 to 8 a run)
+take at most 17 ms.
+
+**What it says.** A loaded machine turns each major GC of the worker into a pause of a few hundred milliseconds: about one pair
+of long frames per one or two minutes of play here. The marking work follows what the worker keeps alive, 635 to 690 MB and about
+91 M references on the Island (the families above). The marking time can only fall with fewer references to trace (steps 3 to 9).
+Less garbage would make the cycles rarer, but not shorter. Each step removes 5 to 12% of the references, so getting such a pause
+under 100 ms needs most of the plan, not one step. Not measured: the Mac itself; play with fighting, conversations or explosions;
+Firefox under the same pinning.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do

@@ -46,7 +46,7 @@ add('7.2.2', 'every supported browser: drawn-frame interval p95 ≤ 16.7 ms on t
     need: 'a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux'});
 add('7.2.3', 'Chrome: from a map\'s first 5 s on, no drawn-frame gap over 100 ms in a 120 s roam', 'H', 'PARTIAL',
   {machine: MAC, proof: ['hitch-run.mjs --mode roam --seconds 120', 'hitch-summary.mjs'],
-    weak: 'measured on Linux only (after 2026-10-27, one roam: draw gap p99 16.8 ms, one 26 ms worker GC); not on the Mac'});
+    weak: 'Linux only: with all cores, no gap over 100 ms on the Island and WanChai Underworld; pinned to two cores (a loaded machine, where the user feels it on the Mac) 2 to 4 gaps over 100 ms a run, up to 350 ms, each the worker\'s major GC (2026-10-28, docs/live-heap.md); not on the Mac'});
 add('7.2.4', 'Firefox inline: from a map\'s first 5 s on, no gap over 150 ms and at most two over 50 ms a minute (D3)', 'H', 'FAIL',
   {decision: 'D3', machine: `${MAC}, ${LINUX}`, proof: ['hitch-ab.mjs or hitch-run.mjs --browser firefox', 'hitch-summary.mjs'],
     weak: 'fails today: 26 to 31 gaps over 50 ms and 6 to 8 over 90 ms in 65 s from 40 s after the map, longest 133 ms (Linux, 2026-10-28); the work is the parked live-heap plan'});
