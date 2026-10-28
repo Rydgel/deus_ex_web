@@ -30,7 +30,9 @@ export function decodeScript(script) {
   const nameRef = () => { const nameIndex=r.compact(); pc+=4; return {nameIndex,name:nameAt(pkg,nameIndex)}; };
   function expression(depth=0) {
     if (depth>128 || pc>=size) throw new PackageError('Invalid script expression nesting or size',r.offset);
-    const offset=pc,serializedOffset=r.offset,op=byte(),n={op,offset,serializedOffset};
+    // (the byte offset in the package is kept for the error message only: as fields of every node, it and the end were two boxed
+    // numbers each, 750,000 objects in the worker's heap on the Island, and nothing read them; docs/live-heap.md)
+    const offset=pc,serializedOffset=r.offset,op=byte(),n={op,offset};
     const child=()=>expression(depth+1);
     const args=()=>{const result=[];for(;;){const arg=child();if(arg.op===0x16)return result;result.push(arg);}};
     if(op>=0x60){n.op='native';n.index=op<0x70?((op-0x60)<<8)+byte():op;n.args=args();}
@@ -73,7 +75,7 @@ export function decodeScript(script) {
       default:throw new PackageError(`Unsupported executable script opcode 0x${op.toString(16)}`,serializedOffset);
     }
     if(pc>size)throw new Error('Expanded script length mismatch');
-    n.token=op;n.end=pc;n.serializedEnd=r.offset;expressions.set(offset,n);return n;
+    n.token=op;n.end=pc;expressions.set(offset,n);return n;
   }
   while(pc<size){const offset=pc,node=expression();statements.set(offset,{node,next:pc});}
   if(pc!==size||r.offset!==bytes.length)throw new Error('Expanded script length mismatch');

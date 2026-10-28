@@ -357,8 +357,15 @@ references removed. The pauses are within the run-to-run spread: on the Island 2
 300 ms (300 and 300 before); in WanChai a longest of 283 ms (350 before), 2 gaps over 100 ms both times. The worker's median
 frame was 12.0 to 13.1 ms after against 13.2 to 14.7 before, which may be less marking competing for the two cores (indicative).
 As expected, the pauses need the larger families removed: the load graph (step 7, about 11 M references) and the bytecode trees
-(step 8, about 11 M). One more cheap candidate: `serializedOffset` and `serializedEnd` on the decoded bytecode expressions are
-376,000 boxed numbers each in V8 (about 1.5 M references).
+(step 8, about 11 M).
+
+**The bytecode nodes' package offsets.** `decodeScript` (bytecode.mjs) gave every expression `serializedOffset` and, after its
+operands, `serializedEnd`: its byte range in the package, which nothing reads (the decoder keeps the start for its error message).
+In the worker they were boxed numbers (376,000 each on the Island). Without them the worker holds 15.39 M objects (16.60 M), 80.7 M
+references (84.9 M) and 625 MB (639 MB): 1.21 M fewer objects, more than the fields themselves, since the heap's boxed numbers
+fell by 1.22 M. The state digests are the same on the Island, Training and the 747, and `validate-script-vm-interp` (539,583
+checks against the JavaScript VM), `validate-script-process` and `validate-script-vm-x87` pass. Since this morning the worker has
+lost 14.5% of its objects and 11.7% of its references.
 
 ## Open
 
