@@ -80,6 +80,9 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // world built them (no SetupForSurf cache header, world.relightMovers), the
 // A arm of its cost (docs/static-lighting.md "Mover surfaces in SetupForSurf").
 const moverRelight=new URLSearchParams(location.search).get('moverRelight')!=='off';
+// Measurement only: ?fogOrder=last draws the fog-map pass after every other world item, its place before 2026-10-28, the A arm
+// of DrawComplexSurface's order (render-layers.mjs FOG_RENDER_ORDER; deusExViewer.fogOrder switches it at run time).
+const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // The render scan (script-vm-render.mjs) filters Level.Actors in Rust for
 // the moving lights, sprites, mesh admission and Galaxy's ambient scan;
 // ?renderScan=js keeps the JavaScript loops, ?renderScan=verify checks every
@@ -270,6 +273,9 @@ let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeErro
 // constant half-pixel centre; deusExViewer.frameProjection(false) is the
 // latter, for the pixel census (scripts/census-frame-projection.mjs).
 let frameProjection = true;
+// Validation only (deusExViewer.holdTextureClock, scripts/census-draw-order.mjs): the clock the surface textures last animated at,
+// and, while held, the one they keep (animated chains and procedural textures stand still in a held level's frames).
+let textureClock, heldTextureClock = null;
 // The vertex stage of the same frame: world and mesh materials project their
 // vertices with Render.dll's and D3DDrv's chain (frame-projection.mjs,
 // docs/frame-projection.md) in every pass that has a frame. ?vertexProjection=off
@@ -1070,6 +1076,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
+    if (fogOrderParam === 'last') world.fog?.setLast(true);
     if (world.mirrors.stats.planes > 0) world.mirrors.clipShape(renderer);
     game = nextGame;sim = nextSim;runtimeError=null;lockGameKeys(true); $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
     // The previews drive the runtime directly: on the page only.
@@ -2077,6 +2084,8 @@ fog() {
 /** Validation only: the 3D view's projection from the pass frame (on, the
  * default) or from the FOV and the constant pixel centre (off). */
 frameProjection(on) { frameProjection = Boolean(on); },
+/** Validation only: hold the clock the surface textures animate at (on: the last frame's; off: the frame's own again). */
+holdTextureClock(on) { heldTextureClock = on ? textureClock ?? null : null; },
 /** Validation only: the vertex stage of the frame's projection (on, the
  * default) or the camera's matrices (off). */
 vertexProjection(on) { if (on === undefined) return vertexProjection.state(); vertexProjection.enabled = Boolean(on); return null; },
@@ -2086,6 +2095,10 @@ spriteTiles(on) { vertexProjection.spriteTiles(Boolean(on)); },
 viewportDecals(on) { viewportDecalsOn = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
+/** Validation only: where the fog pass draws, 'surface' (the default: after its surface's detail fans, before the decals and
+ * every translucent or modulated item, as DrawComplexSurface and DrawFrame order it) or 'last' (after every other world item, the
+ * order before 2026-10-28). */
+fogOrder(order) { world?.fog?.setLast(order === 'last'); },
 /** The page's corona pass (corona-pass.mjs): the last frame's counters,
  * and the simulation's last corona frame: its icons with the inputs of
  * their placement, the lights the helper was called for (in order), those
@@ -2420,7 +2433,8 @@ function drawFrame(snap, time) {
   }
   // The worker's snapshot animates textures at its frame's post time;
   // on the page the frame is now.
-  world.updateTextureAnimation(simClient ? snap?.now : undefined,
+  textureClock = heldTextureClock ?? (simClient ? snap?.now : undefined) ?? performance.now() / 1000;
+  world.updateTextureAnimation(textureClock,
     { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: lightFrustum,
       drawn: drawnLightMaps, phase });
   world.flushLighting(renderer);

@@ -6,6 +6,7 @@ import { displayRampGlsl } from './light-atlas.mjs';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { lightmapBasis } from '../unreal/lighting.mjs';
 import { toView } from '../unreal/geometry.mjs';
+import { FOG_RENDER_ORDER, FOG_RENDER_ORDER_LAST, FOG_RENDER_ORDER_MASKED } from './render-layers.mjs';
 
 /** Volumetric fog in Play (docs/volumetric-fog.md "Play"): the fog map of
  * every drawn light-mapped surface in a bFogZone zone, recomputed each frame
@@ -35,6 +36,11 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
   const stats = { surfaces: 0, moverPolygons: 0, lights: 0, drawn: 0, texels: 0, kernel: Boolean(kernel) };
   const size = lightAtlas.size;
+  // Where a surface's fog map draws among the frame's items (render-layers.mjs: after its surface, a masked one's in the
+  // non-occluding list's band); `last` (validation, setLast) puts every map after the other world items.
+  let last = false;
+  const orderOf = masked => last ? FOG_RENDER_ORDER_LAST : masked ? FOG_RENDER_ORDER_MASKED : FOG_RENDER_ORDER;
+  const moverMasked = new Set();
   function page(index) {
     if (!pages.has(index)) {
       const pixels = new Uint8Array(size * size * 4);
@@ -185,11 +191,13 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     let slot = items[itemsUsed];
     if (!slot) {
       const uniform = { value: null }, mesh = new THREE.Mesh(new THREE.BufferGeometry(), material(uniform));
-      mesh.matrixAutoUpdate = false; mesh.renderOrder = 1; mesh.frustumCulled = false;
+      mesh.matrixAutoUpdate = false; mesh.frustumCulled = false;
       root.add(mesh);
       slot = items[itemsUsed] = { mesh, uniform, texture: null, width: 0, height: 0 };
     }
     itemsUsed++;
+    slot.masked = moverMasked.has(`${item.mover}:${item.polygon}`);
+    slot.mesh.renderOrder = orderOf(slot.masked);
     const w = record.width + 2, h = record.height + 2;
     if (slot.width !== w || slot.height !== h) {
       slot.texture?.dispose();
@@ -228,22 +236,23 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     root, stats,
     /** A light-mapped level surface in a fog zone: its light-map record, atlas
      * tile and the surface triangles' view positions, light UVs and bounds. */
-    addSurface(record, tile, positions, lightUV, lightBounds, surfaceIndex = -1) {
+    addSurface(record, tile, positions, lightUV, lightBounds, surfaceIndex = -1, masked = false) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(lightUV, 3));
       geometry.setAttribute('lightBounds', new THREE.Float32BufferAttribute(lightBounds, 4));
       geometry.computeBoundingSphere();
       const fogPage = page(tile.page.index), mesh = new THREE.Mesh(geometry, material(fogPage.uniform));
-      mesh.matrixAutoUpdate = false; mesh.visible = false; mesh.renderOrder = 1;
+      mesh.matrixAutoUpdate = false; mesh.visible = false; mesh.renderOrder = orderOf(masked);
       root.add(mesh);
-      surfaces.push({ record, tile, mesh, fogPage, surfaceIndex });
+      surfaces.push({ record, tile, mesh, fogPage, surfaceIndex, masked });
       stats.surfaces = surfaces.length;
     },
     /** A lit mover polygon (its light-map record from the Brush's model):
      * its draw items get fog maps over their fragments. */
-    addMoverPolygon(record, mover, polygon) {
+    addMoverPolygon(record, mover, polygon, masked = false) {
       moverPolygons.set(`${mover}:${polygon}`, record);
+      if (masked) moverMasked.add(`${mover}:${polygon}`);
       stats.moverPolygons = moverPolygons.size;
     },
     /** A light with VolumeRadius > 0 (class defaults merged). */
@@ -356,6 +365,12 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
         surface.mesh.visible = true;
         passTiles.push(surface);
       }
+    },
+    /** Validation only: every fog map after the other world items (`last`), or where DrawComplexSurface draws it. */
+    setLast(on) {
+      last = Boolean(on);
+      for (const { mesh, masked } of surfaces) mesh.renderOrder = orderOf(masked);
+      for (const slot of items) slot.mesh.renderOrder = orderOf(slot.masked);
     },
     /** The shader warm-up's fog mesh (shader-warmup.mjs): a mover polygon's draw item, made once play runs (itemMesh). */
     warmup(geometry) { return [new THREE.Mesh(geometry, material({ value: null }))]; },

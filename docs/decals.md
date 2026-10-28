@@ -237,7 +237,10 @@ Host choices, noted:
 - The fragment order is the occlusion stream's, not DrawFrame's pass order
   (the occluding list is key-sorted there); modulated blends commute up to
   the framebuffer's rounding, and every decal is drawn before the
-  translucent surfaces.
+  translucent surfaces. Since 2026-10-28 the decals also draw after the
+  fog maps, as DrawFrame's decal block follows DrawComplexSurface, whose
+  last pass is the fog map ([DrawFrame's draw order](bsp-occlusion.md#drawframes-draw-order));
+  a decal on a fogged surface was not compared with an original frame.
 - Mirror child frames draw no decals, as the original's ClipDecal returns
   nothing there; sky child frames draw none either, where the original
   would (unexercised).

@@ -279,7 +279,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         // with fog zones, whose draw items are gated by their own zones
         // (fog-pass.mjs, the brush tracker).
         if (lightmap && lit && actorName && anyFogZone) {
-          fog.addMoverPolygon(lightmap, actorName, surfaceIndex);
+          fog.addMoverPolygon(lightmap, actorName, surfaceIndex, Boolean(flags & POLY.Masked));
         } else if (lightmap && lit && !actorName && (await zoneActor(zone)).fog) {
           const fogUV = [], fogBounds = [];
           for (let i = 0; i < g.positions.length; i += 3) {
@@ -287,7 +287,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
             fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
-          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex);
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex, Boolean(flags & POLY.Masked));
         }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });

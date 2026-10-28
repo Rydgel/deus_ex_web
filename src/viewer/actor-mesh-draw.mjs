@@ -19,6 +19,7 @@ import {decodeLodMeshPayload} from '../runtime/lodmesh-payload.mjs';
 import {readLodMeshSurfaces} from '../runtime/lodmesh-materials.mjs';
 import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
+import {actorPassRenderOrder} from './render-layers.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
 import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
@@ -218,6 +219,10 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(materialStateApplied&&Object.is(glow,lastGlow)&&Object.is(style,lastStyle))return;
     for(const material of materials)applyMaterialStyle(material,glow,style);
     for(const group of groups){
+      // A transparent group draws in DrawFrame's sprite pass for the actor's Style (render-layers.mjs ACTOR_PASS_RENDER_ORDER);
+      // an opaque one keeps the opaque list's order.
+      group.mesh.renderOrder=group.material.transparent?actorPassRenderOrder(style):0;
+      if(group.twin)group.twin.renderOrder=group.mesh.renderOrder;
       rebatch(group);
       if(!group.sided)continue;
       group.split=group.sided.double.transparent;
