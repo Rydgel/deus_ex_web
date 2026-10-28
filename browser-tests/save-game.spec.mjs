@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { chromiumChannel } from './browsers.mjs';
 import { parsePackage } from '../src/unreal/package.mjs';
 import { parseSaveInfo } from '../src/runtime/save-info.mjs';
+import { lockedMove } from './menu-cursor.mjs';
 
 // Saving from the default start (travel step 4, docs/travel.md "Play, step 4", docs/save-storage.md "Writing a save"): Escape -> Save Game on 00_Training writes
 // `Save0001` through the original's own scripts (MenuScreenSaveGame -> DeusExPlayer.SaveGame, native 3011) into the browser's storage in the original's
@@ -42,19 +43,26 @@ function correlation(shown, texture) {
   return sxy / Math.sqrt(sxx * syy);
 }
 
-/** The menu cursor follows relative motion: clamp it at the root's corner, then move by the control's drawing-buffer position (original-start-load-game.spec). */
+/** The menu cursor follows relative motion under the pointer lock: clamp it at the root's corner, then move by the control's drawing-buffer
+ * position (original-start-load-game.spec). A free pointer reaches the menu at its own position: Firefox releases the lock for its prompt
+ * when the first kept save asks for persistent storage (navigator.storage.persist(), measured 2026-10-28; docs/save-storage.md). */
 async function cursor(page) {
   let box = await page.locator('#scene').boundingBox();
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(120); };
-  for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
-  const ref = { ...at };
+  const go = async (x, y, steps = 20) => { await lockedMove(page, at, { x, y }, steps); at = { x, y }; await page.waitForTimeout(120); };
+  // (a click with the pointer free takes the lock again on its release, the default start's first click: the cursor is parked anew then)
+  const locked = () => page.evaluate(() => Boolean(document.pointerLockElement));
+  let ref = null;
+  const park = async () => { for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); } ref = { ...at }; };
+  if (await locked()) await park();
   const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
   return {
     async click(spec) {
       box = await page.locator('#scene').boundingBox();
-      const target = (await probe(page, { op: 'center', ...spec })).result;
-      await go(ref.x + box.width * target.x / buffer.w, ref.y + box.height * target.y / buffer.h);
+      if (!(await locked())) ref = null;
+      else if (!ref) await park();
+      const target = (await probe(page, { op: 'center', ...spec })).result, origin = ref ?? { x: box.x, y: box.y };
+      await go(origin.x + box.width * target.x / buffer.w, origin.y + box.height * target.y / buffer.h);
       await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up(); await page.waitForTimeout(250);
     },
   };

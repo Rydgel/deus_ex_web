@@ -1663,6 +1663,8 @@ function leaveFullscreen() {
 }
 document.addEventListener('fullscreenchange', () => {
   simInput.fullscreen(Boolean(document.fullscreenElement));
+  if (lockWithFullscreen && document.fullscreenElement && document.pointerLockElement !== $('scene')) $('scene').requestPointerLock?.()?.catch?.(() => {});
+  lockWithFullscreen = false;
   if (!originalStart) return;
   if (!document.fullscreenElement) { navigator.keyboard?.unlock?.(); return; }
   lockGameKeys(!runtimeError);
@@ -1677,9 +1679,15 @@ function grabPointer(event, windowHasMouse) {
   return true;
 }
 // UWindowsViewport::ToggleFullscreen (0x1110d500): fullscreen and the pointer lock leave together, and come back together.
+// Firefox refuses a lock requested in the same event as the fullscreen (NotAllowedError) and grants it once the page is fullscreen
+// (measured 2026-10-28, Playwright's Firefox 155; Chromium grants both), so the fullscreenchange handler asks again (lockWithFullscreen).
+let lockWithFullscreen = false;
 function toggleFullscreen() {
   if (document.fullscreenElement) leaveFullscreen();
-  else { takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  else {
+    takeFullscreen();
+    if (mode === 'play' && game && !runtimeError) { lockWithFullscreen = true; $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  }
 }
 // Alt+Enter, the original's ToggleFullscreen; the Enter press reaches no binding (Enter=ParseLeftClick|Fire).
 function toggleFullscreenKey(event) {

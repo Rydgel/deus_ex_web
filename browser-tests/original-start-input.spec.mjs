@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { chromiumChannel } from './browsers.mjs';
+import { lockedMove } from './menu-cursor.mjs';
 
 // The original's start (no ?debug=1) takes the mouse as the original does ([WinDrv.WindowsClient] CaptureMouse=True; Alt+Enter is
 // WinDrv's ToggleFullscreen, 0x1110a280) but starts windowed (the user's choice, 2026-10-22, over StartupFullscreen=True): the first
@@ -28,7 +29,7 @@ test('the original start takes the pointer (not fullscreen), keeps it through Es
   // The menu's cursor by relative motion: up-left until the root clamps it at its corner, then to the Training button.
   box = await page.locator('#scene').boundingBox();
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(150); };
+  const go = async (x, y, steps = 20) => { await lockedMove(page, at, { x, y }, steps); at = { x, y }; await page.waitForTimeout(150); };
   for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
   await go(at.x + box.width * 0.5, at.y + box.height * (299 / 641));   // MenuMain's fifth button, Training (validate-travel-play)
   await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();

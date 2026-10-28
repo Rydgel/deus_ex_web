@@ -203,16 +203,30 @@ test('the browser is asked once, after the first kept save, not to evict the pag
   const asked = [];
   const refusing = await open(createFakeIndexedDB(), { requestPersist: async () => { asked.push('refused'); return false; } });
   assert.equal(refusing.status().persisted, null, 'nothing is asked before a save');
+  const answered = () => new Promise(resolve => setTimeout(resolve));   // the answer is not awaited by the save
   await refusing.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
   await refusing.commitSlot('Save0002', [{ name: 'SaveInfo.dxs', bytes: bytes(2) }]);
+  await answered();
   assert.deepEqual(asked, ['refused'], 'once');
   assert.equal(refusing.status().persisted, false);
   assert.match(describeSaves(refusing.status()).note, /Export saves/);
   const granting = await open(createFakeIndexedDB(), { requestPersist: async () => true });
   await granting.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  await answered();
   assert.equal(granting.status().persisted, true);
   assert.equal(describeSaves(granting.status()).note, null);
   const none = await open(createFakeIndexedDB(), { requestPersist: () => null });
   await none.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
   assert.equal(none.status().persisted, null, 'a browser without persist() says nothing');
+});
+
+test('a persistence prompt left unanswered holds no later save (Firefox asks the player, and the page goes on)', async () => {
+  const changes = [];
+  const waiting = await open(createFakeIndexedDB(), { requestPersist: () => new Promise(() => {}), onChange: () => changes.push('change') });
+  await waiting.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  await waiting.commitSlot('Save0002', [{ name: 'SaveInfo.dxs', bytes: bytes(2) }]);
+  await waiting.removeSlot('Save0001');
+  assert.deepEqual(waiting.simSaves().map(s => s.directory), ['Save0002']);
+  assert.equal(waiting.status().persisted, null, 'not answered yet');
+  assert.ok(changes.length >= 3, 'each change is said at once');
 });

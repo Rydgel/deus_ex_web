@@ -57,11 +57,14 @@ export async function openSavePersistence({ mode = 'off', openStorage = openBrow
   requestPersist = () => globalThis.navigator?.storage?.persist?.() ?? null } = {}) {
   let storage = null, directory = null, handle = null, signature = '', persistAsked = false;
   const state = { source: 'memory', browser: { kind: null, message: null }, folder: null, message: null, error: null, saveError: null, persisted: null };
-  /** After the first save kept in the browser's own storage: ask that it be exempt from eviction (the answer is only reported; a refusal changes nothing). */
+  /** After the first save kept in the browser's own storage: ask that it be exempt from eviction (the answer is only reported; a refusal changes nothing).
+   * Resolves true when an answer changed what the status says. */
   const askPersistence = async () => {
-    if (persistAsked || state.source !== 'browser') return;
+    if (persistAsked || state.source !== 'browser') return false;
     persistAsked = true;
+    const before = state.persisted;
     try { const answer = await requestPersist(); state.persisted = answer === null || answer === undefined ? null : Boolean(answer); } catch { state.persisted = null; }
+    return state.persisted !== before;
   };
   const keepsServed = Boolean(served) && mode !== 'off';
   const layer = top => keepsServed ? createLayeredSaveBackend(top, createServedSaveBackend(served)) : top;
@@ -129,7 +132,9 @@ export async function openSavePersistence({ mode = 'off', openStorage = openBrow
       try { await directory.replaceDir(dir, files); }
       catch (error) { const failure = failureOf(error); state.saveError = { ...failure, slot: dir }; signature = signatureOf(directory); notify(); throw folderError(error); }
       state.saveError = null; signature = signatureOf(directory);
-      await askPersistence();
+      // (not awaited: Firefox's persist() waits for the player's answer to its prompt, and the saves after this one must not wait with it;
+      // the answer reaches the Saves window when it comes)
+      void askPersistence().then(changed => { if (changed) notify(); });
       notify();
     }),
     /** DeleteGame: the slot's directory and its files. */

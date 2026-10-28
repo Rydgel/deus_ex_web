@@ -92,7 +92,8 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
 * a click in the world that takes the pointer reaches no binding (no Fire): a rule of this page, not the original's;
 * while a menu holds the mouse, the pointer lock's relative motion moves the menu's own cursor, and the system cursor is hidden over it;
 * Alt+Enter takes fullscreen (`#app`), every bindable key through the Keyboard Lock ([input bindings](input-bindings.md)) and the pointer, and leaves them
-  again; the Enter press reaches no binding, as in the original;
+  again; the Enter press reaches no binding, as in the original. Firefox refuses a pointer lock asked in the same event as the fullscreen
+  (NotAllowedError) and grants it once the page is fullscreen (measured 2026-10-28), so the page asks again at `fullscreenchange`;
 * a travel keeps the pointer (the original's viewport keeps the mouse across a level load);
 * out of fullscreen, or in a browser without Keyboard Lock, Escape releases the pointer as the browser requires, and the next click (a menu
   button's included) takes it back.

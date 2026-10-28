@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { chromiumChannel } from './browsers.mjs';
+import { lockedMove } from './menu-cursor.mjs';
 
 // The original's Load Game screen from the default start, as the original shows it with no saves (docs/save-directory.md): a click on MenuMain's
 // Load Game button opens MenuScreenLoadGame (native 3013 CreateGameDirectoryObject and the GameDirectory natives behind it), with an empty list,
@@ -25,7 +26,7 @@ test('the default start opens the Load Game screen with the empty save directory
   const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
   const load = (await probe({ op: 'center', field: 'winButtons', index: 2 })).result;   // MenuMain's third button, Load Game
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(150); };
+  const go = async (x, y, steps = 20) => { await lockedMove(page, at, { x, y }, steps); at = { x, y }; await page.waitForTimeout(150); };
   for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
   await go(at.x + box.width * load.x / buffer.w, at.y + box.height * load.y / buffer.h);
   await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();

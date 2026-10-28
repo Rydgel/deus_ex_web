@@ -101,7 +101,9 @@ test('the wheel selects the belt items through NextBeltItem and PrevBeltItem; th
   expect(errors).toEqual([]);
 });
 
-test('the original start asks Keyboard Lock for every key the original can bind when it takes fullscreen', async ({ page }) => {
+// Keyboard Lock is Chromium's (navigator.keyboard); Firefox and Safari have none: there the fullscreen comes without it, and F11 and the
+// reserved chords stay the browser's (docs/input-bindings.md "Browser-reserved keys").
+test('the original start asks Keyboard Lock for every key the original can bind when it takes fullscreen, where the browser has it', async ({ page }) => {
   test.setTimeout(400_000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -117,11 +119,17 @@ test('the original start asks Keyboard Lock for every key the original can bind 
   expect(await page.evaluate(() => window.__locks.length)).toBe(0);         // nothing locks outside fullscreen
   await page.keyboard.down('AltLeft'); await page.keyboard.press('Enter'); await page.keyboard.up('AltLeft');
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null)).toBe('app');
-  await expect.poll(() => page.evaluate(() => window.__locks.length)).toBeGreaterThan(0);
-  const locked = await page.evaluate(() => window.__locks.at(-1));
-  for (const code of ['Escape', 'Tab', 'F1', 'F3', 'F5', 'F6', 'F7', 'F11', 'F12', 'KeyW', 'KeyT', 'KeyN', 'Digit0', 'Pause', 'CapsLock', 'NumpadPeriod'].map(c => c === 'NumpadPeriod' ? 'NumpadDecimal' : c))
-    expect(locked, code).toContain(code);
-  expect(locked).not.toContain('MetaLeft');   // the system's own key stays the system's
+  if (await page.evaluate(() => typeof navigator.keyboard?.lock === 'function')) {
+    await expect.poll(() => page.evaluate(() => window.__locks.length)).toBeGreaterThan(0);
+    const locked = await page.evaluate(() => window.__locks.at(-1));
+    for (const code of ['Escape', 'Tab', 'F1', 'F3', 'F5', 'F6', 'F7', 'F11', 'F12', 'KeyW', 'KeyT', 'KeyN', 'Digit0', 'Pause', 'CapsLock', 'NumpadPeriod'].map(c => c === 'NumpadPeriod' ? 'NumpadDecimal' : c))
+      expect(locked, code).toContain(code);
+    expect(locked).not.toContain('MetaLeft');   // the system's own key stays the system's
+  } else {
+    // no Keyboard Lock: the fullscreen and the pointer lock without it, and nothing the page tried to call
+    expect(await page.evaluate(() => window.__locks.length)).toBe(0);
+    await expect.poll(() => page.evaluate(() => document.pointerLockElement?.id ?? null)).toBe('scene');
+  }
   // Alt+Enter leaves fullscreen and releases the lock; the keys are the browser's again.
   await page.keyboard.down('AltLeft'); await page.keyboard.press('Enter'); await page.keyboard.up('AltLeft');
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null)).toBe(null);

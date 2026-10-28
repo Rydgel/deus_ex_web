@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { chromiumChannel } from './browsers.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { lockedMove } from './menu-cursor.mjs';
 
 // Loading a saved game in the page (docs/travel.md "Play, step 4"): the real desktop slots of the Wine capture (Save0001 and QuickSave, Training) reach the
 // default start's browser storage by the Saves window's import, and are loaded by the original's own controls: the Load Game screen from the logo map's
@@ -31,7 +32,7 @@ async function clickWindow(page, field, index, actionKey) {
   const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
   const target = (await probe(page, { op: 'center', ...(actionKey ? { actionKey } : { field, ...(index === undefined ? {} : { index }) }) })).result;
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(150); };
+  const go = async (x, y, steps = 20) => { await lockedMove(page, at, { x, y }, steps); at = { x, y }; await page.waitForTimeout(150); };
   if (await page.evaluate(() => Boolean(document.pointerLockElement)))
     for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
   else at = { x: box.x, y: box.y };

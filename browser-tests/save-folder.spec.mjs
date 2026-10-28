@@ -3,6 +3,7 @@ import { chromiumChannel } from './browsers.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { crc32 } from 'node:zlib';
 import path from 'node:path';
+import { lockedMove } from './menu-cursor.mjs';
 
 // The Load Game screen with the player's real saves (docs/save-storage.md "The folder flow"): copies of the two real saves of the Wine capture
 // (docs/save-directory.md) reach the default start by the page's own controls, and its Load Game screen lists them with the info and the snapshot picture the
@@ -72,7 +73,7 @@ async function clickWindow(page, field, index, actionKey) {
   const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
   const target = (await probe(page, { op: 'center', ...(actionKey ? { actionKey } : { field, ...(index === undefined ? {} : { index }) }) })).result;
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(150); };
+  const go = async (x, y, steps = 20) => { await lockedMove(page, at, { x, y }, steps); at = { x, y }; await page.waitForTimeout(150); };
   // A free pointer reaches the menu at its own position; a locked one moves the menu's cursor by relative motion (parked in the corner first).
   if (await page.evaluate(() => Boolean(document.pointerLockElement)))
     for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
