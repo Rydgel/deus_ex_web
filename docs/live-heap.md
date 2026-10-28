@@ -179,7 +179,7 @@ these checks:
 * the step's own validators;
 * `profile-live-heap.mjs` and `profile-firefox-memory.mjs` before and after;
 * draw gaps in Firefox, inline and worker, two interleaved Island pairs
-  (`.work/hitch/ab-ff.sh`, `ff-gaps.mjs`);
+  (`scripts/hitch-ab.mjs`, `hitch-summary.mjs --gaps 90`);
 * a Chromium worker frame A/B, to show no regression.
 
 Step 1 is done, and its measurement re-ranks the rest. A major GC's time follows the

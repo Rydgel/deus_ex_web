@@ -26,6 +26,17 @@ simulation state, and without the URL switch it installs nothing
 4. `node scripts/analyze-hitchlog.mjs <file>` prints the report; the file is
    also what to send back.
 
+**Scripted sessions** (Stage 7's frame-time rows, [criteria](stage-7-exit-criteria.md)):
+* `node scripts/hitch-run.mjs --map MAP --seconds S --mode roam|walk|idle|scan [--browser firefox]` records a session with the
+  recorder and saves its full dump to `<out>.json`. It starts its own dev server unless given `--url`. Chromium options add CPU
+  throttling, V8 GC events, the worker's heap and CPU profiles, and debugger stalls; Firefox options add a Gecko profile.
+* `scripts/hitch-summary.mjs` reads the file (and a saved dump): frame work and drawn-gap figures, and the 7.2 rows' verdicts.
+* `scripts/hitch-ab.mjs` runs interleaved arms with each session's CPU.
+* `scripts/frame-time-set.mjs` runs the ten-map frame-time set.
+* `scripts/hitch-frame-profile.mjs` and `scripts/gecko-gc.mjs` name what a slow frame ran.
+
+These tools replace the earlier `.work/hitch/` copies that the dated sections below cite.
+
 For the memory theory of a hitch that only shows on a 16 GB machine, run this
 in a Terminal next to the game and note the times of the hitches (it logs
 swap use, the compressor and pageouts every two seconds):

@@ -1,7 +1,9 @@
 # Stage 7 exit criteria: a finite definition of "Done when"
 
 Status: **adopted by the user on 2026-10-28**: the six decisions as recommended
-([below](#what-the-user-decided-2026-10-28)). Written from master 598f8928. The rows that rest on a decision say which.
+([below](#what-the-user-decided-2026-10-28)). Written from master 598f8928. The data is `scripts/stage7-criteria.mjs`:
+`node scripts/stage7-criteria.mjs` prints the scoreboard, `--list` the rows, and `--markdown` the row tables of this note, which
+are generated from it. The rows that rest on a decision say which.
 
 The roadmap's criterion for section 7 ([roadmap](roadmap.md#7-make-the-browser-runtime-reliable)): *done when declared
 browser/performance targets pass repeatable tests, long sessions and repeated map changes remain stable, and failures offer
@@ -95,9 +97,21 @@ Headless Chromium on the Mac renders with Metal (`--use-angle=metal`), and on Li
 row measures host work. A drawn-interval row needs a headed browser with vsync.
 
 **Frame-time set:** the ten maps of the October 2 census in [frame cost](play-frame-cost.md): Training, the Island, the Bar,
-Battery Park, the Airfield, Wan Chai, the Ship, the Chateau, Everett and the Area 51 bunker. Each runs the census route: four
-drag-look headings about 60° apart, 90 frames each, after a 5 s settle. The route's tool (`.work/tools/scan-play.mjs`) and the
-hitch recorder (`.work/hitch/`) are outside Git; moving them into `scripts/` is the first piece of work (7.2).
+Battery Park, the Airfield, Wan Chai's market, the Ship, the Chateau, Everett and the Area 51 bunker (`frame-time-set.mjs`
+`FRAME_TIME_SET`). Each runs the census route: four headings 60 degrees apart, the first the authored view, each held for a
+quarter of the session (60 s by default), after a 3 s settle (`hitch-run.mjs --mode scan`). The census itself turned with drag-look
+and counted 90 frames per heading. Its tool stayed on the Mac, so the route was re-created from its description, and it sets the
+heading with `placeProbe`'s ViewRotation write.
+
+**The rows' tools** (step 1 below, 2026-10-28):
+* `hitch-run.mjs` records a session with the in-page hitch log, in Chromium or Firefox ([hitch log](hitch-log.md)).
+* `hitch-summary.mjs` gives its figures and judges rows 7.2.1 to 7.2.5.
+* `hitch-ab.mjs` runs interleaved arms with each one's CPU.
+* `frame-time-set.mjs` runs the set.
+* `gecko-gc.mjs` and `hitch-frame-profile.mjs` attribute a stall.
+
+"Frame work" is the page's `animate` and the worker's `w.dur`, per frame. 7.2.1 takes the larger of the two medians, since in
+worker mode the two run side by side and the slower bounds the frame rate.
 
 ## The scoreboard (2026-10-28)
 
@@ -128,24 +142,24 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.1.1 | Chrome, macOS, worker mode | H | `npx playwright test`, the 7.x validators | Mac | weak: the suite is Chromium-only and headless; no whole-suite pass is recorded since Stage 6; the Mac has not run it since early October | PARTIAL |
 | 7.1.2 | Chrome, Linux, worker mode | H | the same | Linux | weak: as 7.1.1, on this host | PARTIAL |
-| 7.1.3 | Firefox, macOS and Linux, inline mode | H | the suite with a Firefox project; validate-inline-restore-play, validate-context-loss-play --browser firefox | Mac, Linux | needed: a Firefox project in playwright.config; only two validators run in Firefox today (Linux) | PARTIAL |
-| 7.1.4 | Safari, macOS | H | the suite under Playwright's WebKit as a stand-in, plus the session in real Safari (by hand or safaridriver) | Mac | needed: never run; Safari's storage eviction, no Keyboard Lock, no `showDirectoryPicker` | MISSING |
+| 7.1.3 | Firefox, macOS and Linux, inline mode | H | the suite with a Firefox project, validate-inline-restore-play, validate-context-loss-play --browser firefox | Mac, Linux | needed: a Firefox project in playwright.config; only two validators run in Firefox today (Linux) | PARTIAL |
+| 7.1.4 | Safari, macOS | H | the suite under Playwright's WebKit as a stand-in, the session in real Safari (by hand or safaridriver) | Mac | needed: never run; Safari's storage eviction, no Keyboard Lock, no `showDirectoryPicker` | MISSING |
 
 ### 7.2 Frame time (D2, D3)
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.2.1 | Chrome, worker: median host work per frame ≤ 8.3 ms on each map of the frame-time set (AGENTS.md) | H | profile-play-browser.mjs with the census route; interleaved medians | Mac | needed: the route in Git; a Mac measurement. Indicative: the Island's worker frame p50 12.2 ms on Linux (2026-10-27) | MISSING |
-| 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set | H | the hitch recorder, headed | Mac | needed: the recorder in Git; a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux | MISSING |
-| 7.2.3 | Chrome: after a map's first 5 s, no drawn-frame gap over 100 ms in a 120 s roam | H | the hitch recorder | Mac | weak: measured on Linux only (after 2026-10-27, one roam: draw gap p99 16.8 ms, one 26 ms worker GC); not on the Mac | PARTIAL |
-| 7.2.4 | Firefox inline: no gap over 150 ms, at most two over 50 ms a minute (D3) | H | `.work/hitch/ab-ff.sh`, `ff-gaps.mjs` (to Git) | Mac, Linux | fails today: 26 to 31 gaps over 50 ms and 6 to 8 over 90 ms in 65 s, longest 133 ms (Linux, 2026-10-28); the work is the parked live-heap plan | FAIL |
-| 7.2.5 | no shader program is compiled during play after a load | P | the hitch log's program counts | Mac, Linux | weak: 0 programs measured on the Island, Airfield and UNATCO HQ (Chrome) and the Island (Firefox), on Linux, with tools outside Git; the Mac is not measured | PARTIAL |
+| 7.2.1 | Chrome, worker: on each map of the frame-time set, the larger of the page's and the worker's median frame work ≤ 8.3 ms (AGENTS.md) | H | frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs) | Mac | needed: a Mac measurement. Indicative: the Island's worker frame p50 12.2 ms on Linux (2026-10-27) | MISSING |
+| 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps' jitter) | H | frame-time-set.mjs --browser B, headed (hitch-run.mjs --headed) | Mac | needed: a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux | MISSING |
+| 7.2.3 | Chrome: from a map's first 5 s on, no drawn-frame gap over 100 ms in a 120 s roam | H | hitch-run.mjs --mode roam --seconds 120, hitch-summary.mjs | Mac | weak: measured on Linux only (after 2026-10-27, one roam: draw gap p99 16.8 ms, one 26 ms worker GC); not on the Mac | PARTIAL |
+| 7.2.4 | Firefox inline: from a map's first 5 s on, no gap over 150 ms and at most two over 50 ms a minute (D3) | H | hitch-ab.mjs or hitch-run.mjs --browser firefox, hitch-summary.mjs | Mac, Linux | fails today: 26 to 31 gaps over 50 ms and 6 to 8 over 90 ms in 65 s from 40 s after the map, longest 133 ms (Linux, 2026-10-28); the work is the parked live-heap plan | FAIL |
+| 7.2.5 | no shader program is compiled during play after a load | P | hitch-summary.mjs (programs created from 5 s on) over the frame-time set | Mac, Linux | weak: 0 programs measured on the Island, Airfield and UNATCO HQ (Chrome) and the Island (Firefox), on Linux; the Mac is not measured | PARTIAL |
 
 ### 7.3 Loading time (D4)
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs (the first map from navigation) | Mac | needed: the bound; a measurement of the original start, not of `?debug=1` Training | MISSING |
+| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs (the first map from navigation) | Mac | needed: a measurement of the original start, not of `?debug=1` Training | MISSING |
 | 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel, as a census over the 83 maps | Mac | weak: measured for the Island (4.6 s) and Training (1.5 s) in Chrome only | PARTIAL |
 | 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs over the internet save corpus's slots | Mac | needed: the measurement; no tool times a load from a save | MISSING |
 
@@ -153,7 +167,7 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), plus the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
+| 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
 | 7.4.2 | each map of the frame-time set stays within a declared memory budget (page plus worker, after GC) | H | profile-live-heap.mjs, profile-firefox-memory.mjs | Mac | needed: the budget, to fit a 16 GB machine; today the Island's worker reaches 1.4 GB before a GC in Chrome | MISSING |
 | 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | a session harness | Mac | needed: the harness | MISSING |
 
@@ -161,8 +175,8 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | validate-galaxy-music-play.mjs; a browser spec | Mac, Linux | weak: Chromium only; suspension and resume are not checked | PARTIAL |
-| 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | a Wine measurement of the original; `AudioContext.outputLatency` plus the worklet's queue in Play | Mac, Linux | needed: the original's measurement; Play's is not measured | MISSING |
+| 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | validate-galaxy-music-play.mjs, a browser spec | Mac, Linux | weak: Chromium only; suspension and resume are not checked | PARTIAL |
+| 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | a Wine measurement of the original, `AudioContext.outputLatency` plus the worklet's queue in Play | Mac, Linux | needed: the original's measurement; Play's is not measured | MISSING |
 
 ### 7.6 Window and input
 
@@ -171,7 +185,7 @@ plays sound.
 | 7.6.1 | the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up | H | browser-tests/pointer-lock.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
 | 7.6.2 | Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari) | O, H | browser-tests/original-start-input.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
 | 7.6.3 | resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error | H | a new spec: resizes during Play, pixels against a fresh load at the final size | Linux, Mac | needed: the spec; nothing tests a resize during Play | MISSING |
-| 7.6.4 | a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows | H | pointer-lock.spec.mjs (blur); a hidden-tab spec | all browsers | weak: blur is tested; `visibilitychange` is not | PARTIAL |
+| 7.6.4 | a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows | H | pointer-lock.spec.mjs (blur), a hidden-tab spec | all browsers | weak: blur is tested; `visibilitychange` is not | PARTIAL |
 
 ### 7.7 Graphics capability and failures
 
@@ -186,8 +200,8 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.8.1 | the game folder opens through the gate's picker in every supported browser | H | browser-tests/viewer.spec.mjs | all browsers | weak: Chromium headless only | PARTIAL |
-| 7.8.2 | saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running | H | browser-tests/save-game.spec.mjs, save-folder.spec.mjs; test/save-store.test.mjs, test/save-persistence.test.mjs | all browsers | weak: Chromium only; the unit tests use a fake store | PARTIAL |
-| 7.8.3 | in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads | H, O | save-folder.spec.mjs headed with a real folder; validate-save-game.mjs | Mac, Linux | needed: [save storage](save-storage.md) says a headed Chromium with a real folder was not run | MISSING |
+| 7.8.2 | saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running | H | browser-tests/save-game.spec.mjs, save-folder.spec.mjs, test/save-store.test.mjs, test/save-persistence.test.mjs | all browsers | weak: Chromium only; the unit tests use a fake store | PARTIAL |
+| 7.8.3 | in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads | H, O | save-folder.spec.mjs headed with a real folder, validate-save-game.mjs | Mac, Linux | needed: [save storage](save-storage.md) says a headed Chromium with a real folder was not run | MISSING |
 | 7.8.4 | settings persist across reloads in every supported browser (row 6.1.5's proof) | O | browser-tests/config-persistence.spec.mjs, validate-config-persistence.mjs | all browsers | weak: Chromium only | PARTIAL |
 
 ### 7.9 Failure recovery
@@ -216,8 +230,9 @@ plays sound.
 
 ## The order of the work
 
-1. **Tools into Git.** The census route, the hitch recorder and the Firefox gap tools move from `.work/` to `scripts/`. A
-   `scripts/stage7-criteria.mjs` prints this scoreboard, as Stage 6's does.
+1. **Tools into Git.** Done 2026-10-28. `hitch-run.mjs`, `hitch-summary.mjs`, `hitch-ab.mjs`, `frame-time-set.mjs`,
+   `gecko-gc.mjs` and `hitch-frame-profile.mjs` replace the `.work/hitch/` copies, with the census route re-created as
+   `--mode scan`. `stage7-criteria.mjs` holds the rows.
 2. **The browser matrix runs.** Playwright projects for Firefox and WebKit (7.10.2), a first Safari session (7.1.4), and the
    Chromium-only specs extended to the other browsers (7.5.1, 7.6.x, 7.8.x, 7.9.1). These are cheap, and they find the
    browser-specific failures before any performance work.
