@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { crc32 } from 'node:zlib';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import path from 'node:path';
 //  1. a folder the player picks: here the origin private file system, a real FileSystemDirectoryHandle, handed to the page by the browser's picker call;
 //  2. an import of a Save folder into the browser's storage, and an export of it as a zip.
 // Chromium's new headless mode, the default worker mode. The saves are read from DX_SAVE_DIR (default the Wine prefix's Save folder) and never changed.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 const base = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
 // (the copy of the Wine prefix's two desktop slots kept in .work/real-saves: the prefix's own Save folder is rewritten by the capture sessions)

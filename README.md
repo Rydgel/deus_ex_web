@@ -357,6 +357,12 @@ npx playwright install chromium firefox
 npm run test:browser
 ```
 
+`npm run test:browser` runs the browser suite once per Playwright project:
+`chromium`, `firefox`, and `webkit` on macOS (install it there with
+`npx playwright install webkit`); `npm run test:browser -- --project firefox`
+runs one. The last run by browser is in
+[the Stage 7 criteria](docs/stage-7-exit-criteria.md#the-browser-suite-by-browser).
+
 For a full validator sweep, use `npm run validate` (four parallel validator
 jobs by default), or explicitly `npm run validate -- --jobs 4`. Use focused
 validators while developing a slice; a full sweep is not required after every

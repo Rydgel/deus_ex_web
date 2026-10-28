@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -6,7 +7,7 @@ import path from 'node:path';
 // default start's browser storage by the Saves window's import, and are loaded by the original's own controls: the Load Game screen from the logo map's
 // menu and from the running game's Escape menu, the QuickLoad key with its confirm box, and Load Game from the menu a death leads to. Chromium's new
 // headless mode, the default worker mode. The slots are read from DX_SAVE_DIR (default the Wine prefix's Save folder) and never changed.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 test.setTimeout(900_000);
 
 const base = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';

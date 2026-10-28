@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // An ending in the page, from an Area 51 arrival (docs/travel.md "Play, step 5"): `15_Area51_Final` opened from the map list (the debugging page: the default
 // start has no way to Area 51 until saves load), then `LocalTravel 99_Endgame1` typed as the original's console line (the Final level's MapExit0 is the
@@ -6,7 +7,7 @@ import { test, expect } from '@playwright/test';
 // quote, and FinishCinematic opens CreditsWindow with bLoadIntro True; a click ends the credits (CreditsWindow.DestroyWindow -> SendPlayer "dxonly"), the DXOnly
 // level arrives with the endgame's flags and its Paralyzed player, and a click there opens MenuMain. The Escape variant (ConWindowActive.AbortCinematicConvo ->
 // FinishCinematic at once) skips the rest of the conversation.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('Endgame1 from 15_Area51_Final runs to the credits, DXOnly and the main menu', async ({ page }) => {
   test.setTimeout(900_000);

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // The original's start (no ?debug=1) takes the mouse as the original does ([WinDrv.WindowsClient] CaptureMouse=True; Alt+Enter is
 // WinDrv's ToggleFullscreen, 0x1110a280) but starts windowed (the user's choice, 2026-10-22, over StartupFullscreen=True): the first
@@ -7,7 +8,7 @@ import { test, expect } from '@playwright/test';
 // them back (src/viewer/main.mjs).
 // Chromium's new headless mode grants pointer lock and fullscreen, so no window opens on the desktop. Escape here is a synthetic
 // key: the browser's own Escape rule (a window releases the lock, a held Escape leaves fullscreen) is not exercised.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('the original start takes the pointer (not fullscreen), keeps it through Escape, the menu and a travel; Alt+Enter toggles fullscreen', async ({ page }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));

@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // Map-to-map transitions in the page (docs/travel-transitions.md): the Hong Kong lift pair (Helibase -> Market#cargoup -> Helibase#HeliBase restored) and the mission-14
 // forms with a map extension and a blank before the portal (`14_OceanLab_UC.dx #UC`, then `14_OceanLab_Lab.dx #Sunkentunnel`, which restores the Lab filed under its MapName).
 // The console line is SendPlayer's own ClientTravel (a MapExit adds ClearWindowStack first); the debugging page opens the first map from the list.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('the Hong Kong lift pair and the .dx URL forms travel and restore in the page', async ({ page }) => {
   test.setTimeout(900_000);

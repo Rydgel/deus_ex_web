@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // Configuration persistence on the default start (docs/config-persistence.md), in Chromium's new headless mode (which grants fullscreen and the
 // pointer lock) and the default worker mode: what the original menus change reaches DeusEx.ini and User.ini in the browser's storage, and a new page
 // reads it back as the original reads its files at the next run. The menu steps are the worker-side `settingsProbe` (validation only); the key press
 // that rebinds is a real keyboard event.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 const base = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
 const probe = (page, step) => page.evaluate(step => window.deusExViewer.settingsProbe(step), step);

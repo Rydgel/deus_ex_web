@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test';
 
-test.use({ browserName:'firefox',viewport:{width:960,height:640} });
+test.use({ viewport:{width:960,height:640} });
 
 // The training Plant7 used to pause Play at the scene adapter (Plant7.Bump was an
 // unsupported scene event). It is now implemented: a player bump runs the real
 // inherited DeusExDecoration.Bump through the VM, pushing the decoration and
 // recording its push sound as a deferred boundary (docs/script-plant-contact.md,
 // scripts/validate-plant-push.mjs). This check confirms the contact no longer
-// pauses, Firefox keeps rendering, and Player start still resets the scene.
+// pauses, the browser keeps rendering (each project's: it ran in Firefox only before the browser matrix), and Player start still resets the scene.
 test('player bump pushes the training plant without pausing, and Player start resets', async ({page}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('http://127.0.0.1:5173/?debug=1');
@@ -27,7 +27,7 @@ test('player bump pushes the training plant without pausing, and Player start re
   expect(pushed.runtimeError,pushed.runtimeError?.message).toBeNull();
   expect(pushed.paused).toBe(false);
   expect(pushed.gameplay.deferredEffects.some(effect=>/Plant7\.PushSound/.test(effect))).toBe(true);
-  // Firefox keeps rendering after the contact.
+  // The browser keeps rendering after the contact.
   await page.waitForFunction(frame=>window.deusExViewer.status().frame>frame,pushed.frame);
   // Player start resets the scene to the original spawn.
   await page.locator('#tools-options').click();

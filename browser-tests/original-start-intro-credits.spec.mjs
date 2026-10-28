@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // The main menu's Play Intro and Credits from the default start, through the original's scripts (docs/travel.md "Play, step 5"): Escape opens MenuMain over the
 // logo map, a click on Play Intro travels to 00_Intro, Escape in the intro's conversation ends it (ConWindowActive.AbortCinematicConvo, then
@@ -7,7 +8,7 @@ import { test, expect } from '@playwright/test';
 // (MouseButtonReleased -> FinishedScrolling -> PopWindow) with the menu again on top. Every click is a real pointer click on the control as the menu draws it
 // (settingsProbe `center`). The default start keeps the pointer through the travels (docs/boot.md "The mouse and fullscreen"): the first world click only takes it.
 // Chromium's new headless mode grants pointer lock and fullscreen, so no window opens on the desktop.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('Play Intro, Escape, the DXOnly menu and the Credits end at the main menu', async ({ page }) => {
   test.setTimeout(600_000);

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readBindingRows, runBoundaryCases, runInputBindings, runWindowCases } from '../scripts/input-binding-cases.mjs';
@@ -9,7 +10,7 @@ import { readBindingRows, runBoundaryCases, runInputBindings, runWindowCases } f
 // run's rows are the table of the doc. The page is the worktree's own vite server:
 //   DX_BASE_URL=http://127.0.0.1:5191 npx playwright test -c .work/playwright.dev.config.mjs browser-tests/input-bindings-table.spec.mjs
 // The rows go to DX_TABLE_OUT (default test-results/input-bindings-table.json).
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 const BASE = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
 
 test('every User.ini binding runs in Play when its key, button or wheel is pressed in the page', async ({ page }) => {

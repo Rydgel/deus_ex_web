@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 import { parsePackage } from '../src/unreal/package.mjs';
 import { parseSaveInfo } from '../src/runtime/save-info.mjs';
 
@@ -6,7 +7,7 @@ import { parseSaveInfo } from '../src/runtime/save-info.mjs';
 // `Save0001` through the original's own scripts (MenuScreenSaveGame -> DeusExPlayer.SaveGame, native 3011) into the browser's storage in the original's
 // format; the Load Game screen then lists it with its picture; the Quick Save key writes `QuickSave`; Delete Game removes a slot's directory.
 // Chromium's new headless mode (no window on the desktop), the default worker mode. The storage is the page's own (IndexedDB of a fresh context).
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 test.setTimeout(600_000);
 
 const base = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';

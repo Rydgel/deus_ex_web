@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // The original's Load Game screen from the default start, as the original shows it with no saves (docs/save-directory.md): a click on MenuMain's
 // Load Game button opens MenuScreenLoadGame (native 3013 CreateGameDirectoryObject and the GameDirectory natives behind it), with an empty list,
 // no info text, Load Game and Delete Game insensitive and the free space the browser reports (StorageManager.estimate(), a host input); Escape
 // returns to MenuMain. The button is reached the way the start's input spec does: the menu's cursor follows relative motion, clamped at the
 // corner first. Chromium's new headless mode grants pointer lock and fullscreen, so no window opens on the desktop.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('the default start opens the Load Game screen with the empty save directory and closes it with Escape', async ({ page }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));

@@ -2,8 +2,8 @@
 
 Status: **adopted by the user on 2026-10-28**: the six decisions as recommended
 ([below](#what-the-user-decided-2026-10-28)). Written from master 598f8928. The data is `scripts/stage7-criteria.mjs`:
-`node scripts/stage7-criteria.mjs` prints the scoreboard, `--list` the rows, and `--markdown` the row tables of this note, which
-are generated from it. The rows that rest on a decision say which.
+`node scripts/stage7-criteria.mjs` prints the scoreboard, `--list` the rows, and `--markdown` the row tables and `--suite` the
+browser suite's section of this note, which are generated from it. The rows that rest on a decision say which.
 
 The roadmap's criterion for section 7 ([roadmap](roadmap.md#7-make-the-browser-runtime-reliable)): *done when declared
 browser/performance targets pass repeatable tests, long sessions and repeated map changes remain stable, and failures offer
@@ -117,18 +117,18 @@ worker mode the two run side by side and the slower bounds the frame rate.
 
 | Clause | PASS | PARTIAL | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
+| 7.1 Supported browsers | 0 | 2 | 1 | 1 | 0 |
 | 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
 | 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
 | 7.4 Memory and long sessions | 0 | 1 | 0 | 2 | 0 |
 | 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
-| 7.6 Window and input | 0 | 3 | 0 | 1 | 0 |
+| 7.6 Window and input | 0 | 2 | 1 | 1 | 0 |
 | 7.7 Graphics capability and failures | 1 | 1 | 0 | 1 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 0 | 2 | 0 | 1 | 0 |
-| 7.10 Regression coverage | 0 | 0 | 1 | 2 | 0 |
+| 7.10 Regression coverage | 0 | 0 | 2 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 1 | 17 | 2 | 14 | 3 |
+| **Total** | 1 | 15 | 5 | 13 | 3 |
 
 ## The rows
 
@@ -140,10 +140,10 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.1.1 | Chrome, macOS, worker mode | H | `npx playwright test`, the 7.x validators | Mac | weak: the suite is Chromium-only and headless; no whole-suite pass is recorded since Stage 6; the Mac has not run it since early October | PARTIAL |
-| 7.1.2 | Chrome, Linux, worker mode | H | the same | Linux | weak: as 7.1.1, on this host | PARTIAL |
-| 7.1.3 | Firefox, macOS and Linux, inline mode | H | the suite with a Firefox project, validate-inline-restore-play, validate-context-loss-play --browser firefox | Mac, Linux | needed: a Firefox project in playwright.config; only two validators run in Firefox today (Linux) | PARTIAL |
-| 7.1.4 | Safari, macOS | H | the suite under Playwright's WebKit as a stand-in, the session in real Safari (by hand or safaridriver) | Mac | needed: never run; Safari's storage eviction, no Keyboard Lock, no `showDirectoryPicker` | MISSING |
+| 7.1.1 | Chrome, macOS, worker mode | H | `npx playwright test`, the 7.x validators | Mac | weak: the Mac has not run the suite since early October; on Linux it runs (7.1.2) | PARTIAL |
+| 7.1.2 | Chrome, Linux, worker mode | H | the same, `--project chromium` | Linux | weak: the suite on 2026-10-28: 29 of 41 pass; of the 12 failures 8 are stale specs, 2 races of a spec with worker mode, 1 Playwright's synthetic Escape and 1 a Play bug (a blur in worker mode, 7.6.1); the 7.x validators are not run as a set | PARTIAL |
+| 7.1.3 | Firefox, macOS and Linux, inline mode | H | the suite, `--project firefox`, validate-inline-restore-play, validate-context-loss-play --browser firefox | Mac, Linux | fails: the suite on 2026-10-28 (Linux), 23 of 41 pass; two Play bugs fail five tests (the wheel counts a notch 2.5 times; the default start's Saves and CRT buttons never show in inline mode), and of the other 13, 7 are stale specs, 5 Playwright's synthetic input under the pointer lock or Escape and 1 Chromium's Keyboard Lock. The Mac not run | FAIL |
+| 7.1.4 | Safari, macOS | H | the suite under Playwright's WebKit as a stand-in (`--project webkit`, on the Mac), the session in real Safari (by hand or safaridriver) | Mac | needed: never run; Playwright's Linux WebKit is an Ubuntu build that this host's libraries do not run (ICU 74, libxml2.so.2, flite); Safari's storage eviction, no Keyboard Lock, no `showDirectoryPicker` | MISSING |
 
 ### 7.2 Frame time (D2, D3)
 
@@ -182,8 +182,8 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.6.1 | the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up | H | browser-tests/pointer-lock.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
-| 7.6.2 | Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari) | O, H | browser-tests/original-start-input.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.6.1 | the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up | H | browser-tests/pointer-lock.spec.mjs | all browsers | fails in Chrome's worker mode: after a blur paused the page the player still walked 7.8 units (about 50 ms) (2026-10-28, Linux); Firefox inline freezes at once. The Escape half cannot run under Playwright (a synthetic Escape does not reach the browser's release of the lock) | FAIL |
+| 7.6.2 | Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari) | O, H | browser-tests/original-start-input.spec.mjs, input-bindings.spec.mjs | all browsers | weak: passes in Chromium; in Firefox the spec cannot drive the menu (Playwright's pointer-lock motion) and the Keyboard Lock check is Chromium's API; Firefox's fullscreen without it has no check | PARTIAL |
 | 7.6.3 | resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error | H | a new spec: resizes during Play, pixels against a fresh load at the final size | Linux, Mac | needed: the spec; nothing tests a resize during Play | MISSING |
 | 7.6.4 | a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows | H | pointer-lock.spec.mjs (blur), a hidden-tab spec | all browsers | weak: blur is tested; `visibilitychange` is not | PARTIAL |
 
@@ -192,23 +192,23 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.7.1 | a lost WebGL context freezes Play and restores it as D3DDrv's `Lock` does; the frames after equal a run with no loss | O | validate-context-loss-play.mjs (Chromium worker and inline, Firefox) | Linux | weak: Safari, and the Mac, not run | PASS |
-| 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | a spec with WebGL disabled (`--disable-webgl`), and one with `EXT_color_buffer_float` refused | Linux | needed: a creation error is not handled (only the GPU mesh's missing extensions are) | MISSING |
+| 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | a spec with WebGL disabled (`--disable-webgl`), and one with `EXT_color_buffer_float` refused | Linux | needed: a creation error is not handled (only the GPU mesh's missing extensions are); with WebAssembly refused the page stays in inspection and says nothing (lodmesh-wasm.spec, 2026-10-28) | MISSING |
 | 7.7.3 | a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable | H | the headless default (SwiftShader) runs | Linux | weak: no validator asserts the path; "playable" has no bound on a software renderer | PARTIAL |
 
 ### 7.8 Files and storage
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.8.1 | the game folder opens through the gate's picker in every supported browser | H | browser-tests/viewer.spec.mjs | all browsers | weak: Chromium headless only | PARTIAL |
-| 7.8.2 | saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running | H | browser-tests/save-game.spec.mjs, save-folder.spec.mjs, test/save-store.test.mjs, test/save-persistence.test.mjs | all browsers | weak: Chromium only; the unit tests use a fake store | PARTIAL |
+| 7.8.1 | the game folder opens through the gate's picker in every supported browser | H | browser-tests/viewer.spec.mjs | all browsers | weak: the picker opens the folder in Chromium and Firefox headless (`setInputFiles`, 2026-10-28); the spec's request rule is stale, a real picker is not run | PARTIAL |
+| 7.8.2 | saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running | H | browser-tests/save-game.spec.mjs, save-folder.spec.mjs, test/save-store.test.mjs, test/save-persistence.test.mjs | all browsers | weak: passes in Chromium; in Firefox the specs stop before saving (the menu cursor under Playwright's pointer lock; the Saves button never shows in inline mode); the unit tests use a fake store | PARTIAL |
 | 7.8.3 | in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads | H, O | save-folder.spec.mjs headed with a real folder, validate-save-game.mjs | Mac, Linux | needed: [save storage](save-storage.md) says a headed Chromium with a real folder was not run | MISSING |
-| 7.8.4 | settings persist across reloads in every supported browser (row 6.1.5's proof) | O | browser-tests/config-persistence.spec.mjs, validate-config-persistence.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.8.4 | settings persist across reloads in every supported browser (row 6.1.5's proof) | O | browser-tests/config-persistence.spec.mjs, validate-config-persistence.mjs | all browsers | weak: the spec passes in Chromium and Firefox on Linux (2026-10-28); WebKit and the Mac not run | PARTIAL |
 
 ### 7.9 Failure recovery
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.9.1 | a runtime error pauses Play with its message, and Player start or a reload recovers | H | browser-tests/runtime-error.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.9.1 | a runtime error pauses Play with its message, and Player start or a reload recovers | H | browser-tests/runtime-error.spec.mjs | all browsers | weak: the spec is stale in every browser (it waits for a deferred push sound nothing records now, and uses F to open a door) | PARTIAL |
 | 7.9.2 | the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half | H | a spec that terminates the worker and one that throws in it | Linux | needed: `onFailure` pauses with the error, but no test exists, and what an out-of-memory worker does is unknown | MISSING |
 | 7.9.3 | a graphics device that never comes back: the page says so, and a reload recovers | H | validate-context-loss-play.mjs with no restore | Linux | weak: the toast exists ([context loss](context-loss.md)); not tested | PARTIAL |
 
@@ -217,7 +217,7 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.10.1 | the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`) | P | run-validators.mjs | Linux, with the Mac's stores | fails: six reds on a clean head on 2026-10-27 (host-services-play, world-batch-gpu, texture-sampling, lodmesh-lod-play, master-frame-play, conversations-census timeout) | FAIL |
-| 7.10.2 | the browser suite passes in every supported browser | P | `npx playwright test` with a project per browser | Mac, Linux | needed: projects for Firefox and WebKit; the suite's whole-run result is not recorded | MISSING |
+| 7.10.2 | the browser suite passes in every supported browser | P | `npx playwright test` (projects chromium, firefox, webkit), SUITE_RUN, `--suite` | Mac, Linux | fails: on 2026-10-28 (Linux) Chromium 29 of 41, Firefox 23 of 41; WebKit runs on the Mac only | FAIL |
 | 7.10.3 | the Stage 4, 5 and 6 gates pass on the closing commit | P, O | validate-stage4-acceptance.mjs, validate-stage5-acceptance.mjs, stage6-criteria.mjs | Linux, Mac | needed: a run on one commit (last runs: Stage 4 on 2026-10-17, Stage 5 on 2026-10-21, Stage 6's rows by 2026-10-26) | MISSING |
 
 ### 7.11 Excluded
@@ -228,6 +228,40 @@ plays sound.
 | 7.11.2 | mobile and touch browsers | - | - | - | the game takes a keyboard and a mouse | EXCLUDED |
 | 7.11.3 | Windows | - | - | - | no Windows machine (D1); Chrome's engine rows stand in for Chrome and Edge there, unmeasured | EXCLUDED |
 
+## The browser suite by browser
+
+Last run 2026-10-28 on the Linux host (AMD, Arch), headless but pointer-lock.spec, 41 tests a browser, one worker:
+
+- chromium 153.0.8010.12 (worker mode): 29 pass, 12 fail (2 race, 8 stale, 1 harness, 1 play), 23.9 min.
+- firefox 155.0 (inline mode): 23 pass, 18 fail (5 play, 1 api, 7 stale, 5 harness), 49.4 min.
+- webkit: not run. Playwright's Linux WebKit needs Ubuntu's libraries (ICU 74, libxml2.so.2, flite); it runs on the Mac.
+
+Causes: **stale**, the spec predates a change in Play and fails in every browser; **race**, the spec reads a state before worker mode delivers it; **harness**, Playwright's synthetic input is not a real browser's, and the spec cannot pass as written; **api**, the spec needs a Chromium-only API; **play**, a Play bug in that browser or simulation mode. A test not listed passed in every browser that ran.
+
+| Test | chromium | firefox | Why |
+| --- | --- | --- | --- |
+| gameplay.spec.mjs:9 | race | pass | `settled` takes the first grounded snapshot after a load, which in worker mode can be the spawn at z -82.50, a tick before the walk lifts it to -80.20 (the suite failed at the crouch, a rerun at the reload) |
+| input-bindings-table.spec.mjs:16 | stale | play | Chromium: its GreyPlus case (scripts/input-binding-cases.mjs) still expects QuickSave to stop at native 3011, which Stage 6 implemented. Firefox stops before it, at the wheel |
+| input-bindings.spec.mjs:17 | pass | play | Firefox fills the legacy `wheelDeltaY` with -3 × `deltaY` (-300 for a 100-pixel notch; Chromium gives -120, Windows' units), and wheel-input.mjs takes it for the platform's notch units: a notch counts 2.5 and the belt moves two items. A real wheel in Firefox is not measured |
+| input-bindings.spec.mjs:104 | pass | api | Keyboard Lock (`navigator.keyboard.lock`) is Chromium's; Firefox's fullscreen without it needs its own expectation ([input bindings](input-bindings.md)) |
+| instructor-conversation.spec.mjs:4 | stale | stale | uses F, the use key before 87926c9e; DefUser.ini binds F to CenterView and RightMouse to use |
+| load-game.spec.mjs:60 | pass | play | the default start's Saves and CRT buttons never show in inline mode: main.mjs `placePageButtons` needs `simClient` and the worker's `windowGrab`, so in Firefox no button opens the Saves window |
+| lodmesh-wasm.spec.mjs:3 | stale | stale | checks the JavaScript pose fallback for a refused WebAssembly, which the Rust core replaced; with Wasm refused the page stays in inspection and says nothing (row 7.7.2) |
+| native-math.spec.mjs:3 | stale | stale | expects the sine table's hash from before entry 8192 became the hardware x87's ([fitting](fitting.md), 2026-10-18); test/coords.test.mjs holds the current b8d75604... |
+| original-start-input.spec.mjs:13 | pass | harness | the original menus' cursor follows relative motion; under Playwright's Firefox pointer lock `movementX/Y` is a synthetic point's offset from a fixed point (-465 for a 25-pixel step), so the cursor never reaches Training. A real mouse in Firefox is not measured |
+| original-start-load-game.spec.mjs:11 | pass | harness | the same motion: the click lands off Load Game |
+| pointer-lock.spec.mjs:5 | harness | harness | the browser's own Escape rule releases the lock, and a synthetic Escape does not reach it (original-start-input.spec.mjs's note) |
+| pointer-lock.spec.mjs:15 | play | pass | worker mode: the player walked 7.8 units (about 50 ms) after a blur paused the page; inline mode freezes at once. Whether frames in flight or ticks before the worker hears of the pause is not traced |
+| runtime-error.spec.mjs:11 | stale | stale | waits for Plant7.PushSound among the deferred effects; nothing records it there now |
+| runtime-error.spec.mjs:48 | stale | stale | uses F to open the first door |
+| save-folder.spec.mjs:165 | pass | play | the Saves button in inline mode (load-game.spec.mjs:60) |
+| save-folder.spec.mjs:212 | pass | play | the same |
+| save-game.spec.mjs:63 | pass | harness | the menu cursor's motion (original-start-input.spec.mjs:13): Training is never clicked |
+| save-game.spec.mjs:178 | pass | harness | the same |
+| training-walk.spec.mjs:4 | stale | stale | uses F to open the doors, and its fixture patches main.mjs's source to read the page's `game`, which worker mode keeps in the worker |
+| viewer.spec.mjs:11 | race | pass | reads the draw calls right after Player start, before worker mode draws again (0; 1835 a frame later) |
+| viewer.spec.mjs:50 | stale | stale | allows only Wasm after the folder is chosen; the simulation worker and the lazy modules load then too (35 scripts in Chromium, 2 in Firefox), all same-origin GETs, which is the rule that matters |
+
 ## The order of the work
 
 1. **Tools into Git.** Done 2026-10-28. `hitch-run.mjs`, `hitch-summary.mjs`, `hitch-ab.mjs`, `frame-time-set.mjs`,
@@ -235,7 +269,10 @@ plays sound.
    `--mode scan`. `stage7-criteria.mjs` holds the rows.
 2. **The browser matrix runs.** Playwright projects for Firefox and WebKit (7.10.2), a first Safari session (7.1.4), and the
    Chromium-only specs extended to the other browsers (7.5.1, 7.6.x, 7.8.x, 7.9.1). These are cheap, and they find the
-   browser-specific failures before any performance work.
+   browser-specific failures before any performance work. Begun 2026-10-28: the projects exist (`--project chromium|firefox|webkit`;
+   the specs that took Chromium's full headless build keep it through `browser-tests/browsers.mjs`), and the suite ran in Chromium
+   and Firefox on Linux ([above](#the-browser-suite-by-browser)). Left: the two Firefox Play bugs and the worker-mode blur, the
+   stale specs and races, a portable way to move the menus' cursor (the harness rows), WebKit and Safari on the Mac.
 3. **The small reliability gaps.** A creation-error message (7.7.2), a resize spec (7.6.3), the hidden tab (7.6.4), a
    worker failure (7.9.2) and a device that never returns (7.9.3).
 4. **A measurement pass on the Mac.** The frame-time set, the load census and the memory budget in every browser (7.2,

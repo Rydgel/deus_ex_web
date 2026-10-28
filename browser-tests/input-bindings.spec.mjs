@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chromiumChannel } from './browsers.mjs';
 
 // The original's input bindings in the browser page (docs/input-bindings.md): the mouse wheel is WinDrv's WM_MOUSEWHEEL (IK_MouseW's
 // axis, then IK_MouseWheelUp/Down pressed and released) and runs User.ini's MouseWheelDown=NextBeltItem / MouseWheelUp=PrevBeltItem;
@@ -7,7 +8,7 @@ import { test, expect } from '@playwright/test';
 //   DX_BASE_URL=http://127.0.0.1:5191 npx playwright test -c .work/playwright.dev.config.mjs browser-tests/input-bindings.spec.mjs
 // What headless Chromium cannot show: its CDP key events go straight to the page, so the browser's own action for an unprevented key
 // (F5 reloading, F3 finding) is not exercised, only that the page prevented it; the browser-reserved chords (Ctrl+W ...) are not tried.
-test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
+test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 const BASE = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
 
 const ready = (page, map) => page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && !s.runtimeError; }, map, { timeout: 240_000 });
