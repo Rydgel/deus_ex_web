@@ -231,6 +231,14 @@ generic over three register models (`Reg`):
   `ONE_MINUS_SRC_ALPHA`, Z writes and `LessEqual`. It samples the fog atlas
   at the light UVs, doubling the seven-bit channels as the light-map shader
   does.
+- **Order** (2026-10-28). The maps draw where DrawComplexSurface draws them,
+  after the surface's detail fans and before its decals and every
+  translucent or modulated item. A masked surface's map draws in the
+  non-occluding list's band, since D3D's fog pass over it is not
+  alpha-tested. Until then the pass drew after every other world item, which
+  painted the 02_NYC_Underground waterfall's fog glow over the modulated
+  sheets in front of it. The change was compared with the original under
+  Wine: [DrawFrame's draw order](bsp-occlusion.md#drawframes-draw-order).
 - **Movers** (with the [brush tracker](brush-tracker.md), 2026-10-07). A
   mover polygon is an FBspSurf of the level model, so SetupForSurf gives
   each of its draw items a fog map under the same gate: the item's zone is

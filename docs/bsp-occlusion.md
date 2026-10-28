@@ -59,7 +59,7 @@ precision for in-game rendering; this is recorded for them separately.
 `DrawFrame` (`0x10b1a2d0`). OccludeFrame runs SetupDynamics (`0x10b22d90`),
 then OccludeBsp (`0x10b173d0`), assigns dynamic lights, and recurses into
 the child frames OccludeBsp created, newest first. DrawFrame draws children
-first, then the frame's lists. `URender::GetVisibleSurfs` (`0x10b160a0`)
+first, then the frame's lists ([DrawFrame's draw order](#drawframes-draw-order)). `URender::GetVisibleSurfs` (`0x10b160a0`)
 shows the minimal original sequence: CreateMasterFrame, then OccludeBsp,
 then the draw lists' surfaces.
 
@@ -943,6 +943,229 @@ Draw calls are per drawn frame.
     host work.
 - **Club spawn.** No child frame is in view, so the modes match within
   noise.
+
+## DrawFrame's draw order
+
+(2026-10-28.) What `URender::DrawFrame` (`0x10b1a2d0`) draws first, read from
+the retail Render.dll and D3DDrv.dll listings, and where that order can
+change Play's pixels.
+
+### The original
+
+1. **Child frames first.** Frame->Child, then each Sibling (`+0xc`),
+   recursively (`0x10b1a336..0x10b1a348`). If the frame's `Draw[0]` is not
+   empty, `RenDev->ClearZ(Frame)` follows (vtable `+0x90`,
+   `0x10b1a34d..0x10b1a35d`).
+2. **Three arrays.** From `Frame->Draw[0..2]` (`+0x98`; FBspDrawList.Next
+   `+0x38`), each list is counted (`0x10b1a363..0x10b1a38f`), given a GMem
+   array (`0x10b1a391..0x10b1a3fe`) and copied in linked order
+   (`0x10b1a404..0x10b1a432`).
+   * OccludeBsp pushes each new list at the head (`0x10b1960c`,
+     `0x10b1979b`) during its front-to-back walk. The linked order is
+     therefore newest first, back to front.
+3. **List 0 (mirrors)** is reversed in place (`0x10b1a434..0x10b1a458`),
+   back to the walk's front-to-back order.
+4. **List 1 (occluding surfaces)** goes through `Sort<FBspDrawList*>`
+   (`0x10b20570`, called at `0x10b1a45f`).
+   * This is Core's `Sort<T>` (UnTemplate.h): a bubble by maximum for runs
+     of up to 8, otherwise a partition on the middle element with an
+     explicit stack. It is unstable.
+   * `Compare(A, B) = A->Key - B->Key` is a signed 32-bit subtraction
+     (`0x10b205e4..0x10b205ee`, `0x10b20600..0x10b2060a`,
+     `0x10b20694..0x10b2069e`), so the order is ascending Key.
+   * OccludeBsp sets the Key (`+0xc`) when it makes the list
+     (`0x10b19760..0x10b1978c`): `(Zone.Index << 26) +
+     (Surf.Texture.Palette.Index << 12) + Surf.Texture.Index`.
+     `Index` is UObject `+4`, the global object index. Palette is UBitmap
+     `+0x2c`. Surf is `Surfs[Node->iSurf]` (`0x10b17f99..0x10b17fa7`). The
+     texture term needs a texture, the palette term a palette.
+   * The Key groups render state. Its subtraction can overflow, so for keys
+     2^31 or more apart (a zone index of 32 or more) Compare is not a total
+     order.
+5. **List 2 (non-occluding)** stays in linked order, back to front. It holds
+   the masked, translucent and modulated surfaces and the drawn portals that
+   are composited.
+6. **The list loop.** It runs `esi = 0..2` (`0x10b1a4c1..0x10b1b465`). For
+   each item:
+   * the textures' Update (vtable `+0x78`, `0x10b1a52d`, `0x10b1a587`), the
+     Surface record and SetupForSurf;
+   * `RenDev->DrawComplexSurface` (`+0x74`, `0x10b1b057`). D3DDrv's body
+     (`0x10003900`) draws the base and its light map, the macro and detail
+     passes, and the fog map last: `SetBlending(0x10000000)` at
+     `0x10004d40` (ONE, INVSRCALPHA, Z writes; no PF_Masked, so no alpha
+     test);
+   * then the decal block (`0x10b1b0ca..0x10b1b34d`): each fragment through
+     `DrawGouraudPolygon` (`+0x78`, `0x10b1b2a7`) with PolyFlags `0x40`.
+7. **Sprites, after each list.** DrawFrame walks the Frame->Sprite chain
+   (`+0xa4`, RenderNext `+0x10`; `0x10b1b3f6..0x10b1b462`). PreRender
+   prepends sprites as the walk reaches them, so the chain runs back to
+   front.
+   * A sprite is translucent when it has an actor whose Style (`+0x165`) is
+     3 (`0x10b1b403..0x10b1b41f`).
+   * A span-based device (`[RenDev+0x48]`) draws every sprite after list 2.
+   * D3D draws the others after list 1 and the translucent ones after
+     list 2, each through DrawActorSprite (`0x10b011c2`).
+8. **The corona pass** (`0x10b1b46a..`) comes last.
+
+On D3D a frame is therefore drawn in this order:
+
+1. its child frames, then ClearZ;
+2. mirrors, in walk order;
+3. occluding surfaces, by Key;
+4. pass 1: actors that are not STY_Translucent, back to front;
+5. non-occluding surfaces, back to front;
+6. pass 2: STY_Translucent actors, back to front;
+7. coronas.
+
+A surface's passes, its fog map and then its decals are drawn together.
+
+D3DDrv's SetBlending (`0x10008270`) gives every draw that is neither
+Translucent nor Modulated PF_Occlude (`0x100082b4..0x100082bf`), so those
+draws write depth. Translucent also drops PF_Masked
+(`0x100082c1..0x100082c6`). The order changes pixels only in three cases:
+
+* two items that write no depth overlap with a blend that does not commute
+  (translucent ONE, INVSRCCOLOR; modulated DESTCOLOR, SRCCOLOR; the detail
+  and decal passes; the fog map's ONE, INVSRCALPHA);
+* an item that writes no depth is drawn before a depth-writing item behind
+  it;
+* two items tie exactly in depth.
+
+### Play
+
+Before this date Play drew the main frame in one `renderer.render`, sorted by
+three.js r186:
+
+* **Opaque list:** opaque and masked world batches and opaque actor-mesh
+  groups, by render order, material and depth.
+* **Transparent list:** by render order, then back to front by each object's
+  bounding-sphere centre. World surfaces are batched per material
+  (`world.mjs` `materialFor`), so a batch's centre says nothing about its
+  surfaces.
+* **Render orders:** detail fans -2, decals -1, every translucent or
+  modulated world batch, sprite and actor-mesh group 0, and the fog pass 1,
+  after all of them.
+
+Now (`src/viewer/render-layers.mjs`):
+
+* **Fog maps** draw where DrawComplexSurface draws them: after the detail
+  fans and before the decals (`FOG_RENDER_ORDER` -1.5), so translucent and
+  modulated items and decals blend over the fogged surface.
+* **Masked surfaces' fog** draws in the non-occluding band
+  (`FOG_RENDER_ORDER_MASKED` 0). A masked surface is a list 2 item, and its
+  fog covers the holes and writes their depth. What was drawn before it
+  (pass 1, list 2 items behind) shows through the holes fogged; pass 2 does
+  not.
+* **Sprites and transparent actor-mesh groups** take DrawFrame's sprite
+  passes by their actor's Style (`ACTOR_PASS_RENDER_ORDER`): -0.5 for pass 1
+  and 0.5 for pass 2, around the world's non-occluding surfaces at 0. Within
+  a band, three.js's back-to-front sort stands for the RenderNext order.
+
+A arms for measurement: `?fogOrder=last` (or `deusExViewer.fogOrder('last')`)
+and `?actorPasses=off`.
+
+What is still not reproduced, with its reach in the shipped data
+(`node scripts/census-draw-order.mjs --data`, 83 maps):
+
+* **List 2's own order.** Play keeps three.js's per-batch order. The data
+  holds 4,323 drawn translucent nodes but only 120 modulated ones. All of
+  the modulated nodes are the three NYC_Underground sewers' waterfalls
+  (WtrFall_A01 and Splash_A01, `0x400148` Unlit, TwoSided, Modulated,
+  NotSolid), stacked sheets whose modulated-over-modulated blend commutes
+  apart from 8-bit rounding and the clamp of 2·src·dst at 1.
+  * 04 and 08_NYC_Underground hold no translucent node.
+  * 02_NYC_Underground's 15 belong to one water portal (surface 724, at
+    (-3792, 1800, -1120)), 3,500 units from its waterfall. No view
+    overlapping the two was searched for.
+* **List 1's Key order and list 0's reversal.** They decide only exact depth
+  ties. Play's depth buffer and rasterizer do not reproduce D3D's ties
+  ([frame projection](frame-projection.md), "Depth buffer"). The Key would
+  need the GObjObjects indexes of zones, palettes and textures
+  ([object index captures](object-index-captures.md)). The coplanar mover
+  case is handled by the mover polygon offset (`world.mjs`).
+* **Masked surfaces in Play's opaque list.** They draw before pass 1, where
+  the original draws them after it. This differs only where a modulated
+  pass 1 item lies in front of a masked surface; the original's masked
+  surface then overwrites it.
+  * The modulated actor classes are DeusEx.BloodDrop and BloodSpurt, both
+    meshes (combat only).
+  * ParticleGenerator proxies would be Modulated with bModulated, or Masked
+    without bTranslucent (SetProxyData). No placed generator sets either and
+    no script does.
+* **ClearZ after the children.** Play draws each child frame into its own
+  target (`mirrors.mjs`), so a child's depth never reaches its parent:
+  nothing to reproduce.
+
+### Measurements
+
+**Where it changes Play's frames.** `scripts/census-draw-order.mjs` draws
+the same held frame (?hold=1, bPlayersOnly, TimeDilation 0, the surface
+textures' clock held by `deusExViewer.holdTextureClock`) with the fog pass in
+DrawComplexSurface's place, in its old place, and in DrawComplexSurface's
+place again (the noise floor). Worker mode, 1280x720, raw frames.
+
+* **02_NYC_Underground, the waterfall's base.** The view holds ZoneInfo7 (a
+  fog zone), volumetric Light50, Light93, Light59 and Light153 at the splash,
+  and the modulated sheets in front of the fogged wall and water.
+  * At (-600, -660, -1150) looking +x, 27,398 pixels differ (largest channel
+    difference 90, mean 14.3).
+  * At (-700, -660, -1230), 23,524 differ (114, 20.0).
+  * The noise floor is 0 in both.
+  * The old order drew the bluish fog glow over the waterfall. DrawFrame's
+    order draws the glow first and lets the modulated sheets darken it.
+* **Elsewhere in the same map.** Seeded views at its volumetric lights show 0
+  changed pixels where nothing translucent stands in front of the fog. One
+  view at the player start, with fog over 704,379 pixels, changes 20 pixels
+  by at most 6.
+* **06_HongKong_WanChai_Market.** Fog covers up to 878,871 pixels there and
+  the views change nothing beyond their own noise.
+
+**Against the original (Linux, Wine).** `scripts/original-views.sh
+02_NYC_Underground` took the views `wf1` (-600, -660, -1150) and `wf2`
+(-700, -660, -1230), level and looking +x, at the held level time 47.097 s.
+It also took the same cameras after `set ZoneInfo bFogZone False` (the
+`-base` frames; `DX_HYPRLAND=0`, since the prefix's Wine virtual desktop
+holds the window). Play's frames are held at 47.095 s, with and without the
+fog pass (`play --base fog`), in both orders. Results from `compare
+--contribution`, where "fog" is the frame less the frame without fog:
+
+| View | Play's order | frame ratio | fog sum, Play / original | correlation | residual | outlier blocks |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| wf1 | DrawComplexSurface's | 1.307 | 1.286 | .983 | .17 | 0 |
+| wf1 | fog last (before) | 1.370 | 1.602 | .858 | .61 | 3 |
+| wf2 | DrawComplexSurface's | 1.274 | 1.198 | .995 | .13 | 0 |
+| wf2 | fog last (before) | 1.338 | 1.395 | .923 | .38 | 0 |
+
+* In DrawFrame's order, Play's fog is the original's times the frame's own
+  Wine brightness gap, and the frames hold no outlier block.
+* In the old order the fog sum is 1.25 and 1.09 times further from the
+  original's than the frame's gap. Its brightest block (over the waterfall)
+  reads 3.56 times the original's, against 1.52 at most in DrawFrame's
+  order.
+* In the original's frame the waterfall's dark band and splash cross the
+  glow, as in Play's new frame.
+* Stored: `.work/acceptance/02_NYC_Underground/{wf1,wf2}{,-base}-original.png`,
+  their `-time.txt`, and Play's `-play.png`, `-play-base.png` and
+  `-play-fog-last.png`.
+
+**Regression check.** The Stage 4 gate rows whose frames hold fog, sprites,
+decals, mirrors or translucent meshes still pass with both changes: 4.2.4,
+4.2.5, 4.2.12, 4.2.15, 4.2.16, 4.2.17, 4.2.23, 4.2.24 and 4.2.29. In the run
+at 2 jobs, 4.2.12's `sprite-tiles-mirror-play` failed once; it passed alone
+and in a rerun of the row.
+
+**Not compared with an original frame:**
+
+* **The sprite passes.** They follow the listing. No shipped static view
+  holds a non-commutative pass 1 or pass 2 pair against the non-occluding
+  list: all placed generators are translucent, and the modulated actors
+  appear only in combat. A staged BloodSpurt summoned in front of a Training
+  observation window (1056, 250, 24, looking +y) drew nothing visible, and
+  the two arms gave identical frames there.
+* **The masked fog band.** Shipped data holds lit masked nodes in a fog zone
+  in 23 maps, but no view with a list 2 surface or a sprite behind a fogged
+  masked surface was captured.
+* **Decals on a fogged surface.** Not captured either.
 
 ## What is left
 

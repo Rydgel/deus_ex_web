@@ -276,7 +276,11 @@ Host choices, noted:
   linked: "Draw order"); within an item the order is the original's. Two
   items' fragments overlap on screen only where coplanar surfaces overlap,
   and every decal is drawn before the translucent surfaces, where the
-  original draws a non-occluding surface's decals among that list.
+  original draws a non-occluding surface's decals among that list. Since
+  2026-10-28 the decals also draw after the fog maps, as DrawFrame's decal
+  block follows DrawComplexSurface, whose last pass is the fog map
+  ([DrawFrame's draw order](bsp-occlusion.md#drawframes-draw-order)); a
+  decal on a fogged surface was not compared with an original frame.
 - Mirror child frames draw no decals, as the original's ClipDecal returns
   nothing there; sky child frames draw none either, where the original
   would (unexercised).

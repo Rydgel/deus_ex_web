@@ -4,6 +4,7 @@ import { toView } from '../unreal/geometry.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
 import { frameProjection } from './frame-projection.mjs';
+import { actorPassRenderOrder } from './render-layers.mjs';
 
 const STYLE_BLEND = { 2: 'masked', 3: 'translucent', 4: 'modulated' };
 
@@ -106,6 +107,8 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     const object = sprite(), material = object.material;
     if (material.map !== entry.texture) { material.map = entry.texture; material.needsUpdate = true; }
     spriteBlend(material, mode, displayGamma);
+    // DrawFrame's sprite pass for the actor's Style (render-layers.mjs ACTOR_PASS_RENDER_ORDER).
+    object.renderOrder = actorPassRenderOrder(style);
     const glow = Math.max(0, Math.min(1, scaleGlow));
     material.color.setRGB(glow, glow, glow);
     object.position.fromArray(toView(location));
