@@ -259,6 +259,16 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe,
     dynamics, sprites, 0, detail, detail ? detailTable.length / 16 : 0];
   let stamp = 0;
+  // The last run's status words, and its output decoded: the root frame's draw lists, child requests and sprites, then the child
+  // frames. `stream` is the root frame's output (address and length in the kernel memory) for the decal block (decal-draw.mjs),
+  // valid until the next run; `skipPoints` leaves the saved points to it. `frames` are the child frames in OccludeFrame's order.
+  let lastStatus = null;
+  const decodeOutput = (st, skipPoints, skipSpritePixels, flatDraw) => {
+    // A view: decode copies what it keeps, and runs before the kernel is called again.
+    const all = words().subarray(st[5] >>> 2, (st[5] >>> 2) + st[1]);
+    return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels, flatDraw),
+      frames: decodeFrames(all, st[6], skipPoints, st[5], skipSpritePixels, flatDraw), stream: { at: st[5], words: st[6] } };
+  };
   const setHeader = () => {
     header[14] = stamp;
     // The tracker's counts (Nodes, Verts, Points, Surfs grow with it).
@@ -361,7 +371,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * `{key, x1, y1, x2, y2, zBits, screenBits?}` (ScreenX, ScreenY, Persp bits) with Y1 >= 0, Y2 <= the frame's height
      * and Y1 < Y2 (Setup's checks); or, with `setupCount`, Setup on that
      * many packed candidates (setupCandidates) gives them. */
-    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, skipSpritePixels = false, children = null } = {}) {
+    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, skipSpritePixels = false, flatDraw = false, children = null } = {}) {
       const viaSetup = setupCount >= 0;
       ensureSprites(viaSetup ? setupCount : frameSprites.length);
       if (!viaSetup) {
@@ -400,14 +410,13 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];
       const st = words().slice(kernel.statusPtr() >>> 2, (kernel.statusPtr() >>> 2) + 8);
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);
-      // `stream` is the root frame's output (address and length in the kernel
-      // memory) for the decal block (decal-draw.mjs), valid until the next
-      // run; `skipPoints` leaves the saved points to it. `frames` are the
-      // child frames in OccludeFrame's order.
-      // A view: decode copies what it keeps, and runs before the kernel is called again.
-      const all = words().subarray(st[5] >>> 2, (st[5] >>> 2) + st[1]);
-      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints, st[5], skipSpritePixels),
-        stream: { at: st[5], words: st[6] } };
+      lastStatus = st;
+      return decodeOutput(st, skipPoints, skipSpritePixels, flatDraw);
+    },
+    /** Validation: the last run's output decoded again with other options (its words stay until the next run). */
+    decodeLast({ skipPoints = false, skipSpritePixels = false, flatDraw = false } = {}) {
+      if (!lastStatus) throw new Error('No OccludeBsp run to decode');
+      return decodeOutput(lastStatus, skipPoints, skipSpritePixels, flatDraw);
     },
     /** Validation: the child frames' Setup results for the watched candidate indices (up to 8), read after a run; `watch([])` stops it. */
     childSetupDebug: {
@@ -564,7 +573,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
  * a frame, 0x10b18b4a) and its OccludeBsp output (`stream`: its address in the
  * kernel memory and word count, for the detail pass). */
-function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false) {
+function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatDraw = false) {
   const frames = [];
   let i = at;
   while (i < words.length) {
@@ -597,19 +606,25 @@ function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false) {
     const requestCount = words[i++], requests = Array.from(words.subarray(i, i + requestCount), node => node | 0);
     i += requestCount;
     const length = words[i++];
-    const body = decode(words.subarray(i, i + length), [], skipPoints, boundsOnly);
+    const body = decode(words.subarray(i, i + length), [], skipPoints, boundsOnly, flatDraw);
     // The frame's OccludeBsp output where the kernel left it (valid until the next run), for the detail pass.
     const stream = { at: base + 4 * i, words: length };
     i += length;
     frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, requests, recursion, zone, mirror, nearClip,
       fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines, ...(boundsOnly ? { bounds } : {}) },
-      draw: body.draw, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens, stream });
+      draw: body.draw, drawn: body.drawn, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens, stream });
   }
   return frames;
 }
 
-function decode(words, status, skipPoints = false, skipSpritePixels = false) {
+/** `flatDraw` (Play's caller, which reads each entry's surface and zone and its polygons' nodes alone): the draw lists as arrays,
+ * not an object per entry and per polygon (about a sixth of the simulation worker's allocation; docs/live-heap.md "Allocation and
+ * the long frame"). `drawn.entries[list]` holds each entry's iSurf, iZone and polygon count, in the list's order, and
+ * `drawn.nodes[list]` its polygons' iNode in the same order; `draw` is null. The polygons' points are skipped, and the child
+ * requests' spans have no lines (their kind and node are what that caller reads). */
+function decode(words, status, skipPoints = false, skipSpritePixels = false, flatDraw = false) {
   const draw = [[], [], []], children = [], sprites = [], spriteScreens = [];
+  const drawn = flatDraw ? { entries: [[], [], []], nodes: [[], [], []] } : null;
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
@@ -637,6 +652,7 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false) {
       i += 8;
       const lines = [];
       for (let y = startY | 0; y < (endY | 0); y++) {
+        if (drawn) { i += 2 * words[i] + 1; continue; }
         const count = words[i++], line = [];
         for (let k = 0; k < count; k++, i += 2) line.push([words[i] | 0, words[i + 1] | 0]);
         lines.push(line);
@@ -647,6 +663,13 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false) {
     }
     const list = words[i], iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
     i += 7;
+    if (drawn) {
+      if (!(list < 3)) throw new Error(`Malformed draw list ${list} at ${i - 7}`);
+      const nodes = drawn.nodes[list];
+      drawn.entries[list].push(iSurf | 0, iZone, polyCount);
+      for (let p = 0; p < polyCount; p++) { nodes.push(words[i] | 0); i += 2 + 7 * words[i + 1]; }
+      continue;
+    }
     const polys = [];
     for (let p = 0; p < polyCount; p++) {
       const node = words[i] | 0, count = words[i + 1];
@@ -658,5 +681,5 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false) {
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
-  return { draw, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
+  return { draw: drawn ? null : draw, drawn, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
 }

@@ -545,9 +545,56 @@ also writes `logMs`, the event's time in the log's clock, and gc-gaps.mjs uses i
 
 **What it says.** Steps 7 and 8 shortened the marking, and the worker's share of it with it: in the quiet pair, 380 ms over two
 frames became 304 ms in one. The longest frame is the part of that share that lands in one frame, so it moves only when the share
-falls well below 300 ms, or when the marking spreads over more frames. Whether less allocation per sim frame would spread it
-(V8's incremental marking takes its steps as the program allocates, and here they run back to back inside one frame) is not
-tested.
+falls well below 300 ms, or when the marking spreads over more frames. Less allocation per sim frame does not spread it (next
+section).
+
+### Allocation and the long frame (2026-10-28)
+
+**The question.** V8's incremental marking takes its steps as the program allocates, and in the long frame they run back to back.
+Would a worker that allocates less per sim frame spread its marking over more frames, and so shorten the longest one?
+
+**What the worker allocates.** From the scavenges' heap sizes in the two-core traces, the worker allocates 157 to 177 MB a second
+on the Island, about 3 MB a sim frame. The sampling heap profiler (`hitch-run.mjs --heap-sampling all`, a 60 s roam with all
+cores, load included) samples 11.2 GB, 16% of it in one function: `decode` in bsp-occlusion.mjs. Each frame it turned OccludeBsp's
+output into an object per draw entry and per polygon, and the child requests' span lines into arrays, for a caller
+(sim-session.mjs `visibility`) that reads only each entry's surface and zone, its polygons' nodes, and the child requests' kind
+and node.
+
+**The cut.** Host representation only. `occlusion.run(..., {flatDraw: true})` decodes the draw lists as two arrays per list (each
+entry's iSurf, iZone and polygon count, and the polygons' nodes, in the list's order) and steps over the child requests' lines;
+`drawnOf` reads them in the same order as before. The same 60 s roam samples 8.4 GB, `decode` 46 MB instead of 1,763 MB.
+`validate-occlusion-flat-draw` decodes each output of 192 views on four maps (the Island, Training, WanChai Underworld's mirrored
+dance floor, Paris Club's mirrors) both ways: the entries, polygon nodes, child requests, sprites, screens, counters, streams and
+child frames are the same (7,376 entries, 12,497 polygons, 55 child frames; a mutant miscounting one entry's polygons is caught).
+`decodeLast()` gives it the second decode of the same words, since a second OccludeBsp run of a view can differ. These pass too:
+`validate-bsp-occlusion`, `-child-frames` (against the original under Unicorn), the Play validators that read the visibility
+result (`validate-underworld-panes-play`, `-sprite-tiles-mirror-play`, `-iterator-frames-play`, `-live-visibility-play`,
+`-decal-vertices-play`, `-frame-projection-play`), the 848 unit tests, and the Island's state digest (`15e3720088490242`, unchanged; a headless frame
+runs no occlusion). Two do not pass, as without the cut: `validate-master-frame-play` times out on this host (known), and
+`validate-mover-light-maps-play` stops at 09_NYC_ShipFan, whose fan's light-map header Rotation does not change. That one fails
+the same with the cut's two files, step 8's six files or 12e292ee's script change served from before (its Rust change is comments
+only): a regression from elsewhere, not bisected (the validator came with `b7ecd2e0`).
+
+**Two cores**, three interleaved pairs of the 120 s Island roams (`taskset -c 0,1`, both arms through `serve-variant.mjs`, the
+base arm with `4ba63772`'s bsp-occlusion.mjs and sim-session.mjs), on a quiet host (load 1 to 3.6). From the traces, per major GC
+cycle of the worker:
+
+| Pair | Worker allocation, base / new | Marking per cycle | Most marking in one frame | Longest frame of the cycle | Gaps over 100 ms | Longest gap |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 160 / 124 MB/s | 386 / 299, 301 ms | 195 / 167, 177 ms | 234 / 198, 207 ms | 2 / 4 | 233 / 200 ms |
+| 2 | 177 / 149 MB/s | 320 / 324 ms | 245 / 188 ms | 283 / 224 ms | 1 / 2 | 300 / 233 ms |
+| 3 | 157 / 123 MB/s | 159, 312 / 310, 313 ms | 104, 233 / 172, 205 ms | 187, 255 / 202, 236 ms | 4 / 4 | 267 / 250 ms |
+
+**What it says.** Less allocation did not spread the marking. In every cycle of both arms the marking lands in two consecutive
+frames, 340 to 440 ms from its start to the atomic pause. The first frame after the start takes steps back to back in proportion
+to what it allocates (41 steps and 233 ms in a base cycle, 34 steps and 188 ms in a new one, near the 20% less allocation); the
+second finishes the marking and runs the atomic pause. What the first frame no longer does moves into the second. The longest
+frame of a cycle fell from 234 to 283 ms to 198 to 236 ms (means 257 and 213 ms, 17% less), but the gaps over 100 ms did not
+fall (7 against 10), and the worker's median frame is the same (12.5 to 14.7 ms in both arms). The cycle's length follows how
+fast the marking completes, not the allocation: in those 0.35 s the helper threads run about 0.9 s of background marking on the
+same two cores. An inference, not measured: at best the worker's share splits evenly over the two frames, so the longest frame
+stays above half of it (about 150 ms here). Under 100 ms then needs the worker's share of a cycle under about 200 ms, which is
+the plan's heap reduction, or a longer cycle, which V8 decides.
 
 ## Open
 
@@ -556,9 +603,9 @@ tested.
   7.6% of the pointer references) shortened the marking per major GC by about 13%, and
   step 8 (13% of the objects, 12% of the pointer references) by about 10% more, but not
   the longest frame yet: the worker does its share of a cycle's marking in one or two
-  frames ("The two-core long frame"). Whether the two steps shorten Firefox's escalated
-  slices is not measured, nor whether less allocation per sim frame spreads the worker's
-  marking over more frames.
+  frames ("The two-core long frame"), and 20% less allocation per frame moved part of it
+  from the first frame to the second without spreading it further ("Allocation and the
+  long frame"). Whether the two steps shorten Firefox's escalated slices is not measured.
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.

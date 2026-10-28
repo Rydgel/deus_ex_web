@@ -351,24 +351,33 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // zone), its surface's pBase and vectors as the tracker holds them (the
   // light-map lattice of a dynamic surface) and its fragments' points
   // (the polygons the item draws, world floats).
-  function drawnOf(draw) {
-    const nodes = [];
-    for (const list of draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
+  // A frame's drawn polygons' nodes (draw lists 0 to 2, each in OccludeBsp's order) and the tracked movers' polygons among them,
+  // from its flat draw lists (bsp-occlusion.mjs `flatDraw`: per list, each entry's iSurf, iZone and polygon count, and the
+  // polygons' nodes).
+  function drawnOf({ entries, nodes: listNodes }) {
+    const nodes = new Uint32Array(listNodes[0].length + listNodes[1].length + listNodes[2].length);
+    nodes.set(listNodes[0]); nodes.set(listNodes[1], listNodes[0].length); nodes.set(listNodes[2], listNodes[0].length + listNodes[1].length);
     let movers = null, moverItems = null;
     if (trackerMovers && occlusion.tracker?.live()) {
       movers = {}; moverItems = [];
       const facets = new Map();
-      for (const list of draw) for (const entry of list) {
-        const owner = occlusion.tracker.surfOwner(entry.iSurf);
-        if (!owner) continue;
-        const name = trackerMovers.names[owner.tag - 0x40000000];
-        (movers[name] ??= []).push(owner.ordinal);
-        if (!facets.has(entry.iSurf)) facets.set(entry.iSurf, occlusion.tracker.surfaceFacet(entry.iSurf));
-        moverItems.push({ mover: name, polygon: owner.ordinal, zone: entry.iZone, facet: facets.get(entry.iSurf),
-          fragments: entry.polys.map(poly => occlusion.nodePolygon(poly.iNode)) });
+      for (let list = 0; list < 3; list++) {
+        const listEntries = entries[list], polyNodes = listNodes[list];
+        for (let e = 0, first = 0; e < listEntries.length; e += 3) {
+          const iSurf = listEntries[e], zone = listEntries[e + 1], count = listEntries[e + 2], from = first;
+          first += count;
+          const owner = occlusion.tracker.surfOwner(iSurf);
+          if (!owner) continue;
+          const name = trackerMovers.names[owner.tag - 0x40000000];
+          (movers[name] ??= []).push(owner.ordinal);
+          if (!facets.has(iSurf)) facets.set(iSurf, occlusion.tracker.surfaceFacet(iSurf));
+          const fragments = [];
+          for (let p = from; p < from + count; p++) fragments.push(occlusion.nodePolygon(polyNodes[p]));
+          moverItems.push({ mover: name, polygon: owner.ordinal, zone, facet: facets.get(iSurf), fragments });
+        }
       }
     }
-    return { nodes: Uint32Array.from(nodes), movers, moverItems };
+    return { nodes, movers, moverItems };
   }
   // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null (decodeFrames computes them with skipSpritePixels).
   function spanBounds(span) {
@@ -430,9 +439,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     words[44] = ++drawWorlds; words[45] = u32[0];
     words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0) | (details ? OCCLUSION_DETAIL : 0); words[47] = 0;
     const started = performance.now();
-    const result = occlusion.run(words, [], { setupCount, skipPoints: true, skipSpritePixels: true,
+    const result = occlusion.run(words, [], { setupCount, skipPoints: true, skipSpritePixels: true, flatDraw: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0, frameDynamics } : null });
-    const { nodes, movers, moverItems } = drawnOf(result.draw);
+    const { nodes, movers, moverItems } = drawnOf(result.drawn);
     const detail = details ? detailDraw.frames(built, origin, result) : null;
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
@@ -449,7 +458,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // polygons, its Frame->Sprite keys, the group a mirror frame looks
     // through (a tracked mover's polygon) and its span's bounds.
     const frames = result.frames.map(frame => {
-      const drawnHere = drawnOf(frame.draw);
+      const drawnHere = drawnOf(frame.drawn);
       const ownerOf = node => frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(node)) : null;
       const keyOf = owner => owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null;
       const owner = ownerOf(frame.iNode);
