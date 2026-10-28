@@ -45,6 +45,49 @@ export const FILL_TIE_Y = 1 / 256, FILL_TIE_ROW = 2 ** -10;
  * packages), as the base textures get; the default draws them as the one level they are (docs/frame-projection.md). */
 const generateMips = typeof location !== 'undefined' && new URLSearchParams(location.search).get('detailMips') === 'generate';
 
+/** A detail texture's material (createDetailScene), the shader warm-up's too (detailWarmup). `bias` is the depth the fans are
+ * lowered by. */
+function detailMaterial(map, displayGamma, bias) {
+  const material = new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false, depthFunc: THREE.LessEqualDepth,
+    side: THREE.DoubleSide, fog: false });
+  material.blending = THREE.CustomBlending;
+  material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
+  material.polygonOffset = ZBIAS.factor !== 0 || ZBIAS.units !== 0;
+  material.polygonOffsetFactor = ZBIAS.factor; material.polygonOffsetUnits = ZBIAS.units;
+  material.onBeforeCompile = shader => {
+    shader.uniforms.deusDisplayGamma = displayGamma;
+    Object.assign(shader.uniforms, frameProjection.uniforms);
+    shader.uniforms.uDetailBias = bias;
+    // D3DDrv's vertices (X, Y, depth, RHW) through the original's mapping to clip space; a pass without a frame draws nothing.
+    shader.vertexShader = shader.vertexShader
+      .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nattribute float deusTie;\nvarying float vDeusAlpha;\nvarying float vDeusTie;\nuniform float uDetailBias;\n${frameProjectionGlsl()}\nvoid main() {`)
+      // The fans are already the frame's own (OccludeBsp's output); the host's mirror-plane clip would test the D3D vertex.
+      .replace('#include <clipping_planes_vertex>', '')
+      .replace('#include <project_vertex>', `
+vDeusAlpha = deusAlpha; vDeusTie = deusTie;
+if ( uFpOn > 0.5 ) gl_Position = fpClipOf( vec4( deusD3d.x, deusD3d.y - deusTie, deusD3d.z - uDetailBias, deusD3d.w ), 1.0 / deusD3d.w );
+else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
+`);
+    // COLOROP BLENDDIFFUSEALPHA with the diffuse 0x808080 and the vertex alpha: texel * a + diffuse * (1 - a).
+    shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', '').replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;\nvarying float vDeusAlpha;\nvarying float vDeusTie;')
+      // A fan moved up by vDeusTie px (window y grows upwards) has at this pixel what the unmoved fan has vDeusTie px lower: its
+      // texture coordinates and alpha are read one derivative step back up (0 for every other fan).
+      .replace('#include <map_fragment>', `vec2 deusMapUv = vMapUv + vDeusTie * dFdy( vMapUv );
+float deusFanAlpha = vDeusAlpha + vDeusTie * dFdy( vDeusAlpha );
+${THREE.ShaderChunk.map_fragment.replace(/\bvMapUv\b/g, 'deusMapUv')}
+diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( deusFanAlpha, 0.0, 1.0 ) ), 1.0 );`)
+      .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
+        ${displayRampGlsl('deusDisplayGamma', true)}`);
+  };
+  material.customProgramCacheKey = () => `deus-detail:${FRAME_PROJECTION_KEY}`;
+  return material;
+}
+
+/** The shader warm-up's detail mesh (shader-warmup.mjs). */
+export function detailWarmup({ displayGamma, texture, geometry }) {
+  return [new THREE.Mesh(geometry, detailMaterial(texture, displayGamma, { value: ZBIAS.depth }))];
+}
+
 export function createDetailScene(assets, textures, { displayGamma, surfaceDetails }) {
   const root = new THREE.Group(), notes = new Set(), meshes = new Map(), loaded = new Map();
   // The depth the fans are lowered by (0..1 depth), shared by every material; and the polygon offset the materials carry.
@@ -73,38 +116,7 @@ export function createDetailScene(assets, textures, { displayGamma, surfaceDetai
       // A texture whose file stores one mip level is uploaded as one level (MIPFILTER selects level 0): no chain is generated.
       if (data.mips.length === 1 && !generateMips) gpu.minFilter = THREE.LinearFilter;
       gpu.needsUpdate = true;
-      const material = new THREE.MeshBasicMaterial({ map: gpu, transparent: true, depthWrite: false, depthFunc: THREE.LessEqualDepth,
-        side: THREE.DoubleSide, fog: false });
-      material.blending = THREE.CustomBlending;
-      material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
-      material.polygonOffset = ZBIAS.factor !== 0 || ZBIAS.units !== 0;
-      material.polygonOffsetFactor = ZBIAS.factor; material.polygonOffsetUnits = ZBIAS.units;
-      material.onBeforeCompile = shader => {
-        shader.uniforms.deusDisplayGamma = displayGamma;
-        Object.assign(shader.uniforms, frameProjection.uniforms);
-        shader.uniforms.uDetailBias = bias;
-        // D3DDrv's vertices (X, Y, depth, RHW) through the original's mapping to clip space; a pass without a frame draws nothing.
-        shader.vertexShader = shader.vertexShader
-          .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nattribute float deusTie;\nvarying float vDeusAlpha;\nvarying float vDeusTie;\nuniform float uDetailBias;\n${frameProjectionGlsl()}\nvoid main() {`)
-          // The fans are already the frame's own (OccludeBsp's output); the host's mirror-plane clip would test the D3D vertex.
-          .replace('#include <clipping_planes_vertex>', '')
-          .replace('#include <project_vertex>', `
-vDeusAlpha = deusAlpha; vDeusTie = deusTie;
-if ( uFpOn > 0.5 ) gl_Position = fpClipOf( vec4( deusD3d.x, deusD3d.y - deusTie, deusD3d.z - uDetailBias, deusD3d.w ), 1.0 / deusD3d.w );
-else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
-`);
-        // COLOROP BLENDDIFFUSEALPHA with the diffuse 0x808080 and the vertex alpha: texel * a + diffuse * (1 - a).
-        shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', '').replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;\nvarying float vDeusAlpha;\nvarying float vDeusTie;')
-          // A fan moved up by vDeusTie px (window y grows upwards) has at this pixel what the unmoved fan has vDeusTie px lower: its
-          // texture coordinates and alpha are read one derivative step back up (0 for every other fan).
-          .replace('#include <map_fragment>', `vec2 deusMapUv = vMapUv + vDeusTie * dFdy( vMapUv );
-float deusFanAlpha = vDeusAlpha + vDeusTie * dFdy( vDeusAlpha );
-${THREE.ShaderChunk.map_fragment.replace(/\bvMapUv\b/g, 'deusMapUv')}
-diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( deusFanAlpha, 0.0, 1.0 ) ), 1.0 );`)
-          .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
-            ${displayRampGlsl('deusDisplayGamma', true)}`);
-      };
-      material.customProgramCacheKey = () => `deus-detail:${FRAME_PROJECTION_KEY}`;
+      const material = detailMaterial(gpu, displayGamma, bias);
       Object.assign(entry, { texture: gpu, material });
     }).catch(error => { entry.failed = error.message; notes.add(`Detail texture ${key}: ${error.message}`); });
     return entry;

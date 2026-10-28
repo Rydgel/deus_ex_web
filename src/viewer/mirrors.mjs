@@ -209,7 +209,11 @@ export function createMirrors(notes, displayGamma) {
       updateActors?.(fromView(source.position.toArray()), source, null);
     }
   }
-  const api = { enabled: true, stats, surface, render, mayRender, follow,
+  /** The renderer's clipping planes as every draw after a mirror pass has them: the one plane, disabled (zero normal).
+   * A level with mirror planes draws with that program shape from its first frame (main.mjs at the swap), so its first
+   * mirror pass does not reselect every material's program, and the shader warm-up builds one shape (shader-warmup.mjs). */
+  function clipShape(renderer) { renderClip.normal.set(0, 0, 0); renderClip.constant = 1; renderer.clippingPlanes = clippingPlanes; }
+  const api = { enabled: true, stats, surface, render, mayRender, follow, clipShape,
     /** The mirror planes (mirror-passes.mjs groups). */
     groups: () => [...planes.values()], dispose() { for (const t of targets.values()) t.dispose(); },
     /** Validation access (validate-mirrors-play.mjs); never used by Play. */

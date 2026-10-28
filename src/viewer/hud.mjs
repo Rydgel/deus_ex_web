@@ -8,6 +8,20 @@
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
 import {sharedProceduralTextures} from './procedural-textures.mjs';
+/** A tile batch's material for a texture and Style (createHudRenderer), the shader warm-up's too (hudWarmup). */
+function tileMaterial(texture,style){
+  return new THREE.ShaderMaterial({uniforms:{map:{value:texture}},
+    vertexShader:'attribute vec3 tint; varying vec2 texCoord; varying vec3 tileColor; void main(){texCoord=uv;tileColor=tint;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader:`uniform sampler2D map; varying vec2 texCoord; varying vec3 tileColor; void main(){vec4 c=texture2D(map,texCoord);${style===2?'if(c.a<0.5)discard;':''}gl_FragColor=vec4(c.rgb*tileColor,1.);}`,
+    // Keep every HUD tile in one render list so parent frames precede
+    // opaque portraits and masked glyphs, exactly in Window draw order.
+    depthTest:false,depthWrite:false,side:THREE.DoubleSide,transparent:true,
+    blending:style===3||style===4?THREE.CustomBlending:THREE.NoBlending,
+    blendSrc:style===4?THREE.DstColorFactor:THREE.OneFactor,blendDst:style===4?THREE.SrcColorFactor:THREE.OneMinusSrcColorFactor,
+    toneMapped:false});
+}
+/** The shader warm-up's tile batches (shader-warmup.mjs): the masked style's shader and the others' (one program). */
+export function hudWarmup({texture,geometry}){return [1,2].map(style=>new THREE.Mesh(geometry,tileMaterial(texture,style)));}
 export async function createHudRenderer({assets,preload=[]}){
   const scene=new THREE.Scene(),camera=new THREE.OrthographicCamera(0,1,0,1,-1,1);
   const textures=new Map(),materials=new Map(),batches=[];
@@ -41,17 +55,7 @@ export async function createHudRenderer({assets,preload=[]}){
       texture.magFilter=texture.minFilter=THREE.NearestFilter;texture.flipY=false;
       texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.generateMipmaps=false;texture.needsUpdate=true;textures.set(image.key,texture);
     }
-    if(!materials.has(key)){
-      const m=new THREE.ShaderMaterial({uniforms:{map:{value:textures.get(image.key)}},
-        vertexShader:'attribute vec3 tint; varying vec2 texCoord; varying vec3 tileColor; void main(){texCoord=uv;tileColor=tint;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-        fragmentShader:`uniform sampler2D map; varying vec2 texCoord; varying vec3 tileColor; void main(){vec4 c=texture2D(map,texCoord);${style===2?'if(c.a<0.5)discard;':''}gl_FragColor=vec4(c.rgb*tileColor,1.);}`,
-        // Keep every HUD tile in one render list so parent frames precede
-        // opaque portraits and masked glyphs, exactly in Window draw order.
-        depthTest:false,depthWrite:false,side:THREE.DoubleSide,transparent:true,
-        blending:style===3||style===4?THREE.CustomBlending:THREE.NoBlending,
-        blendSrc:style===4?THREE.DstColorFactor:THREE.OneFactor,blendDst:style===4?THREE.SrcColorFactor:THREE.OneMinusSrcColorFactor,
-        toneMapped:false});materials.set(key,m);
-    }
+    if(!materials.has(key))materials.set(key,tileMaterial(textures.get(image.key),style));
     return materials.get(key);
   }
   function batchFor(nextMaterial){

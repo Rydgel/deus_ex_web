@@ -5,6 +5,45 @@ import { displayRampGlsl } from './light-atlas.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
 import { frameProjection } from './frame-projection.mjs';
 
+const STYLE_BLEND = { 2: 'masked', 3: 'translucent', 4: 'modulated' };
+
+/** A pooled sprite (createSpriteScene), the shader warm-up's too (spriteWarmup). */
+function spriteObject() {
+  const material = new THREE.SpriteMaterial({ color: 0xffffff, depthWrite: false, transparent: true, fog: false, side: THREE.DoubleSide });
+  material.userData.blend = null;
+  // This sprite's tile inputs for the pass being drawn (frameProjection.patchSprite).
+  material.userData.tile = { on: { value: 0 }, a: { value: new THREE.Vector4() }, b: { value: new THREE.Vector4() }, c: { value: new THREE.Vector4() } };
+  return new THREE.Sprite(material);
+}
+
+/** A sprite material's blending for its Style (`mode`: normal, masked, translucent or modulated). */
+function spriteBlend(material, mode, displayGamma) {
+  if (material.userData.blend === mode) return;
+  material.userData.blend = mode;
+  material.blending = THREE.CustomBlending; material.alphaTest = 0; material.depthWrite = false;
+  if (mode === 'translucent') { material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor; }
+  else if (mode === 'modulated') { material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor; }
+  else { material.blending = THREE.NormalBlending; material.depthWrite = true; material.alphaTest = mode === 'masked' ? 0.5 : 0; }
+  material.onBeforeCompile = shader => {
+    shader.uniforms.deusDisplayGamma = displayGamma;
+    frameProjection.patchSprite(shader, material.userData.tile);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
+      .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
+        ${displayRampGlsl('deusDisplayGamma', mode === 'modulated')}`);
+  };
+  material.customProgramCacheKey = () => `deus-sprite-${mode}-fp1`;
+  material.needsUpdate = true;
+}
+
+/** The shader warm-up's sprites (shader-warmup.mjs): one per Style's blending, with a map, as draw leaves them. */
+export function spriteWarmup({ displayGamma, texture }) {
+  return ['normal', ...Object.values(STYLE_BLEND)].map(mode => {
+    const object = spriteObject();
+    object.material.map = texture; spriteBlend(object.material, mode, displayGamma);
+    return object;
+  });
+}
+
 /** Sprites in Play (docs/particles.md "Sprites"), the page's side: the
  * simulation's sprite records (sprite-scan.mjs) drawn as DrawActorSprite
  * (0x10b25080) draws them. A sprite is a screen-aligned tile of
@@ -26,7 +65,6 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
   let used = 0;
   // This frame's sprites whose texture has not decoded yet (not drawn).
   const skipped = new Set();
-  const STYLE_BLEND = { 2: 'masked', 3: 'translucent', 4: 'modulated' };
 
   function texture(reference, masked) {
     const key = `${reference.key ?? `${reference.package}:${reference.index}`}:${masked}`;
@@ -55,32 +93,10 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
 
   function sprite() {
     if (used < pool.length) return pool[used++];
-    const material = new THREE.SpriteMaterial({ color: 0xffffff, depthWrite: false, transparent: true, fog: false, side: THREE.DoubleSide });
-    material.userData.blend = null;
-    // This sprite's tile inputs for the pass being drawn (frameProjection.patchSprite).
-    material.userData.tile = { on: { value: 0 }, a: { value: new THREE.Vector4() }, b: { value: new THREE.Vector4() }, c: { value: new THREE.Vector4() } };
-    const object = new THREE.Sprite(material);
+    const object = spriteObject();
     object.onAfterRender = () => object.userData.feedback?.();
     root.add(object); pool.push(object); used++;
     return object;
-  }
-
-  function blend(material, mode) {
-    if (material.userData.blend === mode) return;
-    material.userData.blend = mode;
-    material.blending = THREE.CustomBlending; material.alphaTest = 0; material.depthWrite = false;
-    if (mode === 'translucent') { material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor; }
-    else if (mode === 'modulated') { material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor; }
-    else { material.blending = THREE.NormalBlending; material.depthWrite = true; material.alphaTest = mode === 'masked' ? 0.5 : 0; }
-    material.onBeforeCompile = shader => {
-      shader.uniforms.deusDisplayGamma = displayGamma;
-      frameProjection.patchSprite(shader, material.userData.tile);
-      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-        .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
-          ${displayRampGlsl('deusDisplayGamma', mode === 'modulated')}`);
-    };
-    material.customProgramCacheKey = () => `deus-sprite-${mode}-fp1`;
-    material.needsUpdate = true;
   }
 
   function draw({ handle, texture: reference, style, location, drawScale, scaleGlow, main, frames, screens }, number) {
@@ -89,7 +105,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     if (!entry.texture) { skipped.add(handle); return; }
     const object = sprite(), material = object.material;
     if (material.map !== entry.texture) { material.map = entry.texture; material.needsUpdate = true; }
-    blend(material, mode);
+    spriteBlend(material, mode, displayGamma);
     const glow = Math.max(0, Math.min(1, scaleGlow));
     material.color.setRGB(glow, glow, glow);
     object.position.fromArray(toView(location));

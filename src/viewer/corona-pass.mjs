@@ -3,6 +3,32 @@ import { textureColorSpace, REENCODE_GLSL } from './original-sampling.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { frameProjection } from './frame-projection.mjs';
 
+/** A pooled corona tile (createCoronaPass), the shader warm-up's too (coronaWarmup). */
+function coronaTile(displayGamma) {
+  const material = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+  material.blending = THREE.CustomBlending; material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor;
+  // This corona's tile inputs (frameProjection.patchCorona): the DrawIcon rectangle and the texture's sizes.
+  material.userData.tile = { on: { value: 0 }, icon: { value: new THREE.Vector4() }, b: { value: new THREE.Vector4() }, c: { value: new THREE.Vector4() } };
+  material.onBeforeCompile = shader => {
+    shader.uniforms.deusDisplayGamma = displayGamma;
+    frameProjection.patchCorona(shader, material.userData.tile);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
+      .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
+        ${displayRampGlsl('deusDisplayGamma', false)}`);
+  };
+  material.customProgramCacheKey = () => 'deus-corona-v2-fp1';
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+/** The shader warm-up's corona tile (shader-warmup.mjs), with a map as update gives it one. */
+export function coronaWarmup({ displayGamma, texture }) {
+  const mesh = coronaTile(displayGamma);
+  mesh.material.map = texture;
+  return [mesh];
+}
+
 /** The page side of Play's light coronas (docs/coronas.md "Play"): the
  * simulation's corona icons (corona-scan.mjs) drawn as screen tiles with the
  * canvas's translucent blend (ONE, INVSRCCOLOR) after the world. An icon
@@ -43,20 +69,7 @@ export function createCoronaPass(assets, textures, { displayGamma }) {
   }
   function tile() {
     if (used < pool.length) return pool[used++];
-    const material = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
-    material.blending = THREE.CustomBlending; material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor;
-    // This corona's tile inputs (frameProjection.patchCorona): the DrawIcon rectangle and the texture's sizes.
-    material.userData.tile = { on: { value: 0 }, icon: { value: new THREE.Vector4() }, b: { value: new THREE.Vector4() }, c: { value: new THREE.Vector4() } };
-    material.onBeforeCompile = shader => {
-      shader.uniforms.deusDisplayGamma = displayGamma;
-      frameProjection.patchCorona(shader, material.userData.tile);
-      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-        .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
-          ${displayRampGlsl('deusDisplayGamma', false)}`);
-    };
-    material.customProgramCacheKey = () => 'deus-corona-v2-fp1';
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
-    mesh.frustumCulled = false;
+    const mesh = coronaTile(displayGamma);
     scene.add(mesh); pool.push(mesh); used++;
     return mesh;
   }

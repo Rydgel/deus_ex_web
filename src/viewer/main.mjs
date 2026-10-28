@@ -52,6 +52,7 @@ import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-mu
 import { msvcrtWtoi } from '../runtime/script-text-parser.mjs';
 import { createFrameKeeper } from './frame-keeper.mjs';
 import { snapshotGrey } from '../runtime/script-root-snapshot.mjs';
+import { createShaderWarmup, shaderWarmupOn } from './shader-warmup.mjs';
 
 // Sound effects and ambient sounds play through Galaxy's own mixer in the
 // music worklet (docs/galaxy-audio.md "Effects through Galaxy's mixer");
@@ -138,12 +139,9 @@ const canvasClear = new THREE.Color('#06101b'), screenClear = new THREE.Color(0,
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
 const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1'||hitchEnabled;
-// ?precompile=1: after a map loads, the scene's shader programs are compiled (renderer.compileAsync) while the
-// loading screen is up, instead of synchronously at the first draw of each material. ANGLE's Metal backend and
-// Apple's OpenGL compile a program in the middle of play at a cost the Linux drivers do not show; measurement
-// switch, off by default (docs/hitch-log.md "Shader programs").
-const precompileParam=new URLSearchParams(location.search).get('precompile')==='1';
-let precompileMs=null;
+// The level's shader programs are built while the map loads (shader-warmup.mjs, docs/hitch-log.md "Shader programs"),
+// not at the first draw that needs each one; ?shaderWarmup=0 turns it off. Its last result is in status().
+let shaderWarmupResult=null;
 // ?seed=N: the shared random stream's srand seed instead of time(NULL), for
 // comparing two runs of one scenario (scripts/validate-sim-split.mjs).
 const seedParam=new URLSearchParams(location.search).get('seed');
@@ -290,6 +288,7 @@ function useFrameProjection(projection, mirror = 1) {
 }
 let hudRenderer=null;
 const flashPass=createFlashPass();
+const shaderWarmup=shaderWarmupOn()?createShaderWarmup(renderer):null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
@@ -893,7 +892,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
-  let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null;
+  let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null, warming = null;
   // A travel arrival attaches to the script process of the level left (script-process.mjs): inline here, in the worker there (sim-worker.mjs).
   // ?process=new starts a new one for every level, as a load from the map list does: a new run of the original, whose classes start from
   // their packages' defaults (a default the level left wrote does not come along).
@@ -961,6 +960,11 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();
     if (overlapped) { overlapped.scene(scenePart); overlapped.scene = null; }
+    // The level's shader programs build while the simulation side loads (shader-warmup.mjs).
+    try {
+      warming = shaderWarmup?.start({ world: nextWorld, gpu: nextGpuMesh, displayGamma: nextWorld.displayGamma,
+        mirrors: nextWorld.mirrors.stats.planes > 0, detail: detailTexturesOn(), roots: [displayRamp?.scene, flashPass.scene].filter(Boolean) }) ?? null;
+    } catch (error) { console.warn('shader warm-up failed', error); }
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary, process: keepProcess, restore: Boolean(filed),
       onAudioVoice: event => { void galaxyVoice(event); },
@@ -1057,6 +1061,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
+    if (world.mirrors.stats.planes > 0) world.mirrors.clipShape(renderer);
     game = nextGame;sim = nextSim;runtimeError=null;lockGameKeys(true); $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
     // The previews drive the runtime directly: on the page only.
     const training = Boolean(game) && name === '00_Training' && !simClient;
@@ -1079,11 +1084,11 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     $('map').value = name; $('gate').hidden = true; $('reset').disabled = false;
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
-    if (precompileParam) {
+    if (warming) {
       const mark = performance.now();
       $('gate-message').textContent = 'Compiling shaders';
-      try { await renderer.compileAsync(scene, camera); } catch (error) { console.warn('precompile failed', error); }
-      precompileMs = performance.now() - mark;
+      const result = await warming.finish().catch(error => { console.warn('shader warm-up failed', error); return null; });
+      shaderWarmupResult = result && { ...result, waitMs: Math.round(performance.now() - mark) };
     }
     // A travel's level: its first frame's dt runs from the last frame before the load (DeusEx.exe's main loop does not reset OldTime
     // across Browse, 0x109147da..0x109148a6), so the loading frame reaches the new level's first tick, where ULevel::Tick clamps the
@@ -1095,6 +1100,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   } catch (error) {
     // a load the worker started waits for the world's part: none comes
     overlapped?.scene?.(null);
+    warming?.dispose();
     if(nextHost&&nextHost!==simHost)nextHost.dispose?.(keepProcess);
     // The level left goes on: the process it shared is its own again (the failed level's runtime may have attached to it).
     const left=simHost?.game?.doors.scriptRuntime.runtime;
@@ -1843,7 +1849,7 @@ function status() {
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     crt: crtEnabled, crtShader, crtCompare,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
-    calls: renderer.info.render.calls, frame: renderer.info.render.frame, precompileMs,
+    calls: renderer.info.render.calls, frame: renderer.info.render.frame, shaderWarmup: shaderWarmupResult,
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.

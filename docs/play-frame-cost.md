@@ -62,9 +62,18 @@ pawn, per tick), draw gaps over 33 ms 263 → 70, draw gap p99 33.4 → 16.8 ms,
 GC of 26 ms in each. Firefox inline, Island, 120 s: still 45 fps drawn on this machine, page frames over 90 ms after the load 17
 → 12, arriving in clusters of two or three about 100 ms frames every 10 to 30 s: a major GC's cost follows the live heap
 (about 7.5 M nodes on a loaded map, mostly the script object model, see "October 14, later"), which these changes do not shrink.
-The page's late shader programs (about 15 on the Island after the first 5 s of play, 50 to 120 ms each here) are the other
-remaining stall; `?precompile=1` builds only what the scene holds at load, and the late ones are variants first needed later
+The page's late shader programs (about 15 on the Island after the first 5 s of play, 50 to 120 ms each here) were the other
+remaining stall; `?precompile=1` built only what the scene held at load, and the late ones are variants first needed later
 (GPU mesh materials by environment pass, blend state and fog; lightmap batches by texture count; translucent sprites).
+
+**Fixed: the shader warm-up** ([hitch log](hitch-log.md#shader-programs), `src/viewer/shader-warmup.mjs`, `?shaderWarmup=0`
+off). While the worker runs a level's startup, the page compiles the world's materials and stand-ins for every material
+variant play can make (built by each factory's own construction, so the programs are the draws' own: the sources match);
+their link checks run at the end of the load. Interleaved roams, Chromium worker: the Island's 24 to 30 programs built after the
+swap (a 400 to 417 ms first frame, then up to 6 late ones) and Airfield's 25 to 27 in a minute of play become 0; the Island's
+warm-up is 10 programs in 0.18 s (8 to 13 ms of page thread), the first map's 75 in 1.3 s, inside the worker's 4 to 5 s startup,
+and the first frame arrives 0.35 s sooner. Firefox inline (no parallel-compile extension there): the Island's 18 programs at
+its first frames become 0. A level with mirrors now has the mirror passes' clipping-plane shape from its first frame.
 
 ## October 14: periodic hitches (reported on the Mac only)
 

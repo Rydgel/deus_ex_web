@@ -101,19 +101,88 @@ host (2026-10-15; not in Safari); every optional API is feature-tested.
 
 ## Shader programs
 
-three.js compiles a program the first time a material is drawn, and checks
-its link status at once, so the thread that draws waits for the compiler.
-`programs` and `gl.compile` say how often that happens in play. On the Linux
-host a map builds 7 to 30 programs; Everett's last one is built 19 s into
-play, Airfield builds 19 more programs during a minute of roaming (5 to 25 ms
-each here). Whether ANGLE's Metal backend or Apple's OpenGL makes them
-seconds is not known here; the recorder will show it. `?precompile=1` builds
-the scene's programs while the loading screen is up (`renderer.compileAsync`):
-Airfield goes from 28-30 programs (17-19 built after play began, 150-160 ms of
-`gl.compile` in a 90 s roam) to 69 (7 late, 78 ms). It
-also compiles about 40 programs a roam never uses, so it moves the cost to
-the load rather than removing it; it is off by default, and an experiment for
-a machine whose log shows compile time in slow seconds.
+three.js builds a program the first time a material is drawn with a program
+key it has not built, and checks its link status at once, so the thread that
+draws waits for the compiler. `programs` and `gl.compile` say how often that
+happens in play.
+
+**Before the warm-up (Linux host, 2026-10-27).** A map built 7 to 30
+programs, most of them in its first drawn frame (the Island, after Training:
+6 to 24 programs, a 400 to 550 ms first frame), the rest when a draw first
+needed a variant: actor meshes by environment pass, side, alpha test and
+blend state (Style), the view model, lightmap batches by texture count,
+translucent sprites. On the Island 0 to 15 were built after the first 5 s of
+roaming, each a 50 to 120 ms frame; a program no material used any more was
+deleted and built again when the next one needed it. Airfield built 17 to 19
+during a 90 s roam. The former `?precompile=1` compiled only what the scene
+held at load (Airfield: 7 late).
+
+**The warm-up** (`src/viewer/shader-warmup.mjs`, on by default,
+`?shaderWarmup=0` turns it off). Once the page's world is built and sent to
+the worker, the page compiles, while the worker runs the level's startup:
+
+- the world's own materials (BSP surfaces, movers, sky, fog surfaces) and
+  the full-screen passes (display ramp, flash). Compiling a material binds
+  nothing: its first draw derives its program key again from its state then
+  and finds the program built;
+- stand-ins for what is made once play runs, built by each factory's own
+  construction (`actorMeshWarmup`, `spriteWarmup`, `decalWarmup`,
+  `detailWarmup`, `coronaWarmup`, the fog pass's `warmup`, `hudWarmup`): the
+  actor meshes' materials (a GPU slot's by environment flag, and the CPU
+  path's) by side, alpha test and opacity, their batches, a weapon's
+  back-side faces in a mirror frame, the sprites' four blends, decals, detail textures, coronas, mover
+  fog items and the HUD's two tile shaders. Their onBeforeCompile and
+  customProgramCacheKey are the draws' own, and their map and geometry give
+  the key what it reads from them (that a map exists; which standard
+  attributes the geometry has), so the programs are the ones the draws would
+  build. The stand-ins are never drawn; they are kept until the next level's
+  warm-up has finished, so their programs stay alive meanwhile.
+
+A level with mirror planes takes the mirror passes' clipping-plane shape (one
+plane, disabled outside a mirror frame) at its swap (`mirrors.mjs
+clipShape`), the shape every draw had after its first mirror pass anyway, so
+its first mirror pass no longer rebuilds every material's program and the
+warm-up builds one shape. The driver compiles and links what the warm-up
+issued while the load goes on (one program after another, about 15 to 18 ms
+each in Chromium here, 9 in Firefox); the link checks, which wait for that
+(each program's first use), run at the end of the load (`finish`), when the
+programs are built. With KHR_parallel_shader_compile (Chromium) non-blocking
+completion polls say when they were; Firefox 155 here has no such extension,
+and nothing is asked of a program before `finish`. A page call that must
+wait for the GPU process waits for every compile queued before it: a first
+try that built 130 programs at once (both clipping shapes) held the page
+2.3 s inside the load, and a first Firefox version that checked the links at
+once 0.65 s. `status().shaderWarmup` gives `programs` (built by this
+warm-up), `mainMs` (the page's part), `ms` (until the polls saw every program
+linked; null without the extension), `checkMs` (the link checks) and
+`waitMs` (how long the load waited at its end).
+
+**Measured** (Linux host, headless Chromium, `--use-angle=gl`, worker mode,
+1440x960, roams with `.work/hitch/run.mjs` after the page's first map,
+Training; interleaved with `?shaderWarmup=0`):
+
+| | warm-up off | warm-up on |
+|---|---|---|
+| Island, 2 x 120 s: programs built after the swap | 24 and 30 (460 to 580 ms of compile calls: a 400 to 417 ms first frame, then 0 and 6 late ones) | 0 |
+| Airfield, 3 x 60 s (to the player's death): programs built in play | 25 to 27 (366 to 454 ms) | 0 (the first two runs: 2, the actor meshes' CPU path at the death, which the stand-ins now include) |
+| the Island's load: ready, first frame | 6.17 to 6.23 s, 6.95 to 7.00 s | 6.15 to 6.21 s, 6.59 to 6.65 s |
+| warm-up: programs, until linked (page thread) | | Training 75, 1.33 s in a 5.4 s load (34 ms, link checks 14 ms); Island 10, 0.18 s (8 to 13 ms, 4 ms); Airfield 13; DXONLY 2, 0.05 s |
+| Firefox inline, Island 90 s: programs built in play | 18 (the first frames; 146 ms of compile calls on the page) | 0 (Training's load: 87 ms of link checks; the Island's: 3 ms) |
+
+The load waits only for the link checks (`waitMs` 3 to 14 ms: the worker's
+startup takes 4 to 5 s, Firefox's inline startup 14 s). Without the warm-up some programs were built twice: three.js deletes a
+program no material uses, and the next draw needing it builds it again (the
+Island's opaque GPU-mesh pair at 65 s and 81 s; Airfield's batch program four
+times); the stand-ins keep them. The shader sources match: recording every
+linked program's source (`run.mjs --sources`, an init script around
+shaderSource and linkProgram), all 44 distinct programs the draws built with
+the warm-up off on Training, Airfield and DXONLY were built with the same
+source by the warm-up run (`.work/hitch/compare-texts.mjs`).
+
+Not covered: the frame keeper's copy pass (a save's snapshot), the CRT
+display shaders (off by default), a level whose world materials change after
+its load (none known), and the first frame's other work (the swap's 0.2 s
+frame is the load's last step, not a compile).
 
 ## Cost
 

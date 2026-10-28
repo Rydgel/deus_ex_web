@@ -129,8 +129,9 @@ come from the capture session's own earlier loads.
 * **One LoadMap per arrival**: done (2026-10-27, [class graph
   design](class-graph-design.md) migration step 5). No Player start after a
   load; the names follow one load, as the original's do.
-* **First frame.** The shader programs could compile while the page waits for
-  the worker (`renderer.compileAsync`, an experiment in [hitch log](hitch-log.md)).
-  The first tick is the level's own first-tick script work.
+* **First frame.** The shader programs compile while the page waits for the
+  worker (done 2026-10-27: the shader warm-up, [hitch log](hitch-log.md#shader-programs));
+  the Island's first frame no longer builds 24 to 30 programs. The first tick
+  is the level's own first-tick script work.
 * **Static lightmaps** (0.55 to 0.7 s). These matter inline (Firefox), or in
   worker mode once the worker's load is shorter than the page's world build.

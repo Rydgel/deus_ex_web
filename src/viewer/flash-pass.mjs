@@ -24,6 +24,8 @@ export function createFlashPass() {
   scene.add(mesh);
   const device = { index: 0, offset: 4, normalColorOp: 4, normalAlphaOp: 1, z33: 1, z43: 0.5 };
   return {
+    /** The pass's scene, for the shader warm-up (shader-warmup.mjs). */
+    scene,
     /** Draw the flash of the frame (`{scale, fog}`, the planes Draw hands to Lock); returns whether anything drew. */
     render(renderer, flash) {
       if (!flash) return false;

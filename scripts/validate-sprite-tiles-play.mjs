@@ -11,7 +11,7 @@
  *   - its lit pixels lie inside the reference tile (src/runtime/sprite-tile.mjs from the
  *     record's Setup floats and the frame's rectangle: the D3D pixel centres its quad
  *     covers) and fill most of it;
- *   - with a static probe texture (red first rows, green last rows) on the first sprite:
+ *   - with a static probe texture (red first rows, green last rows) on the sprite with both halves most in the frame:
  *     the first texture row is on top, in the tile and in the camera's billboard (the
  *     fallback of a ViewportWindow's pass), and the two differ at the quad's edges only;
  *   - with the probe on every sprite, the whole frame drawn with tiles and with
@@ -167,8 +167,12 @@ try {
       if (fill > 0.3) filled++;
     }
     assert.ok(measured > 0, `${label}: at least one sprite is visible`);
-    // The probe texture on the first measured sprite: the first texture row is the top of the tile (D3DDrv draws V = 0 there).
-    const first = drawn.find(s => references.get(s.i));
+    // The probe texture on a measured sprite: the first texture row is the top of the tile (D3DDrv draws V = 0 there). Both halves
+    // must show, so the sprite with the most frame rows on the shorter side of its middle: the vent's smoke tiles are taller than
+    // the frame, and the first one's middle can sit a few rows above the frame's bottom edge or under it, with the particles' state.
+    const candidates = drawn.filter(s => references.get(s.i));
+    const rowsEachSide = s => { const { y, yl } = references.get(s.i).icon, middle = y + yl / 2; return Math.min(middle - Math.max(y, 0), Math.min(y + yl, height) - middle); };
+    const first = candidates.reduce((best, s) => rowsEachSide(s) > rowsEachSide(best) ? s : best, candidates[0]);
     const reference = references.get(first.i), mid = origin[1] + yb + reference.icon.y + reference.icon.yl / 2;
     await probe([first.i], true);
     const probeNone = await set(true, -1), probeTile = await set(true, first.i), probeBillboard = await set(false, first.i);

@@ -44,6 +44,8 @@ export function createDisplayRamp() {
   const scene = new THREE.Scene(), camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   scene.add(mesh); scene.matrixAutoUpdate = false;
   return {
+    /** The ramp's scene, for the shader warm-up (shader-warmup.mjs). */
+    scene,
     reset() { crtDisplay?.reset(); },
     /** The clear colour whose ramped value is `color` (a THREE.Color). */
     rawClear(color, gamma) {
