@@ -804,6 +804,8 @@ export class ScriptRuntime {
     record.function={record,script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
       result:fields.find(field=>field.metadata.return)??null};
     this.functions.set(record.key,record);
+    // Most linked bodies never run: the tree goes until the first run decodes it again (docs/live-heap.md step 8).
+    compiled.release();
     return record;
   }
   async prepareState(asset,index) {
@@ -822,6 +824,7 @@ export class ScriptRuntime {
       for(const label of table.labels)if(lower(label.name)!=='none')labels.set(lower(label.name),label.target);
     }
     const node={record,script,compiled,labels,...await this.members(record),base:script.baseRef?await this.prepareState(record.asset,script.baseRef):null};
+    compiled.release();
     this.states.set(record.key,node);return node;
   }
   /** Attach storage to an existing loaded identity. This is not SpawnActor or

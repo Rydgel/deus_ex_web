@@ -1089,7 +1089,7 @@ export async function createScriptDoors({
       await runtime.prepareResource(cls.record);
       await runtime.prepareMesh(identity);
       const fn=functions.lightSwitchFrob.function;
-      for(const node of fn.compiled.decoded.expressions.values())if(node.op===0x20){
+      for(const node of fn.compiled.readDecoded().expressions.values())if(node.op===0x20){
         const object=runtime.objects.operand(fn.script,node);
         if(object?.kind==='Sound')await runtime.prepareResource(object);
       }
@@ -1285,8 +1285,13 @@ export async function createScriptDoors({
       if (value.kind || value.asset) return;
       for (const item of Object.values(value)) collectValue(item, depth + 1);
     };
+    // Each body once: a body scanned again (every actor walks its class chain) names only classes already seen, and its tree is
+    // usually released, so a scan decodes it (docs/live-heap.md step 8).
+    const scanned = new Set();
     const collectBytecode = fn => {
-      const expressions = fn?.compiled?.decoded?.expressions;
+      if (!fn || scanned.has(fn)) return;
+      scanned.add(fn);
+      const expressions = fn.compiled?.readDecoded().expressions;
       if (!expressions) return;
       for (const node of expressions.values())
         if (node.op === 0x20) addClass(runtime.objects.operand(fn.script, node));

@@ -69,6 +69,8 @@ function fixedPropertyShape(record, metadata) {
   return { key, type, width };
 }
 
+// `offset`: the property expression's expanded offset (null for a function result), not the node, which would keep a released
+// body's nodes (docs/live-heap.md step 8).
 function makePropertyDescriptor(record, metadata, node = null) {
   const shape = fixedPropertyShape(record, metadata);
   if (!shape) return null;
@@ -80,7 +82,7 @@ function makePropertyDescriptor(record, metadata, node = null) {
     type: shape.type,
     structKey: shape.structKey ?? null,
     width: shape.width,
-    node,
+    offset: node?.offset ?? null,
     zero: () => zeroValue({ key: shape.key, metadata }),
   };
 }
@@ -297,8 +299,9 @@ async function contextNode(runtime, script, node, seen) {
 /**
  * Prepare a sparse map for null Context results. Unsupported expression
  * shapes are intentionally omitted; the VM reports one only if execution
- * reaches that Context. The map key is the exact decoded `Context.value`
- * object identity used by compileFunction.
+ * reaches that Context. The map key is the expanded offset of the
+ * `Context.value` expression, which names it in every decode of the body
+ * (compileFunction releases and decodes trees again, docs/live-heap.md step 8).
  */
 export async function prepareContextResults(runtime, script, decoded) {
   const result = new Map();
@@ -308,7 +311,7 @@ export async function prepareContextResults(runtime, script, decoded) {
     try {
       const descriptor = await contextNode(runtime, script, node, new Set());
       if (!descriptor) continue;
-      result.set(node.value, { ...descriptor, context: node, encodedSize: node.valueSize });
+      result.set(node.value.offset, { ...descriptor, contextOffset: node.offset, encodedSize: node.valueSize });
     } catch {
       // A single unresolved cross-package/native/opaque result must not make
       // every other prepared script context unusable.
@@ -324,8 +327,7 @@ export async function prepareContextResults(runtime, script, decoded) {
  */
 export function zeroContextResult(resultMap, node, encodedSize) {
   if (!(resultMap instanceof Map)) throw new TypeError('Expected a prepared Context result Map');
-  const valueNode = resultMap.has(node) ? node : node?.value;
-  const descriptor = resultMap.get(valueNode);
+  const descriptor = resultMap.get(resultMap.has(node?.offset) ? node.offset : node?.value?.offset);
   if (!descriptor) {
     fail(`Unsupported null Context result at offset ${node?.offset ?? '<unknown>'}`, {
       offset: node?.offset ?? null, size: encodedSize,
@@ -335,7 +337,7 @@ export function zeroContextResult(resultMap, node, encodedSize) {
     fail(`Null Context result width mismatch for ${descriptor.key}: ` +
       `encoded ${encodedSize}, linked ${descriptor.width}`, {
         key: descriptor.key, type: descriptor.type,
-        offset: descriptor.context?.offset ?? node?.offset ?? null, size: encodedSize,
+        offset: descriptor.contextOffset ?? node?.offset ?? null, size: encodedSize,
       });
   }
   return descriptor.zero();

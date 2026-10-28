@@ -118,7 +118,7 @@ function objectClassOperands(runtime, record) {
       refs.push(object);
     }
   };
-  for (const entry of record.function.compiled.decoded.statements.values())
+  for (const entry of record.function.compiled.readDecoded().statements.values())
     walkDecoded(entry.node ?? entry, visit);
   return refs;
 }

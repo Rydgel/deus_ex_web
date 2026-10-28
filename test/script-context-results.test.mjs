@@ -24,10 +24,11 @@ test('prepares fixed scalar, bool-wrapper, and canonical struct Context results'
     [5, field(5, 'string')],
   ]);
   const runtime = { objects: { reference: (_script, index) => fields.get(index) }, field: async record => record };
-  const byteValue = { op: 0x01, fieldIndex: 2 };
-  const boolValue = { op: 0x2d, value: { op: 0x01, fieldIndex: 3 } };
-  const vectorValue = { op: 0x36, fieldIndex: 4, value: { op: 0x17 } };
-  const stringValue = { op: 0x01, fieldIndex: 5 };
+  // Every decoded expression has its expanded offset, the results' key.
+  const byteValue = { op: 0x01, offset: 11, fieldIndex: 2 };
+  const boolValue = { op: 0x2d, offset: 21, value: { op: 0x01, offset: 22, fieldIndex: 3 } };
+  const vectorValue = { op: 0x36, offset: 31, fieldIndex: 4, value: { op: 0x17, offset: 35 } };
+  const stringValue = { op: 0x01, offset: 41, fieldIndex: 5 };
   const decoded = { expressions: new Map([
     [10, { op: 0x19, offset: 10, context: { op: 0x01, fieldIndex: 1 }, value: byteValue, valueSize: 1 }],
     [20, { op: 0x19, offset: 20, context: { op: 0x01, fieldIndex: 1 }, value: boolValue, valueSize: 4 }],
@@ -43,7 +44,7 @@ test('prepares fixed scalar, bool-wrapper, and canonical struct Context results'
   const second = zeroContextResult(result, vectorValue, 12);
   assert.deepEqual(first, [0, 0, 0]);
   assert.notStrictEqual(first, second);
-  assert.equal(result.has(stringValue), false);
+  assert.equal(result.has(stringValue.offset), false);
 });
 
 test('prepares a ClassContext (0x12) null result like an ordinary Context', async () => {
@@ -52,7 +53,7 @@ test('prepares a ClassContext (0x12) null result like an ordinary Context', asyn
     [2, field(2, 'int')],
   ]);
   const runtime = { objects: { reference: (_script, index) => fields.get(index) }, field: async record => record };
-  const intValue = { op: 0x01, fieldIndex: 2 };
+  const intValue = { op: 0x01, offset: 11, fieldIndex: 2 };
   const decoded = { expressions: new Map([
     // Class<Ammo>(AmmoClass).default.AmmoAmount — a class-typed context whose
     // null case must zero the int result, matching execClassContext's memset.
@@ -65,8 +66,8 @@ test('prepares a ClassContext (0x12) null result like an ordinary Context', asyn
 });
 
 test('zeroContextResult rejects an unprepared value or an encoded-width mismatch', () => {
-  const value = { op: 0x01, fieldIndex: 1 };
-  const result = new Map([[value, {
+  const value = { op: 0x01, offset: 5, fieldIndex: 1 };
+  const result = new Map([[value.offset, {
     key: 'fixture.Byte', type: 'byte', width: 1,
     zero: () => 0,
   }]]);

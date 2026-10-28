@@ -120,7 +120,9 @@ once per record. That happens only when a ViewportWindow's frustum culls light m
   * state labels (`script-state.mjs`).
 * The Rust VM holds only the lowered words, which refer back to nodes by index.
 * Node identity is the key of several caches: `nodeCode`, `contextResults`,
-  `lowered.nodes`, `memberCaches`.
+  `lowered.nodes`, `memberCaches`. (Since step 8 the operands, `contextResults` and
+  the discarded calls are keyed by expression offset; `memberCaches` keys class and
+  state nodes, not bytecode.)
 * Each function also keeps a copy of its bytecode (`src/unreal/script-metadata.mjs:136`),
   though the package bytes hold the same.
 
@@ -230,11 +232,15 @@ Firefox GC markers, not only by heap size.
    reference per record. See "Step 7's results".
    * Expected: 1.5 to 2.5 M objects. Measured: 1.72 M objects and 5.0 M pointer
      references.
-8. **Bytecode trees released after lowering.** Key the node caches by (function,
-   offset) instead of node identity. Keep operands as handle arrays per function.
-   Drop a function's decoded tree once the Rust VM has lowered all of it, and decode
-   again from the package bytes when the JavaScript path needs a node.
-   * Expected: most of the 2.6 M objects.
+8. **Bytecode trees released after lowering: first part done 2026-10-28.** Nothing
+   outside a body's tree keys on its nodes any more: the linked operands, the null-Context
+   results and the discarded calls are keyed by expression offset. A body's tree is
+   released after its link and decoded again from the function's bytes at its first run;
+   its JavaScript engine is built then too. See "Step 8's results".
+   * Expected: most of the 2.6 M objects. Measured: see "Step 8's results".
+   * Left: the trees of bodies that ran (about a tenth of them on the Island), which
+     their Rust lowerings reach by node index for every import, a call's name and
+     arguments included; and operands as handle arrays the Rust VM reads.
    * This is the Rust core's target ([Rust core](rust-core.md) "Target architecture").
      Verify against the interpreter's existing verify modes.
 9. **The BSP model as typed arrays in the simulation.** Nodes, vertices and surfaces as
@@ -431,12 +437,102 @@ cores is about 18% shorter. Not measured: Firefox, the Mac, WanChai.
 **Load time.** The headless Island boot (bench-sim, three interleaved pairs, the base arm through a node load hook serving the
 same copies) took 6,615 to 6,743 ms against 6,781 to 6,890 ms before: no slower. Both arms gave the same 3-tick digest.
 
+## Step 8's results (2026-10-28)
+
+**What the bytecode trees held.** In the worker's snapshot after step 7 (the Island, 13.67 M objects), the script process holds
+14,447 decoded bodies (functions and states): 610,024 expression nodes, 125,267 statement entries and 984 label entries. Each node
+also has an out-of-line property array (611,008: `decodeScript` adds fields after the node's literal), and 176,485 boxed numbers
+sit in the nodes. Two what-ifs over the snapshot (ad hoc, outside Git: the objects no longer reachable once a set of objects is
+cut from the graph):
+* cutting the trees and the operand maps frees 2.01 M objects, 9.4 M snapshot edges and 6.35 M pointer references (10.4% of the
+  worker's 61.07 M);
+* cutting only the index (the decoded records, their `statements` and `expressions` Maps) and the operand maps leaves 218,675
+  nodes and statement entries reachable through other holders: the null-Context results (about 72,000, keyed by node), the Rust
+  lowerings' `entries` and `nodes` (65,000, bodies that ran), the discarded-call Sets (38,000) and the JavaScript engines' node
+  code (5,000).
+
+Beside the trees, `compileFunction` built a JavaScript engine for every linked body, whether it ran or not: 260,344 closures (18
+per body) in 14,756 contexts, with 1.56 M and 0.33 M pointer references. The step's earlier family figures (2.6 M objects) were
+first-reach families that included identities reached through the operand maps; those stay.
+
+**The change.** Host representation only: every body computes what it did.
+* Nothing outside a body's tree keys on its nodes. The linked operands (`ScriptObjects.link`) are a Map from the expression's
+  expanded offset to its identity, and the GC's operand write replaces that entry. The `names` Set is gone: a name operand is an
+  expression or label entry with a `nameIndex`. The null-Context results are keyed by the value expression's offset, and their
+  descriptors keep the property's and the Context's offsets instead of the nodes. The discarded native calls are a Set of offsets
+  inside the tree. An offset names one expression in every decode of a body.
+* A compiled body (`CompiledFunction`, script-vm.mjs) holds its tree only while it may run. `prepareFunction` and `prepareState`
+  release it after the link, the null-Context results and the DynamicLoadObject prefetch, before the body can run. The first read
+  of `decoded` (a lowering, the JavaScript engine, a state label check) decodes it again from the function's bytes and keeps it,
+  with the same jump checks. The load-time scans that run no code use `readDecoded()`: the held tree, or a decode that is not
+  kept. These are the spawn closure's class constants, LightSwitch's sounds and the player start's class operands. The spawn
+  closure's scan now reads each body once: it walked every actor's class chain, which with released trees meant a decode per
+  actor (about 3 s more boot), and a second scan of a body names only classes already seen.
+* The JavaScript engine (the node closures, the statement loop, the reference engine) is built at the body's first run. A body
+  whose engine was built keeps its tree, since the engine's code holds its nodes.
+* Not done (the rest of step 8): releasing the trees of bodies that ran, about a tenth of them on the Island. Their Rust lowerings
+  reach the nodes by index for every import (a call's name and arguments, a field's fallback, a JavaScript leaf), and so do their
+  engines. Operands as handle arrays that the Rust VM reads are not done either.
+
+**Checks.** bench-sim's state digests (300 ticks) are unchanged on the Island (`15e3720088490242`), Training (`148077479825af78`)
+and the 747 (`ad8e591a01434df5`). On the Island and Training they are also unchanged under the interpreter's verify modes:
+the JavaScript engine (`SCRIPT_VM=js`), its reference engine (`SCRIPT_VM_REFERENCE=1`), and Rust with `SCRIPT_VM_CHECK=1
+STATE_VERIFY=1 RECEIVER_VERIFY=1`, with no errors. `DISPATCH_VERIFY=1` stops on a call-cache slot's probe word (stored 0, fresh
+0xffffffff) at master `039d8857` as well: `callResolve` does not write that word. These pass: `validate-script-vm-interp`
+(539,583 checks against the JavaScript VM), `-script-vm-x87`, `-script-process`, the class-graph validators
+(`validate-process-collection`, `-original-loaded`, `-original-lookups`, `-linker-imports`, `-linker-preload`),
+`-script-serialization` (the GC's operand walk), `-script-sound-admission`, the validators that compile bodies directly
+(`validate-core-casts`, `-core-damage-primitives`, the ten `validate-native-*` operator validators, `-numeric-conversions`,
+`-pawn-direction-reach`, `-pawn-nav`, `-script-struct-values`; the two x87 hardware validators skip without CrossOver) and the
+848 unit tests. No Rust changed.
+
+**Heap**, the Island's worker after 30 s of walking and forced GCs (`profile-live-heap.mjs`); pointer references as in step 7.
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (used of total) |
+| --- | ---: | ---: | ---: | ---: |
+| Before (master `039d8857`) | 13.67 M | 75.8 M | 61.07 M | 530 of 547 MB |
+| After | 11.83 M (-13.5%) | 66.0 M (-12.9%) | 53.70 M (-12.1%) | 468 of 484 MB |
+
+After 30 s of play the worker holds 1,433 trees (14,447 before): 101,150 expression nodes and 19,005 statement entries, against
+610,024 and 125,267. The engines' closures number 18,486 in 1,519 contexts (260,344 in 14,756). No expression node is held outside a
+held tree. A first version that kept the property node in the null-Context descriptors still held 16,554 nodes of released bodies
+that way. Since this morning (`cec0ee3c`) the worker has lost 34% of its objects (18.00 to 11.83 M) and 28% of its snapshot
+references (91.4 to 66.0 M).
+
+**Load time.** The headless Island boot (bench-sim, three interleaved pairs on a loaded host, the base arm through a node load hook
+serving `039d8857`'s copies of the six changed files) took 14,576 to 15,398 ms in both arms; both gave the same 3-tick digest.
+The Island's tick (bench-sim, 300 ticks, four interleaved pairs on a quiet host): medians 8.46 to 8.75 ms before, 8.62 to 8.78 ms
+after, about 0.1 ms apart, within the spread.
+
+**Two cores**, three interleaved pairs of the same 120 s roams (`taskset -c 0,1`, Chromium worker mode), both arms served by
+`serve-variant.mjs` through `hitch-run.mjs --url` (the base arm with `039d8857`'s copies of the six changed files). Other
+sessions' work (a headless Chromium and the original under Wine) loaded the host during the first two pairs; the third ran on a
+quiet host. Each run had one major GC of the worker.
+
+| Pair (host load) | Marking per cycle, base / new | Gaps over 100 ms | Longest gap | Longest worker frames at the cycle |
+| --- | ---: | ---: | ---: | ---: |
+| 1 (6 to 12) | 454 / 366 ms | 7 / 5 | 300 / 317 ms | 247 + 275 / 306 ms |
+| 2 (10 to 14) | 432 / 318 ms | 4 / 1 | 317 / 300 ms | 311 + 269 / 286 ms |
+| 3 (1 to 2.5) | 328 / 295 ms | 2 / 1 | 217 / 317 ms | 211 / 304 ms |
+
+On the quiet host the marking per cycle fell by 10% (328 to 295 ms), in line with the 12% fewer pointer references; the loaded
+pairs fell by 19 and 26%, within their noise. The pauses did not move: each cycle still has one or two long worker frames of 200
+to 310 ms in both arms. One observation does not fit the picture of those frames as marking: in these traces, as in step 7's,
+the worker thread's GC events inside each long frame are only scavenges of a few milliseconds, and the cycle's incremental steps,
+background marking and atomic pause come 1.6 to 2.8 s after the frame (see "Open").
+
 ## Open
 
+* **What the two-core long frame is.** The worker's CPU profile in "Chromium on a loaded machine" put most of the long worker
+  frames in the garbage collector, but the traces of steps 7 and 8 (`hitch-run.mjs --trace`, mapped to page time through a
+  `performance.mark`) place each major GC cycle's marking 1.6 to 2.8 s after the long frame, with only scavenges inside it. Either that mapping is off by about two
+  seconds, or the long frame is something else that precedes each major GC (unchecked). Steps 7 and 8 shortened the marking by
+  about 13% and 10% without moving the long frame, so this decides whether the remaining steps can.
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
   not set the marking time. In Chromium's worker on two cores, step 7 (11% of the objects,
-  7.6% of the pointer references) shortened the marking per major GC by about 13%, but not
-  the pauses yet. Whether it shortens Firefox's escalated slices is not measured.
+  7.6% of the pointer references) shortened the marking per major GC by about 13%, and
+  step 8 (13% of the objects, 12% of the pointer references) by about 10% more, but not
+  the pauses yet. Whether they shorten Firefox's escalated slices is not measured.
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.

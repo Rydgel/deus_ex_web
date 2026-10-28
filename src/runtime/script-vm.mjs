@@ -528,13 +528,63 @@ const NO_SERVICES = Object.freeze({});
 
 const REFERENCE_ENGINE = typeof process !== 'undefined' && process.env?.SCRIPT_VM_REFERENCE === '1';
 
-export function compileFunction(fn) {
+/** A body's decoded tree and what is read beside it: its statements, and the offsets of the native calls whose result goes only to
+ * statement scratch storage (discardedNativeCalls). The jump checks run at each decode, so a malformed body fails at its first. */
+function decodeTree(fn) {
   const decoded = decodeScript(fn), { statements } = decoded;
-  const discardedCalls = discardedNativeCalls(decoded);
   for (const { node } of statements.values()) if ([0x06, 0x07].includes(node.op) && !statements.has(node.target)) throw new Error('Script jump is not an instruction boundary');
   for(const {node} of statements.values())if(node.op===0x2f&&statements.get(node.target)?.node.op!==0x30){
     throw new Error('Iterator target is not an IteratorPop instruction');
   }
+  const discarded = new Set();
+  for (const node of discardedNativeCalls(decoded)) discarded.add(node.offset);
+  return { decoded, statements, discarded };
+}
+
+export function compileFunction(fn) { return new CompiledFunction(fn); }
+
+/** A linked function or state body. Its decoded tree is held only while the body may run (docs/live-heap.md step 8): prepare
+ * releases it after the link, before the body first runs, and the first read decodes it again from the function's bytes and keeps
+ * it. Nothing outside a held tree keys on its nodes: the linked operands, the null-Context results and the discarded calls are
+ * keyed by expression offset, which names one expression of the body in every decode. Its JavaScript engine (about twenty
+ * closures) is built at its first run, since most linked bodies never run. */
+class CompiledFunction {
+  constructor(fn) {
+    this.name = fn.entry.path; this.size = fn.size; this.script = fn;
+    this.displayName = fn.name??fn.objectName??'script';
+    this.tree = decodeTree(fn);
+    this.built = null;
+  }
+  held() { return this.tree ??= decodeTree(this.script); }
+  // The held tree, decoded again (and kept) when it was released.
+  get decoded() { return this.held().decoded; }
+  // The tree for one walk that runs no code (a load-time scan of the operands): the held one, or a decode that is not kept.
+  readDecoded() { return (this.tree ?? decodeTree(this.script)).decoded; }
+  // Prepare's release after the link. A body whose engine was built keeps its tree, since the engine's code holds its nodes.
+  release() { if (!this.built) this.tree = null; }
+  get engine() { return this.built ??= buildEngine(this); }
+  // The Rust interpreter's JavaScript nodes and statements.
+  nodeValue(n, fr, r) { return this.engine.rvNode(n, fr, r); }
+  nodeEffect(n, fr, r) { return this.engine.evNode(n, fr, r); }
+  step(frame, entry) { return this.engine.stepCompiled(frame, entry); }
+  // SCRIPT_VM_CHECK (script-vm-rust.mjs): a primitive operator's native()
+  // body on the operand values the Rust interpreter used (an out native's
+  // target as a reference the caller supplies), without services.
+  primitive(index, values) { return this.engine.native(index, values, undefined, NO_SERVICES, undefined); }
+  createFrame(instance, locals = {}, services = {}, options = {}) {
+    if (REFERENCE_ENGINE) return this.createReferenceFrame(instance, locals, services, options);
+    const { offset = 0, state = false } = options, engine = this.engine;
+    const frame = { instance, locals, script: this.script, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services };
+    frame.resume = () => engine.resumeCompiled(frame);
+    return frame;
+  }
+  createReferenceFrame(instance, locals, services, options) { return this.engine.referenceFrame(instance, locals, services, options); }
+  run(instance, locals = {}, services = {}) { return this.createFrame(instance,locals,services).resume(); }
+}
+
+/** A body's JavaScript engine over its held tree: the compiled closures, the statement loop, and the reference engine. */
+function buildEngine(compiled) {
+  const fn = compiled.script, held = () => compiled.held();
 
   function native(index, args, receiver, services, frame) {
     if(moverPrimitiveIndices.has(index))return executeMoverPrimitive(index,args);
@@ -1043,7 +1093,7 @@ export function compileFunction(fn) {
         return index === 130 ? a && Boolean(secondValue.rv(fr, fr.instance)) : a || Boolean(secondValue.rv(fr, fr.instance));
       };
     }
-    const primitive = primitiveNatives.has(index), discarded = discardedCalls.has(n);
+    const primitive = primitiveNatives.has(index), discarded = held().discarded.has(n.offset);
     const outs = primitiveOutNatives.get(index), codes = args.map(sub);
     const byReference = Array.from({ length: count }, (_, i) => !primitive || Boolean(outs?.has(i)));
     return (fr, r) => {
@@ -1210,7 +1260,7 @@ export function compileFunction(fn) {
     const services = frame.services, instance = frame.instance, n = entry.node, op = n.op;
     if(op===0x2f){
       if(!services.iterator)throw new Error('Original iterator native is not linked');
-      const after=statements.get(n.target).next;
+      const after=held().statements.get(n.target).next;
       let call=n.value,receiver=instance,skipped=false;
       if(call.op===0x19){
         const context=rvNode(call.context,frame,instance);
@@ -1244,6 +1294,7 @@ export function compileFunction(fn) {
       frame.cursor=null;
     } else if (op === 0x05) {
       const switched = evNode(n.value,frame,instance), key = refValue(switched), keyType = referenceElementType(switched);
+      const statements = held().statements;
       for (let at = entry.next;;) {
         const header = statements.get(at);
         if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
@@ -1268,6 +1319,7 @@ export function compileFunction(fn) {
       if (lowered) return frame.state ? vm.resumeState(frame, compiled, lowered) : vm.resume(frame, compiled, lowered);
     }
     let budget = 200000000;
+    const statements = held().statements;
     // ProcessState (0x103e5c16) tests bDeleteMe before each opcode of a state frame: a Destroy() ends the code run.
     while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned && !(frame.state && frame.services.isPendingKill?.(frame.instance))) {
       if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
@@ -1278,23 +1330,9 @@ export function compileFunction(fn) {
     return frame.result;
   }
 
-  const compiled = {
-    name: fn.entry.path, size: fn.size, decoded, script: fn,
-    displayName: fn.name??fn.objectName??'script',
-    // The Rust interpreter's JavaScript nodes and statements.
-    nodeValue: rvNode, nodeEffect: evNode, step: stepCompiled,
-    // SCRIPT_VM_CHECK (script-vm-rust.mjs): a primitive operator's native()
-    // body on the operand values the Rust interpreter used (an out native's
-    // target as a reference the caller supplies), without services.
-    primitive: (index, values) => native(index, values, undefined, NO_SERVICES, undefined),
-    createFrame(instance, locals = {}, services = {}, options = {}) {
-      if (REFERENCE_ENGINE) return compiled.createReferenceFrame(instance, locals, services, options);
-      const { offset = 0, state = false } = options;
-      const frame = { instance, locals, script: fn, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services };
-      frame.resume = () => resumeCompiled(frame);
-      return frame;
-    },
-    createReferenceFrame(instance, locals = {}, services = {}, { offset = 0, state = false } = {}) {
+  return {
+    native, rvNode, evNode, stepCompiled, resumeCompiled,
+    referenceFrame(instance, locals = {}, services = {}, { offset = 0, state = false } = {}) {
       const frame = { instance, locals, script: fn, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[] };
       const call = (node, receiver) => {
         const target={kind:node.op===0x1c?'final':node.op===0x38?'global':'virtual',
@@ -1328,7 +1366,7 @@ export function compileFunction(fn) {
                 : first||Boolean(rvalue(second.value,instance));
             }
             if(!primitiveNatives.has(n.index)&&services.invokeNative)return services.invokeNative({index:n.index,receiver,script:fn,frame,
-              resultDiscarded:discardedCalls.has(n),
+              resultDiscarded:held().discarded.has(n.offset),
               argumentCount:n.args.length,evaluateArgument:index=>evaluate(n.args[index],instance)});
             const args=n.args.map((arg,index)=>{
               if(!primitiveNatives.has(n.index)||primitiveOutNatives.get(n.index)?.has(index))return evaluate(arg,instance);
@@ -1451,6 +1489,7 @@ export function compileFunction(fn) {
         // uncounted loops (state label gotos with no latent), which hang the
         // original.
         let budget = 200000000;
+        const statements = held().statements;
         // A native iterator owns its body loop until Next/Pop, including when
         // a body statement changes the actor's latent action. A state frame also ends at a Destroy() (ProcessState, 0x103e5c16).
         while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned && !(state && services.isPendingKill?.(instance))) {
@@ -1529,7 +1568,5 @@ export function compileFunction(fn) {
       };
       return frame;
     },
-    run(instance, locals = {}, services = {}) { return compiled.createFrame(instance,locals,services).resume(); },
   };
-  return compiled;
 }

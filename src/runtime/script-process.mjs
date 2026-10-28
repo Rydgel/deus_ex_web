@@ -22,7 +22,7 @@ export class ScriptProcess {
     this.packageObjects = new Map();
     // Every identity this process holds, from its table, the class loader and the resource registry.
     this.identities = new WeakSet();
-    // Readiness: ScriptObjects' linked bytecode (script -> bindings, script -> operand table).
+    // Readiness: ScriptObjects' linked bytecode (script -> bindings, script -> operand table by expression offset).
     this.linkedScripts = new WeakMap();
     this.linkedOperands = new WeakMap();
     this.functions = new Map();
