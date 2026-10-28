@@ -1,4 +1,5 @@
 import {linkScriptStruct} from './script-struct-link.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 /**
  * The reached UState::Link body from the installed Deus Ex GOTY Core.dll.
@@ -107,10 +108,7 @@ function samePointer(left, right) {
 }
 
 function mapHolder(record, offset) {
-  if (!(record?.nativeSlots instanceof Map) || !record.nativeSlots.has(offset)) return undefined;
-  const holder = record.nativeSlots.get(offset);
-  if (holder && typeof holder === 'object' && own(holder, 'value')) return holder.value;
-  return holder;
+  return record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
 }
 
 function readSlot(record, offset, names, services, detail = {}) {
@@ -142,13 +140,12 @@ function writeSlot(record, offset, value, width, services, detail = {}) {
       kind: 'ustate-link-write-slot', offset, width, ...detail,
     });
   }
-  if (record?.nativeSlots instanceof Map) {
-    const holder = record.nativeSlots.get(offset);
-    if (holder && typeof holder === 'object' && holder.width !== undefined && holder.width !== width) {
+  if (record?.nativeSlots instanceof NativeSlots) {
+    const prior = record.nativeSlots.width(offset);
+    if (prior !== undefined && prior !== width) {
       throw new Error(`Native slot width mismatch at +0x${offset.toString(16)}`);
     }
-    if (holder && typeof holder === 'object' && own(holder, 'value')) holder.value = value;
-    else record.nativeSlots.set(offset, { value, width });
+    record.nativeSlots.assign(offset, value, width);
   }
   return value;
 }
@@ -157,7 +154,7 @@ function setLogicalHashNext(field, value) {
   // A nativeSlots record may expose a getter/setter alias.  Writing it keeps
   // the logical view live; a raw-only record needs the ordinary field so the
   // result remains inspectable by the caller.
-  if (field?.nativeSlots instanceof Map && !own(field, 'hashNext')) return;
+  if (field?.nativeSlots instanceof NativeSlots && !own(field, 'hashNext')) return;
   field.hashNext = value;
 }
 
@@ -305,13 +302,10 @@ function asHashStorage(value, { kind = 'logical-array', zero = null } = {}) {
 }
 
 function nativeWordStorage(record, services) {
-  const map = record?.nativeSlots;
-  if (!(map instanceof Map)) return null;
+  const slots = record?.nativeSlots;
+  if (!(slots instanceof NativeSlots)) return null;
   const base = SCRIPT_STATE_LINK.offsets.hashTable;
-  const firstHolder = map.get(base);
-  const firstValue = firstHolder && typeof firstHolder === 'object' && own(firstHolder, 'value')
-    ? firstHolder.value : firstHolder;
-  const arrayStorage = asHashStorage(firstValue, { kind: 'native-array', zero: 0 });
+  const arrayStorage = asHashStorage(slots.value(base), { kind: 'native-array', zero: 0 });
   if (arrayStorage) return arrayStorage;
 
   // Root native class construction allocates these as explicit 4-byte raw
@@ -319,7 +313,7 @@ function nativeWordStorage(record, services) {
   // not silently treated as zero because the native constructor did not write
   // this block.
   const present = Array.from({ length: SCRIPT_STATE_LINK.offsets.hashBucketCount },
-    (_, index) => map.has(base + index * 4));
+    (_, index) => slots.has(base + index * 4));
   if (present.some(value => !value)) {
     if (present.some(Boolean)) {
       fail('UState::Link has an incomplete native +0x84 hash table', {
@@ -329,14 +323,14 @@ function nativeWordStorage(record, services) {
     return null;
   }
   for (let index = 0; index < present.length; index += 1) {
-    const holder = map.get(base + index * 4);
-    if (holder && typeof holder === 'object' && holder.width !== undefined && holder.width !== 4) {
+    const width = slots.width(base + index * 4);
+    if (width !== undefined && width !== 4) {
       throw new Error(`Native hash-table slot +0x${(base + index * 4).toString(16)} is not 4 bytes`);
     }
   }
   return {
     kind: 'native-words',
-    identity: map,
+    identity: slots,
     zero: 0,
     get: index => mapHolder(record, base + index * 4),
     set: (index, next) => writeSlot(record, base + index * 4, next, 4, services, {

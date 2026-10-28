@@ -75,7 +75,7 @@ whenever reached.
 ## Host binding
 
 `linkScriptStruct(record, {archive, secondArgument, services})` reads and writes
-live `nativeSlots` holders, or explicit `readSlot`/`writeSlot` services. Missing
+live `nativeSlots` (`src/runtime/native-slots.mjs`), or explicit `readSlot`/`writeSlot` services. Missing
 fields are errors; a pointer zero is a known null. Known UStruct/UState/UClass
 vtables supply the recovered inheritance-super behavior; other overrides need
 `getInheritanceSuper`. `isA` and `getOwnerClass` may bind canonical host objects;

@@ -246,7 +246,7 @@ const weaponBaseClass = await classOf(engine, 'Weapon');
 const pickupClass = await classOf(engine, 'Pickup');
 const ammoBaseClass = await classOf(engine, 'Ammo');
 
-const linkedSize = cls => cls.loadRecord.nativeSlots.get(0x3c)?.value;
+const linkedSize = cls => cls.loadRecord.nativeSlots.value(0x3c);
 // AWeapon's registration instance size doubles as Engine.Weapon's
 // PropertiesSize — the convention AInventory's record already relies on.
 // The recovered UStruct::Link the class loader ran must reproduce it.

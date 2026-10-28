@@ -5,6 +5,8 @@
  * translated in script-config.mjs (see docs/script-config.md).
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export const SCRIPT_OBJECT_CONFIG = Object.freeze({
   localized: Object.freeze({
     thunk: 0x1010306c,
@@ -112,9 +114,7 @@ function callback(service, names) {
 }
 
 function mapSlot(record, offset) {
-  if (!(record?.nativeSlots instanceof Map) || !record.nativeSlots.has(offset)) return undefined;
-  const holder = record.nativeSlots.get(offset);
-  return holder && typeof holder === 'object' && own(holder, 'value') ? holder.value : holder;
+  return record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
 }
 
 function readSlot(record, offset, names, services, detail = {}) {

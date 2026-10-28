@@ -2,6 +2,8 @@
  * docs/script-load-graph.md. Package I/O is supplied before entering the graph.
  */
 import {Reader} from '../unreal/package.mjs';
+import {NativeSlots} from './native-slots.mjs';
+import {LoadEdges} from './script-load-edges.mjs';
 import {expandScriptExpression, skipExpandedScriptExpression} from '../unreal/classes.mjs';
 import {
   linkerLoadArchive, linkerPreload, serializeLoadedObject, serializeLoadedField,
@@ -162,7 +164,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const nameText = index => (Number.isInteger(index) ? gnames[index] : index) ?? `<name ${index}>`;
 
   // ---------------------------------------------------------------------------
-  // Object records: {nativeAddress, nativeSlots: Map(offset -> {value, width})}.
+  // Object records: {nativeAddress, nativeSlots: NativeSlots (offset -> value, width)}.
   // Pointer slots hold records; FArray slots hold {data,num,max}.
   // ---------------------------------------------------------------------------
 
@@ -182,32 +184,22 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // reference the object's Preload resolves (the object whose serialization is in progress is the top of `preloadStack`), and a new
   // object's Class, Outer and SuperField.
   const preloadStack = recordLoadEdges ? [] : null;
-  const loadEdges = recordLoadEdges ? new Map() : null;
+  const loadEdges = recordLoadEdges ? new LoadEdges() : null;
   const loadEdge = (from, to) => {
     if (!loadEdges || !from || !to || from === to || typeof from !== 'object' || typeof to !== 'object') return;
-    let targets = loadEdges.get(from);
-    if (!targets) loadEdges.set(from, targets = new Set());
-    targets.add(to);
+    loadEdges.add(from, to);
   };
   // `setDeferPreload(policy)`: while a policy is set, an object it returns true for is not preloaded and keeps its flags (RF_NeedLoad,
   // RF_NeedPostLoad); EndLoad's post-load pass skips it. A later preload with no policy loads it as before.
   let deferPreload = null;
   const deferredPreloads = new WeakSet();
 
-  const slotOf = (record, offset) => {
-    const holder = record?.nativeSlots instanceof Map ? record.nativeSlots.get(offset) : undefined;
-    return holder === undefined ? undefined : holder.value;
-  };
+  const slotOf = (record, offset) => record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
   const readSlot = (record, offset) => slotOf(record, offset);
   const writeSlot = (record, offset, value, width = 4) => {
-    const holder = record.nativeSlots.get(offset);
-    if (holder) {
-      if (holder.width !== undefined && holder.width !== width) {
-        throw new TypeError(`Wrong native slot width at +0x${offset.toString(16)}`);
-      }
-      holder.value = value;
-    } else record.nativeSlots.set(offset, {value, width});
-    return value;
+    const slots = record.nativeSlots, prior = slots.width(offset);
+    if (prior !== undefined && prior !== width) throw new TypeError(`Wrong native slot width at +0x${offset.toString(16)}`);
+    return slots.assign(offset, value, width);
   };
 
   const addr = record => record === null || record === undefined ? null
@@ -253,7 +245,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       // carry the name text; the numeric +0x20 index lives in nativeSlots.
       key: nameText(name),
       name: nameText(name),
-      nativeSlots: new Map(),
+      nativeSlots: new NativeSlots(),
+      loadOrdinal: -1, // its place in the load edges (script-load-edges.mjs)
       nativeConstructor: null,
       objectFlags: flags >>> 0,
       base: null,
@@ -603,9 +596,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         // the native zero — but +0x28 must stay null-readable for the CreateExport
         // isA walk that runs before the superIndex write.
         const source = cls?.defaults?.data instanceof Map ? cls.defaults.data : null;
-        for (const [offset, holder] of existing.nativeSlots) {
-          if (offset >= 0x28) existing.nativeSlots.set(offset, {value: null, width: holder.width});
-        }
+        existing.nativeSlots.forEach((value, offset, width) => {
+          if (offset >= 0x28) existing.nativeSlots.set(offset, null, width);
+        });
         existing.instanceValues = new Map();
         existing.script = null;
         existing.defaults = null;

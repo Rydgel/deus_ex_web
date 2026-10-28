@@ -5,6 +5,8 @@
  * two native bodies below.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export const SCRIPT_STRUCT_REGISTRATION = Object.freeze({
   uField: Object.freeze({ thunk: 0x1010183e, body: 0x10125dd0 }),
   uStruct: Object.freeze({ thunk: 0x10103076, body: 0x10125fe0 }),
@@ -60,7 +62,7 @@ function nameValueOf(record) {
 }
 
 function nativeFriendlyNameAlias(record) {
-  if (!(record.nativeSlots instanceof Map)) return false;
+  if (!(record.nativeSlots instanceof NativeSlots)) return false;
   const existing = Object.getOwnPropertyDescriptor(record, 'friendlyName');
   if (existing && !existing.configurable && !existing.get && !existing.set) {
     fail('UStruct::Register cannot expose a live FriendlyName native slot', {
@@ -72,15 +74,13 @@ function nativeFriendlyNameAlias(record) {
     Object.defineProperty(record, 'friendlyName', {
       configurable: true,
       enumerable: true,
-      get: () => record.nativeSlots.get(offset)?.value,
+      get: () => record.nativeSlots.value(offset),
       set: value => {
-        const slot = record.nativeSlots.get(offset);
-        if (slot && slot.width !== undefined && slot.width !== 4) {
+        const width = record.nativeSlots.width(offset);
+        if (width !== undefined && width !== 4) {
           throw new Error(`FriendlyName native slot +0x${offset.toString(16)} is not 4 bytes`);
         }
-        if (slot) slot.value = value;
-        else record.nativeSlots.set(offset, { value, width: 4 });
-        return value;
+        return record.nativeSlots.assign(offset, value, 4);
       },
     });
   }
@@ -89,12 +89,11 @@ function nativeFriendlyNameAlias(record) {
 
 function writeNativeFriendlyNameSlot(record, value) {
   const offset = SCRIPT_STRUCT_REGISTRATION.struct.friendlyName;
-  const slot = record.nativeSlots.get(offset);
-  if (slot && slot.width !== undefined && slot.width !== 4) {
+  const width = record.nativeSlots.width(offset);
+  if (width !== undefined && width !== 4) {
     throw new Error(`UStruct::Register FriendlyName slot +0x${offset.toString(16)} is not 4 bytes`);
   }
-  if (slot) slot.value = value;
-  else record.nativeSlots.set(offset, { value, width: 4 });
+  record.nativeSlots.assign(offset, value, 4);
 }
 
 function writeFriendlyName(record, value, services, trace) {
@@ -107,7 +106,7 @@ function writeFriendlyName(record, value, services, trace) {
   if (typeof writer === 'function') {
     writer(record, SCRIPT_STRUCT_REGISTRATION.struct.friendlyName, value, 4, detail);
   }
-  if (record.nativeSlots instanceof Map) {
+  if (record.nativeSlots instanceof NativeSlots) {
     nativeFriendlyNameAlias(record);
     writeNativeFriendlyNameSlot(record, value);
   } else {

@@ -44,8 +44,8 @@ the UStruct FriendlyName step.  The reached operations are:
 3. Only UStruct.Register reads the resolved FName at `record+0x20` and writes
    the same value to `record+0x40` (`FriendlyName`).  `registerScriptField`
    stops after step 2, leaving its `+0x40` field (Category for UProperty)
-   untouched.  For an offset `nativeSlots` Map, the struct entry exposes a
-   live `record.friendlyName` accessor backed by the four-byte `+0x40` holder;
+   untouched.  For a record with `nativeSlots` (`src/runtime/native-slots.mjs`), the struct entry exposes a
+   live `record.friendlyName` accessor backed by the four-byte `+0x40` slot;
    it does not create a copied second value.
 
 The returned value is:
@@ -66,8 +66,8 @@ The field-only return has the same `record`, `baseResult`, `baseField` and
 The trace records `uobject-register`, an optional
 `conditional-register-base-field`, and `friendly-name`, including the native
 body and field offsets.  The `writeSlot`/`writeNativeSlot` option can observe
-the exact FriendlyName write with `(record, 0x40, value, 4, detail)`; a raw
-`nativeSlots` Map is updated directly when that callback is absent.
+the exact FriendlyName write with `(record, 0x40, value, 4, detail)`; a record's
+`nativeSlots` are updated directly when that callback is absent.
 
 For a UClass record, `+0x28` is the UClass Super pointer, so this same body
 conditionally registers the Super before UStruct copies FriendlyName.  For a

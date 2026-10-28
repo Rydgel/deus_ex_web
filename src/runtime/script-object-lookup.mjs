@@ -1,4 +1,5 @@
 import {ScriptObjectRegistry} from './script-object-construction.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 export const SCRIPT_OBJECT_LOOKUP = Object.freeze({
   staticFindObject: 0x10151de0,
@@ -26,7 +27,7 @@ function storedClass(object) {
   return object.objectClass;
 }
 function storedSuper(cls) {
-  if (cls.nativeSlots?.has(0x28)) return cls.nativeSlots.get(0x28).value;
+  if (cls.nativeSlots instanceof NativeSlots && cls.nativeSlots.has(0x28)) return cls.nativeSlots.value(0x28);
   if (own(cls, 'superClass')) return cls.superClass;
   throw new Error('Object lookup requires a bound Class.SuperField (+0x28)');
 }

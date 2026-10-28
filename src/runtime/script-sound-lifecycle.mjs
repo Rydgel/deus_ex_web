@@ -8,6 +8,8 @@
  * docs/script-sound-lifecycle.md for the original instruction contract.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 const freeze = value => Object.freeze(value);
 
 export const SOUND_LIFECYCLE_CONTRACT = freeze({
@@ -187,7 +189,7 @@ function readNativeField(target, offset, names, services, {
     if (value !== undefined) return fieldValue(value);
   }
   const slots = target.nativeSlots;
-  if (slots instanceof Map && slots.has(offset)) return fieldValue(slots.get(offset));
+  if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
   if (slots && typeof slots === 'object' && own(slots, offset)) return fieldValue(slots[offset]);
   for (const name of names) if (own(target, name)) return fieldValue(target[name]);
   if (required) fail(`${label} (+0x${offset.toString(16)}) is unresolved`, {
@@ -216,10 +218,8 @@ function writeNativeField(target, offset, names, value, services, {
     });
   }
   const slots = target.nativeSlots;
-  if (slots instanceof Map && slots.has(offset)) {
-    const current = slots.get(offset);
-    if (current && typeof current === 'object' && own(current, 'value')) current.value = value;
-    else slots.set(offset, value);
+  if (slots instanceof NativeSlots && slots.has(offset)) {
+    slots.assign(offset, value);
     return value;
   }
   if (slots && typeof slots === 'object' && own(slots, offset)) {
@@ -300,7 +300,7 @@ function readArchiveWord(archive, offset, names, services, {
     if (value !== undefined) return fieldValue(value);
   }
   const slots = archive?.nativeSlots;
-  if (slots instanceof Map && slots.has(offset)) return fieldValue(slots.get(offset));
+  if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
   if (slots && typeof slots === 'object' && own(slots, offset)) return fieldValue(slots[offset]);
   for (const name of names) if (own(archive, name)) return fieldValue(archive[name]);
   for (const source of [archive?.state, archive?.flags]) {

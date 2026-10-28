@@ -4,12 +4,13 @@ import {
   SCRIPT_STATE_LINK,
   linkScriptState,
 } from '../src/runtime/script-state-link.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 function wordSlots(values = {}) {
-  const slots = new Map();
+  const slots = new NativeSlots();
   for (let index = 0; index < SCRIPT_STATE_LINK.offsets.hashBucketCount; index += 1) {
     const offset = SCRIPT_STATE_LINK.offsets.hashTable + index * 4;
-    slots.set(offset, { value: values[index] ?? 0, width: 4 });
+    slots.set(offset, values[index] ?? 0, 4);
   }
   return slots;
 }
@@ -32,11 +33,11 @@ test('UState::Link calls UStruct::Link, copies buckets, and hashes direct struct
   const laterProperty = { kind: 'IntProperty', isStruct: false, outer: record, next: inherited };
   const first = {
     kind: 'Function', isStruct: true, nameIndex: 0x103, outer: record,
-    next: null, nativeSlots: new Map([[0x30, { value: null, width: 4 }]]),
+    next: null, nativeSlots: NativeSlots.from([[0x30, { value: null, width: 4 }]]),
   };
   const second = {
     kind: 'State', isStruct: true, nameIndex: 0x203, outer: record,
-    next: laterProperty, nativeSlots: new Map([[0x30, { value: null, width: 4 }]]),
+    next: laterProperty, nativeSlots: NativeSlots.from([[0x30, { value: null, width: 4 }]]),
   };
   first.next = second;
   record.children = first;
@@ -56,9 +57,9 @@ test('UState::Link calls UStruct::Link, copies buckets, and hashes direct struct
   assert.equal(result.structResult, 'linked-struct');
   assert.equal(result.super, parent);
   assert.deepEqual(result.linkedChildren, [first, second]);
-  assert.equal(first.nativeSlots.get(0x30).value, inherited);
-  assert.equal(second.nativeSlots.get(0x30).value, first);
-  assert.equal(record.nativeSlots.get(0x84 + 3 * 4).value, second);
+  assert.equal(first.nativeSlots.value(0x30), inherited);
+  assert.equal(second.nativeSlots.value(0x30), first);
+  assert.equal(record.nativeSlots.value(0x84 + 3 * 4), second);
   assert.equal(result.hashBuckets[3], second);
   assert.equal(result.hashBuckets[4], 0);
   assert.deepEqual(result.probeMaskWrites, []);

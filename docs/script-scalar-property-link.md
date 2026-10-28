@@ -84,7 +84,7 @@ is supplied, with its live slot services or `services.scalarPropertyLink`.
 The focused composition check rebuilds a byte array, aligned int array, and
 object-reference layout through both actual linkers.
 
-Layout writes use the same live `nativeSlots` Map / `readSlot` /
+Layout writes use the same live `nativeSlots` / `readSlot` /
 `writeSlot` boundary as `src/runtime/script-struct-link.mjs`.  Raw slots are
 `+0x38` and `+0x48`, four bytes each.  Missing Outer, size, kind, vtable, or
 writable layout storage is an unsupported native boundary; Bool, Struct,

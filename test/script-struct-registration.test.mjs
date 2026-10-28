@@ -5,6 +5,7 @@ import {
   registerScriptField,
   registerScriptStruct,
 } from '../src/runtime/script-struct-registration.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 test('UStruct Register calls shared UObject/base-field registration before FriendlyName copy', () => {
   const baseField = { key: 'Core.BaseField', index: -1 };
@@ -14,7 +15,7 @@ test('UStruct Register calls shared UObject/base-field registration before Frien
     baseField,
     next: { key: 'Fixture.Next' },
     children: { key: 'Fixture.Children' },
-    nativeSlots: new Map([[SCRIPT_STRUCT_REGISTRATION.struct.friendlyName, { value: 0, width: 4 }]]),
+    nativeSlots: NativeSlots.from([[SCRIPT_STRUCT_REGISTRATION.struct.friendlyName, { value: 0, width: 4 }]]),
   };
   const registrants = [record, baseField];
   const calls = [];
@@ -36,7 +37,7 @@ test('UStruct Register calls shared UObject/base-field registration before Frien
   assert.equal(result.baseField, baseField);
   assert.equal(result.friendlyName, 23);
   assert.equal(record.friendlyName, 23);
-  assert.equal(record.nativeSlots.get(0x40).value, 23);
+  assert.equal(record.nativeSlots.value(0x40), 23);
   assert.deepEqual(record.next, { key: 'Fixture.Next' });
   assert.deepEqual(record.children, { key: 'Fixture.Children' });
   assert.deepEqual(result.operations.map(operation => operation.operation), [
@@ -47,12 +48,12 @@ test('UStruct Register calls shared UObject/base-field registration before Frien
     key: 'Fixture.Property',
     nameIndex: 41,
     baseField: null,
-    nativeSlots: new Map([[SCRIPT_STRUCT_REGISTRATION.struct.friendlyName, { value: 0xdeadbeef, width: 4 }]]),
+    nativeSlots: NativeSlots.from([[SCRIPT_STRUCT_REGISTRATION.struct.friendlyName, { value: 0xdeadbeef, width: 4 }]]),
   };
   const fieldResult = registerScriptField(property, {
     registration: { registerUObject: object => object },
   });
   assert.equal(fieldResult.friendlyName, undefined);
-  assert.equal(property.nativeSlots.get(SCRIPT_STRUCT_REGISTRATION.struct.friendlyName).value, 0xdeadbeef);
+  assert.equal(property.nativeSlots.value(SCRIPT_STRUCT_REGISTRATION.struct.friendlyName), 0xdeadbeef);
   assert.equal(Object.hasOwn(property, 'friendlyName'), false);
 });

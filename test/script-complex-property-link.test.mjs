@@ -12,6 +12,7 @@ import {SCRIPT_ARRAY_PROPERTY_LINK} from '../src/runtime/script-array-property-l
 import {SCRIPT_FIXED_ARRAY_PROPERTY_LINK as FIXED} from '../src/runtime/script-fixed-array-property-link.mjs';
 import {SCRIPT_MAP_PROPERTY_LINK} from '../src/runtime/script-map-property-link.mjs';
 import {SCRIPT_STRUCT_PROPERTY_LINK as STRUCT_PROP} from '../src/runtime/script-struct-property-link.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 const STR_VTABLE = STR.strProperty.vtable;
 const ARRAY_VTABLE = SCRIPT_ARRAY_PROPERTY_LINK.arrayProperty.vtable;
@@ -23,9 +24,9 @@ const BOOL_VTABLE = 0x10175c84;
 const UCLASS_VTABLE = 0x101758f4;
 
 function slotMap(entries = []) {
-  return new Map(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
+  return NativeSlots.from(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
 }
-const get = (object, offset) => object.nativeSlots?.get(offset)?.value;
+const get = (object, offset) => object.nativeSlots?.value(offset);
 
 function uOuter(size) {
   return {nativeSlots: slotMap([[0x00, UCLASS_VTABLE], [0x3c, size]])};
@@ -272,7 +273,7 @@ test('complex bodies require their child records', () => {
 // --- integration with UStruct::Link ----------------------------------------x
 
 function record(values) {
-  return {nativeSlots: new Map(Object.entries(values).map(([offset, value]) => [Number(offset), {value, width: 4}]))};
+  return {nativeSlots: NativeSlots.from(Object.entries(values).map(([offset, value]) => [Number(offset), {value, width: 4}]))};
 }
 function classRecord() {
   const fieldClass = record({0x28: null}); fieldClass.nativeAddress = 0x101f2b18;
@@ -293,10 +294,10 @@ test('UStruct::Link lays out string, bool and int fields with the destroy chain'
   const bool0 = field('BoolProperty', BOOL_VTABLE);
   const bool1 = field('BoolProperty', BOOL_VTABLE);
   const int1 = field('IntProperty', INT_VTABLE);
-  cls.nativeSlots.get(0x38).value = str;
-  str.nativeSlots.get(0x2c).value = bool0;
-  bool0.nativeSlots.get(0x2c).value = bool1;
-  bool1.nativeSlots.get(0x2c).value = int1;
+  cls.nativeSlots.assign(0x38, str);
+  str.nativeSlots.assign(0x2c, bool0);
+  bool0.nativeSlots.assign(0x2c, bool1);
+  bool1.nativeSlots.assign(0x2c, int1);
 
   linkScriptStruct(cls, {archive: {}, secondArgument: 1, services: {preload() {}}});
 
@@ -310,7 +311,7 @@ test('UStruct::Link lays out string, bool and int fields with the destroy chain'
   // String paints the destroy flag; the destroy chain head points at it.
   assert.equal(get(str, 0x3c) & 0x400000, 0x400000);
   assert.equal(get(cls, 0x68), str);
-  assert.equal(str.nativeSlots.get(0x54)?.value, null);
+  assert.equal(str.nativeSlots.value(0x54), null);
 });
 
 test('UStruct::Link lays out array fields and inner element offsets', () => {
@@ -318,8 +319,8 @@ test('UStruct::Link lays out array fields and inner element offsets', () => {
   const el = {kind: 'IntProperty', nativeSlots: slotMap([[0x00, INT_VTABLE], [0x18, cls], [0x38, 4]])};
   const arr = field('ArrayProperty', ARRAY_VTABLE, {0x5c: el});
   const arr2 = field('ArrayProperty', ARRAY_VTABLE, {0x5c: el});
-  cls.nativeSlots.get(0x38).value = arr;
-  arr.nativeSlots.get(0x2c).value = arr2;
+  cls.nativeSlots.assign(0x38, arr);
+  arr.nativeSlots.assign(0x2c, arr2);
 
   linkScriptStruct(cls, {archive: {}, secondArgument: 1, services: {preload() {}}});
   assert.equal(get(arr, 0x48), 0x00);

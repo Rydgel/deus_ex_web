@@ -129,9 +129,9 @@ one identity per export. `metadata`, `function`, `loadRecord` and the like are a
 later. Four pieces of what it holds:
 * `metadata.serialized` is a copy of every property export's bytes
   (`script-metadata.mjs:294`). Nothing in `src` reads it.
-* A load-graph record keeps a `nativeSlots` Map with a `{value, width}` object per
-  slot, about ten per record. 100 uses across 22 files read it directly, not only
-  through `slotOf`.
+* A load-graph record kept a `nativeSlots` Map with a `{value, width}` object per
+  slot, about 24 per record, read directly in 22 files, not only through `slotOf`
+  (one array of pairs per record since step 7).
 * `ScriptProcess.functions` (`script-runtime.mjs:806`) is written and never read.
 * `contextResults` (`prepareContextResults`, `script-runtime.mjs:800, 816`) is built at
   link for every Context node. It is read only when a Context's receiver is None.
@@ -223,13 +223,13 @@ Firefox GC markers, not only by heap size.
    load. Reads fall back to the load record's defaults and the class image.
    * Expected: 0.3 to 0.5 M objects. This touches spawn, `defaultValue`,
      `classDefaultReference` and `refreshConfigDefaults`.
-7. **Load-graph records without slot objects.** `nativeSlots` becomes parallel arrays
-   per record, or typed storage for the numeric slots. `loadEdges` becomes typed edge
-   lists over record ordinals.
-   * Expected: 1.5 to 2.5 M objects.
-   * Touches the 22 files that read `nativeSlots` directly. Verify with the class-graph
-     validators (`validate-process-collection`, `validate-original-loaded`,
-     `validate-original-lookups`, `validate-script-process`, `validate-linker-*`).
+7. **Load-graph records without slot objects: done 2026-10-28.** A record's `nativeSlots`
+   is a `NativeSlots` (`src/runtime/native-slots.mjs`): one array of key/value pairs, the
+   key packing the offset and the width. `loadEdges` is a `LoadEdges`
+   (`script-load-edges.mjs`): typed-array lists over record ordinals, holding one
+   reference per record. See "Step 7's results".
+   * Expected: 1.5 to 2.5 M objects. Measured: 1.72 M objects and 5.0 M pointer
+     references.
 8. **Bytecode trees released after lowering.** Key the node caches by (function,
    offset) instead of node identity. Keep operands as handle arrays per function.
    Drop a function's decoded tree once the Rust VM has lowered all of it, and decode
@@ -367,11 +367,76 @@ fell by 1.22 M. The state digests are the same on the Island, Training and the 7
 checks against the JavaScript VM), `validate-script-process` and `validate-script-vm-x87` pass. Since this morning the worker has
 lost 14.5% of its objects and 11.7% of its references.
 
+## Step 7's results (2026-10-28)
+
+**What the load graph held.** On the Island after a headless boot (bench-sim), the class loader's graph has 34,583 records with
+819,951 native slots: 8 to 39 a record (two thirds 16 to 31), every one a `{value, width}` cell, widths 1, 2, 4, 8 or 16,
+offsets under 0x1000. Its load edges are 176,836, from 34,487 records, at most 123 from one record. The browser's worker after a
+map-list load and 30 s of play holds 69,172 records.
+
+**The change.** Host representation only; the slots and edges hold the same values in the same order.
+* A record's `nativeSlots` is a `NativeSlots` (`src/runtime/native-slots.mjs`): one array of pairs, the key (offset * 256 + width
+  + 1, or offset * 256 with no width) then the value, in first-write order. A lookup scans the keys; past 64 slots (only test
+  fixtures reach that) the store also indexes them. Its two writes are the cell's two: `set` replaces value and width (the Map's
+  set of a new cell), `assign` keeps an existing slot's width (`cell.value = value`).
+* The 22 files that read the Map directly now go through those methods. No cell escaped. Two adapters used the Map itself as their
+  storage identity (the FArray view in `script-class-link.mjs`, the hash-table view in `script-state-link.mjs`); they use the
+  store, which is still one object per record. `nativeClassSlot`'s accessors looked their cell up at each call, so reading the
+  store instead sees the same value. Where a present slot holding no vtable stood as its cell in `script-property-copy.mjs`'s
+  `?? raw` chain, the store stands instead, so that case still matches no kind.
+* `loadEdges` is a `LoadEdges` (`src/runtime/script-load-edges.mjs`): each record taking part gets an ordinal (`loadOrdinal`, set
+  in makeRecord), and the entries and edges are typed-array linked lists over ordinals. It keeps the Map of Sets' order (targets
+  in first-added order, entries in first-edge order, a deleted entry re-added last) and lifetimes: a record is held (`records`,
+  one reference) while it has an entry or an edge points to it, with a count per ordinal. Its three readers
+  (`original-loaded.mjs` walk, the collection's demotion pass and its purge) use `forEachTarget`, `forEachFrom` and
+  `deleteTargets`.
+
+**Checks.** bench-sim's state digests (300 ticks) are unchanged on the Island (`15e3720088490242`), Training
+(`148077479825af78`) and the 747 (`ad8e591a01434df5`). The class-graph validators pass (`validate-process-collection`,
+`-original-loaded`, `-original-lookups`, `-script-process`, `-linker-imports`, `-linker-preload`), and so do
+`validate-script-vm-interp` (539,583 checks), `validate-class-loader`, `-inventory-spawn`, `-object-layout` and
+`-weapon-construction` (their fixtures moved to the store) and the 848 unit tests. Two of those are new
+(`test/native-slots.test.mjs`): random operation sequences against the Map of cells and the Map of Sets they replace, comparing
+every value, width, order and which records are held.
+
+**Heap**, the Island's worker after 30 s of walking and forced GCs (`profile-live-heap.mjs`). This Chromium's snapshots record
+integers (Smis) as nodes, so their edge count includes integer fields the collector does not follow; "pointer references"
+leaves those out, and the snapshot's own strings for boxed numbers' values (an ad hoc count over the same snapshots).
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (used of total) |
+| --- | ---: | ---: | ---: | ---: |
+| Before (master `2115380c`) | 15.39 M | 80.7 M | 66.07 M | 596 of 624 MB |
+| After | 13.67 M (-11.2%) | 75.8 M (-6.1%) | 61.07 M (-7.6%) | 530 of 547 MB |
+
+By kind: 1.63 M fewer plain objects (the cells, -6.5 M edges), 69,300 fewer Maps and 68,400 fewer Sets with their tables; 69,172
+`NativeSlots` and their pair arrays came in. The plan's "about 11 M references" for the load graph was a first-reach family that
+included the records themselves, which stay. Since this morning (`cec0ee3c`) the worker has lost 24% of its objects (18.00 to
+13.67 M) and 17% of its snapshot references (91.4 to 75.8 M).
+
+**Two cores**, two interleaved pairs of the same 120 s roams (`taskset -c 0,1`, Chromium worker mode). Both arms were served the
+same way, by `.work/tools/serve-variant.mjs` through `hitch-run.mjs --url` (the base arm with `2115380c`'s copies of the 19
+changed files), so no server ran on the pinned cores during play.
+
+| | Worker major GCs | Marking per cycle (incremental steps + atomic pause) | Gaps over 100 ms | Longest gap |
+| --- | ---: | ---: | ---: | ---: |
+| Before | 2, 1 | 413, 398 ms | 4, 2 | 317, 400 ms |
+| After | 2, 2 | 361, 343 ms | 4, 3 | 283, 400 ms |
+
+The marking per cycle fell by about 13% (406 to 352 ms on average), between the fall in pointer references (7.6%) and in objects
+(11%). The atomic pause shrank most (74 and 35 ms a cycle before, 35 and 28 after); the incremental steps went from 338 and 364
+to 326 and 315 ms a cycle. The pauses stay within the run-to-run spread: the long gaps are still worker frames where incremental
+steps and minor GCs pile up, in both arms. Against this morning's runs (about 428 ms at `cec0ee3c`), the marking per cycle on two
+cores is about 18% shorter. Not measured: Firefox, the Mac, WanChai.
+
+**Load time.** The headless Island boot (bench-sim, three interleaved pairs, the base arm through a node load hook serving the
+same copies) took 6,615 to 6,743 ms against 6,781 to 6,890 ms before: no slower. Both arms gave the same 3-tick digest.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
-  not set the marking time. Whether removing pointer-rich structures shortens the
-  escalated slices, and by how much, is open until a step from 3 to 9 is measured.
+  not set the marking time. In Chromium's worker on two cores, step 7 (11% of the objects,
+  7.6% of the pointer references) shortened the marking per major GC by about 13%, but not
+  the pauses yet. Whether it shortens Firefox's escalated slices is not measured.
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.

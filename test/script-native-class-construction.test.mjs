@@ -6,6 +6,7 @@ import {createScriptNativeRegistration, NATIVE_REGISTRATION,
   CORE_CLASS_CONSTRUCTORS} from '../src/runtime/script-native-registration.mjs';
 import {constructNativeScriptClass, nativeClassSlot,
   NATIVE_CLASS_CONSTRUCTION} from '../src/runtime/script-native-class-construction.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 test('original Core.Class constructor inputs reach the live queue and preserve native slot storage', () => {
   const coreClass = {nativeAddress: 0x101f1c18};
@@ -14,7 +15,7 @@ test('original Core.Class constructor inputs reach the live queue and preserve n
   const corePackage = {nativeAddress: 0x1029b8e0};
   const untouchedName = {value: 913, width: 4};
   const untouchedPadding = {value: 0xbeef, width: 2};
-  coreClass.nativeSlots = new Map([[0x40, untouchedName], [0x82, untouchedPadding]]);
+  coreClass.nativeSlots = NativeSlots.from([[0x40, untouchedName], [0x82, untouchedPadding]]);
   const notReached = () => { throw new Error('Registration is outside this constructor reference case'); };
   const registration = createScriptNativeRegistration({
     registry: new ScriptObjectRegistry(),
@@ -52,8 +53,8 @@ test('original Core.Class constructor inputs reach the live queue and preserve n
   assert.deepEqual(writes.filter(write => write.offset === 0).map(write => write.value),
     [NATIVE_CLASS_CONSTRUCTION.structVtable, NATIVE_CLASS_CONSTRUCTION.classVtable]);
   assert.equal(writes.find(write => write.offset === 0x80).width, 2);
-  assert.equal(coreClass.nativeSlots.get(0x40), untouchedName);
-  assert.equal(coreClass.nativeSlots.get(0x82), untouchedPadding);
+  assert.deepEqual([coreClass.nativeSlots.value(0x40), coreClass.nativeSlots.width(0x40)], [untouchedName.value, untouchedName.width]);
+  assert.deepEqual([coreClass.nativeSlots.value(0x82), coreClass.nativeSlots.width(0x82)], [untouchedPadding.value, untouchedPadding.width]);
   assert.equal(untouchedName.value, 913);
   assert.equal(untouchedPadding.value, 0xbeef);
 

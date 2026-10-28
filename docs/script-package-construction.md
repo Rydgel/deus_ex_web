@@ -114,7 +114,7 @@ An undefined result from StaticFindObject or StaticAllocateObject is rejected
 as an unbound adapter.  A null allocator result remains the native null
 return.  `constructScriptPackage` requires a `bindPackage` callback; it writes
 the vtable first and invokes that callback second.  If a host exposes a
-`nativeSlots` Map, the helper keeps its live four-byte `+0` holder synchronized
+`nativeSlots`, the helper keeps its live four-byte `+0` slot synchronized
 with `nativeVtable`.
 
 The shared native-registration check composes the real `CreatePackage` existing

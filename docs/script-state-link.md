@@ -55,14 +55,14 @@ The JavaScript adapter accepts one explicit live table representation:
 
 * a 256-entry `record.hashBuckets`, `stateHashBuckets`, or
   `labelHashBuckets` array;
-* a `nativeSlots` map containing either an array at `+0x84`, or all 256
-  four-byte holders at `+0x84 + 4*i`; or
+* `nativeSlots` (`src/runtime/native-slots.mjs`) holding either an array at `+0x84`, or all 256
+  four-byte slots at `+0x84 + 4*i`; or
 * `services.getHashBuckets`/`getStateHashTable`, `getHashBucket` plus
   `setHashBucket`, or `allocateHashBuckets` with a 256-entry `get`/`set`
   adapter.
 
 The native UClass constructor does not initialize the +0x84 block.  A
-`nativeSlots` host must therefore allocate all 256 raw holders before this
+`nativeSlots` host must therefore write all 256 raw slots before this
 call.  Undefined source words are rejected rather than guessed as zero.  A
 logical JavaScript array uses `null` for the zero pointer; a typed array or
 raw native word storage uses numeric zero.  The same storage remains live

@@ -1,5 +1,6 @@
 /** GOTY Core.dll UStruct::Link; see docs/script-struct-link.md. */
 import {linkScriptProperty} from './script-property-link.mjs';
+import {NativeSlots, slotValue} from './native-slots.mjs';
 
 export const SCRIPT_STRUCT_LINK = Object.freeze({
   thunk: 0x10101933, body: 0x10126060,
@@ -28,17 +29,18 @@ const required = (value, label) => typeof value === 'function' ? value : fail(`U
 
 function slot(object, offset, services) {
   const fromHost = services.readSlot?.(object, offset);
-  const value = fromHost === undefined ? object?.nativeSlots?.get(offset)?.value : fromHost;
+  const value = fromHost === undefined ? slotValue(object, offset) : fromHost;
   if (value === undefined) fail(`UStruct::Link has no binding for +0x${offset.toString(16)}`);
   return value;
 }
 
 function write(object, offset, value, services, width = 4) {
-  const holder = object?.nativeSlots?.get(offset);
-  if (holder && holder.width !== width) throw new TypeError(`Wrong native slot width at +0x${offset.toString(16)}`);
+  const slots = object?.nativeSlots instanceof NativeSlots ? object.nativeSlots : null;
+  const present = slots !== null && slots.has(offset);
+  if (present && slots.width(offset) !== width) throw new TypeError(`Wrong native slot width at +0x${offset.toString(16)}`);
   if (services.writeSlot) services.writeSlot(object, offset, value, width);
-  if (holder) holder.value = value;
-  else if (object?.nativeSlots instanceof Map) object.nativeSlots.set(offset, {value, width});
+  if (present) slots.assign(offset, value);
+  else if (slots) slots.set(offset, value, width);
   else if (!services.writeSlot) fail(`UStruct::Link has no writable +0x${offset.toString(16)} binding`);
 }
 

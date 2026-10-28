@@ -7,6 +7,8 @@
  * docs/script-complex-property-link.md for the per-body contract.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 /** CPF bits consumed by every complex body (`testb $0x10, %ah` and `orl 0x400000`). */
 export const LINK_FLAGS = Object.freeze({
   // Skipped-destruction ("atomic") bit: property 0x1000 present -> do not set the
@@ -66,10 +68,7 @@ export function linkHelpers(kind, code) {
       const value = services.readSlot(object, offset, { kind: `${code.toLowerCase()}-read-slot`, offset, ...detail });
       if (value !== undefined) return value;
     }
-    if (object?.nativeSlots instanceof Map && object.nativeSlots.has(offset)) {
-      const holder = object.nativeSlots.get(offset);
-      return holder && typeof holder === 'object' && own(holder, 'value') ? holder.value : holder;
-    }
+    if (object?.nativeSlots instanceof NativeSlots && object.nativeSlots.has(offset)) return object.nativeSlots.value(offset);
     return first(object, aliases, undefined);
   };
   const writeSlot = (object, offset, value, width, services, detail = {}) => {
@@ -77,13 +76,12 @@ export function linkHelpers(kind, code) {
     if (typeof writer === 'function') {
       writer(object, offset, value, width, { kind: `${code.toLowerCase()}-write-slot`, offset, width, ...detail });
     }
-    if (object?.nativeSlots instanceof Map) {
-      const holder = object.nativeSlots.get(offset);
-      if (holder && typeof holder === 'object' && holder.width !== undefined && holder.width !== width) {
+    if (object?.nativeSlots instanceof NativeSlots) {
+      const prior = object.nativeSlots.width(offset);
+      if (prior !== undefined && prior !== width) {
         throw new Error(`Native property slot +0x${offset.toString(16)} is not ${width} bytes`);
       }
-      if (holder && typeof holder === 'object' && own(holder, 'value')) holder.value = value;
-      else object.nativeSlots.set(offset, { value, width });
+      object.nativeSlots.assign(offset, value, width);
       return value;
     }
     if (typeof writer !== 'function') {

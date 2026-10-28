@@ -51,6 +51,7 @@ import {SCRIPT_BOOL_PROPERTY_LINK} from '../src/runtime/script-bool-property-lin
 import {SCRIPT_STR_PROPERTY_LINK} from '../src/runtime/script-str-property-link.mjs';
 import {SCRIPT_STRUCT_PROPERTY_LINK} from '../src/runtime/script-struct-property-link.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 // This validator records original call order by replacing the runtime's
 // callFunction/executeScript/invokeNative hooks. The Rust interpreter
 // (the default engine) runs calls and natives such as IsA without those
@@ -222,8 +223,8 @@ const vtables = new Map(Object.entries(SCRIPT_SCALAR_PROPERTY_LINK.properties)
 vtables.set('BoolProperty', SCRIPT_BOOL_PROPERTY_LINK.boolProperty.vtable);
 vtables.set('StrProperty', SCRIPT_STR_PROPERTY_LINK.strProperty.vtable);
 vtables.set('StructProperty', SCRIPT_STRUCT_PROPERTY_LINK.structProperty.vtable);
-const slotValue = (object, offset) => object.nativeSlots.get(offset)?.value;
-const putSlot = (object, offset, value) => object.nativeSlots.set(offset, {value, width: 4});
+const slotValue = (object, offset) => object.nativeSlots.value(offset);
+const putSlot = (object, offset, value) => object.nativeSlots.set(offset, value, 4);
 
 const metadataRuntime = new ScriptRuntime(systemAssets);
 
@@ -235,11 +236,11 @@ async function linkClassProperties(asset, classPath, superPropertiesSize) {
   const index = asset.exportsByPath.get(classPath.toLowerCase());
   const record = await metadataRuntime.objects.resolve(asset, index);
   const metadata = readClass(asset, index);
-  const base = {nativeSlots: new Map(), preloaded: true};
+  const base = {nativeSlots: new NativeSlots(), preloaded: true};
   for (const [offset, value] of [[0, 0x10175698], [0x28, null], [0x38, null],
     [0x3c, superPropertiesSize], [0x68, null]]) putSlot(base, offset, value);
   const node = {record, key: record.key, kind: 'Struct', nativeVtable: 0x10175698,
-    nativeSlots: new Map(), fields: new Map(), preloaded: true};
+    nativeSlots: new NativeSlots(), fields: new Map(), preloaded: true};
   for (const [offset, value] of [[0, node.nativeVtable], [0x28, base], [0x38, null], [0x3c, 0]])
     putSlot(node, offset, value);
   const declared = [];
@@ -254,7 +255,7 @@ async function linkClassProperties(asset, classPath, superPropertiesSize) {
       const vtable = vtables.get(child.kind);
       assert.ok(vtable !== undefined, `unsupported linked property kind ${child.kind}`);
       const property = {record: child, key: child.key, kind: child.kind,
-        nativeSlots: new Map(), preloaded: true, nativeVtable: vtable};
+        nativeSlots: new NativeSlots(), preloaded: true, nativeVtable: vtable};
       putSlot(property, 0x18, node);
       putSlot(property, 0x2c, null);
       for (const [offset, value] of [[0, vtable], [0x34, field.metadata.arrayDim],

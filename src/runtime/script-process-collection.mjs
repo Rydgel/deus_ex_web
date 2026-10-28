@@ -34,6 +34,7 @@ import { NATIVE_CLASS_KEYS } from './native-class-roots.mjs';
 import { releaseHandle, identityOfHandle } from './script-object-handles.mjs';
 import { cleanupPlan } from './script-runtime.mjs';
 import { RESOURCE_KINDS } from './script-objects.mjs';
+import { NativeSlots } from './native-slots.mjs';
 
 const RF_NATIVE = 0x04000000;
 const CPF_NATIVE = 0x1000;
@@ -59,7 +60,7 @@ export function createProcessCollection(process) {
     if (root === undefined) nativeRoots.set(record, root = NATIVE_CLASS_KEYS.has(fullName(record).toLowerCase()));
     return root;
   };
-  const isRecord = value => value !== null && typeof value === 'object' && value.nativeSlots instanceof Map;
+  const isRecord = value => value !== null && typeof value === 'object' && value.nativeSlots instanceof NativeSlots;
 
   // A property's value in a Defaults block or a struct: object and class values are records; a struct value is an object keyed by
   // member name (ScriptClassLoader.value), a fixed array an array.
@@ -284,12 +285,12 @@ export function createProcessCollection(process) {
       };
       // A class's Defaults also hold what it inherited: InitClassDefaultObject copies the super's block, which the subclass's own load never
       // resolves (no load edge), so a readiness-only class's Defaults are read too.
-      for (const [from, targets] of graph.loadEdges) {
-        if (from.detached || tracker.has(from)) continue;
-        for (const target of targets) keep(target);
+      graph.loadEdges.forEachFrom(from => {
+        if (from.detached || tracker.has(from)) return;
+        graph.loadEdges.forEachTarget(from, keep);
         if (from.defaults?.data instanceof Map && kindOf(from) === 'Class') defaultsReferences(from, keep);
-      }
-      while (stack.length) for (const target of graph.loadEdges.get(stack.pop()) ?? []) keep(target);
+      });
+      while (stack.length) graph.loadEdges.forEachTarget(stack.pop(), keep);
     }
     tracker.forget(demoted);
     const classes = [], classIdentities = [];
@@ -319,7 +320,7 @@ export function createProcessCollection(process) {
     }
     graph.forgetDetached(purged);
     // a kept record's load edge to a purged one would let a later walk reach the detached record
-    if (graph.loadEdges) for (const targets of graph.loadEdges.values()) for (const target of targets) if (purged.has(target)) targets.delete(target);
+    graph.loadEdges?.deleteTargets(purged);
     tracker.forget(purged);
     // The registry forgets the resources the mark did not reach: the next request materializes a new generation.
     const forgotten = [];

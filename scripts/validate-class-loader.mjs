@@ -13,6 +13,7 @@ import {readScriptStructValue} from '../src/runtime/script-struct-values.mjs';
 import {serializeTaggedProperty} from '../src/runtime/script-linker-preload.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {importText} from '../src/runtime/config-text.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 const root = gameDirectory();
 const files = [];
@@ -33,7 +34,7 @@ const nativeBools = JSON.parse(execFileSync(process.env.DEUS_EX_NATIVE_PYTHON ??
   ['scripts/native-tagged-bool-oracle.py', root], {encoding: 'utf8'}));
 for (const sample of nativeBools) {
   const boolClass = {};
-  const property = {nativeSlots: new Map([[0x24, {value: boolClass}], [0x48, {value: 0}],
+  const property = {nativeSlots: NativeSlots.from([[0x24, {value: boolClass}], [0x48, {value: 0}],
     [0x38, {value: 4}], [0x5c, {value: sample.mask}]])};
   let word = sample.before;
   serializeTaggedProperty({raw: sample.value ? 0x83 : 3, arrayIndex: 0},

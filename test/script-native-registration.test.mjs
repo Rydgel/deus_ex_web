@@ -8,6 +8,7 @@ import {createScriptNativeRegistration, NATIVE_REGISTRATION, CORE_CLASS_CONSTRUC
 import {constructNativeScriptClass} from '../src/runtime/script-native-class-construction.mjs';
 import {registerScriptClass} from '../src/runtime/script-class-registration.mjs';
 import {loadConfig} from '../src/runtime/script-config.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 function fixture({objectGate = 0} = {}) {
   const none={index:0,flags:0,hashNext:null,text:'None'};
@@ -86,7 +87,7 @@ test('native UObject construction queues in LIFO order and registers package/nam
 test('original Core.Object registration composes the native constructor, name lookup, defaults and all three Link layers', () => {
   const {names, registry, globals} = fixture();
   const coreClass = {nativeAddress: 0x101f1c18};
-  const coreObject = {nativeAddress: 0x1029e0d0, nativeSlots: new Map()};
+  const coreObject = {nativeAddress: 0x1029e0d0, nativeSlots: new NativeSlots()};
   const corePackageClass = {nativeAddress: 0x1029b8e0, superClass: coreObject};
   const packageObject = {index: -1, name: 'Core', nameIndex: names.intern('Core').index,
     outer: null, objectClass: corePackageClass};
@@ -95,7 +96,7 @@ test('original Core.Object registration composes the native constructor, name lo
   const packages = createScriptPackageFactory({lookup, packageClass: corePackageClass});
   // Allocated native UClass hash storage is uninitialized until UState::Link.
   for (let offset = 0x84; offset < 0x484; offset += 4)
-    coreObject.nativeSlots.set(offset, {value: undefined, width: 4});
+    coreObject.nativeSlots.set(offset, undefined, 4);
   let registration, registered;
   registration = createScriptNativeRegistration({
     names, registry, globals, coreObjectClass: coreObject,
@@ -134,11 +135,11 @@ test('original Core.Object registration composes the native constructor, name lo
     nameText: 'Object', packageText: 'Core', configText: 'System',
     objectFlags: 0x04084004, instanceConstructor: 0x101017da, staticConstructor: 0x10101041,
   });
-  assert.equal(coreObject.nativeSlots.get(0x84).value, undefined);
+  assert.equal(coreObject.nativeSlots.value(0x84), undefined);
   assert.deepEqual(registration.processRegistrants(), [coreObject]);
   assert.equal(lookup.findObject(packageObject, 'Object'), coreObject);
   assert.equal(coreObject.nameIndex, names.find('Object'));
-  assert.equal(coreObject.nativeSlots.get(0x40).value, coreObject.nameIndex);
+  assert.equal(coreObject.nativeSlots.value(0x40), coreObject.nameIndex);
   assert.equal(coreObject.classConfigName.index, names.find('System'));
   assert.equal(coreObject.defaultBuffer.size, 0x28);
   assert.equal(coreObject.classFlags, 0x13);
@@ -147,8 +148,8 @@ test('original Core.Object registration composes the native constructor, name lo
   assert.equal(defaults.getInt32(4, true), -1);
   assert.equal(defaults.getUint32(0x24, true), 0x1029e0d0);
   for (let offset = 0x84; offset < 0x484; offset += 4)
-    assert.equal(coreObject.nativeSlots.get(offset).value, 0);
+    assert.equal(coreObject.nativeSlots.value(offset), 0);
   for (const head of [0x58, 0x5c, 0x60, 0x64, 0x68])
-    assert.equal(coreObject.nativeSlots.get(head).value, null);
+    assert.equal(coreObject.nativeSlots.value(head), null);
   assert.equal(registered.operations.at(-1).operation, 'load-localized');
 });

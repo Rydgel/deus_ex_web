@@ -1,4 +1,5 @@
 import {UCLASS_CONSTRUCTOR_FLAG_OR} from './script-class-registration.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 export const NATIVE_CLASS_CONSTRUCTION = Object.freeze({
   uStruct: 0x10125ef0,
@@ -33,11 +34,14 @@ function u32(value, label) {
  * normalized at this typed boundary; the stored raw value remains available.
  */
 export function nativeClassSlot(record, offset) {
-  const holder = record.nativeSlots?.get(offset);
-  if (!holder) throw new Error(`Unbound native class slot +0x${offset.toString(16)}`);
+  const slots = record.nativeSlots;
+  if (!(slots instanceof NativeSlots) || !slots.has(offset)) throw new Error(`Unbound native class slot +0x${offset.toString(16)}`);
   return {
-    get: () => pointerSlots.has(offset) && holder.value === 0 ? null : holder.value,
-    set: value => { holder.value = value; return value; },
+    get: () => {
+      const value = slots.value(offset);
+      return pointerSlots.has(offset) && value === 0 ? null : value;
+    },
+    set: value => slots.assign(offset, value),
   };
 }
 
@@ -98,15 +102,14 @@ export function constructNativeScriptClass(record, {
   }
   if (instanceConstructor === undefined || staticConstructor === undefined)
     throw new TypeError('Native UClass construction requires explicit constructor pointers');
-  if (record.nativeSlots !== undefined && !(record.nativeSlots instanceof Map))
-    throw new TypeError('Native UClass storage must be an offset Map');
-  record.nativeSlots ??= new Map();
+  if (record.nativeSlots !== undefined && !(record.nativeSlots instanceof NativeSlots))
+    throw new TypeError('Native UClass storage must be NativeSlots');
+  record.nativeSlots ??= new NativeSlots();
   const write = (offset, value, width = 4) => {
-    const prior = record.nativeSlots.get(offset);
-    if (prior && prior.width !== width)
+    const slots = record.nativeSlots;
+    if (slots.has(offset) && slots.width(offset) !== width)
       throw new Error(`Native slot width mismatch at +0x${offset.toString(16)}`);
-    if (prior) prior.value = value;
-    else record.nativeSlots.set(offset, {value, width});
+    slots.assign(offset, value, width);
     if (offset === 0) record.nativeVtable = value;
     onWrite?.({object: record, offset, width, value});
   };

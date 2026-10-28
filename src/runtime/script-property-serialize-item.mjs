@@ -28,6 +28,8 @@
  * array_2_ints=12, array_empty=4, map_any=0, and bool=1 for every value.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 function first(record, names, fallback = undefined) {
   for (const name of names) {
     if (record !== null && record !== undefined && record[name] !== undefined) return record[name];
@@ -162,7 +164,7 @@ function archiveWord(archive, services, offset, names, context = {}, fallback = 
     if (value !== undefined) return Number(fieldValue(value));
   }
   const slots = archive?.nativeSlots;
-  if (slots instanceof Map && slots.has(offset)) return Number(fieldValue(slots.get(offset)));
+  if (slots instanceof NativeSlots && slots.has(offset)) return Number(slots.value(offset));
   if (slots && typeof slots === 'object' && own(slots, offset)) return Number(fieldValue(slots[offset]));
   for (const name of names) {
     if (own(supplied, name)) return Number(fieldValue(supplied[name]));

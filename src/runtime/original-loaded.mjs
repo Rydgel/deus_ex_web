@@ -17,6 +17,8 @@
  * (`findClass`, step 1c): a class Play links only for its own readiness is not found by name, as the original does not hold it. The
  * LoadMap collection is a later step. A walk that fails is recorded in `failures`, not thrown.
  */
+import { NativeSlots } from './native-slots.mjs';
+
 const PROPERTY_KINDS = ['Int', 'Float', 'Bool', 'Byte', 'Str', 'Name', 'Object', 'Class', 'Struct', 'Array', 'FixedArray', 'Map']
   .map(kind => `${kind}Property`);
 export const METADATA_KINDS = Object.freeze(new Set(['Class', 'Function', 'State', 'Struct', 'Enum', 'Const', 'TextBuffer', 'Package',
@@ -45,7 +47,7 @@ export function createOriginalLoadTracker(graph) {
   let packageFiles = null, index = null, indexedSize = -1, packagesChanged = true;
   const kindOf = record => graph.nameText(graph.slotOf(graph.classRecordOf(record), 0x20));
   const isMetadata = record => METADATA_KINDS.has(kindOf(record));
-  const isRecord = value => value !== null && typeof value === 'object' && value.nativeSlots instanceof Map;
+  const isRecord = value => value !== null && typeof value === 'object' && value.nativeSlots instanceof NativeSlots;
   let walking = false;
 
   // A reached metadata record Play has not preloaded: the original's EndLoad would have. Other kinds the scope creates are deferred.
@@ -69,7 +71,7 @@ export function createOriginalLoadTracker(graph) {
         const record = queue[at];
         if ((graph.slotOf(record, 0x1c) & 0x200) && graph.slotOf(record, 0x10) && isMetadata(record)) preloadScoped(record);
         visit(graph.classRecordOf(record));
-        for (const target of graph.loadEdges.get(record) ?? []) visit(target);
+        graph.loadEdges.forEachTarget(record, visit);
       }
     } finally { walking = false; }
   }

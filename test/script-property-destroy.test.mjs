@@ -5,6 +5,7 @@ import {
   SCRIPT_PROPERTY_DESTROY,
   UnsupportedScriptPropertyDestroyError,
 } from '../src/runtime/script-property-destroy.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 const NEED = SCRIPT_PROPERTY_DESTROY.flags.needDestruction;
 
@@ -152,11 +153,11 @@ test('UStructProperty is member-major across outer ArrayDim and keeps scalar mem
 test('linked struct child chain is consumed lazily after each child dimension loop', () => {
   const order = [];
   const first = {key: 'name', metadata: {type: 'string', arrayDim: 1},
-    nativeSlots: new Map([[0x54, {value: null}]])};
+    nativeSlots: NativeSlots.from([[0x54, {value: null}]])};
   const second = {key: 'number', metadata: {type: 'int', arrayDim: 1},
-    nativeSlots: new Map([[0x54, {value: null}]])};
-  first.nativeSlots.get(0x54).value = second;
-  const structure = {nativeSlots: new Map([[0x68, {value: first}]])};
+    nativeSlots: NativeSlots.from([[0x54, {value: null}]])};
+  first.nativeSlots.assign(0x54, second);
+  const structure = {nativeSlots: NativeSlots.from([[0x68, {value: first}]])};
   const value = ref({name: 'x', number: 7});
   destroyScriptProperty(property('StructProperty', {struct: structure}), value, {
     readSlot(member, offset) {
@@ -187,9 +188,9 @@ test('ordinary Children and absent destructor-chain slots stay unsupported', () 
   assert.throws(() => destroyScriptProperty(missingHead, ref({name: 'x'})), error =>
     error instanceof UnsupportedScriptPropertyDestroyError && error.slot === '+0x68');
 
-  const missingNext = {key: 'name', metadata: {type: 'string', arrayDim: 1}, nativeSlots: new Map()};
+  const missingNext = {key: 'name', metadata: {type: 'string', arrayDim: 1}, nativeSlots: new NativeSlots()};
   const missingNextProperty = property('StructProperty', {
-    struct: {nativeSlots: new Map([[0x68, {value: missingNext}]])}, arrayDim: 1, elementSize: 12,
+    struct: {nativeSlots: NativeSlots.from([[0x68, {value: missingNext}]])}, arrayDim: 1, elementSize: 12,
   });
   assert.throws(() => destroyScriptProperty(missingNextProperty, ref({name: 'x'})), error =>
     error instanceof UnsupportedScriptPropertyDestroyError && error.slot === '+0x54');

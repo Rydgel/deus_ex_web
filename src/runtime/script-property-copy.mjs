@@ -2,6 +2,8 @@
  * Cursors address native byte storage. Heap ownership requires explicit services;
  * logical VM strings/objects are not treated as native pointers. */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export class UnsupportedScriptPropertyCopyError extends Error {
   constructor(message, {property = null, slot = null} = {}) {
     super(message);
@@ -21,10 +23,7 @@ function slot(property, offset, aliases, services) {
     const value = services.readSlot(property, offset);
     if (value !== undefined) return value;
   }
-  if (property?.nativeSlots?.has(offset)) {
-    const value = property.nativeSlots.get(offset);
-    return value && typeof value === 'object' && Object.hasOwn(value, 'value') ? value.value : value;
-  }
+  if (property?.nativeSlots instanceof NativeSlots && property.nativeSlots.has(offset)) return property.nativeSlots.value(offset);
   for (const source of [property, property?.metadata]) {
     for (const name of aliases) if (source?.[name] !== undefined) return source[name];
   }
@@ -97,8 +96,10 @@ const DWORD_KINDS = new Set(['IntProperty', 'FloatProperty', 'ObjectProperty', '
 function propertyKind(property, services) {
   const supplied = property?.nativeKind ?? property?.kind ?? property?.metadata?.className;
   const kind = supplied?.startsWith('U') ? supplied.slice(1) : supplied;
-  const raw = property?.nativeSlots?.get(0);
-  const vtable = services.readSlot?.(property, 0) ?? raw?.value ?? raw ?? property?.nativeVtable ?? property?.vtable;
+  // A present +0 slot that holds no vtable stands as the slot itself, which matches no kind (as its {value, width} cell did).
+  const slots = property?.nativeSlots instanceof NativeSlots ? property.nativeSlots : null;
+  const raw = slots?.has(0) ? slots.value(0) ?? slots : undefined;
+  const vtable = services.readSlot?.(property, 0) ?? raw ?? property?.nativeVtable ?? property?.vtable;
   if (vtable !== undefined && vtable !== null) {
     const entry = Object.entries(SCRIPT_PROPERTY_COPY).find(([, record]) => record.vtable === vtable);
     if (!entry || (kind && kind !== entry[0])) fail('Property copy has an unverified native vtable/class', property, 0);

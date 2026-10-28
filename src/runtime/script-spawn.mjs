@@ -3,6 +3,7 @@ import {bumpActorsEpoch} from './base-epoch.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
 import {INVENTORY_CONSTRUCTION, resolveInheritedInventoryConstructorChain} from './script-inventory-construction.mjs';
 import {NATIVE_ACTOR_CONSTRUCTORS} from './script-native-actor-constructors.mjs';
+import {slotValue} from './native-slots.mjs';
 
 /** Engine execSpawn103e36d0. Defaults are sampled between argument
  * evaluations, not together at entry. SpawnActor receives NAME_None; the
@@ -297,7 +298,7 @@ export function inventoryImageChain(cls) {
  * stored in the linked class record (+0x3c), which a subclass's own fields
  * enlarge. The spawn sequence needs it for the constructor selection check. */
 function linkedPropertiesSize(cls) {
-  const size=cls?.loadRecord?.nativeSlots?.get(0x3c)?.value;
+  const size=slotValue(cls?.loadRecord,0x3c);
   if(!Number.isInteger(size))throw new Error(`Original class ${classKey(cls)} has no linked PropertiesSize`);
   return size;
 }

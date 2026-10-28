@@ -6,6 +6,7 @@ import {
   initializeClassDefaultObject,
   registerScriptClass,
 } from '../src/runtime/script-class-registration.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 test('UClass Register keeps native order and copies an inherited linked property', () => {
   const parentData = new Uint8Array(0x30);
@@ -117,7 +118,7 @@ test('UClass Register keeps native order and copies an inherited linked property
   );
 
   // The chains produced by UStruct::Link use live +54 Next and raw layout.
-  const rawProperty = (offset, next) => ({nativeSlots: new Map([
+  const rawProperty = (offset, next) => ({nativeSlots: NativeSlots.from([
     [0x48, {value: offset, width: 4}], [0x38, {value: 4, width: 4}],
     [0x34, {value: 1, width: 4}], [0x54, {value: next, width: 4}],
   ])});
@@ -132,7 +133,7 @@ test('UClass Register keeps native order and copies an inherited linked property
   initializeClassDefaultObject({...record, superClass: {...parent, linkedProperties: firstRaw}}, changingBuffer,
     {...services, copyCompleteValue: detail => {
       services.copyCompleteValue(detail);
-      detail.property.nativeSlots.get(0x54).value = null;
+      detail.property.nativeSlots.assign(0x54, null);
     }});
   assert.deepEqual(changingBuffer.copiedProperties, [firstRaw]);
 });

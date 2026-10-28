@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {linkScriptStruct, SCRIPT_STRUCT_LINK as S} from '../src/runtime/script-struct-link.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 const raw = object => (offset, value, width = 4) => {
-  object.nativeSlots.set(offset, {value, width});
+  object.nativeSlots.set(offset, value, width);
   return object;
 };
-const get = (object, offset) => object.nativeSlots.get(offset)?.value;
-const record = values => ({nativeSlots: new Map(Object.entries(values).map(([offset, value]) =>
+const get = (object, offset) => object.nativeSlots.value(offset);
+const record = values => ({nativeSlots: NativeSlots.from(Object.entries(values).map(([offset, value]) =>
   [Number(offset), {value, width: 4}]))});
 
 test('UStruct Link preserves/rebuilds layout, builds inherited chains, and coalesces equal expanded conditions', () => {

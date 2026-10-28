@@ -1,5 +1,6 @@
 import {sortScriptNetFields} from './script-net-field-sort.mjs';
 import {linkScriptState} from './script-state-link.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 /**
  * The reached UClass::Link body from the installed Deus Ex GOTY Core.dll.
@@ -140,13 +141,11 @@ function traceCall(trace, operation, fields = {}) {
 }
 
 function nativeSlot(record, offset) {
-  if (!(record?.nativeSlots instanceof Map)) return undefined;
-  const holder = record.nativeSlots.get(offset);
-  return holder === undefined ? undefined : holder?.value;
+  return record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
 }
 
 function hasNativeSlot(record, offset) {
-  return record?.nativeSlots instanceof Map && record.nativeSlots.has(offset);
+  return record?.nativeSlots instanceof NativeSlots && record.nativeSlots.has(offset);
 }
 
 function readSlot(record, offset, names, fallback, services, detail = {}) {
@@ -171,13 +170,12 @@ function writeSlot(record, offset, value, width, services, detail = {}) {
       kind: 'class-link-write-slot', offset, width, ...detail,
     });
   }
-  if (record?.nativeSlots instanceof Map) {
-    const holder = record.nativeSlots.get(offset);
-    if (holder && holder.width !== undefined && holder.width !== width) {
+  if (record?.nativeSlots instanceof NativeSlots) {
+    const prior = record.nativeSlots.width(offset);
+    if (prior !== undefined && prior !== width) {
       throw new Error(`Native slot width mismatch at +0x${offset.toString(16)}`);
     }
-    if (holder) holder.value = value;
-    else record.nativeSlots.set(offset, { value, width });
+    record.nativeSlots.assign(offset, value, width);
   }
   return value;
 }
@@ -316,7 +314,7 @@ function makeArrayState(record, offset, aliases, elementSize, services) {
     }
   }
 
-  const mapBacked = record?.nativeSlots instanceof Map &&
+  const mapBacked = record?.nativeSlots instanceof NativeSlots &&
     (hasNativeSlot(record, offset) || hasNativeSlot(record, offset + 4) || hasNativeSlot(record, offset + 8));
   if (mapBacked) {
     if (!hasNativeSlot(record, offset) || !hasNativeSlot(record, offset + 4) || !hasNativeSlot(record, offset + 8)) {
@@ -644,7 +642,7 @@ function writeRepIndex(field, value, services, trace) {
   writeSlot(field, SCRIPT_CLASS_LINK.offsets.rawRepIndex, raw, 2, services, {
     kind: 'raw-rep-index', field,
   });
-  if (!(field.nativeSlots instanceof Map)) {
+  if (!(field.nativeSlots instanceof NativeSlots)) {
     field.repIndex = raw;
   } else if (own(field, 'repIndex')) {
     field.repIndex = raw;

@@ -18,6 +18,7 @@
  */
 
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
+import {NativeSlots, slotValue} from './native-slots.mjs';
 
 const freeze = Object.freeze;
 
@@ -193,19 +194,20 @@ const required = (value, label) =>
 function slot(object, offset, services, names = []) {
   const fromHost = services.readSlot?.(object, offset);
   if (fromHost !== undefined) return fromHost;
-  if (object?.nativeSlots instanceof Map && object.nativeSlots.has(offset))
-    return object.nativeSlots.get(offset)?.value;
+  if (object?.nativeSlots instanceof NativeSlots && object.nativeSlots.has(offset))
+    return object.nativeSlots.value(offset);
   for (const name of names) if (object && Object.hasOwn(object, name)) return object[name];
   return undefined;
 }
 
 function write(object, offset, value, services, names = [], width = 4) {
-  const holder = object?.nativeSlots instanceof Map ? object.nativeSlots.get(offset) : null;
-  if (holder && holder.width !== undefined && holder.width !== width)
+  const slots = object?.nativeSlots instanceof NativeSlots ? object.nativeSlots : null;
+  const present = slots !== null && slots.has(offset), prior = present ? slots.width(offset) : undefined;
+  if (prior !== undefined && prior !== width)
     throw new TypeError(`Wrong native slot width at +0x${offset.toString(16)}`);
   if (services.writeSlot) services.writeSlot(object, offset, value, width);
-  if (holder) holder.value = value;
-  else if (object?.nativeSlots instanceof Map) object.nativeSlots.set(offset, { value, width });
+  if (present) slots.assign(offset, value);
+  else if (slots) slots.set(offset, value, width);
   for (const name of names) object[name] = value;
   return value;
 }
@@ -567,7 +569,7 @@ export function serializeLoadedField(object, archive, services = {}, context = {
  */
 export function serializeLoadedEnum(object, archive, services = {}, context = {}) {
   serializeLoadedField(object, archive, services, context);
-  const names = object.names ?? object.nativeSlots?.get(0x34)?.value ?? {};
+  const names = object.names ?? slotValue(object, 0x34) ?? {};
   archive.countBytes((names.max ?? 0) * 4, (names.num ?? 0) * 4);
   const count = archive.readCompact();
   const data = new Array(count);
@@ -654,7 +656,7 @@ export function serializeLoadedStruct(object, archive, services = {}, context = 
 
   put(object, LINKER_PRELOAD.offsets.line, archive.readU32(), services);
   put(object, LINKER_PRELOAD.offsets.textPos, archive.readU32(), services);
-  const scriptArray = object.script ?? object.nativeSlots?.get(LINKER_PRELOAD.offsets.script)?.value ?? {};
+  const scriptArray = object.script ?? slotValue(object, LINKER_PRELOAD.offsets.script) ?? {};
   const scriptSize = archive.readU32();
   emit(context, { op: 'SerializeStructScriptSize', object, scriptSize });
 

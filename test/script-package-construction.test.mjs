@@ -5,6 +5,7 @@ import {
   constructScriptPackage,
   createScriptPackage,
 } from '../src/runtime/script-package-construction.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 test('CreatePackage preserves native lookup/allocation/constructor order and live vtable slot', () => {
   const packageClass = {name: 'Core.Package'};
@@ -12,7 +13,7 @@ test('CreatePackage preserves native lookup/allocation/constructor order and liv
   const resolvedOuter = {index: 7, name: 'Core'};
   const calls = [];
   const fName = {index: 14, name: 'Core', entry: {index: 14}};
-  const packageObject = {index: -1, nativeSlots: new Map([[0, {value: 0xfeed, width: 4}]])};
+  const packageObject = {index: -1, nativeSlots: NativeSlots.from([[0, {value: 0xfeed, width: 4}]])};
   const lookup = {
     resolveName: (outerRef, nameRef, options) => {
       calls.push(['resolveName', options]);
@@ -64,7 +65,7 @@ test('CreatePackage preserves native lookup/allocation/constructor order and liv
 
   assert.equal(result, packageObject);
   assert.equal(packageObject.nativeVtable, SCRIPT_PACKAGE_CONSTRUCTION.packageVtable);
-  assert.equal(packageObject.nativeSlots.get(0).value, SCRIPT_PACKAGE_CONSTRUCTION.packageVtable);
+  assert.equal(packageObject.nativeSlots.value(0), SCRIPT_PACKAGE_CONSTRUCTION.packageVtable);
   assert.deepEqual(calls.map(([kind]) => kind), [
     'resolveName', 'staticFindObject', 'internName', 'staticAllocateObject', 'bindPackage',
   ]);

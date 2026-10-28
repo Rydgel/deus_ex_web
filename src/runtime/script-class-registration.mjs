@@ -2,6 +2,7 @@ import {registerScriptStruct} from './script-struct-registration.mjs';
 import {linkScriptClass} from './script-class-link.mjs';
 import {loadScriptLocalized} from './script-object-config.mjs';
 import {copyCompletePropertyValue} from './script-property-copy.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 /**
  * The reached UClass registration/default-object path from the installed
@@ -203,17 +204,17 @@ function* linkedProperties(record) {
   for (let property = candidate; property;) {
     if (seen.has(property)) throw new Error('Cyclic UClass linked property chain');
     seen.add(property); yield property;
-    const rawNext = property.nativeSlots?.get(0x54);
-    if (property.nativeSlots instanceof Map && rawNext?.value === undefined)
+    const slots = property.nativeSlots instanceof NativeSlots ? property.nativeSlots : null;
+    if (slots && slots.value(0x54) === undefined)
       fail('Inherited CopyCompleteValue requires live property Next +0x54', {operation: 'InitProperties', slot: '+0x54'});
-    property = rawNext ? rawNext.value : first(property, ['next', 'nextProperty'], null);
+    property = slots ? slots.value(0x54) : first(property, ['next', 'nextProperty'], null);
   }
 }
 
 function propertyLayout(property, sourceSize) {
   const metadata = property?.metadata ?? property;
-  const native = (offset, fallback) => property?.nativeSlots?.has(offset)
-    ? property.nativeSlots.get(offset).value : fallback;
+  const native = (offset, fallback) => property?.nativeSlots instanceof NativeSlots && property.nativeSlots.has(offset)
+    ? property.nativeSlots.value(offset) : fallback;
   const offsetValue = native(0x48, first(property, ['offset', 'propertyOffset'], first(metadata, ['offset', 'propertyOffset'])));
   if (offsetValue === null || offsetValue === undefined)
     fail('Inherited CopyCompleteValue requires linked property offset', {operation: 'InitProperties', slot: '+0x48'});

@@ -145,7 +145,7 @@ for (const cls of classes) for (const entry of layouts.get(cls).properties) {
   assert.equal(entry.elementSize, entry.struct.size, `${entry.key} ElementSize is the struct size`);
   for (const member of entry.struct.members) {
     let node = null;
-    for (let layout = recovered; layout && !node; layout = layout.nativeSlots.get(0x28)?.value) node = layout.fields.get(member.key);
+    for (let layout = recovered; layout && !node; layout = layout.nativeSlots.value(0x28)) node = layout.fields.get(member.key);
     assert.ok(node, `${member.key} in recovered layout`);
     assert.equal(node.offset, member.offset, `${member.key} offset`);
     assert.equal(node.elementSize, member.elementSize, `${member.key} ElementSize`);

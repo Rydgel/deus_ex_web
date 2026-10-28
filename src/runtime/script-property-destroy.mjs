@@ -9,6 +9,8 @@
  * performed.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export const SCRIPT_PROPERTY_DESTROY = Object.freeze({
   property: Object.freeze({ kind: 'Property', vtable: 0x10175a44, body: 0x10165590 }),
   byteProperty: Object.freeze({ kind: 'ByteProperty', vtable: 0x10175b04, body: 0x10165590 }),
@@ -131,7 +133,7 @@ function readSlot(property, offset, aliases, services = {}, context = {}) {
     if (value !== undefined) return nativeSlotValue(value);
   }
   const slots = property?.nativeSlots;
-  if (slots instanceof Map && slots.has(offset)) return nativeSlotValue(slots.get(offset));
+  if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
   if (slots && typeof slots === 'object' && own(slots, offset)) return nativeSlotValue(slots[offset]);
   for (const source of [property, metadataOf(property)]) {
     const value = first(source, aliases, UNRESOLVED);

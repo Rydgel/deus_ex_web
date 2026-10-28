@@ -5,9 +5,10 @@ import {
   UnsupportedScriptScalarPropertyLinkError,
   linkScalarProperty,
 } from '../src/runtime/script-scalar-property-link.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 function slotMap(entries = []) {
-  return new Map(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
+  return NativeSlots.from(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
 }
 
 test('scalar UProperty::Link dispatches verified bodies, preserves order, and rejects unsupported kinds', () => {
@@ -35,16 +36,16 @@ test('scalar UProperty::Link dispatches verified bodies, preserves order, and re
     const result = linkScalarProperty(property, {}, previous, {
       getPropertiesSize(receiver, detail) {
         events.push(['size', receiver, detail.previousProperty]);
-        assert.equal(property.nativeSlots.get(0x38).value,
+        assert.equal(property.nativeSlots.value(0x38),
           SCRIPT_SCALAR_PROPERTY_LINK.properties[kind].elementSize);
         return outerSize;
       },
     });
     assert.equal(result.kind, kind);
     assert.equal(result.previousProperty, previous);
-    assert.equal(property.nativeSlots.get(0x38).value,
+    assert.equal(property.nativeSlots.value(0x38),
       SCRIPT_SCALAR_PROPERTY_LINK.properties[kind].elementSize);
-    assert.equal(property.nativeSlots.get(0x48).value, expectedOffset);
+    assert.equal(property.nativeSlots.value(0x48), expectedOffset);
     assert.deepEqual(events, [['size', outer, previous]]);
     previous = property;
   }

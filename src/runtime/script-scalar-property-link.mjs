@@ -8,6 +8,8 @@
  * in the returned record, although these five bodies do not inspect them.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export const SCRIPT_SCALAR_PROPERTY_LINK = Object.freeze({
   uProperty: Object.freeze({
     linkSlot: 0x68,
@@ -115,11 +117,6 @@ function integer(value, label, { minimum = 0, maximum = 0x7fffffff } = {}) {
   return number;
 }
 
-function nativeHolderValue(holder) {
-  if (holder && typeof holder === 'object' && own(holder, 'value')) return holder.value;
-  return holder;
-}
-
 function readSlot(object, offset, aliases, services, detail = {}) {
   if (typeof services.readSlot === 'function') {
     const value = services.readSlot(object, offset, {
@@ -127,8 +124,8 @@ function readSlot(object, offset, aliases, services, detail = {}) {
     });
     if (value !== undefined) return value;
   }
-  if (object?.nativeSlots instanceof Map && object.nativeSlots.has(offset)) {
-    return nativeHolderValue(object.nativeSlots.get(offset));
+  if (object?.nativeSlots instanceof NativeSlots && object.nativeSlots.has(offset)) {
+    return object.nativeSlots.value(offset);
   }
   return first(object, aliases, undefined);
 }
@@ -140,13 +137,12 @@ function writeSlot(object, offset, value, width, services, detail = {}) {
       kind: 'scalar-property-link-write-slot', offset, width, ...detail,
     });
   }
-  if (object?.nativeSlots instanceof Map) {
-    const holder = object.nativeSlots.get(offset);
-    if (holder && typeof holder === 'object' && holder.width !== undefined && holder.width !== width) {
+  if (object?.nativeSlots instanceof NativeSlots) {
+    const prior = object.nativeSlots.width(offset);
+    if (prior !== undefined && prior !== width) {
       throw new Error(`Native property slot +0x${offset.toString(16)} is not ${width} bytes`);
     }
-    if (holder && typeof holder === 'object' && own(holder, 'value')) holder.value = value;
-    else object.nativeSlots.set(offset, { value, width });
+    object.nativeSlots.assign(offset, value, width);
     return value;
   }
   if (typeof writer !== 'function') {

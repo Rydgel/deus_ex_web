@@ -8,15 +8,16 @@ import {
 } from '../src/runtime/script-bool-property-link.mjs';
 import {linkScriptProperty} from '../src/runtime/script-property-link.mjs';
 import {linkScriptStruct, SCRIPT_STRUCT_LINK as S} from '../src/runtime/script-struct-link.mjs';
+import {NativeSlots} from '../src/runtime/native-slots.mjs';
 
 const BOOL_VTABLE = SCRIPT_BOOL_PROPERTY_LINK.boolProperty.vtable; // 0x10175c84
 const UCLASS_VTABLE = 0x101758f4;
 const UFUNCTION_VTABLE = 0x10175738;
 
 function slotMap(entries = []) {
-  return new Map(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
+  return NativeSlots.from(entries.map(([offset, value, width = 4]) => [offset, {value, width}]));
 }
-const get = (object, offset) => object.nativeSlots.get(offset)?.value;
+const get = (object, offset) => object.nativeSlots.value(offset);
 
 function boolProp(outer, extra = []) {
   return {kind: 'BoolProperty', nativeSlots: slotMap([
@@ -159,7 +160,7 @@ test('the property-link dispatcher routes BoolProperty to the packing body and s
 
 test('UStruct::Link lays out a mixed int/bool/bool/int class with the bools sharing one DWORD', () => {
   // Minimal UField class scaffolding shared with script-struct-link.test.mjs.
-  const record = values => ({nativeSlots: new Map(Object.entries(values).map(([offset, value]) =>
+  const record = values => ({nativeSlots: NativeSlots.from(Object.entries(values).map(([offset, value]) =>
     [Number(offset), {value, width: 4}]))});
   const fieldClass = record({0x28: null}); fieldClass.nativeAddress = 0x101f2b18;
   const propertyClass = record({0x28: fieldClass}); propertyClass.nativeAddress = S.propertyClass;
@@ -176,10 +177,10 @@ test('UStruct::Link lays out a mixed int/bool/bool/int class with the bools shar
   const bool0 = field('BoolProperty', BOOL_VTABLE);
   const bool1 = field('BoolProperty', BOOL_VTABLE);
   const int1 = field('IntProperty', 0x10175bc4);
-  cls.nativeSlots.get(0x38).value = int0;
-  int0.nativeSlots.get(0x2c).value = bool0;
-  bool0.nativeSlots.get(0x2c).value = bool1;
-  bool1.nativeSlots.get(0x2c).value = int1;
+  cls.nativeSlots.assign(0x38, int0);
+  int0.nativeSlots.assign(0x2c, bool0);
+  bool0.nativeSlots.assign(0x2c, bool1);
+  bool1.nativeSlots.assign(0x2c, int1);
 
   const archive = {};
   linkScriptStruct(cls, {archive, secondArgument: 1, services: {preload() {}}});

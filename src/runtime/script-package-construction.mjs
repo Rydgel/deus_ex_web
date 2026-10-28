@@ -5,6 +5,8 @@
  * See docs/script-package-construction.md for the source trace.
  */
 
+import {NativeSlots} from './native-slots.mjs';
+
 export const SCRIPT_PACKAGE_CONSTRUCTION = Object.freeze({
   createPackageThunk: 0x10101ccb,
   createPackage: 0x101549f0,
@@ -78,18 +80,17 @@ function writePackageVtable(object) {
   // creating a detached JS-only value.
   object.nativeVtable = CONFIG.packageVtable;
   if (object.nativeSlots === undefined) return;
-  if (!(object.nativeSlots instanceof Map)) {
-    throw new TypeError('UPackage nativeSlots must be an offset Map');
+  if (!(object.nativeSlots instanceof NativeSlots)) {
+    throw new TypeError('UPackage nativeSlots must be NativeSlots');
   }
-  const holder = object.nativeSlots.get(0);
-  if (holder === undefined) {
-    object.nativeSlots.set(0, {value: CONFIG.packageVtable, width: 4});
+  if (!object.nativeSlots.has(0)) {
+    object.nativeSlots.set(0, CONFIG.packageVtable, 4);
     return;
   }
-  if (!holder || typeof holder !== 'object' || holder.width !== 4) {
-    throw new TypeError('UPackage vtable slot +0 must be a four-byte holder');
+  if (object.nativeSlots.width(0) !== 4) {
+    throw new TypeError('UPackage vtable slot +0 must be a four-byte slot');
   }
-  holder.value = CONFIG.packageVtable;
+  object.nativeSlots.assign(0, CONFIG.packageVtable);
 }
 
 /**

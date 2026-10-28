@@ -4,14 +4,15 @@ import {SCRIPT_SCALAR_PROPERTY_LINK} from './script-scalar-property-link.mjs';
 import {SCRIPT_BOOL_PROPERTY_LINK} from './script-bool-property-link.mjs';
 import {SCRIPT_STR_PROPERTY_LINK} from './script-str-property-link.mjs';
 import {SCRIPT_STRUCT_PROPERTY_LINK} from './script-struct-property-link.mjs';
+import {NativeSlots} from './native-slots.mjs';
 
 const vtables=new Map(Object.entries(SCRIPT_SCALAR_PROPERTY_LINK.properties)
   .map(([kind,body])=>[kind,body.vtable]));
 vtables.set('BoolProperty',SCRIPT_BOOL_PROPERTY_LINK.boolProperty.vtable);
 vtables.set('StrProperty',SCRIPT_STR_PROPERTY_LINK.strProperty.vtable);
 vtables.set('StructProperty',SCRIPT_STRUCT_PROPERTY_LINK.structProperty.vtable);
-const slot=(object,offset)=>object.nativeSlots.get(offset)?.value;
-const put=(object,offset,value)=>object.nativeSlots.set(offset,{value,width:4});
+const slot=(object,offset)=>object.nativeSlots.value(offset);
+const put=(object,offset,value)=>object.nativeSlots.set(offset,value,4);
 
 /** Original package metadata -> recovered UStruct/property Link slot boundary.
  * The returned native layout is separate from keyed logical VM value storage.
@@ -24,7 +25,7 @@ export async function loadScriptStructLayout(runtime,record,ancestry=[]) {
   const base=metadata.baseRef?await runtime.structLayout(
     await runtime.objects.resolve(record.asset,metadata.baseRef),path):null;
   const layout={record,key:record.key,kind:'Struct',nativeVtable:0x10175698,
-    nativeSlots:new Map(),fields:new Map(),preloaded:true};
+    nativeSlots:new NativeSlots(),fields:new Map(),preloaded:true};
   for(const [offset,value] of [[0,layout.nativeVtable],[0x28,base],[0x38,null],[0x3c,0]])put(layout,offset,value);
   let child=await runtime.objects.resolve(record.asset,metadata.childrenRef),previous=null;
   const seen=new Set();
@@ -33,7 +34,7 @@ export async function loadScriptStructLayout(runtime,record,ancestry=[]) {
     seen.add(child.key);
     const owner=await runtime.objects.resolve(child.asset,child.entry.outer);
     if(owner!==record)throw new Error(`Unsupported foreign Outer in struct layout: ${child.key}`);
-    const node={record:child,key:child.key,kind:child.kind,nativeSlots:new Map(),preloaded:true};
+    const node={record:child,key:child.key,kind:child.kind,nativeSlots:new NativeSlots(),preloaded:true};
     put(node,0x18,layout);put(node,0x2c,null);
     if(child.kind.endsWith('Property')){
       const field=await runtime.field(child,path),m=field.metadata;
