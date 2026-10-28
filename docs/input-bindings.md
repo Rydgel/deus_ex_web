@@ -85,8 +85,12 @@ one notch, a line is 40 (three lines to a notch, `SPI_GETWHEELSCROLLLINES` 3), a
 Playwright carry ±120 whatever the pixel delta, 40, 53, 100 or 200) or else 1.2 each (100 pixels to a notch, Chromium on Windows).
 `createWheelAccumulator` cuts the units into messages of one notch (±120) and carries the remainder: a touchpad's small deltas add up to a
 notch, a reversal of direction or a pause of 500 ms drops the remainder, one event is at most 8 notches. So a notch of any wheel is one
-`WM_MOUSEWHEEL` of 120, as on Windows. The conversion constants are a rule of this page; macOS trackpad and Firefox values were not
-measured. A sideways scroll is no notch. Unit tests: `test/wheel-input.test.mjs`. The listener is on `document`, non-passive (so that
+`WM_MOUSEWHEEL` of 120, as on Windows. Firefox fills `wheelDeltaY` from ticks too, but only when its widget reported them (GTK's
+discrete and smooth wheel events and Windows' set them); an event without ticks gets -round(3 × deltaY) (`dom/events/WheelEvent.cpp`
+`WheelDeltaY`, `kTrustedDeltaToWheelDelta` = 3, read at Firefox 161), a pixel count. Taken as ticks, Playwright's 100-pixel notch
+(-300, **measured**) counted 2.5 notches and moved the belt two items (Stage 7's browser suite, 2026-10-28), so in Firefox that exact
+value takes the pixel rule (`wheelUnits(event, {gecko})`). A real wheel in Firefox is not measured; neither is a macOS trackpad, and
+the conversion constants are a rule of this page. A sideways scroll is no notch. Unit tests: `test/wheel-input.test.mjs`. The listener is on `document`, non-passive (so that
 Ctrl+wheel does not zoom the page), and only takes events that target the canvas or the locked pointer.
 
 **Keys.** WinDrv's window procedure answers every key message itself, so the page takes every key the original can bind

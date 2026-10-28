@@ -24,7 +24,19 @@ test('blur pauses simulation, clears held movement and resumes without catch-up'
   // the game's response; actual OS focus/visibility delivery is separate coverage.
   await page.evaluate(() => window.dispatchEvent(new FocusEvent('blur')));
   expect((await status()).paused).toBe(true);
-  const frozen = (await status()).gameplay.player;
+  // Worker mode: the frames posted before the blur (run, their time before it) land after it, and the game status comes with every
+  // 15th post (main.mjs postSimFrame), so the state the blur froze is the first status that the next one repeats (the player was
+  // walking at over 100 units/s). Inline mode has it at once.
+  const frozen = await page.evaluate(async () => {
+    const viewer = window.deusExViewer;
+    if (viewer.status().sim !== 'worker') return viewer.status().gameplay.player;
+    const next = async previous => { while (viewer.status().gameplay === previous) await new Promise(resolve => setTimeout(resolve, 20)); return viewer.status().gameplay; };
+    for (let last = await next(viewer.status().gameplay); ;) {
+      const now = await next(last);
+      if (JSON.stringify(now.player) === JSON.stringify(last.player)) return now.player;
+      last = now;
+    }
+  });
   await page.waitForTimeout(600);
   expect((await status()).gameplay.player).toEqual(frozen);
   await page.keyboard.up('KeyW');

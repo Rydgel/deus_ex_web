@@ -30,6 +30,11 @@ test('wheel events are converted to Windows units: 120 per notch, positive away 
   assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: -53, wheelDeltaY: 120 }), 120);
   assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: 10, wheelDeltaY: 30 }), -12);       // a wheelDeltaY of the wrong sign is ignored
   assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: 10, wheelDeltaY: undefined }), -12);
+  // Firefox: ticks give ±120 a notch, an event without ticks -round(3 x deltaY) (measured: Playwright's 100 px notch, -300), which is pixels
+  assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: 100, wheelDeltaY: -300 }, { gecko: true }), -120);
+  assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: -25, wheelDeltaY: 75 }, { gecko: true }), 30);
+  assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: 57, wheelDeltaY: -120 }, { gecko: true }), -120);   // a GTK notch: 3 lines of 19 px, one tick
+  assert.equal(wheelUnits({ deltaMode: PIXEL, deltaY: 100, wheelDeltaY: -300 }), -300);                  // elsewhere the attribute is the ticks
   // lines: three to a notch (SPI_GETWHEELSCROLLLINES), pages: one notch each
   assert.equal(wheelUnits({ deltaMode: LINE, deltaY: 3 }), -120);
   assert.equal(wheelUnits({ deltaMode: LINE, deltaY: -1 }), 40);

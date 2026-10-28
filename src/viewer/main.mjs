@@ -423,9 +423,14 @@ savesUi.bind();
 // window; Alt+Enter in fullscreen); under the pointer lock the menu's own cursor stays inside the picture.
 $('page-saves').onclick = () => savesUi.open();
 $('page-crt').onclick = () => { setCrt(!crtEnabled, true); $('page-crt').setAttribute('aria-pressed', String(crtEnabled)); };
+/** Whether an original window holds the mouse: the worker's answer with its last snapshot, or the page's own game (?sim=inline, Firefox's default). */
+function windowGrabbed() {
+  if (simClient) return Boolean(simAnswers.windowGrab);
+  try { return Boolean(game?.windowMouseGrabbed()); } catch { return false; }
+}
 function placePageButtons() {
   const box = $('page-buttons');
-  const show = originalStart && mode === 'play' && Boolean(game) && !loading && !runtimeError && Boolean(simClient) && Boolean(simAnswers.windowGrab);
+  const show = originalStart && mode === 'play' && Boolean(game) && !loading && !runtimeError && windowGrabbed();
   if (box.hidden !== !show) box.hidden = !show;
   if (!show) return;
   $('page-crt').setAttribute('aria-pressed', String(crtEnabled));
@@ -1821,7 +1826,7 @@ document.addEventListener('wheel', event => {
   if (event.target !== scene && document.pointerLockElement !== scene) return;
   if (mode !== 'play' || !game || runtimeError || !world || loading) return;
   event.preventDefault();
-  try { for (const notch of wheelNotches.push(wheelUnits(event), event.timeStamp)) simInput.wheel(notch); }
+  try { for (const notch of wheelNotches.push(wheelUnits(event, { gecko: geckoPage }), event.timeStamp)) simInput.wheel(notch); }
   catch (error) { pauseForRuntimeError(error); }
 }, { passive: false });
 document.addEventListener('keyup', event => {

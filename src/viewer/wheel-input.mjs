@@ -38,13 +38,17 @@ export function wheelMessage(delta) {
 
 /** A browser WheelEvent in Windows' wheel units (WHEEL_DELTA = 120 per notch, positive = away from the user, as WM_MOUSEWHEEL).
  * Lines count 40 each (three lines to a notch), a page is one notch, pixels use the browser's own tick count (`wheelDeltaY`, the
- * legacy attribute Chromium and Safari fill from the platform's notches) or else 1.2 each (100 pixels to a notch). */
-export function wheelUnits(event) {
+ * legacy attribute Chromium and Safari fill from the platform's notches) or else 1.2 each (100 pixels to a notch).
+ * `gecko`: the page runs in Firefox, whose `wheelDeltaY` is the platform's ticks times 120 only when the widget reported ticks (its
+ * GTK and Windows wheels do); an event without them gets -round(3 x deltaY) instead (dom/events/WheelEvent.cpp `WheelDeltaY`,
+ * kTrustedDeltaToWheelDelta 3, Firefox 161), which counts pixels, not notches, so that value takes the pixel rule. */
+export function wheelUnits(event, { gecko = false } = {}) {
   const dy = Number(event.deltaY) || 0;
   if (event.deltaMode === DOM_DELTA_PAGE) return 0 - dy * WHEEL_DELTA;
   if (event.deltaMode === DOM_DELTA_LINE) return 0 - dy * (WHEEL_DELTA / LINES_PER_NOTCH);
   const legacy = Number(event.wheelDeltaY);
-  if (Number.isFinite(legacy) && legacy !== 0 && Math.sign(legacy) === -Math.sign(dy)) return legacy;
+  const geckoPixels = gecko && legacy === -Math.round(3 * dy);
+  if (Number.isFinite(legacy) && legacy !== 0 && !geckoPixels && Math.sign(legacy) === -Math.sign(dy)) return legacy;
   return 0 - dy * (WHEEL_DELTA / PIXELS_PER_NOTCH);
 }
 
