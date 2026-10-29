@@ -57,17 +57,85 @@ const sameRotation = (a, b) => a && b && a[0] === b[0] && a[1] === b[1] && a[2] 
 /** PointRegion struct field binding with the plain {zone,leaf,zoneNumber}
  * shape setActorZone reads and writes (same storage as
  * ScriptRuntime.regionValue/setRegion). */
-function regionBinding(field, actor, name) {
-  const ref = field(actor, name);
-  const k = 'engine.actor.pointregion';
-  return {
-    get() {
-      const v = ref.get() ?? {};
-      return { zone: v[`${k}.zone`] ?? null, leaf: v[`${k}.ileaf`] ?? -1, zoneNumber: v[`${k}.zonenumber`] ?? 0 };
-    },
-    set(v) { ref.set({ [`${k}.zone`]: v.zone ?? null, [`${k}.ileaf`]: v.leaf ?? -1, [`${k}.zonenumber`]: v.zoneNumber ?? 0 }); },
-  };
+class RegionBinding {
+  constructor(field, actor, name) { this.ref = field(actor, name); }
+  get() {
+    const k = 'engine.actor.pointregion', v = this.ref.get() ?? {};
+    return { zone: v[`${k}.zone`] ?? null, leaf: v[`${k}.ileaf`] ?? -1, zoneNumber: v[`${k}.zonenumber`] ?? 0 };
+  }
+  set(v) {
+    const k = 'engine.actor.pointregion';
+    this.ref.set({ [`${k}.zone`]: v.zone ?? null, [`${k}.ileaf`]: v.leaf ?? -1, [`${k}.zonenumber`]: v.zoneNumber ?? 0 });
+  }
 }
+
+// The view's accessors are functions shared by every pawn view: they find the view's access object (its local readers, the
+// actor, the services) through `this` (docs/live-heap.md, "Step 5's results"). A getter and a setter closure with a context for
+// each of the view's hundred members was most of what a pawn view held.
+const ACCESS = Symbol('pawnViewAccess');
+const KINDS = { id: [v => v, v => v], byte: [v => Number(v) & 0xff, v => v], bool: [Boolean, Boolean] };
+const boundMembers = new Map(), valueMembers = new Map(), actorMembers = new Map(), regionMembers = new Map(), boolMembers = new Map();
+/** `read(get(name))` and `set(name, write(v))` of the field `name`. */
+function boundMember(name, kind = 'id') {
+  const key = `${name}:${kind}`;
+  let member = boundMembers.get(key);
+  if (!member) {
+    const [read, write] = KINDS[kind];
+    boundMembers.set(key, member = Object.freeze({
+      get() { return read(this[ACCESS].get(name)); },
+      set(v) { this[ACCESS].set(name, write(v)); },
+    }));
+  }
+  return member;
+}
+function cachedMember(cache, key, make) {
+  let member = cache.get(key);
+  if (!member) cache.set(key, member = Object.freeze(make()));
+  return member;
+}
+const valueMember = name => cachedMember(valueMembers, name, () => ({ get() { return this[ACCESS].get(name); } }));
+const boolMember = name => cachedMember(boolMembers, name, () => ({ get() { return Boolean(this[ACCESS].get(name)); } }));
+const actorMember = prop => cachedMember(actorMembers, prop, () => ({ get() { return this[ACCESS].actor[prop]; } }));
+const regionMember = prop => cachedMember(regionMembers, prop, () => ({
+  get() { return this[ACCESS][prop].get(); }, set(v) { this[ACCESS][prop].set(v); } }));
+const SHARED = Object.freeze({
+  controlledPlayer: Object.freeze({ get() { const a = this[ACCESS]; return Boolean(a.services.isA(a.actor, 'engine.playerpawn') && a.get('Player') != null); } }),
+  deleted: Object.freeze({ get() { return Boolean(this[ACCESS].actor.actorFlags & 0x80); } }),
+  collideWorld: Object.freeze({ get() { return Boolean(this[ACCESS].actor.flags & 0x2); } }),
+  isPlayerPawn: Object.freeze({ get() { return this[ACCESS].isPlayerPawn; } }),
+  netMode: Object.freeze({ get() { return this[ACCESS].level.netMode ?? 0; } }),
+  zoneNumber: Object.freeze({ get() { return this.region.zoneNumber; } }),
+  imagedCollisionBits: Object.freeze({ get() { return this[ACCESS].actor.collisionBits; } }),
+  imagedFlags: Object.freeze({ get() { return this[ACCESS].actor.flags; },
+    set(v) { const actor = this[ACCESS].actor; actor.flags = ((actor.flags & ~0xd) | (v & 0xd)) >>> 0; } }),
+  imagedActorFlags: Object.freeze({ get() { return this[ACCESS].actor.actorFlags; } }),
+  composedCollisionBits: Object.freeze({ get() {
+    const a = this[ACCESS];
+    return (a.get('bCollideActors') ? 1 : 0) | (a.get('bBlockActors') ? 4 : 0) | (a.get('bBlockPlayers') ? 8 : 0) | (a.get('bProjTarget') ? 0x10 : 0); } }),
+  composedFlags: Object.freeze({ get() { return this.collisionBits | (this[ACCESS].get('bCollideWorld') ? 2 : 0); },
+    set(v) { const a = this[ACCESS]; a.set('bCollideActors', Boolean(v & 1)); a.set('bBlockActors', Boolean(v & 4)); a.set('bBlockPlayers', Boolean(v & 8)); } }),
+  composedActorFlags: Object.freeze({ get() {
+    const a = this[ACCESS];
+    return (a.get('bStatic') ? 1 : 0) | (a.get('bDeleteMe') ? 0x80 : 0) | (a.get('bCollideWhenPlacing') ? 0x20000 : 0) | (a.get('bMovable') ? 0x80000 : 0); } }),
+  static: Object.freeze({ get() { return Boolean(this.actorFlags & 1); } }),
+  movable: Object.freeze({ get() { return Boolean(this.actorFlags & 0x80000); } }),
+  pawnFlags: Object.freeze({ get() { return this[ACCESS].actor.pawnFlags ?? 0; }, set(v) { this[ACCESS].actor.pawnFlags = v; } }),
+  motionFlags: Object.freeze({ get() { return this[ACCESS].actor.motionFlags ?? 0; }, set(v) { this[ACCESS].actor.motionFlags = v; } }),
+  justTeleported: Object.freeze({ get() { return Boolean(this.motionFlags & 0x100); },
+    set(v) { this.motionFlags = ((this.motionFlags & ~0x100) | (v ? 0x100 : 0)) >>> 0; } }),
+  gravity: Object.freeze({ get() { return (this[ACCESS].zone().ZoneGravity ?? [0, 0, -950]).map(f); } }),
+  zoneVelocity: Object.freeze({ get() { return (this[ACCESS].zone().ZoneVelocity ?? [0, 0, 0]).map(f); } }),
+  terminalVelocity: Object.freeze({ get() { return f(this[ACCESS].zone().ZoneTerminalVelocity ?? 2500); } }),
+  friction: Object.freeze({ get() { return f(this[ACCESS].zone().ZoneGroundFriction ?? 8); } }),
+  fluidFriction: Object.freeze({ get() { return f(this[ACCESS].zone().ZoneFluidFriction ?? 1.2); } }),
+  zoneGravityZ: Object.freeze({ get() { return this.gravity[2]; } }),
+  regionWater: Object.freeze({ get() { return this[ACCESS].water(this.region.zone); } }),
+  headWater: Object.freeze({ get() { return this[ACCESS].water(this.headRegion.zone); } }),
+  footWater: Object.freeze({ get() { return this[ACCESS].water(this.footRegion.zone); } }),
+  footFluidFriction: Object.freeze({ get() { const a = this[ACCESS]; return f(a.services.zoneFields(this.footRegion.zone).ZoneFluidFriction ?? 1.2); } }),
+});
+/** An enumerable accessor property of a pawn view over a shared member. */
+const visible = member => ({ ...member, enumerable: true });
 
 /** Persistent pawn view over a script-attached map actor: script-visible
  * fields route through `field(name)` bindings (Location/Velocity/Physics/
@@ -87,18 +155,21 @@ export function pawnPhysicsView(actor, services) {
   const zone = () => services.zoneFields(pawn.region.zone ?? level.pointRegion(pawn.position).zone);
   if (typeof services.isA !== 'function') unsupported('Pawn physics requires original class ancestry');
   const pawn = { self: actor, worldActor, isPawn: true, pawn: true,
-    get controlledPlayer() { return Boolean(services.isA(actor, 'engine.playerpawn') && get('Player') != null); },
+    controlledPlayer: false,
     decoration: false, movingBrush: false,
     projectile: false, model: actor.model ?? null };
+  // `controlledPlayer` was a getter of the literal: the same property, in the same place, over a shared function.
+  Object.defineProperty(pawn, 'controlledPlayer', { ...SHARED.controlledPlayer, enumerable: true, configurable: true });
+  const access = { actor, services, level, get, set, zone, water: null, isPlayerPawn: false, region: null, footRegion: null, headRegion: null };
+  Object.defineProperty(pawn, ACCESS, { value: access });
   // The view stands for `actor` in the IsBasedOn/SetBase walks, and
   // BeginTouch/EndTouch refuse it (actor-touch.mjs). A symbol key: not one of
   // the view's enumerable keys.
   Object.defineProperty(pawn, ACTOR_IDENTITY, { value: actor });
-  const bind = (prop, name, read = v => v, write = v => v) =>
-    Object.defineProperty(pawn, prop, { get: () => read(get(name)), set: v => set(name, write(v)), enumerable: true });
+  const bind = (prop, name, kind = 'id') => Object.defineProperty(pawn, prop, visible(boundMember(name, kind)));
   bind('position', 'Location'); bind('rotation', 'Rotation');
   bind('velocity', 'Velocity'); bind('acceleration', 'Acceleration');
-  bind('physics', 'Physics', v => Number(v) & 0xff);
+  bind('physics', 'Physics', 'byte');
   bind('base', 'Base'); bind('oldLocation', 'OldLocation');
   bind('destination', 'Destination'); bind('moveTimer', 'MoveTimer');
   bind('avgPhysicsTime', 'AvgPhysicsTime'); bind('standingCount', 'StandingCount');
@@ -111,25 +182,26 @@ export function pawnPhysicsView(actor, services) {
     ['airControl', 'AirControl'], ['maxStepHeight', 'MaxStepHeight'], ['minHitWall', 'MinHitWall'],
     ['mass', 'Mass'], ['buoyancy', 'Buoyancy'], ['airSpeed', 'AirSpeed'], ['waterSpeed', 'WaterSpeed'], ['desiredSpeed', 'DesiredSpeed'],
     ['viewRotation', 'ViewRotation'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
-    Object.defineProperty(pawn, prop, { get: () => get(name), enumerable: true });
+    Object.defineProperty(pawn, prop, visible(valueMember(name)));
   // A map pawn's flag members read its image's flag words
   // (actor-flag-words.mjs), the storage of the bool fields themselves.
   const words = flagWordsOf(actor), imaged = Boolean(words?.collision && words.actor);
   if (words && !words.motion) throw new Error(`Map pawn ${actor.name} has no +0x1ec image word (actor-flag-words.mjs)`);
   for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
     ['collideWorld', 'bCollideWorld'], ['bounce', 'bBounce']])
-    Object.defineProperty(pawn, prop, { get: imaged && prop === 'deleted' ? () => Boolean(actor.actorFlags & 0x80)
-      : imaged && prop === 'collideWorld' ? () => Boolean(actor.flags & 0x2) : () => Boolean(get(name)), enumerable: true });
+    Object.defineProperty(pawn, prop, visible(imaged && prop === 'deleted' ? SHARED.deleted
+      : imaged && prop === 'collideWorld' ? SHARED.collideWorld : boolMember(name)));
   // The ladder branch (0x103cc5ed) sets bIsWalking before physFlying.
-  bind('isWalking', 'bIsWalking', Boolean, Boolean);
+  bind('isWalking', 'bIsWalking', 'bool');
   // calcVelocity/physFlying test the class chain for PlayerPawn (0x1058c160).
   const isPlayerPawn = services.isA(actor, 'engine.playerpawn');
-  Object.defineProperty(pawn, 'isPlayerPawn', { get: () => isPlayerPawn, enumerable: true });
-  Object.defineProperty(pawn, 'netMode', { get: () => level.netMode ?? 0, enumerable: true });
-  Object.defineProperty(pawn, 'zoneNumber', { get: () => pawn.region.zoneNumber, enumerable: true });
+  access.isPlayerPawn = isPlayerPawn;
+  Object.defineProperty(pawn, 'isPlayerPawn', visible(SHARED.isPlayerPawn));
+  Object.defineProperty(pawn, 'netMode', visible(SHARED.netMode));
+  Object.defineProperty(pawn, 'zoneNumber', visible(SHARED.zoneNumber));
   for (const [prop, name] of [['region', 'Region'], ['footRegion', 'FootRegion'], ['headRegion', 'HeadRegion']]) {
-    const ref = regionBinding(field, actor, name);
-    Object.defineProperty(pawn, prop, { get: () => ref.get(), set: v => ref.set(v), enumerable: true });
+    access[prop] = new RegionBinding(field, actor, name);
+    Object.defineProperty(pawn, prop, visible(regionMember(prop)));
   }
   // The native +0x1dc bitfield and the actor-flag word: a map pawn's image
   // words, else derived from the bool fields exactly as
@@ -137,28 +209,20 @@ export function pawnPhysicsView(actor, services) {
   // 0x10369200 flag writes, native 262/283). The `flags` setter writes
   // bCollideActors, bBlockActors and bBlockPlayers.
   if (imaged) {
-    Object.defineProperty(pawn, 'collisionBits', { get: () => actor.collisionBits, enumerable: true });
-    Object.defineProperty(pawn, 'flags', {
-      get: () => actor.flags, set(v) { actor.flags = ((actor.flags & ~0xd) | (v & 0xd)) >>> 0; }, enumerable: true });
-    Object.defineProperty(pawn, 'actorFlags', { get: () => actor.actorFlags, enumerable: true });
+    Object.defineProperty(pawn, 'collisionBits', visible(SHARED.imagedCollisionBits));
+    Object.defineProperty(pawn, 'flags', visible(SHARED.imagedFlags));
+    Object.defineProperty(pawn, 'actorFlags', visible(SHARED.imagedActorFlags));
   } else {
-    Object.defineProperty(pawn, 'collisionBits', {
-      get: () => (get('bCollideActors') ? 1 : 0) | (get('bBlockActors') ? 4 : 0) |
-        (get('bBlockPlayers') ? 8 : 0) | (get('bProjTarget') ? 0x10 : 0), enumerable: true });
-    Object.defineProperty(pawn, 'flags', {
-      get: () => pawn.collisionBits | (get('bCollideWorld') ? 2 : 0),
-      set(v) { set('bCollideActors', Boolean(v & 1)); set('bBlockActors', Boolean(v & 4)); set('bBlockPlayers', Boolean(v & 8)); },
-      enumerable: true });
-    Object.defineProperty(pawn, 'actorFlags', {
-      get: () => (get('bStatic') ? 1 : 0) | (get('bDeleteMe') ? 0x80 : 0) |
-        (get('bCollideWhenPlacing') ? 0x20000 : 0) | (get('bMovable') ? 0x80000 : 0), enumerable: true });
+    Object.defineProperty(pawn, 'collisionBits', visible(SHARED.composedCollisionBits));
+    Object.defineProperty(pawn, 'flags', visible(SHARED.composedFlags));
+    Object.defineProperty(pawn, 'actorFlags', visible(SHARED.composedActorFlags));
   }
-  Object.defineProperty(pawn, 'static', { get() { return Boolean(this.actorFlags & 1); }, enumerable: true });
-  Object.defineProperty(pawn, 'movable', { get() { return Boolean(this.actorFlags & 0x80000); }, enumerable: true });
+  Object.defineProperty(pawn, 'static', visible(SHARED.static));
+  Object.defineProperty(pawn, 'movable', visible(SHARED.movable));
   // Host collision/identity props (registration entries are values-keyed).
   for (const prop of ['lineage', 'values', 'touching'])
-    Object.defineProperty(pawn, prop, { get: () => actor[prop], enumerable: true });
-  Object.defineProperty(pawn, 'pawnFlags', { get: () => actor.pawnFlags ?? 0, set: v => { actor.pawnFlags = v; }, enumerable: true });
+    Object.defineProperty(pawn, prop, visible(actorMember(prop)));
+  Object.defineProperty(pawn, 'pawnFlags', visible(SHARED.pawnFlags));
   // The +0x1ec word the original physics reads and writes on the actor
   // itself: bJustTeleported (0x100) cleared at the top of physWalking
   // 0x103ca83e, physFalling 0x103d0f04, physFlying 0x103d3177 and
@@ -168,35 +232,34 @@ export function pawnPhysicsView(actor, services) {
   // 0x103c9faa. A map pawn's and a spawned pawn's `motionFlags` are accessors
   // over that image word (actor-flag-words.mjs, script-actor-collision.mjs),
   // the storage of the script bools; there is no separate host copy.
-  Object.defineProperty(pawn, 'motionFlags', { get: () => actor.motionFlags ?? 0, set: v => { actor.motionFlags = v; }, enumerable: true });
-  Object.defineProperty(pawn, 'justTeleported', {
-    get: () => Boolean(pawn.motionFlags & 0x100),
-    set: v => { pawn.motionFlags = ((pawn.motionFlags & ~0x100) | (v ? 0x100 : 0)) >>> 0; }, enumerable: true });
+  Object.defineProperty(pawn, 'motionFlags', visible(SHARED.motionFlags));
+  Object.defineProperty(pawn, 'justTeleported', visible(SHARED.justTeleported));
   // bHitSlopedWall is a declared Pawn bool (Pawn.uc, "used by Physics"): the
   // +0x318 word's 0x20 bit (script-runtime.mjs Flags318, the walking oracle's
   // case field). One storage for the Rust loop and this reference.
-  bind('hitSlopedWall', 'bHitSlopedWall', Boolean, Boolean);
+  bind('hitSlopedWall', 'bHitSlopedWall', 'bool');
   // Zone-derived fields read through the actor's stored Region.Zone — the same
   // field the original physics reads after every SetActorZone update.
-  Object.defineProperty(pawn, 'gravity', { get: () => (zone().ZoneGravity ?? [0, 0, -950]).map(f), enumerable: true });
-  Object.defineProperty(pawn, 'zoneVelocity', { get: () => (zone().ZoneVelocity ?? [0, 0, 0]).map(f), enumerable: true });
-  Object.defineProperty(pawn, 'terminalVelocity', { get: () => f(zone().ZoneTerminalVelocity ?? 2500), enumerable: true });
-  Object.defineProperty(pawn, 'friction', { get: () => f(zone().ZoneGroundFriction ?? 8), enumerable: true });
+  Object.defineProperty(pawn, 'gravity', visible(SHARED.gravity));
+  Object.defineProperty(pawn, 'zoneVelocity', visible(SHARED.zoneVelocity));
+  Object.defineProperty(pawn, 'terminalVelocity', visible(SHARED.terminalVelocity));
+  Object.defineProperty(pawn, 'friction', visible(SHARED.friction));
   // 1.2 is Engine.u's serialized ZoneInfo default, for zones read from values.
-  Object.defineProperty(pawn, 'fluidFriction', { get: () => f(zone().ZoneFluidFriction ?? 1.2), enumerable: true });
-  Object.defineProperty(pawn, 'zoneGravityZ', { get: () => pawn.gravity[2], enumerable: true });
+  Object.defineProperty(pawn, 'fluidFriction', visible(SHARED.fluidFriction));
+  Object.defineProperty(pawn, 'zoneGravityZ', visible(SHARED.zoneGravityZ));
   // Swimming reads bWaterZone (ZoneInfo+0x388 bit 0) of Region.Zone and
   // HeadRegion.Zone as MoveActor's SetActorZone left them, and of the
   // UModel::PointRegion zone at a findWaterLine midpoint; physFalling's
   // water-zone guard reads Region and FootRegion (docs/swimming.md). Derived
   // reads, not script fields: not enumerable, like `surfaceScan` below.
   const water = z => Boolean(z && services.zoneFields(z).bWaterZone);
-  Object.defineProperty(pawn, 'regionWater', { get: () => water(pawn.region.zone) });
-  Object.defineProperty(pawn, 'headWater', { get: () => water(pawn.headRegion.zone) });
-  Object.defineProperty(pawn, 'footWater', { get: () => water(pawn.footRegion.zone) });
+  access.water = water;
+  Object.defineProperty(pawn, 'regionWater', SHARED.regionWater);
+  Object.defineProperty(pawn, 'headWater', SHARED.headWater);
+  Object.defineProperty(pawn, 'footWater', SHARED.footWater);
   // physFalling's PlayerPawn foot-water integration (0x103d1086) damps with
   // FootRegion.Zone->ZoneFluidFriction; it is read only while footWater holds.
-  Object.defineProperty(pawn, 'footFluidFriction', { get: () => f(services.zoneFields(pawn.footRegion.zone).ZoneFluidFriction ?? 1.2) });
+  Object.defineProperty(pawn, 'footFluidFriction', SHARED.footFluidFriction);
   Object.defineProperty(pawn, 'waterAt', { value: position => water(level.pointRegion(position.map(f)).zone) });
 
   // The original collision-hash entries, Touching slots and IsBlockedBy bits
