@@ -106,10 +106,13 @@ const natives = new Map([[1200,gcIntersect],
 [1295,gcClearZ]]);
 const pack = c=>['r','g','b','a'].reduce((n,k,i)=>n|((c?.[`core.object.color.${k}`]??0)&255)<<(8*i),0)>>>0;
 const unpack = n=>Object.fromEntries(['r','g','b','a'].map((k,i)=>[`core.object.color.${k}`,(n>>>(8*i))&255]));
+const setOut=(raw,i,v)=>{if(raw[i]?.reference)raw[i].set(v);};
 export function dispatchGcNative(heap,services,call) {
  const fn=natives.get(call.index);if(!fn)return {handled:false};
- const raw=Array.from({length:call.argumentCount},(_,i)=>call.evaluateArgument(i));
- const a=raw.map(refValue),set=(i,v)=>{if(raw[i]?.reference)raw[i].set(v);};
+ // (plain loops: the HUD runs a few hundred of these a frame, each was a {length} object, a closure and two arrays more)
+ const count=call.argumentCount,raw=new Array(count),a=new Array(count);
+ for(let i=0;i<count;i++)raw[i]=call.evaluateArgument(i);
+ for(let i=0;i<count;i++)a[i]=refValue(raw[i]);
  let value;
  switch(call.index){
   case 1210:case 1214:case 1216:case 1218:case 1220:case 1247:case 1258:case 1260:a[0]=a[0]?1:0;break;
@@ -130,10 +133,10 @@ export function dispatchGcNative(heap,services,call) {
  }
  // execGetTextExtent (0x1002c020) passes its two out params to the method as
  // the X and Y extent pointers, in declaration order.
- if(call.index===1280){value=fn(call.receiver,a[0],a[3],services);set(1,value.xExtent);set(2,value.yExtent);value=undefined;}
- else if(call.index===1231||call.index===1241){set(0,unpack(fn(call.receiver,services)));}
- else if(call.index===1246){const r=fn(call.receiver,services);set(0,heap.objectAt(r.normalFont));set(1,heap.objectAt(r.boldFont));}
- else if(call.index===1257){const r=fn(call.receiver,services);set(0,r.hAlign);set(1,r.vAlign);}
+ if(call.index===1280){value=fn(call.receiver,a[0],a[3],services);setOut(raw,1,value.xExtent);setOut(raw,2,value.yExtent);value=undefined;}
+ else if(call.index===1231||call.index===1241){setOut(raw,0,unpack(fn(call.receiver,services)));}
+ else if(call.index===1246){const r=fn(call.receiver,services);setOut(raw,0,heap.objectAt(r.normalFont));setOut(raw,1,heap.objectAt(r.boldFont));}
+ else if(call.index===1257){const r=fn(call.receiver,services);setOut(raw,0,r.hAlign);setOut(raw,1,r.vAlign);}
  else {
   if(call.index>=1282&&call.index<=1287){
    const count=call.index===1283?2:call.index===1282?4:call.index===1287?8:call.index===1286?7:6;

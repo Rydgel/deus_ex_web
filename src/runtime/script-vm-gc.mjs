@@ -15,7 +15,7 @@
  * the heap's used bytes and the depth are compared.
  */
 import {runGcNative} from './script-window-gc-dispatch.mjs';
-import {drawTileCommand} from './script-gc-draw-model.mjs';
+import {drawTileCommand, transientTileCommand} from './script-gc-draw-model.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';
 import {gcPopGC} from './script-gc-pop-gc.mjs';
 import {NativeHeapError} from './script-native-heap.mjs';
@@ -153,7 +153,13 @@ export class GcHost {
         }
         return this.heap.addressOf(object) >>> 0;
       },
-      js_gc_tile: (slot, canvas) => this.call(slot, canvas, drawTileCommand(tileFields(this.tile()))),
+      js_gc_tile: (slot, canvas) => {
+        // The window host's callVirtual reads the block at the call (`transientPayloads`): the words go straight into one reused block.
+        if (this.services.transientPayloads !== true) return this.call(slot, canvas, drawTileCommand(tileFields(this.tile())));
+        const view = this.vm.arena.view, at = this.tileAt, word = i => view.getUint32(at + 4 * i, true);
+        return this.call(slot, canvas, transientTileCommand(word(0), word(1), word(2), word(3), word(4), word(5), word(6), word(7), word(8), word(9),
+          word(10), word(11), word(12), word(13), word(14)));
+      },
       js_gc_native: (index, handle) => { runGcNative(index, vm.identity(handle), this.args(index), this.services); },
       js_gc_verify: (index, handle, base) => this.verify(index, vm.identity(handle), base),
     };

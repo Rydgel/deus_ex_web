@@ -20,13 +20,13 @@ export function textDraw(W,win,gc){
  gcEnableWordWrap(gc,W.u32(win,0x150)&1,s);
  W.processScript(win,'DrawWindow',[gc]);
  const x=W.f32(win,0x154),y=W.f32(win,0x158);
- gcDrawText(gc,...[x,y,W.f32(win,O.width)-2*x,W.f32(win,O.height)-2*y].map(f32Bits),W.heap.read(win,0x168,'string'),s);
+ gcDrawText(gc,f32Bits(x),f32Bits(y),f32Bits(W.f32(win,O.width)-2*x),f32Bits(W.f32(win,O.height)-2*y),W.heap.read(win,0x168,'string'),s);
 }
 /** XButtonWindow::Draw 0x100082c0. */
 export function buttonDraw(W,win,gc){
  const s=W.gc.services;
  gcSetTileColor(gc,W.u32(win,0x188),s);gcSetTextColor(gc,W.u32(win,0x18c),s);
- gcDrawPattern(gc,...[0,0,W.f32(win,O.width),W.f32(win,O.height),0,0].map(f32Bits),W.u32(win,0x184),s);
+ gcDrawPattern(gc,f32Bits(0),f32Bits(0),f32Bits(W.f32(win,O.width)),f32Bits(W.f32(win,O.height)),f32Bits(0),f32Bits(0),W.u32(win,0x184),s);
  textDraw(W,win,gc);
 }
 /** The GC bodies XCheckboxWindow::Draw calls; a check may record them instead. */
