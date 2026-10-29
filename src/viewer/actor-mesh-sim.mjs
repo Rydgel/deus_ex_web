@@ -839,6 +839,13 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         }
         if(at>=0?u32[at+MB.MESH]!==meshHandle:own.Mesh()!==meshReference)
           throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
+        return updateDrawn(view,record,at,u32,f32,verify);
+      },
+      summary};
+    // The rest of a main-frame update, for a binding the frame draws. The closures below (the LOD choice, the lighting passes) make a
+    // function that holds them allocate a context object whenever it is entered (scripts/closure-context-scan.mjs), and the
+    // checks before this point turn most bindings away: they are in `update`, which makes none.
+    function updateDrawn(view,record,at,u32,f32,verify){
         record.visible=true;record.childOnly=childOnly;drawnMain=!childOnly;
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
@@ -1022,7 +1029,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         summary.animation=own.AnimSequence();summary.frame=own.AnimFrame();
         record.changed=poseChanged;
         return record;
-      },summary};
+    }
     return binding;
   } catch(error) {dispose();throw error;}
 }
@@ -1127,6 +1134,11 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     if(!mesh||(mesh.kind!=='LodMesh'&&mesh.kind!=='Mesh')||!read(actor,'Location'))return;
     // A map with mirrors also admits actors only its child frames draw.
     if(!drawnInWorld(actor)&&!(childFrames&&drawnInWorld(actor,null,true)))return;
+    admitNew(actor,mesh);
+  };
+  // admit's creation of the binding, apart from its checks: the closures below make a function that holds them allocate a context object
+  // whenever it is entered (scripts/closure-context-scan.mjs), and admit turns back nearly every actor of every update.
+  const admitNew=(actor,mesh)=>{
     const npc=retired.get(actor)??false;retired.delete(actor);
     const options={id:nextId++,kernel,lighting,layout,textures,lod,originalObjectIndex:synthetic++,visible:drawnInWorld,
       childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,reads:true};
@@ -1172,20 +1184,29 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const epoch=actorsEpoch();
     if(epoch!==liveEpoch||!live){
       live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
-      levelIndex=new Map();level.actors.forEach((actor,i)=>{if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);});
-      const next=new Map();
-      meshReaders=liveList.map(actor=>{
-        if(!actor)return null;
-        const reader=meshAccessors.get(actor)??fieldAccessor(runtime,actor,'Mesh');
-        next.set(actor,reader);return reader;
-      });
-      meshAccessors.clear();for(const [actor,reader] of next)meshAccessors.set(actor,reader);
+      levelIndex=new Map();
+      for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
+      // (the accessors of the actors still in the level are kept in place, and those of the others dropped: a second Map of all of
+      // them, and the first one filled again, was about 600 KB each time the level's actors change)
+      meshReaders=new Array(liveList.length);
+      for(let i=0;i<liveList.length;i++){
+        const actor=liveList[i];
+        if(!actor){meshReaders[i]=null;continue;}
+        let reader=meshAccessors.get(actor);
+        if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+        meshReaders[i]=reader;
+      }
+      for(const actor of meshAccessors.keys())if(!live.has(actor))meshAccessors.delete(actor);
     }
-    for(const [actor,binding] of bindings){
-      if(!live.has(actor))retire(actor,binding);
+    // (`actors` holds the bindings in the order `bindings` does, both appended together and removed together by retire; a retired
+    // binding leaves the list, so the index stays where it is)
+    for(let i=0;i<actors.length;){
+      const binding=actors[i],actor=binding.actor;
+      if(!live.has(actor)){retire(actor,binding);continue;}
       // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
       // mesh is admitted like a newly visible actor (admit).
-      else if(binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);}
+      if(binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);continue;}
+      i++;
     }
     // The render scan (script-vm-render.mjs) leaves the actors with a live
     // Mesh, and those it hands back; admit returns at once for the others.
@@ -1338,10 +1359,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     if(!render.meshReads(pairs,count,{player,behind,viewTarget}))return null;
     // Typed views of the arena's current buffer: a memory growth during an
     // update (the GPU plan, the light selection) replaces it.
-    let buffer=null,u32=null,f32=null;
+    // (one object, its arrays replaced with the buffer: callers read both at once and keep neither)
+    let buffer=null;
+    const current={u32:null,f32:null};
     const views=()=>{
-      if(arena.memory.buffer!==buffer){buffer=arena.memory.buffer;u32=new Uint32Array(buffer);f32=new Float32Array(buffer);}
-      return {u32,f32};
+      if(arena.memory.buffer!==buffer){buffer=arena.memory.buffer;current.u32=new Uint32Array(buffer);current.f32=new Float32Array(buffer);}
+      return current;
     };
     return {views,verify:renderScanMode()==='verify'};
   };
@@ -1376,7 +1399,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
         // The pawns' lighting makes the weapons' SetupForActor calls in the original's order (actor-weapon-sim.mjs interleave).
         view=weapons.interleave(view);
-        for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
+        // (one view for every binding: the bindings read it and change none of it)
+        const bindingView=reads?{...view,reads}:view;
+        for(let i=0;i<actors.length;i++)records.push(actors[i].update(bindingView));
         drawItems(view.items??[],view,records);
         drawExtras(view,records);
         weapons.update(actors,view,records);

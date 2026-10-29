@@ -110,16 +110,25 @@ export function laserCurrentItem(state, ownerLocation, frand) {
 }
 
 const BEAM = name => `deusex.laseriterator.sbeam.${name}`;
+// (the beam keys made once: a template string for each of five fields of each beam of each iterator each frame)
+const BEAM_ACTIVE = BEAM('bactive'), BEAM_LOCATION = BEAM('location'), BEAM_ROTATION = BEAM('rotation'), BEAM_LENGTH = BEAM('length'),
+  BEAM_NUMSEGMENTS = BEAM('numsegments');
+const float3 = v => [Math.fround(v[0]), Math.fround(v[1]), Math.fround(v[2])];
+const int3 = v => [v[0] | 0, v[1] | 0, v[2] | 0];
 
 function readLaserState(runtime, iterator, proxy) {
-  const read = name => runtime.readNamed(iterator, name);
+  const raw = runtime.readNamed(iterator, 'Beams'), beams = new Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    const b = raw[i];
+    beams[i] = { active: Boolean(b[BEAM_ACTIVE]), location: float3(b[BEAM_LOCATION]), rotation: int3(b[BEAM_ROTATION]),
+      length: Math.fround(b[BEAM_LENGTH]), numSegments: b[BEAM_NUMSEGMENTS] | 0 };
+  }
   return {
-    beams: read('Beams').map(b => ({ active: Boolean(b[BEAM('bactive')]), location: [...b[BEAM('location')]].map(Math.fround),
-      rotation: [...b[BEAM('rotation')]].map(v => v | 0), length: Math.fround(b[BEAM('length')]), numSegments: b[BEAM('numsegments')] | 0 })),
-    index: read('Index') | 0, maxItems: read('MaxItems') | 0,
-    prevLoc: [...read('prevLoc')].map(Math.fround), prevRand: [...read('prevRand')].map(Math.fround),
-    savedLoc: [...read('savedLoc')].map(Math.fround), savedRot: [...read('savedRot')].map(v => v | 0),
-    nextItem: read('nextItem') | 0, randomBeam: Boolean(read('bRandomBeam')), hasProxy: Boolean(proxy),
+    beams,
+    index: runtime.readNamed(iterator, 'Index') | 0, maxItems: runtime.readNamed(iterator, 'MaxItems') | 0,
+    prevLoc: float3(runtime.readNamed(iterator, 'prevLoc')), prevRand: float3(runtime.readNamed(iterator, 'prevRand')),
+    savedLoc: float3(runtime.readNamed(iterator, 'savedLoc')), savedRot: int3(runtime.readNamed(iterator, 'savedRot')),
+    nextItem: runtime.readNamed(iterator, 'nextItem') | 0, randomBeam: Boolean(runtime.readNamed(iterator, 'bRandomBeam')), hasProxy: Boolean(proxy),
   };
 }
 

@@ -380,6 +380,8 @@ const NATIVE_EVENT_BODIES=Object.freeze({
 });
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
+// (the native graph slots among them, which soundField reads reflected first)
+const SOUND_GRAPH_FIELDS=new Set(['DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
 /** The script process's class loader (script-process.mjs). Its services read the level attached now through `shared.runtime`; they
  * are made here, outside a runtime's constructor, so that their closures keep no runtime alive (a closure made in the constructor
@@ -2337,15 +2339,12 @@ export class ScriptRuntime {
       const object=instance.nativeObject;
       return object?object.index:null;
     }
-    const reflected=name=>{
-      try{return this.readNamed(actor,name);}
-      catch(error){return undefined;}
-    };
+    // (a method, not a closure over `actor`: the closure would make every call allocate a context object on entry)
     // An ordinary reflected property (LightType on every actor in
     // AIGetLightLevel's scan) needs none of the level-graph cases below;
     // levelFor is a pure lookup, so skipping it changes no result.
     if(!SOUND_LEVEL_FIELDS.has(name)){
-      const value=reflected(name);
+      const value=this.reflectedField(actor,name);
       if(value===undefined)throw new Error(`Original sound field is not linked: ${name}`);
       return value;
     }
@@ -2367,9 +2366,9 @@ export class ScriptRuntime {
       if(value===undefined)throw new Error('Original noise field is not linked: TimeSeconds');
       return typeof value==='function'?value():value;
     }
-    if(['DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor'].includes(name)){
+    if(SOUND_GRAPH_FIELDS.has(name)){
       // Native graph slots; the level container carries the established ones.
-      const graph=reflected(name);
+      const graph=this.reflectedField(actor,name);
       if(graph!==undefined)return graph;
       if(name==='DemoRecDriver')return level?.demoRecDriver??null;
       if(name==='Model')return level?.model??null;
@@ -2382,9 +2381,14 @@ export class ScriptRuntime {
       if(name==='Actor'&&level?.engine?.client?.viewports?.includes(actor))return actor.actor??null;
       throw new Error(`Original sound native graph field is not bound: ${name}`);
     }
-    const value=reflected(name);
+    const value=this.reflectedField(actor,name);
     if(value===undefined)throw new Error(`Original sound field is not linked: ${name}`);
     return value;
+  }
+  /** soundField's reflected read: the property's value, or undefined where it is not linked. */
+  reflectedField(actor,name) {
+    try{return this.readNamed(actor,name);}
+    catch(error){return undefined;}
   }
   /** UObject vtable +0x18 ProcessRemoteFunction for ProcessEvent's native
    * path: AActor's (0x103e5d90, process-remote-function.mjs) for actors, and
@@ -4507,8 +4511,8 @@ export class ScriptRuntime {
           actorOptions.set(type,options={...nativeServices,level,tickType:type});
           (this.levelTickActorOptions??=new WeakSet()).add(options);
         }
-        const run=()=>this.processActorTick(actor,delta,options);
-        return nativeServices.aroundActorTick?nativeServices.aroundActorTick(actor,run):run();
+        // (no closure per actor: aroundActorTick takes the arguments of the tick it wraps)
+        return nativeServices.aroundActorTick?nativeServices.aroundActorTick(actor,delta,options):this.processActorTick(actor,delta,options);
       },
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       resetInputProperties:actor=>this.resetActorInput(actor),

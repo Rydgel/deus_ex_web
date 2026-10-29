@@ -526,8 +526,24 @@ export async function createScriptDoors({
   // native lines the travel code adds ("Log: Browse: ..."), in the order they happen.
   const engineLog=[];
   const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);if(engineLog.length>8192)engineLog.splice(0,4096);};
+  // The canonical GObjObjects array BindEvents walks: the level's actors without the empty slots, read again after each candidate it binds
+  // (a BindEvents of a map's conversations is hundreds of calls in one frame, each a copy of the whole list). The array of the last
+  // call is returned again while the actors are the ones it holds, in the same order; a change makes a new array, so the one a caller
+  // is walking never changes under it.
+  let conversationList = [];
+  const conversationActors = () => {
+    const actors = level.actors;
+    let count = 0;
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (!actor) continue;
+      if (conversationList[count] !== actor) return conversationList = actors.filter(Boolean);
+      count++;
+    }
+    return count === conversationList.length ? conversationList : conversationList = actors.filter(Boolean);
+  };
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true, process,
-    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
+    conversationObjects:conversationActors,boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });
   // LoadMap startup (Mover.BeginPlay's Move/SetRotation) and Login already
   // move actors and cross zones. Bind the scene's event, rider, map-rotation
@@ -1461,6 +1477,8 @@ export async function createScriptDoors({
     return level.zoneLastRenderTimes?.[region?.['engine.actor.pointregion.zonenumber']];
   };
   let tickBoundary = null, lastTickDelta = 0;
+  // One Actor.Tick of the level's scheduler (aroundActorTick, below): a function made once, called with the tick's arguments.
+  const tickActorBody = (actor, delta, options) => runtime.processActorTick(actor, delta, options);
   const npcTickOptions = {
     allocateDeferredActor: () => ({}),
     readInput: (viewport, delta) => {
@@ -1495,9 +1513,9 @@ export async function createScriptDoors({
       if (!aiEvents?.active) throw new Error('Level.Tick EventManager.Tick is not linked');
       aiEvents.tick();
     },
-    aroundActorTick: (actor, run) => {
+    aroundActorTick: (actor, delta, options) => {
       const from = level.actors.length;
-      try { return liveConPlay.withLifecycle(run); }
+      try { return liveConPlay.withLifecycle(tickActorBody, actor, delta, options); }
       catch (error) { npcFailures.set(actor, String(error?.message ?? error)); throw error; }
       finally { collectSpawned(from); }
     },
@@ -2464,7 +2482,7 @@ export async function createScriptDoors({
     player:playerActor,windowHost,spawnWorldPrepared:true,
     onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
   const nativeWindowFacade={get root(){return windowHost.root;},get hud(){return windowHost.hud;},
-    withLifecycle:fn=>fn(),readNative:windowHost.raw.read,isDestroyed:windowHost.isDestroyed};
+    withLifecycle:(fn,a,b,c)=>fn(a,b,c),readNative:windowHost.raw.read,isDestroyed:windowHost.isDestroyed};
 
   // Prepare the live face-to-face (ConPlay) conversations the map's
   // conversation-owning pawns can invoke, so a frobbed instructor runs the real

@@ -24,14 +24,25 @@ function transform(v,coords,point) {
 const compose=(coords,matrix)=>coords.map((v,i)=>transform(v,matrix,i===0));
 /** Core's FCoords *= FCoords (docs/weapon-attachment.md): `coords` (Origin, X, Y, Z) seen through `matrix`. */
 export const composeCoords=compose;
-function rotate(coords,rotation) {
-  const [p,y,r]=rotation,s=rotatorSin,c=a=>s((a+0x4000)|0);
-  for(const rows of [
-    [[c(y),s(y),0],[-s(y),c(y),0],[0,0,1]],
-    [[c(p),0,s(p)],[0,1,0],[-s(p),0,c(p)]],
-    [[1,0,0],[0,c(r),-s(r)],[0,s(r),c(r)]],
-  ])coords=compose(coords,[[0,0,0],...rows]);
-  return coords;
+// The matrix being built, as 12 doubles (Origin, X, Y, Z axes): GetFrame's coordinate setup runs for every actor the frame lights and
+// plans, and its rotations were nested arrays and closures for each of the eleven transforms (about 50 arrays a rotate).
+const stage=new Float64Array(12);
+const dot=(l0,l1,l2,a,b,c)=>f(f(f(l0*f(a))+f(l1*f(b)))+f(l2*f(c)));
+/** `compose(coords, [[0,0,0], a, b, c])` on `m` in place, `transform` above with a zero origin: each of the four rows seen through the
+ * matrix of rows a, b, c (the point row's origin subtraction is `f(f(v)-f(0))`, which is `f(v)`, as for the vectors). */
+function applyRows(m,a0,a1,a2,b0,b1,b2,c0,c1,c2) {
+  for(let i=0;i<12;i+=3){
+    const l0=f(m[i]),l1=f(m[i+1]),l2=f(m[i+2]);
+    m[i]=dot(l0,l1,l2,a0,a1,a2);m[i+1]=dot(l0,l1,l2,b0,b1,b2);m[i+2]=dot(l0,l1,l2,c0,c1,c2);
+  }
+}
+/** The yaw, pitch and roll rotations of `m`, in that order. */
+function rotate(m,rotation) {
+  const p=rotation[0],y=rotation[1],r=rotation[2],s=rotatorSin;
+  const sy=s(y),cy=s((y+0x4000)|0),sp=s(p),cp=s((p+0x4000)|0),sr=s(r),cr=s((r+0x4000)|0);
+  applyRows(m,cy,sy,0,-sy,cy,0,0,0,1);
+  applyRows(m,cp,0,sp,0,1,0,-sp,0,cp);
+  applyRows(m,1,0,0,0,cr,-sr,0,sr,cr);
 }
 const read=(services,actor,name)=>{
   const value=services.read(actor,name);
@@ -92,18 +103,19 @@ const vectorAt=(array,index)=>Array.from(array.subarray(index*3,index*3+3));
  * the zero-shear pass and the mesh Scale times DrawScale. `value(name)`
  * reads the actor's Location, PrePivot and Rotation in the original order. */
 export function lodMeshFrameMatrix(mesh,coords,scaleFactor,value) {
-  let matrix=[0,1,2,3].map(i=>coords.slice(i*3,i*3+3).map(f));
-  const scale=mesh.scale.map(v=>f(f(v)*f(scaleFactor)));
+  const factor=f(scaleFactor),s0=f(f(mesh.scale[0])*factor),s1=f(f(mesh.scale[1])*factor),s2=f(f(mesh.scale[2])*factor);
   // A zero scale (a ShockRing's first frame) runs the original arithmetic: Core's
   // FScale divides the origin by it (0x1011c39d), so the points are NaN and
   // DrawLodMesh's sign-bit outcodes draw nothing (docs/script-lodmesh-frame.md
   // "A zero DrawScale"). A nonfinite scale stays unsupported.
-  if(scale.some(v=>!Number.isFinite(v)))throw new LodMeshError(`GetFrame nonfinite scale is unsupported (${mesh.entry?.name??mesh.name??'mesh'} x ${scaleFactor})`);
-  const location=value('Location'),prePivot=value('PrePivot');
-  matrix[0]=matrix[0].map((v,i)=>f(f(v)-f(f(location[i])+f(prePivot[i]))));
-  matrix=rotate(rotate(matrix,value('Rotation')),mesh.rotation);
-  matrix=compose(matrix,identity()); // Core FScale's zero-shear pass.
-  return matrix.map((v,row)=>v.map((x,i)=>row?f(f(x)*scale[i]):f(f(x)/scale[i])));
+  if(!Number.isFinite(s0)||!Number.isFinite(s1)||!Number.isFinite(s2))throw new LodMeshError(`GetFrame nonfinite scale is unsupported (${mesh.entry?.name??mesh.name??'mesh'} x ${scaleFactor})`);
+  const location=value('Location'),prePivot=value('PrePivot'),rotation=value('Rotation');
+  const m=stage;
+  for(let i=0;i<12;i++)m[i]=f(coords[i]);
+  for(let i=0;i<3;i++)m[i]=f(m[i]-f(f(location[i])+f(prePivot[i])));
+  rotate(m,rotation);rotate(m,mesh.rotation);
+  applyRows(m,1,0,0,0,1,0,0,0,1); // Core FScale's zero-shear pass.
+  return [[f(m[0]/s0),f(m[1]/s1),f(m[2]/s2)],[f(m[3]*s0),f(m[4]*s1),f(m[5]*s2)],[f(m[6]*s0),f(m[7]*s1),f(m[8]*s2)],[f(m[9]*s0),f(m[10]*s1),f(m[11]*s2)]];
 }
 
 /** The vertex loops of GetFrame for one coordinate matrix and output buffer:

@@ -528,6 +528,31 @@ fn start(a: &Actor, time_seconds: f64, tick_tag: u32) -> Option<Start> {
     Some(Start::Tick)
 }
 
+/// The arguments of the next `tick_record`, written by the host (docs/live-heap.md "Cut: tick and actors"): a double or a u32 above
+/// the small-integer range that an argument list carries is a heap number the caller makes for each call, so the call carries none.
+/// Words: ctx, handle, base, mask_lo, mask_hi, flags, tick_type, tick_tag, events.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TickArgs {
+    seconds: f64,
+    time_seconds: f64,
+    words: [u32; 9],
+}
+static mut T_ARGS: TickArgs = TickArgs { seconds: 0.0, time_seconds: 0.0, words: [0; 9] };
+
+#[no_mangle]
+pub extern "C" fn tick_args_ptr() -> *mut u8 {
+    addr_of_mut!(T_ARGS) as *mut u8
+}
+
+/// tick_actor with its arguments read from T_ARGS (copied first: a callback's nested tick writes it again).
+#[no_mangle]
+pub extern "C" fn tick_record() -> i32 {
+    let a = unsafe { *addr_of!(T_ARGS) };
+    let w = a.words;
+    tick_actor(w[0], w[1], w[2], w[3], w[4], w[5], a.seconds, w[6], a.time_seconds, w[7], w[8])
+}
+
 /// tickStandaloneActor for one actor. Returns its result (0 or 1), DEFER
 /// (the host allocates the deferred node, then the result is 0) or HANDBACK.
 #[no_mangle]

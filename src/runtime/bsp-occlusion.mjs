@@ -321,6 +321,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       setHeader();
       return masterFrame(kernel, camera);
     },
+    /** The address meshRecord made for `key`, or undefined (the caller then has the fields made). */
+    meshRecordAt(key) { return meshRecords.get(key); },
     /** A mesh's record for Setup (UMesh::GetRenderBoundingBox's fields),
      * made once per `key`: `box` {min, max, valid} (BoundingBox), `boxes`
      * the BoundingBoxes array's bytes (28 per FBox), `scale`, `origin`

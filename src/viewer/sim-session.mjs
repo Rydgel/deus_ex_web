@@ -1285,10 +1285,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       try {
         const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors, requested,
           frames: inspect ? null : frames, rect });
-        const byId = new Map((actorScene?.all() ?? []).map(binding => [binding.id, binding]));
         // `actorPasses`: the page applies the actor layer's mirror pass
         // decisions (no runtime error); otherwise its last state draws.
         const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
+        const byId = new Map();
+        for (let i = 0; i < bindings.length; i++) byId.set(bindings[i].id, bindings[i]);
         // OccludeBsp's Frame->Sprite for the main frame (occludeMain); the
         // mirror and sky passes keep the frustum.
         const main = inspect ? null : current?.visibility?.main ?? null;

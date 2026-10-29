@@ -25,6 +25,14 @@ import {handCoords, weaponCoords, selectedCoords, specialOutcode} from '../runti
 
 const lower = value => String(value).toLowerCase();
 
+/** The child frames' LOD inputs for a weapon's own view: those the weapon was placed in, with the hand's coordinates there. A function of
+ * its own: the closures here, in the loop body of `update`, made every pawn's iteration allocate a context object
+ * (scripts/closure-context-scan.mjs). */
+function weaponLodFrames(lodFrames, entry, ids) {
+  return lodFrames.filter(entryFrame => entry.coords.has(entryFrame.index))
+    .map(entryFrame => ({ index: entryFrame.index, ids, frame: { ...entryFrame.frame, coords: entry.coords.get(entryFrame.index) } }));
+}
+
 export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRelease, nextIndex, errors, enabled = true, mirrors = true, interleave = true, layout = null}) {
   // `live` is a new Set for each update, not one cleared: the tables of a Set in old space are allocated in old space (docs/live-heap.md "Cut: promoted garbage")
   const entries = new Map(), owners = new Map(), pawnClass = new WeakMap(), noIds = new Set();
@@ -286,8 +294,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
           lightFrames.push(item);
         }
         wview.lodFrame = view.lodFrame ? { ...view.lodFrame, coords: entry.coords.get(null) ?? ok.at(-1).coords } : undefined;
-        wview.lodFrames = view.lodFrames ? view.lodFrames.filter(entryFrame => entry.coords.has(entryFrame.index))
-          .map(entryFrame => ({ index: entryFrame.index, ids, frame: { ...entryFrame.frame, coords: entry.coords.get(entryFrame.index) } })) : undefined;
+        wview.lodFrames = view.lodFrames ? weaponLodFrames(view.lodFrames, entry, ids) : undefined;
         const record = entry.weaponBinding.update(wview);
         entry.cur ^= 1; entry.lastRecord = record; entry.lastView = view; entry.lastLocation = location;
         records.push(record);

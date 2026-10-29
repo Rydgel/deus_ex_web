@@ -65,10 +65,12 @@ export class LocomotionHost {
   /** Fill the table's missing entries from the registry when it changed.
    * An added entry recomputes every class row's locomotion word. */
   table() {
-    if (this.complete) return;
-    const version = fieldImageCellVersion();
-    if (this.tableVersion === version) return;
-    this.tableVersion = version;
+    if (!this.complete && this.tableVersion !== fieldImageCellVersion()) this.fillTable();
+  }
+  /** table()'s slow path, a function of its own: the closure below would make table() allocate a context object on every call
+   * (scripts/closure-context-scan.mjs), and it runs for every actor of every tick. */
+  fillTable() {
+    this.tableVersion = fieldImageCellVersion();
     const view = this.vm.arena.view, expected = this.expected ??= LOCO_FIELDS.map(() => null);
     let added = false;
     LOCO_FIELDS.forEach(([, key, kind], index) => {
