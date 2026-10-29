@@ -1,9 +1,25 @@
 import {readObject} from '../unreal/objects.mjs';
 import {readScriptArrayValue} from './script-struct-values.mjs';
+import {defaultsSnapshot} from './class-defaults-snapshot.mjs';
 
 /** The standalone map linker's ContextFlags word (+0xa0): GIsClient|GIsServer,
  * the same value script-load-graph.mjs installs on every game linker. */
 const STANDALONE_CONTEXT_FLAGS = 0x00030000;
+
+/** The elements a map authors of one property by array index, as the Map it replaces (get, has, set, values and entries in insertion
+ * order) with the first element inline: nearly every property has one, and the Island's 1,752 authored actors held 25,000 Maps. */
+class AuthoredElements {
+  constructor(index, value) { this.index = index; this.value = value; this.rest = null; }
+  get(index) { return index === this.index ? this.value : this.rest?.get(index); }
+  has(index) { return index === this.index || (this.rest?.has(index) ?? false); }
+  set(index, value) {
+    if (index === this.index) this.value = value;
+    else (this.rest ??= new Map()).set(index, value);
+  }
+  *entries() { yield [this.index, this.value]; if (this.rest !== null) yield* this.rest; }
+  *values() { yield this.value; if (this.rest !== null) yield* this.rest.values(); }
+  [Symbol.iterator]() { return this.entries(); }
+}
 
 /**
  * The two admission gates `ULinkerLoad::CreateExport` applies before an export
@@ -88,10 +104,11 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
     // (12_Vandenberg_Computer's FlagTrigger0.FlagName `Heliosborn` is DeusExConText's `HeliosBorn`: unreal/name-spelling.mjs). decodeMap reads its own copy of
     // the package, which no table spells.
     else if (property.type === 6 && runtime.nameSpelling) value=runtime.nameSpelling.spell(value);
-    if (!authored.has(field.key)) { authored.set(field.key, new Map()); authoredFields.push(field); }
-    authored.get(field.key).set(property.arrayIndex, value);
+    const elements = authored.get(field.key);
+    if (elements === undefined) { authored.set(field.key, new AuthoredElements(property.arrayIndex, value)); authoredFields.push(field); }
+    else elements.set(property.arrayIndex, value);
   }
-  const snapshot = new Map(cls.defaults);
+  const snapshot = defaultsSnapshot(cls);
   // The initial value of one field: its authored elements over the class
   // defaults. `authoredFields` lists the fields the map authors.
   return Object.assign(field => {
