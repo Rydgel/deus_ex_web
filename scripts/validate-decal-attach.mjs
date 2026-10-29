@@ -107,7 +107,7 @@ for (const [index, scenario] of cases.request.scenarios.entries()) {
   const movers = new Map(Object.entries(scenario.surfaceActors ?? {})
     .filter(([, actor]) => /mover/i.test(actor.class)).map(([k, actor]) => [Number(k), actor.rotation ?? [0, 0, 0]]));
   const decalModel = uploadDecalModel(kernel, model, { surfaceFlags,
-    isMover: s => movers.get(s) ?? (model.surfaces[s]?.dynamic ? moverRotation(model.surfaces[s].mover) : null) });
+    isMover: s => movers.get(s) ?? (model.surfaces.at(s)?.dynamic ? moverRotation(model.surfaces.at(s).mover) : null) });
   const store = createDecalStore(kernel, decalModel, { capacity: 4 });
   const actors = new Map(), textures = new Map(), touched = new Set();
   const actorOf = name => {

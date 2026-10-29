@@ -54,35 +54,40 @@ function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => f
   const nodes = model.nodes, surfaces = model.surfaces;
   // UModel::PostLoad's Surf.Nodes, at load: a tracked model's fragments
   // (past `originalNodes`) are not in any surface's list.
-  const surfNodes = surfaces.map(() => []), original = model.originalNodes ?? nodes.length;
-  nodes.forEach((node, k) => { if (k < original && surfNodes[node.surface]) surfNodes[node.surface].push(k); });
+  // Counting sort of the nodes by surface: each surface's nodes ascending, in one list.
+  const original = model.originalNodes ?? nodes.length, surfaceCount = surfaces.length, listStart = new Int32Array(surfaceCount + 1);
+  for (let k = 0; k < original; k++) { const surface = nodes.surface(k); if (surface >= 0 && surface < surfaceCount) listStart[surface + 1]++; }
+  for (let i = 0; i < surfaceCount; i++) listStart[i + 1] += listStart[i];
+  const surfNodes = new Int32Array(listStart[surfaceCount]), filled = listStart.slice(0, surfaceCount);
+  for (let k = 0; k < original; k++) { const surface = nodes.surface(k); if (surface >= 0 && surface < surfaceCount) surfNodes[filled[surface]++] = k; }
   const trace = traceModelLayout(model);
   if (!trace) throw new Error('The decal model needs a traceable BSP');
   const points = Math.max(pointCapacity, model.points.length);
   const nodeAt = 4 * HEADER_WORDS, vertAt = nodeAt + 4 * NODE_WORDS * nodes.length,
     pointAt = vertAt + 4 * model.vertices.length, vectorAt = pointAt + 12 * points,
     surfAt = vectorAt + 12 * model.vectors.length, listAt = surfAt + 4 * SURF_WORDS * surfaces.length,
-    listWords = surfNodes.reduce((total, list) => total + list.length, 0),
+    listWords = surfNodes.length,
     traceAt = (listAt + 4 * listWords + 15) & ~15, size = traceAt + trace.size;
   const base = kernel.alloc(size);
   const words = new Uint32Array(kernel.memory.buffer, base, (traceAt - 0) >>> 2);
   const header = [nodes.length, base + nodeAt, base + vertAt, base + pointAt, base + vectorAt, base + surfAt,
     base + listAt, base + traceAt, surfaces.length, model.vertices.length, model.points.length, model.vectors.length, listWords];
   words.set(header.map(v => v >>> 0), 0);
-  nodes.forEach((node, i) => words.set([node.vertexPool, node.surface, node.coplanar, node.vertexCount].map(v => v >>> 0),
-    (nodeAt >>> 2) + NODE_WORDS * i));
-  model.vertices.forEach((v, i) => { words[(vertAt >>> 2) + i] = v.point >>> 0; });
-  model.points.forEach((p, i) => words.set(p.map(f32Bits), (pointAt >>> 2) + 3 * i));
-  model.vectors.forEach((p, i) => words.set(p.map(f32Bits), (vectorAt >>> 2) + 3 * i));
-  let list = 0;
-  surfaces.forEach((surface, i) => {
-    const flags = surfaceFlags?.[i] ?? surface.flags;
-    const mover = isMover(i), rotation = Array.isArray(mover) ? mover : [0, 0, 0];
-    words.set([flags, surface.base, surface.normal, list, surfNodes[i].length, mover ? 1 : 0, ...rotation].map(v => v >>> 0),
-      (surfAt >>> 2) + SURF_WORDS * i);
-    words.set(surfNodes[i], (listAt >>> 2) + list);
-    list += surfNodes[i].length;
-  });
+  for (let i = 0; i < nodes.length; i++) {
+    const at = (nodeAt >>> 2) + NODE_WORDS * i;
+    words[at] = nodes.vertexPool(i) >>> 0; words[at + 1] = nodes.surface(i) >>> 0; words[at + 2] = nodes.coplanar(i) >>> 0; words[at + 3] = nodes.vertexCount(i);
+  }
+  for (let i = 0; i < model.vertices.length; i++) words[(vertAt >>> 2) + i] = model.vertices.point(i) >>> 0;
+  // A float32 vector's words are f32Bits of each component.
+  const floatWords = table => new Uint32Array(table.data.buffer, table.data.byteOffset, table.data.length);
+  words.set(floatWords(model.points), pointAt >>> 2);
+  words.set(floatWords(model.vectors), vectorAt >>> 2);
+  words.set(surfNodes, listAt >>> 2);
+  for (let i = 0; i < surfaceCount; i++) {
+    const flags = surfaceFlags?.[i] ?? surfaces.flags(i);
+    const mover = isMover(i), rotation = Array.isArray(mover) ? mover : [0, 0, 0], at = (surfAt >>> 2) + SURF_WORDS * i;
+    words.set([flags, surfaces.base(i), surfaces.normal(i), listStart[i], listStart[i + 1] - listStart[i], mover ? 1 : 0, ...rotation].map(v => v >>> 0), at);
+  }
   trace.write(kernel.memory.buffer, base + traceAt);
   return { base, points, surfAt };
 }

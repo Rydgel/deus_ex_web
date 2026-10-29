@@ -6,6 +6,7 @@
  * IteratorNext boundary.
  */
 import { fastLineCheck } from './fast-line-check.mjs';
+import { NodeAccess } from '../unreal/bsp-model.mjs';
 
 const isReference = value => Boolean(value?.reference && typeof value.set === 'function');
 export const refValue = value => value?.reference ? value.get() : value;
@@ -236,16 +237,15 @@ export function createTraceTextureIterator({
         // The Level->Model the trace read (level-queries.mjs worldModel): with the moving brush tracker a fragment's
         // iSurf is the tracker's FBspSurf, with its polygon's PolyFlags and texture.
         const model = level.hash?.worldModel?.() ?? level.model, surfaceTexture = model.surfaceTexture ?? level.surfaceTexture;
-        if (!Array.isArray(model?.nodes))
+        if (!(model?.nodes instanceof NodeAccess))
           throw new TypeError('TraceTexture world hit requires the level BSP model');
-        const node = model.nodes[hit.item];
-        if (!node) throw new Error(`TraceTexture hit item is not a valid BSP node: ${String(hit.item)}`);
-        const surface = model.surfaces[node.surface];
-        if (!surface) throw new Error(`TraceTexture node references an invalid surface: ${String(node.surface)}`);
-        flags = surface.flags | 0;
+        if (!model.nodes.has(hit.item)) throw new Error(`TraceTexture hit item is not a valid BSP node: ${String(hit.item)}`);
+        const nodeSurface = model.nodes.surface(hit.item);
+        if (!(nodeSurface >= 0 && nodeSurface < model.surfaces.length)) throw new Error(`TraceTexture node references an invalid surface: ${String(nodeSurface)}`);
+        flags = model.surfaces.flags(nodeSurface) | 0;
         if (!Array.isArray(surfaceTexture))
           throw new TypeError('TraceTexture requires the level surface texture table');
-        const texture = surfaceTexture[node.surface];
+        const texture = surfaceTexture[nodeSurface];
         if (texture) {
           name = texture.name;
           if (texture.outerName != null) group = texture.outerName;

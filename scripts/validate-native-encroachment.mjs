@@ -6,6 +6,7 @@ import path from 'node:path';
 import {brushCollisionBounds,primitiveCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {loadTraceKernel} from '../src/runtime/trace-kernel.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 const kernel=await loadTraceKernel(); // the Rust twin of a brush's world box answers when loaded (TRACE_KERNEL=js: the reference)
 const f=Math.fround,reuse=process.argv.includes('--reuse'),captureOnly=process.argv.includes('--capture-only');
 const poses=JSON.parse(await readFile('reports/movement/native-bounds/cases.json')),summaries=[];
@@ -32,7 +33,7 @@ for(const name of ['00_Training','01_NYC_UNATCOIsland']){
  for(const field of ['scene','cases'])assert.equal(original[field+'Sha256'],createHash('sha256').update(await readFile(path.join(directory,field+'.json'))).digest('hex'));
  if(captureOnly){console.log(name,cases.length,'captured');continue;}
  const {createCollisionHash}=await import('../src/runtime/collision-hash.mjs'),{actorEncroachmentCheck}=await import('../src/runtime/encroachment-query.mjs');
- const bits=new DataView(new ArrayBuffer(4));for(const a of scene.actors)if(a.model)for(const n of a.model.nodes)if(n.planeBits)n.plane=n.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});
+ const bits=new DataView(new ArrayBuffer(4));for(const a of scene.actors)if(a.model){for(const n of a.model.nodes)if(n.planeBits)n.plane=n.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});a.model=modelFromObjects(a.model);}
  const hash=createCollisionHash(),bounds=a=>a.model?brushCollisionBounds(a.model,a.values):primitiveCollisionBounds(null,a.values);
  for(const a of scene.actors){a.lineage=a.kind==='Mover'?['engine.mover','engine.brush','engine.actor']:['engine.actor'];hash.addActor(a,bounds(a),{location:a.values.Location});}
  const mismatches=[];

@@ -36,6 +36,7 @@
 import {compileScriptVm} from './script-vm-kernel.mjs';
 import {ObjectArena, RESERVED} from './script-object-arena.mjs';
 import {rotationSineTable} from './coords.mjs';
+import { NodeAccess } from '../unreal/bsp-model.mjs';
 
 const env = typeof process !== 'undefined' ? process.env : undefined;
 const JS_ONLY = env?.TRACE_KERNEL === 'js';
@@ -86,7 +87,6 @@ async function load() {
   return kernel;
 }
 
-const numeric = v => v === undefined || typeof v === 'number';
 const ZERO3 = [0, 0, 0];
 /** Three plain numbers (int32 when `integer`) into `into[at..at+3]`. */
 function triple(v, into, at, integer) {
@@ -118,20 +118,12 @@ const finite3 = v => !!v && v.length === 3 && Number.isFinite(v[0]) && Number.is
  * both write it. */
 export function traceModelLayout(model) {
   const nodes = model?.nodes;
-  if (!Array.isArray(nodes) || !nodes.length || model.rootOutside === undefined) return null;
+  if (!(nodes instanceof NodeAccess) || !nodes.length || model.rootOutside === undefined) return null;
   const count = nodes.length;
-  for (let i = 0; i < count; i++) {
-    const node = nodes[i];
-    if (typeof node !== 'object' || node === null) return null;
-    const p = node.plane;
-    if (p == null || typeof p[0] !== 'number' || typeof p[1] !== 'number' || typeof p[2] !== 'number' ||
-      typeof p[3] !== 'number' || !numeric(node.flags) || !numeric(node.vertexCount)) return null;
-  }
-  // Hull words that are not all int32 are not uploaded: every hull then
-  // reads as out of range, and extent traces reaching one fall back.
+  // The node block holds only float32 planes and bytes: every node is eligible. Hull words are int32 by construction
+  // (before the typed tables, words that were not were not uploaded and every hull read as out of range).
   const words = model.leafHulls;
-  let wordCount = Array.isArray(words) ? words.length : 0;
-  for (let i = 0; i < wordCount; i++) if (words[i] !== (words[i] | 0)) { wordCount = 0; break; }
+  const wordCount = words instanceof Int32Array ? words.length : 0;
   const size = HEADER + count * NODE + wordCount * 4;
   return {size, write(buffer, base) {
     const wordsAt = base + HEADER + count * NODE;
@@ -141,14 +133,14 @@ export function traceModelLayout(model) {
     const ints = new Int32Array(buffer, base + HEADER, count * NODE / 4);
     const link = v => v === -1 ? -1 : Number.isInteger(v) && v >= 0 && v < count ? v : INVALID;
     for (let i = 0; i < count; i++) {
-      const node = nodes[i], p = node.plane, at = i * (NODE / 8), w = i * (NODE / 4) + 8;
-      planes[at] = p[0]; planes[at + 1] = p[1]; planes[at + 2] = p[2]; planes[at + 3] = p[3];
-      const bound = node.collisionBound;
-      ints[w] = link(node.front);
-      ints[w + 1] = link(node.back);
-      ints[w + 2] = node.flags | 0;
+      const at = i * (NODE / 8), w = i * (NODE / 4) + 8, o = nodes.base + (i << 4);
+      planes[at] = nodes.f32[o]; planes[at + 1] = nodes.f32[o + 1]; planes[at + 2] = nodes.f32[o + 2]; planes[at + 3] = nodes.f32[o + 3];
+      const bound = nodes.collisionBound(i);
+      ints[w] = link(nodes.front(i));
+      ints[w + 1] = link(nodes.back(i));
+      ints[w + 2] = nodes.flags(i);
       ints[w + 3] = bound === -1 ? -1 : Number.isInteger(bound) && bound >= 0 && bound < wordCount ? bound : INVALID;
-      ints[w + 4] = node.vertexCount > 0 ? 1 : 0;
+      ints[w + 4] = nodes.vertexCount(i) > 0 ? 1 : 0;
     }
     if (wordCount) new Int32Array(buffer, wordsAt, wordCount).set(words);
   }};
@@ -228,9 +220,7 @@ class TraceKernel {
     if (entry === undefined) {
       if (model.rootOutside === undefined || !(source.capacity > 0)) return this.ineligible();
       // traceModelLayout's hull rule: words that are not all int32 are not uploaded.
-      const words = model.leafHulls;
-      let wordCount = Array.isArray(words) ? words.length : 0;
-      for (let i = 0; i < wordCount; i++) if (words[i] !== (words[i] | 0)) { wordCount = 0; break; }
+      const words = model.leafHulls, wordCount = words instanceof Int32Array ? words.length : 0;
       const size = HEADER + source.capacity * NODE + wordCount * 4, base = this.arena.alloc(size);
       this.views();
       const wordsAt = base + HEADER + source.capacity * NODE;

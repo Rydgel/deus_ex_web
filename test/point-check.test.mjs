@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {pointCheck} from '../src/runtime/point-check.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // Controlled compiled hull captured using original UModel.PointCheck103f1570.
 // Contains no original map assets; expected booleans are native observations.
@@ -8,8 +9,8 @@ function boxModel() {
   const planes=[[-1,0,0,10],[1,0,0,10],[0,-1,0,10],[0,1,0,10],[0,0,-1,10],[0,0,1,10]];
   const view=new DataView(new ArrayBuffer(4));
   const bits=v=>{view.setFloat32(0,v,true);return view.getInt32(0,true);};
-  return {rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],
-    nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))};
+  return modelFromObjects({rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],
+    nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))});
 }
 test('native stationary extent overlap and strict supplemental bound contact',()=>{
   const model=boxModel(),extent=[20,20,43];
@@ -26,6 +27,6 @@ test('native zero extent chooses back on plane, front strictly beyond it',()=>{
 test('invalid extents and cyclic BSP fail explicitly',()=>{
   const model=boxModel();
   assert.throws(()=>pointCheck(model,[0,0,0],[-1,1,1]),/Negative/);
-  model.nodes[0].back=0;
+  model.nodes.i32[8]=0;
   assert.throws(()=>pointCheck(model,[0,0,0]),/cyclic/);
 });

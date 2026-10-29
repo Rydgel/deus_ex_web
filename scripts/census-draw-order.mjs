@@ -58,7 +58,7 @@ async function dataCensus() {
     const fogZones = new Set(model.zones.flatMap((zone, i) => fogActors.has(zone.actor) ? [i] : []));
     const row = {translucent: 0, modulated: 0, masked: 0, fogZones: fogZones.size, maskedLitInFog: 0, blendedInFog: 0};
     for (const node of model.nodes) {
-      const surface = model.surfaces[node.surface];
+      const surface = model.surfaces.at(node.surface);
       let flags = surface.flags >>> 0, texture = null;
       if (surface.texture) {
         if (!textureFlags.has(surface.texture)) {

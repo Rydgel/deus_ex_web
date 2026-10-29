@@ -7,15 +7,15 @@ import {CollisionWorld} from '../src/runtime/collision.mjs';
 import {Player} from '../src/runtime/player.mjs';
 import {bindPlayerScene} from '../src/runtime/player-scene.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
+import {typedSceneModels} from './native-model.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 
 export function createPlayerSequenceFixture(saved) {
-  const scene=structuredClone(saved),bits=new DataView(new ArrayBuffer(4));
-  for(const model of [scene.model,...scene.actors.map(actor=>actor.model).filter(Boolean)])
-    for(const node of model.nodes)if(node.planeBits)
-      node.plane=node.planeBits.map(word=>{bits.setUint32(0,word,true);return bits.getFloat32(0,true);});
+  const scene=structuredClone(saved);
+  typedSceneModels(scene);
   // The sequence oracle supplies Model.Zones separately from nativeModel's
   // geometry projection; null zone actors resolve to its LevelInfo fallback.
-  scene.model.zones=scene.zones.map(()=>({}));
+  scene.model.zones=modelFromObjects({zones:scene.zones.map(()=>({}))}).zones;
   const collision=new CollisionWorld(scene.model);
   const savedPlayer=scene.actors.find(actor=>actor.id==='$player');
   if(!savedPlayer)throw new Error('Sequence scene requires its original $player fixture');
@@ -59,9 +59,8 @@ export function createPlayerSequenceFixture(saved) {
   player.nativeRandom=createNativeRng(1).frand;
   player.textureForHit=hit=>{
     if(hit.actor!==world||hit.primitive!==scene.model)return null;
-    const node=scene.model.nodes[hit.item];
-    if(!node)throw new Error('Original world ray returned an invalid surface node');
-    return scene.textures[node.surface]??null;
+    if(!scene.model.nodes.has(hit.item))throw new Error('Original world ray returned an invalid surface node');
+    return scene.textures[scene.model.nodes.surface(hit.item)]??null;
   };
   return {player,collision};
 }

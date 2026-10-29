@@ -199,9 +199,9 @@ export class ZoneHost {
 export const zoneModelSize = ({model, zoneActors}) => 20 + 4 * zoneActors.length + NODE_BYTES * model.nodes.length;
 /** Write the zone model block (zone.rs) for `source` at `address`: the
  * header, the zone handles (0 for a falsy entry, which pointRegion's `||`
- * replaces by the LevelInfo) and the nodes. False when a node does not fit
- * the block exactly (a plane component that is not a float32, a child,
- * leaf or zone that is not an integer of its width). */
+ * replaces by the LevelInfo) and the nodes. Every node fits the block exactly
+ * (the node table holds float32 planes, int32 children and leaves and byte zones),
+ * so this returns true. */
 export function writeZoneModel(view, address, {model, levelInfo, zoneActors}) {
   const nodes = model.nodes, zones = zoneActors.length;
   const handles = address + 20, nodesAt = handles + 4 * zones;
@@ -211,23 +211,15 @@ export function writeZoneModel(view, address, {model, levelInfo, zoneActors}) {
   view.setUint32(address + 12, handles, true);
   view.setUint32(address + 16, nodesAt, true);
   zoneActors.forEach((zone, i) => view.setUint32(handles + 4 * i, zone ? handleOf(zone) : 0, true));
-  const int32 = v => Number.isInteger(v) && v >= -0x80000000 && v <= 0x7fffffff;
-  const uint32 = v => Number.isInteger(v) && v >= 0 && v <= 0xffffffff;
   for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i], at = nodesAt + NODE_BYTES * i, plane = node?.plane;
-    if (!Array.isArray(plane) || plane.length !== 4 || !int32(node.front) || !int32(node.back) ||
-      !int32(node.leaves?.[0]) || !int32(node.leaves?.[1]) || !uint32(node.zones?.[0]) || !uint32(node.zones?.[1]))
-      return false;
-    for (let j = 0; j < 4; j++) {
-      view.setFloat32(at + 4 * j, plane[j], true);
-      if (!Object.is(view.getFloat32(at + 4 * j, true), plane[j])) return false;
-    }
-    view.setInt32(at + 16, node.front, true);
-    view.setInt32(at + 20, node.back, true);
-    view.setInt32(at + 24, node.leaves[0], true);
-    view.setInt32(at + 28, node.leaves[1], true);
-    view.setUint32(at + 32, node.zones[0], true);
-    view.setUint32(at + 36, node.zones[1], true);
+    const at = nodesAt + NODE_BYTES * i;
+    for (let j = 0; j < 4; j++) view.setFloat32(at + 4 * j, nodes.plane(i, j), true);
+    view.setInt32(at + 16, nodes.front(i), true);
+    view.setInt32(at + 20, nodes.back(i), true);
+    view.setInt32(at + 24, nodes.leaf(i, 0), true);
+    view.setInt32(at + 28, nodes.leaf(i, 1), true);
+    view.setUint32(at + 32, nodes.zone(i, 0), true);
+    view.setUint32(at + 36, nodes.zone(i, 1), true);
   }
   return true;
 }

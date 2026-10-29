@@ -1,3 +1,4 @@
+import { NodeAccess } from '../unreal/bsp-model.mjs';
 const f=Math.fround;
 const bits=new DataView(new ArrayBuffer(4));
 function side(value) {
@@ -34,20 +35,21 @@ export function fastLineCheck(model,first,second) {
     endpoint(first,0);endpoint(second,3);
     return traverse(live.count,live.rootOutside);
   }
-  if(!Array.isArray(model?.nodes)||model.rootOutside===undefined)
+  if(!(model?.nodes instanceof NodeAccess)||model.rootOutside===undefined)
     throw new Error('FastLineCheck requires the original compiled BSP');
   endpoint(first,0);endpoint(second,3);
-  srcNodes=model.nodes;
-  return traverse(model.nodes.length,model.rootOutside);
+  const {nodes}=model;
+  // The model's own node table is the same block (the original FBspNode layout) in a buffer of its own.
+  srcCount=nodes.length;srcAt=nodes.base<<2;viewBuffer=null;viewFloats=nodes.f32;viewWords=nodes.i32;viewBytes=nodes.u8;
+  return traverse(nodes.length,model.rootOutside);
 }
 
-// Where traverse reads its nodes from, set by the caller (traverse does not nest): the model's node objects, or a block in memory in
-// the original 64-byte FBspNode layout (the tracker's, as it holds it now): FPlane at +0, iBack +0x20, iFront +0x24, NodeFlags +0x37.
-// The block's typed views are kept for the memory buffer they were made over (a node in the block was an object with a plane array
-// for every node a line crossed).
-let srcNodes=null,srcCount=0,srcAt=0,viewBuffer=null,viewFloats=null,viewWords=null,viewBytes=null;
+// Where traverse reads its nodes from, set by the caller (traverse does not nest): a block of nodes in the original 64-byte FBspNode
+// layout, the model's own table or the tracker's, as it holds it now: FPlane at +0, iBack +0x20, iFront +0x24, NodeFlags +0x37.
+// The tracker's typed views are kept for the memory buffer they were made over.
+let srcCount=0,srcAt=0,viewBuffer=null,viewFloats=null,viewWords=null,viewBytes=null;
 function useBlock({memory,at,count}) {
-  srcNodes=null;srcCount=count;srcAt=at;
+  srcCount=count;srcAt=at;
   if(viewBuffer!==memory.buffer){
     viewBuffer=memory.buffer;viewFloats=new Float32Array(viewBuffer);viewWords=new Int32Array(viewBuffer);viewBytes=new Uint8Array(viewBuffer);
   }
@@ -57,7 +59,6 @@ function useBlock({memory,at,count}) {
 let frames=new Float64Array(8*64);
 
 function traverse(count,rootOutside) {
-  const nodes=srcNodes;
   if(!count)return Boolean(rootOutside);
   let a0=ends[0],a1=ends[1],a2=ends[2],b0=ends[3],b1=ends[4],b2=ends[5];
   let sp=0,index=0,outside=Number(Boolean(rootOutside)),visits=0;
@@ -65,17 +66,9 @@ function traverse(count,rootOutside) {
   for(;;){
     while(index!==-1){
       if(++visits>limit)throw new Error('Invalid cyclic FastLineCheck BSP');
-      let p0,p1,p2,p3,back,front,flags;
-      if(nodes!==null){
-        const node=nodes[index];
-        if(!node)throw new Error('Invalid FastLineCheck node index');
-        const plane=node.plane;
-        p0=plane[0];p1=plane[1];p2=plane[2];p3=plane[3];back=node.back;front=node.front;flags=node.flags;
-      }else{
-        if(!(index>=0&&index<srcCount))throw new Error('Invalid FastLineCheck node index');
-        const o=(srcAt>>>2)+16*index;
-        p0=viewFloats[o];p1=viewFloats[o+1];p2=viewFloats[o+2];p3=viewFloats[o+3];back=viewWords[o+8];front=viewWords[o+9];flags=viewBytes[srcAt+64*index+55];
-      }
+      if(!(index>=0&&index<srcCount))throw new Error('Invalid FastLineCheck node index');
+      const o=(srcAt>>>2)+16*index;
+      const p0=viewFloats[o],p1=viewFloats[o+1],p2=viewFloats[o+2],p3=viewFloats[o+3],back=viewWords[o+8],front=viewWords[o+9],flags=viewBytes[srcAt+64*index+55];
       const endDistance=f((b2*p2+b1*p1)+b0*p0-p3),startDistance=f((a2*p2+a1*p1)+a0*p0-p3);
       if(!Number.isFinite(endDistance)||!Number.isFinite(startDistance))
         throw new Error('Nonfinite FastLineCheck plane distance is unsupported');

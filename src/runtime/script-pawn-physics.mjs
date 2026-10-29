@@ -291,9 +291,9 @@ export function pawnPhysicsView(actor, services) {
   const worldModel = () => level.hash?.worldModel?.() ?? level.model;
   pawn.textureForHit = hit => {
     if (hit?.actor !== worldActor) return null;
-    const model = worldModel(), node = model.nodes[hit.item];
-    if (!node) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
-    return (model.surfaceTexture ?? level.surfaceTexture)[node.surface] ?? null;
+    const model = worldModel();
+    if (!model.nodes.has(hit.item)) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
+    return (model.surfaceTexture ?? level.surfaceTexture)[model.nodes.surface(hit.item)] ?? null;
   };
   // walking-surface.mjs's scan in one Rust call (docs/rust-core.md R3-b):
   // the queries of `lineCheck` above and the table of `textureForHit`. Not

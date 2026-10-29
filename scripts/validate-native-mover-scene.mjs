@@ -13,6 +13,7 @@ import {playerBlockedBy,checkMoverEncroachment} from '../src/runtime/check-encro
 import {farMoveActor} from '../src/runtime/relocation.mjs';
 import {beginTouch,endTouch,isOverlapping} from '../src/runtime/actor-touch.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+import { typedSceneModels } from './native-model.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const dir='reports/movement/mover-move';
 if(!process.argv.includes('--reuse')){
@@ -26,7 +27,7 @@ if(process.argv.includes('--capture-only')){console.log(cases.length,'controlled
 for(let index=0;index<cases.length;index++){
  const c=cases[index],scene=structuredClone(saved),actors=scene.actors;
  const bits=new DataView(new ArrayBuffer(4));
- for(const model of [scene.model,...actors.map(a=>a.model).filter(Boolean)])for(const node of model.nodes)if(node.planeBits)node.plane=node.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});
+ typedSceneModels(scene,actors);
  for(const a of actors){
   a.flags=a.collisionBits;a.actorFlags=0x80000;a.static=false;a.movable=true;a.movingBrush=Boolean(a.model);a.isPawn=a.kind==='Pawn';a.controlledPlayer=a.isPawn;a.pawnFlags=a.isPawn?2:0;a.collideActors=Boolean(a.flags&1);a.collideWorld=Boolean(a.flags&2);a.blockActors=Boolean(a.flags&4);a.blockPlayers=Boolean(a.flags&8);a.standingCount=0;a.touching=[null,null,null,null];a.physics=0;a.rotation=a.values.Rotation??[0,0,0];a.lineage=['engine.actor',...(a.movingBrush?['engine.mover','engine.brush']:['engine.pawn'])];
   for(const [key,value]of [['position','Location'],['radius','CollisionRadius'],['height','CollisionHeight']])Object.defineProperty(a,key,{get(){return this.values[value]??0;},set(v){this.values[value]=v;}});

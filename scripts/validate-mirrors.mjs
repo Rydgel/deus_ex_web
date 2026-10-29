@@ -17,11 +17,11 @@ for (const directory of ['Maps', 'System']) for (const name of await readdir(pat
   files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 const assets = new AssetStore(files), asset = await assets.get('00_Training'), map = decodeMap(asset.bytes);
 const surfaces = map.model.surfaces.filter(s => s.flags & POLY.Mirrored);
-const heights = [...new Set(surfaces.map(s => map.model.points[s.base][2]))];
+const heights = [...new Set(surfaces.map(s => map.model.points.at(s.base)[2]))];
 assert.equal(surfaces.length, 46);
 assert.deepEqual(heights.toSorted((a, b) => a - b), [-176, -160, -144, -128]);
 for (const s of surfaces) {
-  assert.deepEqual(map.model.vectors[s.normal].map(v => v || 0), [0, 0, 1]);
+  assert.deepEqual(map.model.vectors.at(s.normal).map(v => v || 0), [0, 0, 1]);
   assert.equal(s.flags, 0x08840004);
 }
 const coordsFor = camera => {
@@ -48,7 +48,7 @@ for (const name of (await readdir(path.join(root, 'Maps'))).filter(n => /\.dx$/i
   const m = name === '00_Training.dx' ? map : decodeMap((await assets.get(name.replace(/\.dx$/i, ''))).bytes);
   const planes = mirrorPlanes(m.model);
   for (const [surfaceIndex, plane] of planes) {
-    const flags = m.model.surfaces[surfaceIndex].flags, n = plane;
+    const flags = m.model.surfaces.at(surfaceIndex).flags, n = plane;
     const kind = `${Math.abs(n[2]) > .999 ? (n[2] > 0 ? 'up' : 'down') : Math.abs(n[2]) < .001 ? 'vertical' : 'oblique'} ${flags & 0x47 ? 'composited' : 'opaque'}`;
     kinds[kind] = (kinds[kind] ?? 0) + 1;
     allPlanes.set(plane.join(), plane); mirroredSurfaces++;

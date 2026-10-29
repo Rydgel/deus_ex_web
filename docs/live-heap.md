@@ -250,10 +250,12 @@ Firefox GC markers, not only by heap size.
      arguments included; and operands as handle arrays the Rust VM reads.
    * This is the Rust core's target ([Rust core](rust-core.md) "Target architecture").
      Verify against the interpreter's existing verify modes.
-9. **The BSP model as typed arrays in the simulation.** Nodes, vertices and surfaces as
-   column arrays, and the JavaScript readers moved to them or to the Rust kernels that
-   already hold Wasm copies (point region, zone, line checks, hull build).
-   * Expected: 1 to 2 M objects on the Island; it scales with the map.
+9. **The BSP model as typed arrays: done 2026-10-30.** `readModel` gives the nodes as the
+   original 64-byte FBspNode block and the other records as small typed tables; the
+   collision hulls are Float64Arrays built on first use; every simulation and page reader
+   reads the views, and the Rust kernels' uploads copy the columns. See "Step 9's results".
+   * Expected: 1 to 2 M objects on the Island; it scales with the map. Measured: see
+     "Step 9's results".
 
 Steps 1 and 2 are small. Steps 3 to 7 are medium, and each stands alone. Steps 8 and 9
 are large and follow the Rust core's direction. The V8-only costs (boxed doubles,
@@ -1763,6 +1765,120 @@ property-serialize-item, class-default-travel, config-persistence, native-config
 save-load-play, travel, travel-endings, island-conversation, instructor-conversation, conversation-binding, mesh-faces, gpu-mesh,
 play-hud), after the 31 mesh validators of step 4 on 243f2b2b.
 
+## Step 9's results (2026-10-30)
+
+**What the model held.** In the base worker's snapshot (07de3088, the Island after a 240 s roam; step 4 left these families as they were) the
+decoded map and its collision hulls were three families:
+* `CollisionWorld.bsp.model`: 490 k objects (245,905 Objects, 108,351 Arrays and as many element stores, 26,781 heap numbers), 2.18 M snapshot
+  edges, 11.6 MB. That is `readModel`'s output: a node was an object with four arrays (plane, zone mask, zones, leaves: five objects), a vertex
+  `{point, side}`, a surface an object with its `pan` array, a light map an object with four arrays, a render bound a box of two arrays, a
+  leaf an object with its visible-zones array, and every point and texture vector an array of three.
+* `CollisionWorld.bsp.hulls`: 191 k objects, 0.60 M edges. `BspCollider` made one hull per collision bound when the world was built: an object
+  with `min`, `max`, `node`, a `planes` list (the compiled planes, six box planes, the bevels) and a `sweepPlanes` list, each plane an array
+  of four doubles (91,571 arrays). `partitionPlanes` added one array per node (26 k objects) and `hullByBound` a Map.
+* The page decoded the same `map.model` (and one more per mover brush) as objects too.
+
+None of the hull structures is read in Play: with a compiled root (`rootOutside`, every map) `BspCollider.sweep` and `overlaps` call the
+original model queries (`traceRay`, `traceExtent`, `modelPointCheck`) and reach the hulls only for a model with no root, which only unit-test
+fixtures are. They were built for every collider at load and held for the level's life.
+
+**The change.** Host representation only; every table holds the values the object reader gave.
+* `src/unreal/bsp-model.mjs`: the model as typed tables, filled by `readModel` in the same read order with the same checks.
+  * `nodes` is the original 64-byte FBspNode block (`BspNodes`: an Int32, a Float32 and a Uint8 view of one buffer; the plane, the two zone
+    masks, `iVertPool`, `iSurf`, back, front, coplanar, collision and render bound, zones and vertex count and flags as bytes, the two leaves).
+    It is the layout the Rust occlusion block, the brush tracker's memory, `fast-line-check.mjs` and the trace kernel's import already read, so
+    the occlusion upload is one byte copy of the block, and the tracker's view of Level->Model (`lineModel()`, `collisionModel()`, which were a
+    `Proxy` over node objects made at first read) is `MemoryNodes`: the same accessors over views of the kernel's memory, made again when it grew.
+  * `Vec3s` (points, vectors: one Float32Array), `Surfaces` (eleven int words a surface), `Vertices`, `Zones`, `LightMaps` and `RenderBounds`
+    (an Int32 and a Float32 view of one buffer), `Leaves`, and `leafHulls` and `lights` as Int32Arrays. Two zone values the old reader held
+    outside a byte would have been truncated by the original's FBspNode (`BYTE iZone`) and by the occlusion upload; none of the 76,832 models of the
+    game has one, and `readModel` now refuses it.
+  * Each table's `at(i)` makes record `i` in the old object form and offers `map`, `forEach`, `filter`, `find` and iteration over those: cold readers
+    (validators, exports, one-off tools) use them. `modelObjects(model)` makes the whole old form, `modelFromObjects(old)` goes the other way for
+    fixtures (it refuses a value a table could not hold exactly: a plane that is not four float32s, a zone that is not a byte). `PolygonNodes`
+    and `TrackedSurfaces` are the two other table shapes the host builds: a mover brush made of the tracker's polygons (`moverModelFromPolys`:
+    the plane's offset is a double there, which a float32 table could not hold) and the tracker's model for the decal kernel (`trackedModel`,
+    which was about 500,000 objects copied for one upload).
+* Readers moved to the views (hot ones read `i32`/`f32`/`u8` and the node offset once per traversal): `traceRayFast` and its reference,
+  `traceExtentJs`, `checkPoint`, `pointRegion`, `fastLineCheck` (which now has one path, the block, for the model and for the tracker), the
+  moving-light filters and leaf lists (`dynamic-lighting.mjs`), mesh lighting and coronas' leaf lists, the strobe scan in `sim-session.mjs`,
+  `lighting.mjs` (basis, `pointZone`, zones), `geometry.mjs`, the page's world build and mirrors, the detail table, `walkingSurfaceTextures`,
+  the world-hit texture lookups, and the uploads: the occlusion block, `traceModelLayout` (the trace kernel's layout, from the block),
+  the decal model (a counting sort of nodes by surface, points and vectors copied as words), the tracker's vectors and the zone block.
+* `src/runtime/collision-hulls.mjs`: `BspCollider` builds its hulls at the first query that needs them, as typed arrays: a `HullSet`
+  (`min`, `max`, `node` and `bound` columns; `planes` and `sweep` as two Float64Arrays with offsets per hull, holding the same doubles, computed by the same
+  expressions in the same order, the box planes and the bevels included), `HullTree` (the box tree over hull indices, split as the object
+  tree was so queries visit hulls in the same order) and the partition planes as one Float64Array. In Play they are never built; `status().hulls`
+  reads `hullCount`, which counts the distinct collision bounds without building them.
+
+**Checks.**
+* References first, on the untouched tree (243f2b2b): frame-alloc-meter Island (600 frames, warm 900) `c8cf5fff928609c1`, 03_NYC_747 `f6337bff0cf741fc`,
+  00_Training `e4b017e7b1bc0439`, `hud-stream-digest --frames 1500 --stream` `16bfe2bd08ed1653`. After: `--compare` reports identical frames on all four
+  (and on 02_NYC_Hotel, 300 frames, `1631d9f98ba1623d`, against a copy of 243f2b2b), and bench-sim (300 ticks) gives Island `15e3720088490242`,
+  00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`.
+  The meter found two mistakes the unit tests and the validators did not: `sim-host.mjs` caught a reader of the old form (`walkingSurfaceTextures`
+  over the tracker's polygon textures) and reported "BSP occlusion unavailable", and the frames differed from frame 0; and the page's mover build
+  (`polys.mjs`) raised "model.surfaces.flags is not a function" for every mover, which `validate-mirrors-play` caught as a missing surface on 02_NYC_Hotel
+  (76 textures and 11,551 triangles against 80 and 11,973, "11 render issues"). Both are fixed; the page's world build (textures, triangles, render errors) is
+  now identical to 243f2b2b's on 12 maps (Hotel, Training, Island, 747, Bar, Smug, Everett, Club, WanChai Market, Area51 Bunker, Ship, 04 Island).
+* Differentials against the object forms, raw words (`Object.is` on every number): `scripts/validate-bsp-model.mjs` reads every Model export of every
+  map of the game (76,832 models in 88 maps: 769,874 nodes, 401,470 surfaces, 11.06 M vertices, 1.19 M points, 89,462 vectors, 939 zones, 374,015
+  light maps, 387,617 render bounds, 280,871 leaves, 2.90 M leaf-hull words, 4.27 M light references, 4.11 M triangles; 112 M fields) with the old reader
+  (`test/helpers/model-reference.mjs`) and the new one, and compares every field and the fan triangulation. `scripts/validate-collision-hulls.mjs`
+  compares the typed hulls with the object hulls (`test/helpers/collision-reference.mjs` is `BspCollider` of 243f2b2b) on 8 maps' level models
+  and brushes, with and without a brush transform and root: 43,290 hulls, 1.40 M planes, 146,790 partition planes, and for 12,000 random boxes
+  the candidates, the line-candidate walk (240,741 leaves in 6,000 walks), the sweeps (9,535 hits in 12,000) and the overlaps, all equal.
+  `test/bsp-model.test.mjs`: 80 random compiled models (each table with special floats, full-range masks, random links) read by both readers, errors
+  equal, the node block's byte layout, `MemoryNodes` over a kernel memory that grows, and random box fixtures through both colliders. 873 unit tests
+  pass (877, 4 skipped); the fixtures of 14 test files and 20 validators build their models with `modelFromObjects`.
+* Validators, each exit 0: bsp-occlusion, collision-kernel, tracked-collision, tracked-linecheck, fast-line-check-tracked, native-encroachment,
+  native-walking, native-walking-surface, walk-kernel, pawn-nav, zone-kernel, native-zone, native-rays, native-brush-rays, native-level-points,
+  native-owned-point, native-mover-push and native-rotating-brush (`--reuse`: the saved captures of the original replayed over the typed models),
+  decal-attach, decal-order, brush-tracker, mirrors, child-frames, leaf-lights, coronas, coronas-tracked, texel-sphere, trace-kernel, dynamic-lighting,
+  static-lighting, light-spatial, light-animation-rust, moving-light-effects, moving-lights-incremental, mover-light-maps, dynamic-light-mover,
+  mesh-lighting, mesh-light-types, detail-pass, detail-pass-rust, sky-frame-camera, frame-projection, frame-projection-movers, occlusion-flat-draw,
+  level-save (120 saved levels: the Model payloads write back byte for byte); in the browser (worker mode) decals-play (the shadow and the mover's bullet
+  hole through the tracked model), mirrors-play, mover-push-play, coronas-play, coronas-mover-play, iterator-frames-play, moving-light-effects-play,
+  mesh-lighting-play, decal-vertices-play, world-batches. `validate-world-batch-gpu` times out at its first wait in both trees (a copy of 243f2b2b too).
+  `validate-native-mover-scene` and `-far-move-scene` were not finished: their oracle runs (one Python process each) took more than 25 minutes and were
+  stopped; the same level-query code ran in the other native validators. `validate-master-frame-play` was skipped as asked.
+* `npm run build:wasm`: no Rust file changed, no cargo warnings. 60 s worker-mode roams (`hitch-run.mjs --mode roam`): Island 4,867 frames and Training
+  4,771, no error in either.
+
+**Heap**, the Island's worker after a 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam --seconds 240`). "Before" is step 4's "after" row
+(master 243f2b2b is its merge; the routes of the two roams differ). Pointer references leave out the edges to Smi nodes and the weak edges (the method of
+`.work/pointer-refs.mjs` gives 38,992,545 on the 07de3088 snapshot, step 4's 39.0 M).
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (used of total) |
+| --- | ---: | ---: | ---: | ---: |
+| Worker, before (243f2b2b) | 7.48 M | 43.3 M | 37.3 M | 312 of 323 MB |
+| Worker, after | 6.71 M (-10.3%) | 40.0 M (-7.6%) | 34.6 M (-7.2%) | 287 of 300 MB |
+| BSP model tables, before (07de3088: `bsp.model`, `bsp.hulls`, `bsp.partitionPlanes`) | 707 k | 2.8 M | | 11.6 MB (model only) |
+| BSP model tables, after (20 models) | 826 | 2,550 | | about 3.7 MB of typed arrays |
+| Page (walk), before (07de3088) | 2.39 M | 10.8 M | 8.97 M | 109 MB |
+| Page (walk), after | 1.87 M (-21.8%) | 8.5 M (-21.4%) | 7.24 M (-19.3%) | 94 MB |
+
+The tables' row counts the instances of the table classes in the snapshot (`.work/count-tables.mjs`: 20 `BspNodes`, 40 `Vec3s` and 20 each of the other tables: the level's model and 19 mover brushes, and one `MemoryNodes`,
+the tracker's view) and everything they reach
+through their typed-array views and buffers, so the worker's whole decoded map, hulls included, is 826 objects and 2,550 edges; no `CollisionWorld.bsp.*`
+family is left (the aim was under 20 k objects and 0.1 M edges). The page's tables, 18 of its mover brushes' polygon models included, are 843 objects and
+2,592 edges and 3.7 MB. The 30 s walk gives the same picture: worker 6.21 M objects, 36.9 M edges, 272 MB; page 1.87 M objects.
+
+**Load time.** Three interleaved headless Island boots (bench-sim `bootMs`, the base arm a copy of 243f2b2b with the same Wasm): 7,472 / 7,051 / 7,391 ms
+before, 7,224 / 6,988 / 6,975 ms after (the hulls and the partition planes are no longer built). Both give the 3-tick digest `c449c4831f1804dd`.
+
+**What is left, and why.**
+* Not measured: the marking time per major GC on two cores, Firefox, the Mac. The worker has 10% fewer objects and 7% fewer pointer references than at the
+  end of step 4, a step on the scale of step 4's; the three families it empties were 9% of the worker's objects and 6% of its snapshot edges.
+* Cold readers still use the object form: the page's per-surface lighting records keep a `surface` and a `lightMap` object each
+  (`lighting.mjs surface()` makes them with `at(i)`; 18,602 records on the Island), and the page decodes the BSP's `map.triangles` list as objects
+  (110 k on the Island; step 2 of the plan releases it after the world build). The tracker's model for the decal kernel is copied once when a store
+  is made (`trackedModel`), as typed tables now, not 500 k objects.
+* The hulls are dead code in Play. They could be dropped with the legacy sweep branches once the unit-test fixtures use compiled roots; this step keeps
+  them as the reference that `validate-collision-hulls` compares with the original's hull data.
+* Unverified: `validate-native-mover-scene` and `-far-move-scene` against the original (see above); the Rust kernels' import of tracked nodes is
+  unchanged and covered by `validate-tracked-collision` and `validate-tracked-linecheck`.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1789,7 +1905,8 @@ play-hud), after the 31 mesh validators of step 4 on 243f2b2b.
   references out of the worker (the actor mesh faces, per mesh now), and "Steps 2 and 3's results" took its pointer references down
   by a further 16% (37.4 M to 31.3 M) and its objects by 26%. "Steps 2, 3 and 4 on two cores": together they halve the worker's
   main-thread marking a cycle (267 and 224 to 91 and 113 ms) and the GC frames over 100 ms (20 to 11 in two runs), but a third of
-  the cycles still mark 170 to 250 ms within a few frames. The Mac (twelve cores, where the concurrent markers take more of it)
+  the cycles still mark 170 to 250 ms within a few frames. Step 9 ("Step 9's results") then took 770 k objects and 2.7 M pointer
+  references (the BSP model and its hulls, as typed tables) out of the worker; its marking on two cores is not measured yet. The Mac (twelve cores, where the concurrent markers take more of it)
   and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.

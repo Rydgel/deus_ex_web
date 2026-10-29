@@ -28,6 +28,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {ClassDefaults} from '../src/unreal/classes.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {readModel} from '../src/unreal/model.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {brushToWorld} from '../src/runtime/coords.mjs';
 import {traceRay, traceRayFast} from '../src/runtime/ray.mjs';
@@ -129,7 +130,7 @@ function segment(model, anchors, boxExtent = null) {
     return [start, [...start]];
   }
   if (kind < .92) {
-    const node = pick(model.nodes), {point, unit} = onPlane(node.plane, add(anchor, [signed(200), signed(200), signed(100)]));
+    const node = model.nodes.at(Math.floor(random() * model.nodes.length)), {point, unit} = onPlane(node.plane, add(anchor, [signed(200), signed(200), signed(100)]));
     const push = boxExtent ? Math.abs(unit[0]) * boxExtent[0] + Math.abs(unit[1]) * boxExtent[1] + Math.abs(unit[2]) * boxExtent[2] : 0;
     const offset = () => pick(EPSILONS) + (boxExtent ? pick([push, -push, push * 1.1, 0]) : 0) + (random() < .3 ? signed(2) : 0);
     const a = offset(), b = random() < .5 ? a : offset(), t = tangent(unit, 40);
@@ -182,11 +183,14 @@ function segment(model, anchors, boxExtent = null) {
 
 // Synthetic models: the one-plane ray fixture and models the kernel hands back.
 synthetic = true;
-const plane = (extra = {}) => ({rootOutside: 1, leafHulls: [], nodes: [{plane: [1, 0, 0, 0], back: -1, front: -1,
+// The typed tables (src/unreal/bsp-model.mjs) cannot hold a plane that is not four float32s or a hull word that is not an int32, so the
+// malformed planes and the fractional hull word this validator once handed the kernel are not representable; the links and bounds
+// outside the model still are.
+const plane = (extra = {}) => modelFromObjects({rootOutside: 1, leafHulls: [], nodes: [{plane: [1, 0, 0, 0], back: -1, front: -1,
   coplanar: -1, collisionBound: -1, vertexCount: 4, flags: 0, ...extra}]});
-for (const model of [plane(), plane({front: 7}), plane({plane: [1, 0, 0]}), plane({plane: [1, 0, 0, '0']}),
-  {...plane(), rootOutside: undefined}, {rootOutside: 0, leafHulls: [], nodes: []}, plane({collisionBound: 0}),
-  {...plane({collisionBound: 0}), leafHulls: [0, -1, 1.5, 0, 0, 0, 0, 0]}, {...plane({collisionBound: 0}), leafHulls: [0, -1, 0, 0, 0, 0, 0, 0]}]) {
+for (const model of [plane(), plane({front: 7}),
+  {...plane(), rootOutside: undefined}, modelFromObjects({rootOutside: 0, leafHulls: [], nodes: []}), plane({collisionBound: 0}),
+  {...plane({collisionBound: 0}), leafHulls: Int32Array.of(0, -1, 0, 0, 0, 0, 0, 0)}]) {
   for (const a of [-10, -.001001, -.001, -.000999, 0, .000999, .001, .001001, 10]) {
     for (const b of [-10, -.001001, -.001, 0, .001, .001001, 10]) {
       for (const flags of [0, 0x10, 1]) ray(model, [f(a), 0, 0], [f(b), 1, 0], flags);
@@ -198,8 +202,8 @@ for (const model of [plane(), plane({front: 7}), plane({plane: [1, 0, 0]}), plan
 }
 // A 40,000-node chain: traversals deeper than the kernel's scratch stacks
 // (handed back), and an upload that makes the arena grow before the levels.
-const chain = {rootOutside: 1, leafHulls: [], nodes: Array.from({length: 40000}, (_, i) => ({plane: [1, 0, 0, i],
-  back: -1, front: i + 1 < 40000 ? i + 1 : -1, collisionBound: -1, vertexCount: i % 7 ? 4 : 0, flags: i % 5 ? 0 : 0x20}))};
+const chain = modelFromObjects({rootOutside: 1, leafHulls: [], nodes: Array.from({length: 40000}, (_, i) => ({plane: [1, 0, 0, i],
+  back: -1, front: i + 1 < 40000 ? i + 1 : -1, collisionBound: -1, vertexCount: i % 7 ? 4 : 0, flags: i % 5 ? 0 : 0x20}))});
 const deepBefore = tally.handedBack;
 for (const length of [0, 50, 2000, 2100, 5000]) {
   for (const flags of [0, 0x10]) {

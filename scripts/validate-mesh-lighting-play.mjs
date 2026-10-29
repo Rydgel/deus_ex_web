@@ -163,7 +163,7 @@ const cases = { setups: [] }, expectations = [];
 for (const actor of chosen) {
   const region = read(actor, 'Region'), iLeaf = region['engine.actor.pointregion.ileaf'];
   const zone = region['engine.actor.pointregion.zone'], location = read(actor, 'Location').map(f);
-  const leaf = model.leaves[iLeaf], run = [];
+  const leaf = model.leaves.at(iLeaf), run = [];
   if (leaf && leaf.permeating >= 0)
     for (let i = leaf.permeating; i < model.lights.length && model.lights[i]; i++) run.push(model.lights[i]);
   const records = lighting.frame.lights, byActor = new Map();

@@ -13,6 +13,7 @@ import { readModel } from '../src/unreal/model.mjs';
 import { toView, fromView } from '../src/unreal/geometry.mjs';
 import { brushMatrix } from '../src/viewer/transforms.mjs';
 import { nativeModel } from './native-model.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
@@ -23,9 +24,9 @@ for (const directory of ['Maps', 'System']) for (const name of await readdir(pat
   files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 }
 const assets = new AssetStore(files), defaults = new ClassDefaults(assets);
-const plane = { rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 3.25], zoneMask: [0, 0],
+const plane = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 3.25], zoneMask: [0, 0],
   vertexPool: 0, surface: 0, back: -1, front: -1, coplanar: -1, collisionBound: -1,
-  renderBound: -1, zones: [0, 0], vertexCount: 4, flags: 0, leaves: [-1, -1] }] };
+  renderBound: -1, zones: [0, 0], vertexCount: 4, flags: 0, leaves: [-1, -1] }] });
 const groups = [{ name: 'one-plane', model: plane, cases: [] }];
 let seed = 872679;
 const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };

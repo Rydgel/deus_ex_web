@@ -12,6 +12,7 @@
  * iBrushPoly, pan [U, V]}. */
 
 import { readModel } from '../unreal/model.mjs';
+import { BspNodes, Vec3s, Vertices, TrackedSurfaces, SURF } from '../unreal/bsp-model.mjs';
 import { readPolys } from '../unreal/polys.mjs';
 import { ClassDefaults } from '../unreal/classes.mjs';
 
@@ -132,7 +133,8 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
   {
     const u = words();
     u.set(header.map(v => v >>> 0), headerAt());
-    model.vectors.forEach((v, i) => { for (let k = 0; k < 3; k++) u[(vectors >>> 2) + 3 * i + k] = bits(v[k]); });
+    // The float32 bit patterns of the static vectors (bits(v) for each, which a Float32Array's words are).
+    u.set(new Uint32Array(model.vectors.data.buffer, model.vectors.data.byteOffset, model.vectors.data.length), vectors >>> 2);
     let polyAt = polyBlock >>> 2, exportAt = exportBlock;
     movers.forEach((m, i) => {
       const o = (moverBlock >>> 2) + MOVER.WORDS * i;
@@ -252,29 +254,25 @@ function bits(value) { f32[0] = value; return u32[0]; }
  * kernel's model and trace model over the moved movers (docs/decals.md). */
 export function trackedModel(occlusion, model, memory) {
   const t = occlusion.tracker, { nodes, verts, points } = occlusion.blocks, { vectors, dsurfs } = t.blocks;
-  const u = new Uint32Array(memory.buffer), i32 = new Int32Array(memory.buffer), b = new Uint8Array(memory.buffer);
-  const f = new Float32Array(memory.buffer), count = k => t.header(k), top = t.header(TRACKER.SURFS_TOP);
-  const range = n => Array.from({ length: n }, (_, i) => i);
-  const out = { ...model, originalNodes: count(TRACKER.TOP),
-    nodes: range(count(TRACKER.NODES_NUM)).map(i => {
-      const o = (nodes >>> 2) + 16 * i, at = nodes + 64 * i;
-      return { plane: [f[o], f[o + 1], f[o + 2], f[o + 3]], zoneMask: [u[o + 4], u[o + 5]], vertexPool: i32[o + 6],
-        surface: i32[o + 7], back: i32[o + 8], front: i32[o + 9], coplanar: i32[o + 10], collisionBound: i32[o + 11],
-        renderBound: i32[o + 12], zones: [b[at + 52], b[at + 53]], vertexCount: b[at + 54], flags: b[at + 55],
-        leaves: [i32[o + 14], i32[o + 15]] };
-    }),
-    vertices: range(count(TRACKER.VERTS_NUM)).map(i => ({ point: i32[(verts >>> 2) + 2 * i], side: i32[(verts >>> 2) + 2 * i + 1] })),
-    points: range(count(TRACKER.POINTS_NUM)).map(i => [f[(points >>> 2) + 3 * i], f[(points >>> 2) + 3 * i + 1], f[(points >>> 2) + 3 * i + 2]]),
-    vectors: range(count(TRACKER.VECTORS_NUM)).map(i => [f[(vectors >>> 2) + 3 * i], f[(vectors >>> 2) + 3 * i + 1], f[(vectors >>> 2) + 3 * i + 2]]),
-  };
-  out.surfaces = range(count(TRACKER.SURFS_NUM)).map(i => {
-    if (i < top) return model.surfaces[i];
-    const o = (dsurfs >>> 2) + DSURF.WORDS * (i - top);
-    return { texture: null, flags: u[o + DSURF.FLAGS], base: u[o + DSURF.PBASE], normal: u[o + DSURF.VNORMAL],
-      textureU: u[o + DSURF.VTEXU], textureV: u[o + DSURF.VTEXV], lightMap: i32[o + DSURF.LIGHTMAP],
-      brushPolygon: i32[o + DSURF.BRUSHPOLY], dynamic: true, mover: u[o + DSURF.ACTOR] - 0x40000000 };
-  });
-  return out;
+  const buffer = memory.buffer, u = new Uint32Array(buffer), i32 = new Int32Array(buffer), f = new Float32Array(buffer);
+  const count = k => t.header(k), top = t.header(TRACKER.SURFS_TOP);
+  // The tracker's arrays as typed tables of their own (the node block is the table's layout): copies, since the tracker goes on writing.
+  const nodeTable = new BspNodes(count(TRACKER.NODES_NUM));
+  nodeTable.u8.set(new Uint8Array(buffer, nodes, 64 * nodeTable.length));
+  const vertexTable = new Vertices(count(TRACKER.VERTS_NUM));
+  vertexTable.words.set(i32.subarray(verts >>> 2, (verts >>> 2) + 2 * vertexTable.length));
+  const vec3s = (at, n) => { const table = new Vec3s(n); table.data.set(f.subarray(at >>> 2, (at >>> 2) + 3 * n)); return table; };
+  const surfaces = new TrackedSurfaces(count(TRACKER.SURFS_NUM), top);
+  for (let i = 0; i < surfaces.length; i++) {
+    if (i < top) { surfaces.words.set(model.surfaces.words.subarray(SURF.WORDS * i, SURF.WORDS * i + SURF.WORDS), SURF.WORDS * i); continue; }
+    const o = (dsurfs >>> 2) + DSURF.WORDS * (i - top), w = surfaces.words, r = SURF.WORDS * i;
+    w[r + SURF.FLAGS] = u[o + DSURF.FLAGS]; w[r + SURF.BASE] = u[o + DSURF.PBASE]; w[r + SURF.NORMAL] = u[o + DSURF.VNORMAL];
+    w[r + SURF.TEXTURE_U] = u[o + DSURF.VTEXU]; w[r + SURF.TEXTURE_V] = u[o + DSURF.VTEXV]; w[r + SURF.LIGHT_MAP] = i32[o + DSURF.LIGHTMAP];
+    w[r + SURF.BRUSH_POLYGON] = i32[o + DSURF.BRUSHPOLY];
+    surfaces.movers[i - top] = u[o + DSURF.ACTOR] - 0x40000000;
+  }
+  return { ...model, originalNodes: count(TRACKER.TOP), nodes: nodeTable, vertices: vertexTable,
+    points: vec3s(points, count(TRACKER.POINTS_NUM)), vectors: vec3s(vectors, count(TRACKER.VECTORS_NUM)), surfaces };
 }
 
 /** `level.decalSource` for script-decal.mjs levelDecals: the tracked model

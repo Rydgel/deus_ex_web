@@ -32,7 +32,7 @@ export function decalModelJson(name, map, { model = map.model, moverRotation = n
       surfs: model.surfaces.map(s => ({ flags: s.flags >>> 0, base: s.base, normal: s.normal,
         brushActor: s.brushActor ? objectAt(map.pkg, s.brushActor).className : null,
         ...(s.dynamic ? { mover: moverRotation(s.mover) } : {}) })),
-      leafHulls: model.leafHulls, rootOutside: model.rootOutside,
+      leafHulls: Array.from(model.leafHulls), rootOutside: model.rootOutside,
     },
     actors: map.actors.filter(a => a.values.Location).map(a => ({ index: a.index, name: a.name, className: a.className,
       location: a.values.Location, collisionRadius: a.values.CollisionRadius, collisionHeight: a.values.CollisionHeight })),

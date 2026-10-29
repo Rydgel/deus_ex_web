@@ -102,13 +102,13 @@ const NORMAL_BODY = new Set([0, 1, 2, 3, 11, 19]);
 const second = { ambient: zoneTriples }, chain = [];
 let surfaces = 0;
 for (let index = 0; index < model.surfaces.length; index += surfaceEvery) {
-  const surface = model.surfaces[index], lm = model.lightMaps[surface.lightMap];
+  const surface = model.surfaces.at(index), lm = model.lightMaps.at(surface.lightMap);
   if (!lm || lm.lightActors == null || lm.lightActors < 0 || surface.flags & 0x80) continue;
   let basis;
   try { basis = lightmapBasis(model, surface, lm); } catch { continue; }
   const [width, height] = lm.clamp, pitch = (width + 7) >> 3;
-  const facet = { origin: model.points[surface.base], axisU: model.vectors[surface.textureU],
-    axisV: model.vectors[surface.textureV], normal: model.vectors[surface.normal],
+  const facet = { origin: model.points.at(surface.base), axisU: model.vectors.at(surface.textureU),
+    axisV: model.vectors.at(surface.textureV), normal: model.vectors.at(surface.normal),
     pan: [lm.pan[0], lm.pan[1]], scale: lm.scale, clamp: lm.clamp };
   const p00 = basis.point(0, 0);
   const grid = { start: p00.map(Math.fround), stepU: basis.point(1, 0).map((v, i) => Math.fround(v - p00[i])),

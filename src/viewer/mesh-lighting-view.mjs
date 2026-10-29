@@ -142,9 +142,10 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   const permeatingRun = iLeaf => {
     let run = frame.runs.get(iLeaf);
     if (run) return run;
-    const leaf = frame.model.leaves[iLeaf], lights = frame.model.lights, refs = [], handles = [];
-    if (leaf && leaf.permeating >= 0)
-      for (let i = leaf.permeating; i < lights.length && lights[i]; i++) {
+    const leaves = frame.model.leaves, lights = frame.model.lights, refs = [], handles = [];
+    const permeating = iLeaf >= 0 && iLeaf < leaves.length ? leaves.permeating(iLeaf) : -1;
+    if (permeating >= 0)
+      for (let i = permeating; i < lights.length && lights[i]; i++) {
         const name = exportName(lights[i]), light = name && frame.byName.get(name);
         refs.push(lights[i]); handles.push(light ? handleOf(light) : 0xffffffff);
       }

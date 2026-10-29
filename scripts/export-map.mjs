@@ -22,7 +22,7 @@ try {
   for (const t of triangles) {
     if (t.surface !== currentSurface) {
       currentSurface = t.surface;
-      const texture = objectAt(pkg, model.surfaces[t.surface].texture)?.path ?? 'None';
+      const texture = objectAt(pkg, model.surfaces.at(t.surface).texture)?.path ?? 'None';
       lines.push(`g surface_${t.surface}_${texture.replace(/[^a-zA-Z0-9_.-]/g, '_')}`);
     }
     lines.push(`f ${t.points.map(i => i + 1).join(' ')}`);
@@ -36,7 +36,7 @@ try {
 
   // A geometry footprint is a diagnostic, not a claim to reproduce the game's appearance.
   const usedPoints = new Set(triangles.flatMap(t => t.points));
-  const points = [...usedPoints].map(i => model.points[i]);
+  const points = [...usedPoints].map(i => model.points.at(i));
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
   for (const p of points) for (let axis = 0; axis < 2; axis++) {
     min[axis] = Math.min(min[axis], p[axis]); max[axis] = Math.max(max[axis], p[axis]);
@@ -49,14 +49,14 @@ try {
   const edges = new Set();
   const paths = [];
   for (const node of model.nodes) {
-    if (node.vertexCount < 3 || model.surfaces[node.surface].flags & 1) continue;
+    if (node.vertexCount < 3 || model.surfaces.at(node.surface).flags & 1) continue;
     for (let i = 0; i < node.vertexCount; i++) {
-      const a = model.vertices[node.vertexPool + i].point;
-      const b = model.vertices[node.vertexPool + (i + 1) % node.vertexCount].point;
+      const a = model.vertices.at(node.vertexPool + i).point;
+      const b = model.vertices.at(node.vertexPool + (i + 1) % node.vertexCount).point;
       const key = a < b ? `${a}:${b}` : `${b}:${a}`;
       if (edges.has(key)) continue;
       edges.add(key);
-      const from = project(model.points[a]), to = project(model.points[b]);
+      const from = project(model.points.at(a)), to = project(model.points.at(b));
       if (from.join(',') !== to.join(',')) paths.push(`M${from.join(',')}L${to.join(',')}`);
     }
   }

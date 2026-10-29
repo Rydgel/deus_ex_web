@@ -53,7 +53,7 @@ export function traceExtentJs(model,start,end,extent,ownerCoords=null){
  const traversalPlanes=new Map(),hullPlanes=new Map();
  function transformed(index,hull){
   const cache=hull?hullPlanes:traversalPlanes;if(cache.has(index))return cache.get(index);
-  const p=nodes[index].plane;
+  const p=nodes.planeArray(index);
   if(!rows)return p;
   // Traversal dot uses Z/Y/X; TransformPlaneByOrtho uses Y/Z/X stores.
   const n=rows.map(row=>f(hull?row[1]*p[1]+row[2]*p[2]+row[0]*p[0]:dot(row,p)));
@@ -62,12 +62,12 @@ export function traceExtentJs(model,start,end,extent,ownerCoords=null){
  }
  let hit=null,visits=0;
  function leaf(index){
-  const bound=nodes[index].collisionBound;if(bound===-1)return;
+  const bound=nodes.collisionBound(index);if(bound===-1)return;
   const words=model.leafHulls,planes=[];let cursor=bound;
   if(!Number.isInteger(cursor)||cursor<0||cursor>=words.length)throw Error('Invalid collision hull offset');
-  while(words[cursor]!==-1&&planes.length<64){const ref=words[cursor++],node=ref&~0x40000000;if(!nodes[node])throw Error('Invalid hull node');let p=transformed(node,true);if(ref&0x40000000)p=p.map(v=>-v);planes.push(p);}
+  while(words[cursor]!==-1&&planes.length<64){const ref=words[cursor++],node=ref&~0x40000000;if(!(node>=0&&node<nodes.length))throw Error('Invalid hull node');let p=transformed(node,true);if(ref&0x40000000)p=p.map(v=>-v);planes.push(p);}
   if(words[cursor]!==-1)throw Error('Hull exceeds native64-plane capacity');
-  const bounds=words.slice(cursor+1,cursor+7).map(asFloat);if(bounds.length!==6||!bounds.every(Number.isFinite))throw Error('Invalid hull bounds');
+  const bounds=Array.from(words.subarray(cursor+1,cursor+7),asFloat);if(bounds.length!==6||!bounds.every(Number.isFinite))throw Error('Invalid hull bounds');
   let enter=-1,leave=hit?.rawTime??2,normal=[0,0,0];
   function clip(p){
    const push=storedSupport(p,extent),a=f(dot(start,p)-p[3]),b=f(dot(end,p)-p[3]);
@@ -97,12 +97,12 @@ export function traceExtentJs(model,start,end,extent,ownerCoords=null){
  while(stack.length){let {index,parent,outside}=stack.pop();
   if(index===-1){if(!outside)leaf(parent);continue;}
   if(++visits>nodes.length*8+8)throw Error('Invalid cyclic extent BSP');
-  const node=nodes[index];if(!node)throw Error('Invalid extent BSP node');
+  if(!(index>=0&&index<nodes.length))throw Error('Invalid extent BSP node');
   const p=transformed(index,false),a=dot(start,p)-p[3],b=xyz(end,p)-p[3];
   const pad=support(p,[extent[0]*f(1.1),f(extent[1]*f(1.1)),f(extent[2]*f(1.1))]);
   const visit=[a<=pad||b<=pad,a>=-pad||b>=-pad],near=a>=b?1:0;
-  const solid=node.vertexCount>0&&!(node.flags&0x21);
-  const branches=[{index:node.back,parent:index,outside:outside&&!solid},{index:node.front,parent:index,outside:outside||solid}];
+  const solid=nodes.vertexCount(index)>0&&!(nodes.flags(index)&0x21);
+  const branches=[{index:nodes.back(index),parent:index,outside:outside&&!solid},{index:nodes.front(index),parent:index,outside:outside||solid}];
   if(visit[1-near])stack.push(branches[1-near]);if(visit[near])stack.push(branches[near]);
  }
  if(!hit)return null;

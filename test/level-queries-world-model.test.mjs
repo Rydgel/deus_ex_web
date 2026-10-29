@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLevelQueries } from '../src/runtime/level-queries.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // lineCheck's `worldModel` stands for Level->Model in the world part of
 // SingleLineCheck only (docs/coronas.md "Lights behind a mover's fragments":
 // the moving brush tracker's model, bsp-occlusion.mjs lineModel).
-const empty = { rootOutside: 1, leafHulls: [], nodes: [] };
-const wall = { rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] };
+const empty = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [] });
+const wall = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] });
 const levelInfo = { id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] };
 
 test('a world model replaces Level->Model for TRACE_Level and leaves the actor checks to the hash', () => {

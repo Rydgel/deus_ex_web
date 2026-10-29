@@ -31,8 +31,8 @@ function checkEntry(entry, frame, depth, where, model, details) {
   const facet = { origin: d.facet[0].map(f), u: d.facet[1].map(f), v: d.facet[2].map(f) };
   const stage = { uIndex: d.stage[0], vIndex: d.stage[1], uScale: f(d.stage[2]), vScale: f(d.stage[3]) };
   // The facet and the stage as the port computes them (Render.dll's block + TransformVectorBy; SetTexture's bin and stage code).
-  const surface = model.surfaces[entry.iSurf], info = details[entry.iSurf];
-  const own = facetOf(frame, model.points[surface.base], model.vectors[surface.textureU], model.vectors[surface.textureV]);
+  const surface = model.surfaces.at(entry.iSurf), info = details[entry.iSurf];
+  const own = facetOf(frame, model.points.at(surface.base), model.vectors.at(surface.textureU), model.vectors.at(surface.textureV));
   for (const key of ['origin', 'u', 'v']) assert.deepEqual(own[key].map(v => word(floatWord(v))), d.facet[{ origin: 0, u: 1, v: 2 }[key]].map(word), `${where}: facet ${key}`);
   const ownStage = detailStage(info.uSize, info.vSize, wordFloat(info.scaleBits[0]));
   assert.deepEqual([ownStage.uIndex, ownStage.vIndex, word(floatWord(ownStage.uScale)), word(floatWord(ownStage.vScale))], d.stage.map(word), `${where}: stage values`);

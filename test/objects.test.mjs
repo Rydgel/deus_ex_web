@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readObject } from '../src/unreal/objects.mjs';
 import { readModel, triangulateModel } from '../src/unreal/model.mjs';
+import { modelObjects } from '../src/unreal/bsp-model.mjs';
 
 class Writer {
   bytes = [];
@@ -96,9 +97,9 @@ function modelFixture({ staleVertex = false, invalidLiveVertex = false, badNode 
 test('compiled BSP model yields the expected convex polygon triangle', () => {
   const { pkg, data } = modelFixture();
   const m = readModel(pkg, data, 1);
-  assert.deepEqual(m.points, [[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
+  assert.deepEqual(modelObjects(m).points, [[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
   assert.deepEqual(triangulateModel(m), [{ points: [0, 1, 2], surface: 0, node: 0 }]);
-  m.surfaces[0].flags = 1;
+  m.surfaces.words[1] = 1; // the surface's flags
   assert.deepEqual(triangulateModel(m), []);
   assert.equal(triangulateModel(m, { includeInvisible: true }).length, 1);
 });

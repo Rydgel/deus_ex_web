@@ -40,7 +40,7 @@ const transforms = matrix => { const normal = new THREE.Matrix3().getNormalMatri
   return { transform: p => fromView(new THREE.Vector3(...toView(p)).applyMatrix4(matrix).toArray()),
     transformNormal: n => fromView(new THREE.Vector3(...toView(n)).applyMatrix3(normal).toArray()) }; };
 const leafOf = location => pointRegion(map.model, location, {}, []).leaf;
-const permeating = leaf => { const refs = [], start = leaf >= 0 ? map.model.leaves[leaf].permeating : -1;
+const permeating = leaf => { const refs = [], start = leaf >= 0 ? map.model.leaves.at(leaf).permeating : -1;
   for (let i = start; i >= 0 && map.model.lights[i]; i++) refs.push(map.model.lights[i]); return refs; };
 const lightValues = new Map(await Promise.all([...new Set(map.model.lights.filter(Boolean))].map(async ref =>
   [ref, await defaults.forActor(asset, map.actors.find(a => a.index === ref))])));
@@ -54,7 +54,7 @@ for (const name of ['BreakableGlass0', 'DeusExMover4']) {
   const authored = brushMatrix(actor.values), { transform, transformNormal } = transforms(authored);
   lighting.dynamicLightMover(name, { specialLit: values.bSpecialLit });
   const zone = pointZone(map.model, transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2)));
-  const records = [...new Set(triangles.map(t => t.surface))].filter(s => !(model.surfaces[s].flags & (POLY.Invisible | POLY.Unlit)))
+  const records = [...new Set(triangles.map(t => t.surface))].filter(s => !(model.surfaces.at(s).flags & (POLY.Invisible | POLY.Unlit)))
     .map(s => lighting.surface(model, s, zone, transform, transformNormal, name)).filter(Boolean);
   const rotation = actor.values.Rotation ?? [0, 0, 0];
   // As world.mjs relightMover: the light maps are built again only for a new cache header.
@@ -75,7 +75,7 @@ for (const name of ['BreakableGlass0', 'DeusExMover4']) {
   if (rebuilt.length !== records.length) fail(`${name}: ${rebuilt.length} of ${records.length} light maps built again at the slid Location`);
   const candidates = permeating(leaf);
   for (const r of records) {
-    const origin = transforms(moved).transform(model.points[r.surface.base]), normal = transforms(moved).transformNormal(model.vectors[r.surface.normal]);
+    const origin = transforms(moved).transform(model.points.at(r.surface.base)), normal = transforms(moved).transformNormal(model.vectors.at(r.surface.normal));
     const expected = candidates.filter(ref => { const v = lightValues.get(ref), l = v.Location ?? [0, 0, 0];
       return l.reduce((sum, c, i) => sum + (c - origin[i]) * normal[i], 0) > 0 && Boolean(v.bSpecialLit) === Boolean(values.bSpecialLit); });
     const got = r.lightEntries.map(e => e.ref);

@@ -9,14 +9,15 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { traceRay } from '../src/runtime/ray.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { nativeModel } from './native-model.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), f = Math.fround, reports = [];
 const point = value => [f(value), 0, 0];
-const plane = { rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], zoneMask: [0, 0],
+const plane = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], zoneMask: [0, 0],
   vertexPool: 0, surface: 0, back: -1, front: -1, coplanar: -1, collisionBound: -1,
-  renderBound: -1, zones: [0, 0], vertexCount: 4, flags: 0, leaves: [-1, -1] }] };
+  renderBound: -1, zones: [0, 0], vertexCount: 4, flags: 0, leaves: [-1, -1] }] });
 const groups = [{ name: 'one-plane', model: plane, cases: [] }];
 for (const a of [-10, -.001001, -.001, -.000999, 0, .000999, .001, .001001, 10]) {
   for (const extraNodeFlags of [0, 0x10, 1]) groups[0].cases.push({ start: point(a),

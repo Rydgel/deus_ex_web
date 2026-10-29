@@ -21,12 +21,13 @@ export function mirrorMatrix(plane) {
  * left out so the caller reports it. */
 export function mirrorPlanes(model) {
   const planes = new Map(), mixed = new Set();
-  for (const node of model.nodes) {
-    const surface = model.surfaces[node.surface];
-    if (!surface || !(surface.flags & POLY.Mirrored) || mixed.has(node.surface)) continue;
-    const plane = node.plane.map(Math.fround), seen = planes.get(node.surface);
-    if (!seen) planes.set(node.surface, plane);
-    else if (seen.join() !== plane.join()) { planes.delete(node.surface); mixed.add(node.surface); }
+  const { nodes, surfaces } = model;
+  for (let i = 0; i < nodes.length; i++) {
+    const surface = nodes.surface(i);
+    if (!(surface >= 0 && surface < surfaces.length) || !(surfaces.flags(surface) & POLY.Mirrored) || mixed.has(surface)) continue;
+    const plane = nodes.planeArray(i).map(Math.fround), seen = planes.get(surface);
+    if (!seen) planes.set(surface, plane);
+    else if (seen.join() !== plane.join()) { planes.delete(surface); mixed.add(surface); }
   }
   return planes;
 }
@@ -73,9 +74,9 @@ export function createMirrors(notes, displayGamma) {
   }
   function unsupported(message) { stats.unsupportedSurfaces++; notes.add(message); return null; }
   function surface(model, surfaceIndex, actorName) {
-    const surface = model.surfaces[surfaceIndex];
-    if (!(surface.flags & POLY.Mirrored)) return null;
-    if (surface.flags & (POLY.Masked | POLY.Modulated | POLY.TwoSided))
+    const surfaceFlags = model.surfaces.flags(surfaceIndex);
+    if (!(surfaceFlags & POLY.Mirrored)) return null;
+    if (surfaceFlags & (POLY.Masked | POLY.Modulated | POLY.TwoSided))
       return unsupported('Masked, modulated and two-sided mirrors remain unsupported; they draw as ordinary surfaces.');
     if (!modelPlanes.has(model)) modelPlanes.set(model, mirrorPlanes(model));
     const node = modelPlanes.get(model).get(surfaceIndex);
@@ -93,7 +94,7 @@ export function createMirrors(notes, displayGamma) {
         texture: { value: null }, size: { value: new THREE.Vector2(1, 1) }, active: { value: 0 } });
     }
     stats.surfaces++; stats.planes = planes.size;
-    if (!(surface.flags & 0x47)) stats.opaqueSurfaces++;
+    if (!(surfaceFlags & 0x47)) stats.opaqueSurfaces++;
     return planes.get(key);
   }
   /** A moving group's world plane and reflection from its mover's current

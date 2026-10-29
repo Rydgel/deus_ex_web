@@ -117,13 +117,15 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   // each surface texture's PolyFlags (UTexture +0x80, the packed bools).
   try {
     const textureFlags = new Map(), surfaceTextureFlags = [];
-    for (const surface of map.model.surfaces) {
-      if (!surface.texture) { surfaceTextureFlags.push(0); continue; }
-      if (!textureFlags.has(surface.texture)) {
-        const object = await assets.resolve(asset, surface.texture);
-        textureFlags.set(surface.texture, texturePolyFlags(readTexture(object.asset, object.index).values));
+    const surfaces = map.model.surfaces;
+    for (let i = 0; i < surfaces.length; i++) {
+      const texture = surfaces.texture(i);
+      if (!texture) { surfaceTextureFlags.push(0); continue; }
+      if (!textureFlags.has(texture)) {
+        const object = await assets.resolve(asset, texture);
+        textureFlags.set(texture, texturePolyFlags(readTexture(object.asset, object.index).values));
       }
-      surfaceTextureFlags.push(textureFlags.get(surface.texture));
+      surfaceTextureFlags.push(textureFlags.get(texture));
     }
     const kernel = (await loadScriptVmKernel()).occlusion;
     if (!kernel) throw new Error('the script VM core predates it; run npm run build:wasm');
@@ -146,7 +148,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     // Model->Surfs[Node.iSurf].Texture.
     const polygonTextures = new Map();
     if (trackerMovers) {
-      const records = await walkingSurfaceTextures(assets, asset, { surfaces: trackerMovers.flatMap(m => m.polys.map(p => ({ texture: p.texture }))) });
+      const polygons = trackerMovers.flatMap(m => m.polys.map(p => p.texture));
+      const records = await walkingSurfaceTextures(assets, asset, { surfaces: { length: polygons.length, texture: i => polygons[i] } });
       let k = 0;
       for (const m of trackerMovers) { polygonTextures.set(m, records.slice(k, k + m.polys.length)); k += m.polys.length; }
     }
@@ -175,7 +178,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       const specs = trackerMovers ? movers.map((m, i) => trackerMoverSpec(m, i, { hidden: read(actors[i], 'bHidden'),
         location: read(actors[i], 'Location'), rotation: read(actors[i], 'Rotation'), prePivot: read(actors[i], 'PrePivot') })) : null;
       current = createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
-        zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)), tracker: specs ? { movers: specs } : null,
+        zoneActors: Array.from({ length: map.model.zones.length }, (_, i) => (map.model.zones.actor(i) > 0 ? map.model.zones.actor(i) : 0)), tracker: specs ? { movers: specs } : null,
         detailTable: detail?.some(Boolean) ? detail : null });
       // The constructor's Update(NULL) at the game thread's control word,
       // unmeasured: PC64 is the assumption (docs/brush-tracker.md "Precision").

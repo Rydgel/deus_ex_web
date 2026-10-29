@@ -4,6 +4,7 @@ import { lightColor, shadowMask, lightmapBasis, lightAttenuation, pointZone } fr
 import { LightAtlas } from '../src/viewer/light-atlas.mjs';
 import { readPolys, moverModelFromPolys } from '../src/unreal/polys.mjs';
 import { POLY } from '../src/unreal/geometry.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
 test('modulated surfaces and zone portals use distinct original flags', () => {
@@ -35,7 +36,7 @@ test('shadow masks respect row padding, light offset, bit order and original ker
 });
 
 test('lightmap sample positions invert scaled and skewed texture axes', () => {
-  const model = { points: [[10, 20, 30]], vectors: [[2, 1, 0], [0, -4, 0], [0, 0, 2]] };
+  const model = modelFromObjects({ points: [[10, 20, 30]], vectors: [[2, 1, 0], [0, -4, 0], [0, 0, 2]] });
   const surface = { base: 0, textureU: 0, textureV: 1, normal: 2 }, lm = { pan: [-9, 12], scale: [16, 8] };
   const b = lightmapBasis(model, surface, lm);
   for (const [x, y] of [[0, 0], [5, 3], [-2, 7]]) {
@@ -64,9 +65,9 @@ test('native falloff combines incidence with smooth radius falloff and cone dire
 
 test('zone lookup selects authored BSP sides and rejects cycles', () => {
   const node = { plane: [1, 0, 0, 10], front: -1, back: -1, zones: [3, 7] };
-  assert.equal(pointZone({ nodes: [node] }, [11, 0, 0]), 7);
-  assert.equal(pointZone({ nodes: [node] }, [9, 0, 0]), 3);
-  assert.throws(() => pointZone({ nodes: [{ ...node, front: 0 }] }, [11, 0, 0]), /Cyclic/);
+  assert.equal(pointZone(modelFromObjects({ nodes: [node] }), [11, 0, 0]), 7);
+  assert.equal(pointZone(modelFromObjects({ nodes: [node] }), [9, 0, 0]), 3);
+  assert.throws(() => pointZone(modelFromObjects({ nodes: [{ ...node, front: 0 }] }), [11, 0, 0]), /Cyclic/);
 });
 
 test('atlas padding prevents neighboring lightmaps from bleeding into samples', () => {
@@ -104,7 +105,7 @@ test('mover polygon decoder and correspondence use authored bases, not empty BSP
   const lit = [{ ...polygons[0], brushPolygon: 3, flags: 0x41000000 }, { ...polygons[0], brushPolygon: -1, flags: 1 }];
   const mover = moverModelFromPolys(model, lit, { specialLit: true });
   assert.deepEqual(mover.model.surfaces.map(s => s.lightMap), [3, -1]);
-  assert.equal(mover.model.surfaces[0].flags, 0x100000, 'PolyFlags & 0x3cffffff, PF_SpecialLit for a bSpecialLit mover');
+  assert.equal(mover.model.surfaces.flags(0), 0x100000, 'PolyFlags & 0x3cffffff, PF_SpecialLit for a bSpecialLit mover');
   assert.equal(mover.triangles.length, 1, 'an invisible polygon draws nothing');
   assert.equal(model.surfaces[0].lightMap, -1);
   assert.throws(() => readPolys(pkg, bytes.subarray(0, -1), 1), /Truncated/);

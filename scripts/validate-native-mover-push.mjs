@@ -26,7 +26,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {ClassDefaults} from '../src/unreal/classes.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {readModel} from '../src/unreal/model.mjs';
-import {nativeModel} from './native-model.mjs';
+import {nativeModel,typedSceneModels} from './native-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {createLevelQueries} from '../src/runtime/level-queries.mjs';
@@ -174,7 +174,7 @@ const [saved,cases,native]=raw.map(b=>JSON.parse(b));total+=cases.length;
 for(let index=0;index<cases.length;index++){
  const c=cases[index],scene=structuredClone(saved),actors=scene.actors,expected=native.results[index];
  const bits=new DataView(new ArrayBuffer(4));
- for(const model of [scene.model,...actors.map(a=>a.model).filter(Boolean)])for(const node of model.nodes)if(node.planeBits)node.plane=node.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});
+ typedSceneModels(scene,actors);
  for(const a of actors){
   const pawn=a.kind==='Pawn';
   Object.assign(a,{flags:a.collisionBits,actorFlags:0x80000,static:false,movable:true,movingBrush:Boolean(a.model),isPawn:pawn,controlledPlayer:false,pawnFlags:0,

@@ -49,7 +49,7 @@ for (const [mapName, options] of [['01_NYC_UNATCOIsland', { seed: 13, count: 12,
         if (pv < 0 || seen.has(pv)) continue;
         seen.add(pv);
         // Unreal world coordinates in; the FTransform's view point and the vertex out.
-        u.points.push({ world: model.points[pv], view: [t[0], t[1], t[2]], mode: 0 });
+        u.points.push({ world: model.points.at(pv), view: [t[0], t[1], t[2]], mode: 0 });
         u.expected.push(poly.d3d[k]);
       }
       units.push(u);

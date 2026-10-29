@@ -86,27 +86,26 @@ const filterDistance = (px, py, pz, pw, lx, ly, lz) => f(f(f(f(lz * pz) + f(ly *
  * Dist < R, and joins every coplanar surface with a light map and matching
  * PF_SpecialLit when both hold. Returns those surface indices. */
 export function filterMovingLight(model, location, radius, specialLit = false) {
-  const surfaces = new Set();
-  if (!model.nodes.length) return surfaces;
+  const surfaces = new Set(), { nodes } = model, modelSurfaces = model.surfaces;
+  if (!nodes.length) return surfaces;
   const [lx, ly, lz] = location.map(f), stack = [0];
   for (let visited = 0; stack.length; visited++) {
-    if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
-    const index = stack.pop(), node = model.nodes[index];
-    if (!node) throw new Error(`Invalid BSP node ${index}`);
-    const [px, py, pz, pw] = node.plane;
-    const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+    if (visited > nodes.length) throw new Error('Cyclic BSP moving-light filter');
+    const index = stack.pop();
+    if (!nodes.has(index)) throw new Error(`Invalid BSP node ${index}`);
+    const distance = filterDistance(nodes.plane(index, 0), nodes.plane(index, 1), nodes.plane(index, 2), nodes.plane(index, 3), lx, ly, lz);
     if (-radius < distance) {
-      if (node.front >= 0) stack.push(node.front);
+      if (nodes.front(index) >= 0) stack.push(nodes.front(index));
       if (distance < radius) {
-        for (let coplanar = index; coplanar >= 0; coplanar = model.nodes[coplanar].coplanar) {
-          const surfaceIndex = model.nodes[coplanar].surface, surface = model.surfaces[surfaceIndex];
-          if (!surface || !(surface.lightMap >= 0) || !model.lightMaps.length) continue;
-          if (Boolean(surface.flags & 0x100000) !== Boolean(specialLit)) continue;
+        for (let coplanar = index; coplanar >= 0; coplanar = nodes.coplanar(coplanar)) {
+          const surfaceIndex = nodes.surface(coplanar);
+          if (!(surfaceIndex >= 0 && surfaceIndex < modelSurfaces.length) || !(modelSurfaces.lightMap(surfaceIndex) >= 0) || !model.lightMaps.length) continue;
+          if (Boolean(modelSurfaces.flags(surfaceIndex) & 0x100000) !== Boolean(specialLit)) continue;
           surfaces.add(surfaceIndex);
         }
       }
     }
-    if (distance < radius && node.back >= 0) stack.push(node.back);
+    if (distance < radius && nodes.back(index) >= 0) stack.push(nodes.back(index));
   }
   return surfaces;
 }
@@ -118,22 +117,22 @@ export function filterMovingLight(model, location, radius, specialLit = false) {
  * items start with HitLeaf clear, so every such leaf is taken. Returns the
  * leaf indices in first-hit order of this depth-first walk. */
 export function movingLightLeaves(model, location, radius) {
-  const leaves = [], seen = new Set();
-  if (!model.nodes.length) return leaves;
+  const leaves = [], seen = new Set(), { nodes } = model;
+  if (!nodes.length) return leaves;
   const [lx, ly, lz] = location.map(f), stack = [0];
   const add = leaf => { if (leaf >= 0 && !seen.has(leaf)) { seen.add(leaf); leaves.push(leaf); } };
   for (let visited = 0; stack.length; visited++) {
-    if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
-    const node = model.nodes[stack.pop()];
-    const [px, py, pz, pw] = node.plane;
-    const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+    if (visited > nodes.length) throw new Error('Cyclic BSP moving-light filter');
+    const index = stack.pop();
+    if (!nodes.has(index)) throw new Error(`Invalid BSP node ${index}`);
+    const distance = filterDistance(nodes.plane(index, 0), nodes.plane(index, 1), nodes.plane(index, 2), nodes.plane(index, 3), lx, ly, lz);
     if (-radius < distance) {
-      add(node.leaves[1]);
-      if (node.front >= 0) stack.push(node.front);
+      add(nodes.leaf(index, 1));
+      if (nodes.front(index) >= 0) stack.push(nodes.front(index));
     }
     if (distance < radius) {
-      add(node.leaves[0]);
-      if (node.back >= 0) stack.push(node.back);
+      add(nodes.leaf(index, 0));
+      if (nodes.back(index) >= 0) stack.push(nodes.back(index));
     }
   }
   return leaves;
@@ -181,34 +180,35 @@ export function movingLightInView(location, values, planes) {
  * ancestors of the viewer's leaf are, which is where the corona pass reads).
  * Returns Map(leaf -> light indices, head first). */
 export function movingLightLeafLists(model, lights) {
-  const lists = new Map();
-  if (!model.nodes.length || !lights.length) return lists;
+  const lists = new Map(), { nodes } = model;
+  if (!nodes.length || !lights.length) return lists;
   const locations = lights.map(light => light.location.map(f));
   const pending = new Map([[0, lights.map((_, i) => ({ i, hit: false })).reverse()]]), stack = [0];
   const take = (leaf, i) => { const list = lists.get(leaf); if (list) list.unshift(i); else lists.set(leaf, [i]); };
   for (let visited = 0; stack.length; visited++) {
-    if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
+    if (visited > nodes.length) throw new Error('Cyclic BSP moving-light filter');
     const index = stack.pop(), items = pending.get(index);
     pending.delete(index);
     if (!items) continue;
-    const node = model.nodes[index], [px, py, pz, pw] = node.plane;
+    const px = nodes.plane(index, 0), py = nodes.plane(index, 1), pz = nodes.plane(index, 2), pw = nodes.plane(index, 3);
+    const nodeFront = nodes.front(index), nodeBack = nodes.back(index), leafFront = nodes.leaf(index, 1), leafBack = nodes.leaf(index, 0);
     const front = [], back = [];
     for (const { i, hit } of items) {
       const [lx, ly, lz] = locations[i], radius = lights[i].radius;
       const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
       if (-radius < distance) {
         let hits = hit;
-        if (!hit && node.leaves[1] >= 0) { take(node.leaves[1], i); hits = true; }
-        if (node.front >= 0) front.unshift({ i, hit: hits });
+        if (!hit && leafFront >= 0) { take(leafFront, i); hits = true; }
+        if (nodeFront >= 0) front.unshift({ i, hit: hits });
       }
       if (distance < radius) {
         let hits = hit;
-        if (!hit && node.leaves[0] >= 0) { take(node.leaves[0], i); hits = true; }
-        if (node.back >= 0) back.unshift({ i, hit: hits });
+        if (!hit && leafBack >= 0) { take(leafBack, i); hits = true; }
+        if (nodeBack >= 0) back.unshift({ i, hit: hits });
       }
     }
-    if (front.length) { pending.set(node.front, front); stack.push(node.front); }
-    if (back.length) { pending.set(node.back, back); stack.push(node.back); }
+    if (front.length) { pending.set(nodeFront, front); stack.push(nodeFront); }
+    if (back.length) { pending.set(nodeBack, back); stack.push(nodeBack); }
   }
   return lists;
 }
@@ -224,14 +224,13 @@ function bspTopology(model) {
   const parent = new Int32Array(nodes.length).fill(-1), side = new Uint8Array(nodes.length), owner = new Map();
   let regular = nodes.length > 0;
   for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
     for (let s = 0; s < 2; s++) {
-      const child = s ? node.front : node.back;
+      const child = s ? nodes.front(i) : nodes.back(i);
       if (child >= 0) {
         if (child === 0 || child >= nodes.length || parent[child] !== -1) regular = false;
         else { parent[child] = i; side[child] = s; }
       }
-      const leaf = node.leaves[s];
+      const leaf = nodes.leaf(i, s);
       if (leaf >= 0) owner.set(leaf, owner.has(leaf) ? -1 : i * 2 + s);
     }
   }
@@ -250,7 +249,8 @@ function bspTopology(model) {
  * two owners, or a BSP that is not a tree, goes through the full walk.
  * `locations` are the lights' float32 locations (computed when omitted). */
 export function movingLightLeafList(model, lights, leaf, locations = lights.map(light => light.location.map(f))) {
-  if (!lights.length || !model.nodes.length) return undefined;
+  const { nodes } = model;
+  if (!lights.length || !nodes.length) return undefined;
   if (globalThis.DEUS_EX_LEAF_LISTS === 'full') return movingLightLeafLists(model, lights).get(leaf);
   const topology = bspTopology(model), owner = topology.owner.get(leaf);
   if (owner === undefined) return undefined;
@@ -273,7 +273,7 @@ export function movingLightLeafList(model, lights, leaf, locations = lights.map(
   // Node 0's list holds the candidates prepended one by one: last first.
   for (let j = 0; j < count; j++) { ids[j] = count - 1 - j; hits[j] = 0; }
   for (let k = depth - 1; k >= 0; k--) {
-    const node = model.nodes[walkPath[k]], plane = node.plane, px = plane[0], py = plane[1], pz = plane[2], pw = plane[3];
+    const at = walkPath[k], px = nodes.plane(at, 0), py = nodes.plane(at, 1), pz = nodes.plane(at, 2), pw = nodes.plane(at, 3);
     if (k === 0) {
       // The leaf's node: an item that has not hit a leaf yet and reaches the
       // leaf's side is prepended to the leaf's list.
@@ -292,7 +292,7 @@ export function movingLightLeafList(model, lights, leaf, locations = lights.map(
     // An ancestor: the items reaching the side the path takes go to that
     // child, prepended (the order flips), carrying HitLeaf once this side has
     // a leaf of its own.
-    const s = topology.side[walkPath[k - 1]], leafHere = node.leaves[s] >= 0;
+    const s = topology.side[walkPath[k - 1]], leafHere = nodes.leaf(at, s) >= 0;
     let n = 0;
     for (let j = 0; j < count; j++) {
       const i = ids[j], at = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, at[0], at[1], at[2]);

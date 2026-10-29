@@ -31,6 +31,7 @@ import { createMeshLightManager, setupForActor } from '../src/runtime/mesh-light
 import { gameDirectory } from './game-directory.mjs';
 import { rotationSineTable } from '../src/runtime/coords.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 await loadTraceKernel();
 
 const root = gameDirectory(), files = [];
@@ -70,7 +71,7 @@ for (const mapName of MAPS) {
     if (!v || v.DrawType !== 2 || v.bHidden || !Array.isArray(v.Location)) continue;
     const location = v.Location.map(f), region = pointRegion(model, location, levelInfo.index, zoneRefs);
     if (region.leaf === -1) continue;
-    const run = runOf(model.leaves[region.leaf]);
+    const run = runOf(model.leaves.at(region.leaf));
     const near = run.filter(ref => nonSteady(ref) && Math.hypot(...values.get(ref).Location.map((c, i) => c - location[i])) < worldLightRadius(values.get(ref)));
     if (!near.length) continue;
     taken++;
@@ -132,7 +133,7 @@ scenes.forEach((entry, s) => {
     }, {
       levelInfo: { ambient: ambientOf(entry.levelValues), brightness: f(entry.levelValues.Brightness ?? 1), timeSeconds: frame.timeSeconds },
       noise: { A: Float32Array.from(frame.A) },
-      model: { leaves: [{ permeating: 0 }], lights: [...entry.run, 0] },
+      model: modelFromObjects({ leaves: [{ permeating: 0 }], lights: [...entry.run, 0] }),
       lightOf: ref => objects.get(ref), leafLights: [],
       lineCheck: light => frame.lineChecks[light.actor], viewport: frame, rendMap: 5, noLighting: false, alive: () => true,
       worldToCamera: camera,

@@ -29,9 +29,9 @@ const hex64 = value => {
 };
 
 function nodeCenter(model, i) {
-  const n = model.nodes[i], c = [0, 0, 0];
+  const n = model.nodes.at(i), c = [0, 0, 0];
   for (let k = 0; k < n.vertexCount; k++) {
-    const p = model.points[model.vertices[n.vertexPool + k].point];
+    const p = model.points.at(model.vertices.at(n.vertexPool + k).point);
     for (let j = 0; j < 3; j++) c[j] += p[j] / n.vertexCount;
   }
   return c;
@@ -52,7 +52,7 @@ export async function makeCases(mapName, { seed, count, aimed, views = [], detai
   const pick = list => list[Math.floor(random() * list.length)];
   const targets = [];
   model.nodes.forEach((n, i) => {
-    const flags = (model.surfaces[n.surface].flags | textureFlags[n.surface]) >>> 0;
+    const flags = (model.surfaces.at(n.surface).flags | textureFlags[n.surface]) >>> 0;
     if (aimed && n.vertexCount >= 3 && flags & (MIRRORED | FAKE_BACKDROP))
       targets.push({ center: nodeCenter(model, i), normal: n.plane.slice(0, 3) });
   });
