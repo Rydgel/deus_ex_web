@@ -32,10 +32,14 @@ export const actorOcclusionMode = () => (typeof process !== 'undefined' && proce
  * frame's excluded actor and ViewTarget) is a candidate too, flagged
  * SETUP_ROOT_EXCLUDED. Returns the entries in candidate order: {binding,
  * item, sprite, rootExcluded}. */
+const byOrder = (a, b) => a.order - b.order;
+// The mesh record addresses of one packDynamics call (a scratch, grown as needed: the call's own array of them was a map's result).
+let recordAt = new Uint32Array(1024);
 export function packDynamics(occlusion, { sprites = [], iterators = null, bindings = [], items = [], reads = null,
   levelIndex = null, childFrames = false }) {
   const entries = [];
-  for (const binding of bindings) {
+  for (let b = 0; b < bindings.length; b++) {
+    const binding = bindings[b];
     if (iterators?.has(binding.actor)) continue;
     const index = levelIndex?.get(binding.actor);
     if (index === undefined) continue;
@@ -45,9 +49,17 @@ export function packDynamics(occlusion, { sprites = [], iterators = null, bindin
   }
   for (const { item, binding } of items) entries.push({ order: item.order, binding, item, sprite: null });
   for (const sprite of sprites) entries.push({ order: sprite.order, binding: null, item: null, sprite });
-  entries.sort((a, b) => a.order - b.order);
-  // Mesh records before the views: a new record may grow the memory.
-  const records = entries.map(e => e.binding ? occlusion.meshRecord(e.binding.mesh.key, meshRecordFields(e.binding.payload)) : 0);
+  entries.sort(byOrder);
+  // Mesh records before the views: a new record may grow the memory. A mesh's record is made once (meshRecord keeps it by key), so
+  // its fields are read from the payload only for a key not seen.
+  if (recordAt.length < entries.length) recordAt = new Uint32Array(2 * entries.length);
+  const records = recordAt;
+  for (let i = 0; i < entries.length; i++) {
+    const binding = entries[i].binding;
+    if (!binding) { records[i] = 0; continue; }
+    const key = binding.mesh.key;
+    records[i] = occlusion.meshRecordAt?.(key) ?? occlusion.meshRecord(key, meshRecordFields(binding.payload));
+  }
   const views = occlusion.setupCandidates(entries.length), { u32, f32, i32 } = views;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i], at = views.at + SETUP.WORDS * i;
