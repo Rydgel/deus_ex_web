@@ -124,7 +124,7 @@ export function installPoseFields(host, instance, fields, {values = {}, oldLocat
     const existing = Object.getOwnPropertyDescriptor(host, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
     const entry = new Pose(host, instance, item, cell, field, values);
-    entry.stored = entry.read();
+    if (!item.name) entry.stored = entry.read();   // only OldLocation's fallback reads it
     entry.write(existing?.value === undefined ? entry.fallback() : existing.value);
     defineEntryAccessor(host, item.prop, POSES, item.index);
     installed[item.index] = entry; added.push(item.prop);
