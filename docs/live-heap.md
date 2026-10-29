@@ -22,7 +22,9 @@ Against a running dev server (`node .work/tools/serve.mjs 5190`, or the user's o
   loads the map from the map list, walks forward for 30 s, and forces V8's GC three
   times in each realm. It then writes a heap snapshot of the page and of the
   simulation worker (`--sim inline`: the page only) to `.cache/perf/`. The Island
-  worker's snapshot is about 2 GB.
+  worker's snapshot is about 2 GB. `--mode roam` plays as `hitch-run.mjs --mode roam` does (forward, turning when stuck or
+  at random) instead of walking: after a 240 s roam on master 07de3088 the Island's worker holds 336 MB against 318 MB after
+  the 30 s walk (8.21 M against 7.69 M objects).
 * `node scripts/heap-families.mjs <snapshot> [depth] [top]` groups the live objects by
   owner. An object goes to the family named by the first `depth` property or
   closure-variable names on its shortest path from the roots. Reaching an owner

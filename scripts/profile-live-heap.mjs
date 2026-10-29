@@ -4,6 +4,7 @@
  * mode, of the simulation worker, with each realm's heap usage. Host measurement only. scripts/heap-families.mjs reads the snapshots.
  *
  *   node scripts/profile-live-heap.mjs [--url http://127.0.0.1:5173] [--map 01_NYC_UNATCOIsland] [--sim worker|inline] [--seconds 30]
+ *     [--mode walk|roam] (roam: hitch-run.mjs's roam, forward and turning when stuck or at random)
  *     [--out .cache/perf/heap-island] [--cdp-port 9372]
  *
  * Writes <out>-<sim>-page.heapsnapshot, <out>-<sim>-worker.heapsnapshot (worker mode) and <out>-<sim>.json (outside Git: a snapshot of
@@ -17,6 +18,8 @@ import { debugUrl } from './page-url.mjs';
 const option=(n,f)=>{const i=process.argv.indexOf(`--${n}`);return i<0?f:process.argv[i+1];};
 const url=option('url','http://127.0.0.1:5173'),map=option('map','01_NYC_UNATCOIsland'),sim=option('sim','worker');
 const seconds=Number(option('seconds',30)),out=option('out','.cache/perf/heap-island'),port=Number(option('cdp-port',9372));
+const mode=option('mode','walk');
+if(!['walk','roam'].includes(mode))throw new Error('--mode must be walk or roam');
 mkdirSync(dirname(out),{recursive:true});
 const browser=await chromium.launch({args:[`--use-angle=${process.platform==='darwin'?'metal':'gl'}`,`--remote-debugging-port=${port}`]});
 const page=await (await browser.newContext({viewport:{width:1440,height:960},deviceScaleFactor:1})).newPage();
@@ -27,7 +30,23 @@ await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:
 await page.locator('#map').selectOption(map);
 await page.waitForFunction(m=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===m;},map,{timeout:300000});
 await page.locator('#scene').click({position:{x:576,y:345}});
-await page.keyboard.down('KeyW');await page.waitForTimeout(seconds*1000);await page.keyboard.up('KeyW');
+await page.keyboard.down('KeyW');
+if(mode==='walk')await page.waitForTimeout(seconds*1000);
+else{
+  const positionOf=()=>page.evaluate(()=>window.deusExViewer.status().position);
+  let last=await positionOf(),turns=0;
+  for(const end=Date.now()+seconds*1000;Date.now()<end;){
+    await page.waitForTimeout(1000);
+    const now=await positionOf(),moved=Math.hypot(now[0]-last[0],now[1]-last[1],now[2]-last[2]);last=now;
+    const stuck=moved<30;
+    if(stuck||Math.random()<.15){
+      const key=(turns++%3===2)?'ArrowLeft':'ArrowRight';
+      await page.keyboard.down(key);await page.waitForTimeout(stuck?500+Math.random()*700:200+Math.random()*400);await page.keyboard.up(key);
+      if(stuck)await page.keyboard.press('Space');
+    }
+  }
+}
+await page.keyboard.up('KeyW');
 const status=await page.evaluate(()=>{const s=window.deusExViewer.status();return {map:s.map,sim:s.sim,paused:s.paused,runtimeError:s.runtimeError?.message??null};});
 const {webSocketDebuggerUrl}=await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
 const ws=new WebSocket(webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));
@@ -38,7 +57,7 @@ const send=(method,params={},sessionId)=>new Promise(r=>{const id=next++;waiting
 const {result:{targetInfos}}=await send('Target.getTargets');
 const realms=[['page',targetInfos.find(t=>t.type==='page'&&t.url.startsWith(url))]];
 if(sim==='worker')realms.push(['worker',targetInfos.find(t=>t.type==='worker'&&t.url.includes('sim-worker'))]);
-const report={map,sim,seconds,status,errors,heaps:{}};
+const report={map,sim,seconds,mode,status,errors,heaps:{}};
 for(const [name,info] of realms){
   if(!info){console.log(`no ${name} target`);continue;}
   const {result:{sessionId}}=await send('Target.attachToTarget',{targetId:info.targetId,flatten:true});
