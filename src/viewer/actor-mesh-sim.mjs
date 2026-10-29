@@ -17,8 +17,8 @@ import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
 import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
 import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
-import {fieldAccessor,fieldAccessors} from './actor-fields.mjs';
-import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh-bounds.mjs';
+import {FieldReader,fieldReaders,hasReader} from './actor-fields.mjs';
+import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum,newGroupBoxes,VIEW_BOX_AT} from './gpu-mesh-bounds.mjs';
 import {meshFaceGroups,resolveMeshSkin,resolveMeshSkinNow} from './actor-mesh-skins.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
@@ -177,7 +177,7 @@ function residentResource(runtime,textures,{mesh,skin}) {
  * createMeshBindingNow takes only when resident. */
 function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,drawActor=false,visible=null,
   childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null,lod=true,attach=null}) {
-  const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
+  const own=fieldReaders(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
     'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
     'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType','LODBias','Fatness']);
   // A pawn's third-person weapon (actor-weapon-sim.mjs, docs/weapon-attachment.md): DrawActorSprite draws the
@@ -185,7 +185,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   // DrawMesh gets the hand's Coords: `attach.overrides` replace those reads, `attach.coords(frame)` is the Coords
   // of every GetFrame and LOD call, and the lighting takes the pawn as its light sink.
   if(attach)Object.assign(own,attach.overrides);
-  const read=(object,name)=>object===actor&&Object.hasOwn(own,name)?own[name]():runtime.readNamed(object,name);
+  const read=(object,name)=>object===actor&&hasReader(own,name)?own[name]():runtime.readNamed(object,name);
   const actorName=read(actor,'Name');
   const meshReference=attach?attach.mesh():read(actor,'Mesh');
   const meshTexture=index=>attach?runtime.getMeshTextureOf(meshReference,actor,index):runtime.getActorMeshTexture(actor,index);
@@ -392,10 +392,11 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
     if(gpuHandle)for(const entry of groups.values()){
       // With the LOD a corner may draw any vertex of its wedge collapse
       // chain, morphed toward its collapse target: the boxes cover them all.
-      entry.vertices=meshLod?meshLod.closure(entry.faces):[...new Set(entry.indices)].sort((a,b)=>a-b);
-      entry.boxes=keyframeBoxes(payload,entry.vertices);
-      entry.channelBoxes=Array.from({length:5},()=>new Float64Array(6).fill(NaN));
-      entry.viewBox=new Float64Array(6).fill(NaN);
+      const vertices=meshLod?meshLod.closure(entry.faces):[...new Set(entry.indices)].sort((a,b)=>a-b);
+      entry.boxes=keyframeBoxes(payload,vertices);
+      // (the channels' local boxes and the view box in one array, the view box also a view of its own: gpu-mesh-bounds.mjs)
+      entry.channelBoxes=newGroupBoxes();
+      entry.viewBox=entry.channelBoxes.subarray(VIEW_BOX_AT);
       entry.exact={boundingBox:null,boundingSphere:null};
       entry.mainVisible=true;
     }
@@ -562,8 +563,8 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       try{layout.checkPose(gpuHandle,lastPlan);}
       catch(error){toCpu(error.message);return false;}
       for(const group of groups.values()){
-        for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
-        viewBox(lastPlan,group.channelBoxes,group.viewBox);
+        for(const op of lastPlan.channels)advanceChannelBox(group,op);
+        viewBox(lastPlan,group);
         boxSphere(group);
       }
       updateUnion();
@@ -574,8 +575,8 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       // The first plan (above) is this binding's first GetFrame call.
       try{plannedFrame=firstPassFrame=layout.frame+1;layout.checkPose(gpuHandle,lastPlan);firstPlan=plainPlan(lastPlan);
         for(const group of groups.values()){
-          for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
-          viewBox(lastPlan,group.channelBoxes,group.viewBox);boxSphere(group);
+          for(const op of lastPlan.channels)advanceChannelBox(group,op);
+          viewBox(lastPlan,group);boxSphere(group);
         }
         updateUnion();
       }catch(error){toCpu(error.message);}
@@ -1084,6 +1085,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // URender's LOD settings (lodmesh-lod.mjs RENDER_LOD_SETTINGS; the
   // console's MLOD, MLMODE and MLFIX change them in the original).
   let lodSettings=RENDER_LOD_SETTINGS;
+  // A binding's creation record is a message: it goes to the page when the binding is admitted and nothing here reads it again, so the
+  // binding does not keep it (about forty heap objects a binding: the record, its groups, plan and posed pose).
+  const emitCreation=binding=>{const creation=binding.creation;binding.creation=null;onCreate(creation);};
   const bind=async(actor,options)=>{
     const binding=await createMeshBinding(runtime,actor,{id:nextId++,kernel,lighting,layout,textures,lod,...options});
     return binding;
@@ -1101,7 +1105,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(runtime.readNamed(actor,'bHidden'))continue;
         const binding=await bind(actor,{originalObjectIndex});
         binding.creation.visible=true;
-        npcActors.push(binding);actors.push(binding);bindings.set(actor,binding);onCreate(binding.creation);
+        npcActors.push(binding);actors.push(binding);bindings.set(actor,binding);emitCreation(binding);
       } catch(error) {npcErrors.push({actor:name,message:error.message});}
     }
     if(npcActors.length)errors.push(...npcErrors);
@@ -1158,7 +1162,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   const admit=(actor,readMesh=null)=>{
     if(disposed||!actor||bindings.has(actor)||pending.has(actor))return;
     let mesh;
-    if(readMesh){try{mesh=readMesh();}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
+    if(readMesh){try{mesh=readMesh.read(runtime,'Mesh');}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
     if(failed.get(actor)===mesh)return;
     if(!mesh||(mesh.kind!=='LodMesh'&&mesh.kind!=='Mesh')||!read(actor,'Location'))return;
     // A map with mirrors also admits actors only its child frames draw.
@@ -1175,7 +1179,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       bindings.set(actor,binding);actors.push(binding);(npc?npcActors:propActors).push(binding);refreshSummary();
       // Shown from admission, before its first update (as the layer did).
       binding.creation.visible=drawnInWorld(actor);
-      onCreate(binding.creation);
+      emitCreation(binding);
     };
     const fail=error=>{failed.set(actor,mesh);errors.push({actor:actor.name??'?',message:error.message});};
     // The original's DrawActorSprite draws and stamps an actor spawned in a
@@ -1224,7 +1228,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);
       if(!actor){meshReaders.push(null);continue;}
       let reader=meshAccessors.get(actor);
-      if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+      if(reader===undefined)meshAccessors.set(actor,reader=new FieldReader(actor));
       meshReaders.push(reader);
     }
     liveEpoch=epoch;
@@ -1246,7 +1250,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         const actor=liveList[i];
         if(!actor){meshReaders[i]=null;continue;}
         let reader=meshAccessors.get(actor);
-        if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+        if(reader===undefined)meshAccessors.set(actor,reader=new FieldReader(actor));
         meshReaders[i]=reader;
       }
       for(const actor of meshAccessors.keys())if(!live.has(actor))meshAccessors.delete(actor);
@@ -1306,7 +1310,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   const createItemBinding=(item,entry,alive)=>{
     bind(item.actor,{originalObjectIndex:synthetic++,visible:()=>true})
       .then(binding=>{if(disposed||!alive()){binding.dispose();return;}
-        entry.binding=binding;onCreate(binding.creation);})
+        entry.binding=binding;emitCreation(binding);})
       .catch(error=>{entry.failed=error.message;errors.push({actor:`${item.actor.name??'?'} item`,message:error.message});});
   };
   /** One item's update with its snapshot written into the actor, and restored. */

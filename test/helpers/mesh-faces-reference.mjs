@@ -73,3 +73,29 @@ export function referenceGroupCorners(faces,group) {
   }
   return {indices,uvs,corners};
 }
+
+/** gpu-mesh-layout.mjs's vertex adjacency lists and LOD vertex lists as they stood at master 07de3088: an array of arrays, one
+ * per frame vertex (the layout now holds them as `starts`/`items` pairs). */
+export function referenceVertexFaceLists(faceWords,F,V) {
+  const lists=Array.from({length:V},()=>[]);
+  for(let face=0;face<F;face++)for(let k=0;k<3;k++){
+    const v=faceWords[face*4+k];
+    if(v>=V)throw new Error('GPU mesh: face vertex out of range');
+    lists[v].push(face);
+  }
+  return lists;
+}
+export function referenceLodVertexLists(topology,V) {
+  const {faces,faceCount,wedges,collapseWedges,special}=topology,lists=Array.from({length:V},()=>[]);
+  for(let face=0;face<faceCount;face++)for(let corner=0;corner<3;corner++){
+    let wedge=faces[face*4+corner];
+    for(let steps=0;steps<=wedges.length;steps++){
+      const list=lists[(wedges[wedge]&0xffff)+special],entry=face*4+corner;
+      if(list.at(-1)!==entry)list.push(entry);
+      const next=collapseWedges[wedge];
+      if(next===wedge)break;
+      wedge=next;
+    }
+  }
+  return lists;
+}

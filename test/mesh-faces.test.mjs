@@ -8,7 +8,9 @@ import {readLodMeshSurfaces} from '../src/runtime/lodmesh-materials.mjs';
 import {readUMeshSurfaces} from '../src/runtime/umesh-surfaces.mjs';
 import {meshFaceGroups,groupCorners} from '../src/viewer/actor-mesh-skins.mjs';
 import {POLY} from '../src/unreal/geometry.mjs';
-import {referenceLodMeshSurfaces,referenceUMeshSurfaces,referenceFaceWords,referenceFaceGroups,referenceGroupCorners} from './helpers/mesh-faces-reference.mjs';
+import {referenceLodMeshSurfaces,referenceUMeshSurfaces,referenceFaceWords,referenceFaceGroups,referenceGroupCorners,
+  referenceVertexFaceLists,referenceLodVertexLists} from './helpers/mesh-faces-reference.mjs';
+import {vertexFaceLists,lodVertexLists} from '../src/viewer/gpu-mesh-layout.mjs';
 
 /** A seeded generator (the same sequence on every run). */
 function random(seed) {
@@ -146,4 +148,27 @@ test('anyFlags and faceList read the words',()=>{
   assert.equal(block.anyFlags(POLY.Environment),objects.some(face=>face.flags&POLY.Environment));
   assert.equal(block.anyFlags(0),false);
   assert.deepEqual(faceList(block.words),objects.map(face=>({vertices:face.vertices,flags:face.flags})));
+});
+
+const asLists=({starts,items},V)=>Array.from({length:V},(_,v)=>[...items.subarray(starts[v],starts[v+1])]);
+
+test('the GPU layout\'s vertex adjacency lists are the arrays of arrays they replaced, as offsets and items',()=>{
+  for(let seed=1;seed<=40;seed++) {
+    const V=8+seed*3,mesh=lodMesh(seed,{faces:10+seed*6,wedges:12+seed*4,materials:3,vertices:V,special:0}),block=buildLodMeshFaces(mesh);
+    assert.deepEqual(asLists(vertexFaceLists(block.words,block.count,V),V),referenceVertexFaceLists(block.words,block.count,V));
+  }
+  assert.throws(()=>vertexFaceLists(Uint32Array.of(0,1,9,0),1,5),/face vertex out of range/);
+});
+
+test('the LOD vertex lists keep the walk\'s order and its repeat rule',()=>{
+  for(let seed=1;seed<=40;seed++) {
+    const next=random(seed*7),wedges=20+seed*3,V=10+seed*2,special=seed%4,faceCount=15+seed*3;
+    const faces=new Uint16Array(faceCount*4),collapseWedges=new Uint16Array(wedges),wedgeWords=new Uint32Array(wedges);
+    for(let i=0;i<faceCount*4;i++)faces[i]=next(wedges);
+    // chains that end at a wedge pointing to itself, some pointing back to an earlier wedge of the same vertex
+    for(let w=0;w<wedges;w++){collapseWedges[w]=next(4)===0?w:Math.max(0,w-next(5));wedgeWords[w]=next(V-special)|(next(256)<<16);}
+    for(let w=0;w<wedges;w++)if(collapseWedges[w]>=w)collapseWedges[w]=w;
+    const topology={faces,faceCount,wedges:wedgeWords,collapseWedges,special};
+    assert.deepEqual(asLists(lodVertexLists(topology,V),V),referenceLodVertexLists(topology,V),`seed ${seed}`);
+  }
 });

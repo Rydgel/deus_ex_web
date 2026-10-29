@@ -185,8 +185,9 @@ export function createGpuMesh(renderer,capacities={}) {
     uploadRange(keyframes,record.keyBase,4,new Int16Array(data.buffer,data.byteOffset,record.keyTexels*4));
     uploadRange(meshFaces,record.faceBase,4,Uint32Array.from(faceWords));
     const total=record.adjacencyCount-4,vertexWords=new Uint32Array(record.V*2),listWords=new Uint32Array(Math.ceil(total/4)*4);
-    let at=0;
-    record.lists.forEach((list,v)=>{vertexWords[v*2]=record.adjacencyStart+at;vertexWords[v*2+1]=list.length;listWords.set(list,at);at+=list.length;});
+    const {starts,items}=record.lists;
+    for(let v=0;v<record.V;v++){vertexWords[v*2]=record.adjacencyStart+starts[v];vertexWords[v*2+1]=starts[v+1]-starts[v];}
+    listWords.set(items,0);
     uploadRange(meshVertices,record.vertBase,2,vertexWords);
     if(listWords.length)uploadRange(adjacency,record.adjacencyStart/4,4,listWords);
     // The LOD's static data (gpu-mesh-layout.mjs).
@@ -196,12 +197,12 @@ export function createGpuMesh(renderer,capacities={}) {
     uploadRange(meshLodFaces,record.faceBase,4,faceWordsLod);
     if(record.W)uploadRange(meshWedges,record.wedgeBase,2,wedgeWords);
     const lodTotal=record.lodListCount-4,lodVertexWords=new Uint32Array(record.V*4),lodListWords=new Uint32Array(Math.ceil(lodTotal/4)*4);
-    at=0;
-    record.lodLists.forEach((list,v)=>{
+    const lodStarts=record.lodLists.starts;
+    for(let v=0;v<record.V;v++){
       const ordinary=v-lod.special;
-      lodVertexWords.set([record.lodListStart+at,list.length,ordinary>=0&&ordinary<lod.collapsePoints.length?lod.collapsePoints[ordinary]:0,0],v*4);
-      lodListWords.set(list,at);at+=list.length;
-    });
+      lodVertexWords.set([record.lodListStart+lodStarts[v],lodStarts[v+1]-lodStarts[v],ordinary>=0&&ordinary<lod.collapsePoints.length?lod.collapsePoints[ordinary]:0,0],v*4);
+    }
+    lodListWords.set(record.lodLists.items,0);
     uploadRange(meshLodVertices,record.vertBase,4,lodVertexWords);
     if(lodListWords.length)uploadRange(lodLists,record.lodListStart/4,4,lodListWords);
   }

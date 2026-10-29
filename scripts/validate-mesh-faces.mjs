@@ -3,7 +3,8 @@
  * classic Mesh export of every code package in System, and of the Island, Training and 747 maps. For each mesh: every field of
  * every face (wedges, vertices, UVs, material, flags, texture), the words the lighting kernel and GPU layout read, and the face
  * groups and group corners the actor mesh layer derives (with the skin of a face its TextureIndex, and with PF_Environment faces
- * as a separate texture). Also against the original: validate-lodmesh-materials.mjs compares the block's objects with Render.dll.
+ * as a separate texture), and the GPU layout's vertex adjacency and LOD vertex lists (offsets and items) against the arrays of arrays
+ * they replaced. Also against the original: validate-lodmesh-materials.mjs compares the block's objects with Render.dll.
  *
  *   node scripts/validate-mesh-faces.mjs [--maps 01_NYC_UNATCOIsland,00_Training,03_NYC_747] */
 import assert from 'node:assert/strict';
@@ -14,7 +15,10 @@ import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {meshFaces,faceObjects} from '../src/runtime/mesh-faces.mjs';
 import {meshFaceGroups,groupCorners} from '../src/viewer/actor-mesh-skins.mjs';
 import {POLY} from '../src/unreal/geometry.mjs';
-import {referenceLodMeshSurfaces,referenceUMeshSurfaces,referenceFaceWords,referenceFaceGroups,referenceGroupCorners} from '../test/helpers/mesh-faces-reference.mjs';
+import {referenceLodMeshSurfaces,referenceUMeshSurfaces,referenceFaceWords,referenceFaceGroups,referenceGroupCorners,
+  referenceVertexFaceLists,referenceLodVertexLists} from '../test/helpers/mesh-faces-reference.mjs';
+import {lodMeshTopology} from '../src/runtime/lodmesh-lod.mjs';
+import {vertexFaceLists,lodVertexLists} from '../src/viewer/gpu-mesh-layout.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 let root;
@@ -29,7 +33,8 @@ for(const map of maps){
   files.push(path);
 }
 
-const stats={packages:0,meshes:0,classic:0,faces:0,groups:0,environmentFaces:0,invisibleFaces:0,skipped:[]};
+const stats={packages:0,meshes:0,classic:0,faces:0,groups:0,environmentFaces:0,invisibleFaces:0,adjacency:0,skipped:[]};
+const asLists=({starts,items},V)=>Array.from({length:V},(_,v)=>[...items.subarray(starts[v],starts[v+1])]);
 for(const path of files){
   const bytes=await readFile(path),pkg=parsePackage(bytes);
   stats.packages++;
@@ -54,9 +59,16 @@ for(const path of files){
       assert.deepEqual(groupCorners(block,group),referenceGroupCorners(reference,group),`${label} ${key} corners`);
       stats.groups++;
     }
+    if(!classic){
+      // The GPU layout's per-mesh adjacency and LOD vertex lists, as offsets and items against the arrays of arrays they replaced.
+      const V=mesh.frameVertexCount,topology=lodMeshTopology(mesh);
+      assert.deepEqual(asLists(vertexFaceLists(block.words,block.count,V),V),referenceVertexFaceLists(block.words,block.count,V),`${label} adjacency`);
+      assert.deepEqual(asLists(lodVertexLists(topology,V),V),referenceLodVertexLists(topology,V),`${label} LOD lists`);
+      stats.adjacency++;
+    }
     stats.meshes++;if(classic)stats.classic++;stats.faces+=block.count;
     for(const face of reference){if(face.flags&POLY.Environment)stats.environmentFaces++;if(face.flags&POLY.Invisible)stats.invisibleFaces++;}
   }
 }
 assert.ok(stats.meshes>100,'the game has meshes to compare');
-console.log(`PASS ${stats.meshes} meshes (${stats.classic} classic) of ${stats.packages} packages: ${stats.faces} faces field by field, ${stats.groups} face groups and their corners (${stats.environmentFaces} environment and ${stats.invisibleFaces} invisible faces)${stats.skipped.length?`; ${stats.skipped.length} meshes did not decode (${stats.skipped.slice(0,3).join('; ')})`:''}.`);
+console.log(`PASS ${stats.meshes} meshes (${stats.classic} classic) of ${stats.packages} packages: ${stats.faces} faces field by field, ${stats.groups} face groups and their corners (${stats.environmentFaces} environment and ${stats.invisibleFaces} invisible faces), and ${stats.adjacency} meshes' GPU adjacency and LOD vertex lists${stats.skipped.length?`; ${stats.skipped.length} meshes did not decode (${stats.skipped.slice(0,3).join('; ')})`:''}.`);

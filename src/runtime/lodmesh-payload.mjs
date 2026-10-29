@@ -11,27 +11,41 @@ const asFloat = bits => {
   v.setUint32(0, bits, true); return v.getFloat32(0, true);
 };
 
+/** One mesh array as the payload view presents it (`num`, `max`, `elementSize`, `data` and, for a lazy array, `savedPosition`,
+ * `attached` and `load()`). A mesh holds some twenty of these, and a view made of per-array getter closures was about 25 heap
+ * objects an array (docs/live-heap.md "Step 4's results"); the getters live on the prototypes, and the array's own fields are
+ * the source it reads. `data` is the first `num * elementSize` bytes of the source's, cut once for the source buffer and count
+ * it was last cut for. */
+class ProjectedArray {
+  constructor(source) {
+    this.source = source; this.elementSize = source.elementSize;
+    this.lastData = undefined; this.lastNum = undefined; this.bytes = empty;
+  }
+  get num() { return this.source.num; }
+  get max() { return this.source.max; }
+  get data() {
+    const a = this.source;
+    if (this.lastData !== a.data || this.lastNum !== a.num) {
+      this.lastData = a.data; this.lastNum = a.num;
+      this.bytes = a.data?.subarray(0, a.num * a.elementSize) ?? empty;
+    }
+    return this.bytes;
+  }
+}
+/** A lazy array (the keyframes and their kin): it can be loaded from the package on request. */
+class LazyProjectedArray extends ProjectedArray {
+  constructor(source, lazy, archive, services) { super(source); this.lazy = lazy; this.archive = archive; this.services = services; }
+  get savedPosition() { return this.lazy.savedPosition; }
+  get attached() { return this.lazy.archive === this.archive; }
+  load() { loadMeshLazyArray(this.lazy, this.services); return this; }
+}
+
 /** The same presentation of fields works for detached inspection and the graph. */
 export function meshPayloadView(object, services, {entry, archive, classic = false}) {
   const get = offset => services.read(object, offset), arrays = new Map(), lazyArrays = new Map();
   const project = (a, lazy = null) => {
-    let lastData, lastNum, bytes = empty;
-    const result = {
-      get num() { return a.num; }, get max() { return a.max; }, elementSize: a.elementSize,
-      get data() {
-        if (lastData !== a.data || lastNum !== a.num) {
-          lastData = a.data; lastNum = a.num;
-          bytes = a.data?.subarray(0, a.num * a.elementSize) ?? empty;
-        }
-        return bytes;
-      },
-    };
+    const result = lazy ? new LazyProjectedArray(a, lazy, archive, services) : new ProjectedArray(a);
     if (a.notifyArrays) result.notifyArrays = a.notifyArrays.map(n => project(n));
-    if (lazy) Object.defineProperties(result, {
-      savedPosition: {enumerable: true, get: () => lazy.savedPosition},
-      attached: {enumerable: true, get: () => lazy.archive === archive},
-      load: {value: () => { loadMeshLazyArray(lazy, services); return result; }},
-    });
     return result;
   };
   for (const offset of [0x54, 0x6c, 0x90, 0xc0]) {
