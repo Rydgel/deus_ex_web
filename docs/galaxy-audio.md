@@ -204,6 +204,61 @@ hardware voices and step 12 for a non-streamed (WAV) Talk sample. Update's
 category ratio reads the live SoundVolume/SpeechVolume bytes, which natives
 268/269 change (galaxy-volumes.mjs).
 
+### Update in Rust (2026-10-29)
+
+PlaySound and Update's x87 arithmetic runs in the Rust core
+(`native/script-vm/src/galaxy.rs`, driven by `src/runtime/galaxy-update-kernel.mjs`
+through `scriptVmKernel.galaxy`), not on the BigInt model: the BigInt bodies
+allocated a record and several BigInts per operation, some 180 KB a frame of
+the worker's allocation on UNATCO Island
+([live-heap](live-heap.md) "Cut: x87 math in Rust"). The JavaScript body is kept
+whole as the reference (`updateLockedReference` and PlaySound's loop in
+`galaxy-audio.mjs`); `createGalaxyAudio(config, services, {kernel: null})`
+runs it, and so does any host where the kernel is not loaded.
+
+* **In Rust**, on `x87.rs`'s `Ext` at the game thread's precision control, in
+  the JavaScript body's operation order with its float32 stores (`galaxy.rs`
+  cites the Galaxy.dll addresses): PlaySound's priority and channel choice
+  (steps 3 and 4, including the extended `running` the loop compares); the
+  ambient values of the scan and the refresh (volume, twice that, the light
+  scale, radius, pitch); each channel's play time, priority and listener-space
+  location; the pan, distance factor, occlusion ramp, category ratio, voice
+  volume, Doppler shift (through `safe_normal`) and voice frequency; the
+  listener's eye (`EyeHeight + z`); step 12's `next + 0.1`;
+  `ambientInRangeExact`'s extended compare; and the reverb tail's block (volume,
+  HFDamp and six clamped Time and Gain pairs) at the game thread's 64 bits (the
+  validators' replays at 53 and 24 bits stay on the BigInt body).
+* **Still JavaScript**, because they are JavaScript objects or services: the
+  world reads (`read`), the channel records with their actors, sounds and
+  voices, the services (`fastLineCheck`, `globalLighting`, the voices, `sample`,
+  `lipSync`) and the music section. FPATAN is the host's
+  `services.atan2`, as before: a channel's step is `pre` (Rust: time, priority,
+  listener-space location and appAtan2's two operands), the host's `atan2`,
+  then `post` (Rust: everything after). The order of the services' calls is the
+  reference's; reads of one actor's Location that the reference makes several
+  times are made once, since an Update does not change the world.
+* **Crossing**: one block of words in the kernel instance's memory (the layout
+  is in `galaxy.rs` and mirrored in `galaxy-update-kernel.mjs`): floats go in
+  and out as float32 words through a `Float32Array`, so a NaN keeps its payload
+  and a zero its sign; nothing is allocated per call. At most 64 channels (the
+  original allows 32); more run on the reference.
+* **Compared** by `scripts/validate-galaxy-audio-kernel.mjs`: both bodies play
+  the 165 cases of the oracle validator, those again with a speaking lip-sync
+  pawn, and a seeded sweep of 3,000 cases of extremes (infinite, NaN, huge and
+  tiny locations and radii, every delta-time edge, zero volumes, 1 to 64
+  channels, Doppler speeds of 0 and below) on fresh audio objects. Every
+  return, voice call, request and channel record word after each call is
+  compared as float32 words and integers, and 4,000 random reverb zones (every clamp
+  and byte mask) hand the library the same 27-word block. Where the BigInt body cannot run a case
+  (a NaN reaching `x87sqrt` throws there; the hardware quiets it, and so does the
+  kernel) the case is counted and not compared. `validate-native-galaxy-audio.mjs`
+  runs the Rust path against the original by default (`GALAXY_AUDIO_BODY=js` the
+  reference), and the other Galaxy validators load the kernel too.
+* **Comparison**: `Ext::compare` (the locomotion model's) calls a pair of
+  opposite infinities never below; `x87cmp` of `script-vm.mjs`, which this body
+  uses, calls -inf below +inf. `galaxy.rs` has its own `cmp` with `x87cmp`'s
+  rules.
+
 ## Validation
 
 `scripts/native-galaxy-audio-oracle.py` runs the original PlaySound and Update

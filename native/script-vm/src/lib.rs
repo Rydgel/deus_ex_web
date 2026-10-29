@@ -10,6 +10,7 @@
 #![no_std]
 
 mod aievent;
+mod callers;
 mod bounds;
 mod hash;
 mod move_actor;
@@ -25,6 +26,7 @@ mod fly;
 mod light;
 mod spatial;
 mod fog;
+mod galaxy;
 mod gc;
 mod lipsync;
 mod loco;

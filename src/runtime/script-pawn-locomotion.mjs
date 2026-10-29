@@ -20,6 +20,7 @@
  */
 
 import { rotatorSin } from './coords.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { vectorToRotator } from './script-decoration-primitives.mjs';
 import {
   x87load, x87add, x87neg, x87mul, x87div, x87recip, x87sqrt, x87store,
@@ -182,7 +183,13 @@ const dot3 = (t, r) => st(x87add(
   x87add(x87mul(t[0], ld(r[0])), x87mul(t[1], ld(r[1]))),
   x87mul(t[2], ld(r[2]))));
 
+/** The Rust core's callers.rs `fcoords_axes_out` (percep.rs's fcoords_axes) computes it once the script VM kernel is loaded
+ * (docs/live-heap.md "Cut: x87 math in Rust"); `fcoordsAxesReference` is the BigInt body it is compared with. */
 export function fcoordsAxes(rotation) {
+  const kernel = scriptVmKernel?.fcoordsAxes;
+  return kernel ? kernel(rotation) : fcoordsAxesReference(rotation);
+}
+export function fcoordsAxesReference(rotation) {
   const [pitch, yaw, roll] = rotation.map(v => v | 0);
   const s = rotatorSin, c = a => rotatorSin((a + 0x4000) | 0);
   // Stored matrix axes [origin, XAxis, YAxis, ZAxis] per pass — verified

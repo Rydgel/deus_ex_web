@@ -35,11 +35,15 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
+import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {createGalaxyMusic, x87Arithmetic} from '../src/runtime/galaxy-music.mjs';
 import {x87double} from '../src/runtime/script-vm.mjs';
 import {createMirrorMusicLibrary} from '../src/runtime/galaxy-music-library.mjs';
 import {loadLazyByteArray} from '../src/runtime/script-lazy-byte-array.mjs';
 import {gameDirectory} from './game-directory.mjs';
+
+// PlaySound and Update's arithmetic runs in the Rust core, as in Play (galaxy.rs; GALAXY_AUDIO_BODY=js is the BigInt reference).
+if (process.env.GALAXY_AUDIO_BODY !== 'js') await loadScriptVmKernel();
 
 const DIRECTORY = '.cache/galaxy-music/update', MODULES = '.cache/galaxy-music/modules';
 const PRECISION = {0x037f: 64, 0x027f: 53, 0x007f: 24};

@@ -23,6 +23,7 @@
 import {rotatorSin} from './coords.mjs';
 import {x87load, x87add, x87neg, x87mul, x87store} from './script-vm.mjs';
 import {baseEpoch, riderEpochOf} from './base-epoch.mjs';
+import {scriptVmKernel} from './script-vm-kernel.mjs';
 
 const ld = x87load;
 const st = x87store;
@@ -61,6 +62,21 @@ function unitCoordsTimesYaw(pitch, yaw, roll) {
     return [dot3(t, axes[1]), dot3(t, axes[2]), dot3(t, axes[3])];
   });
 }
+
+/** A rider's RotMotion (BigInt reference of callers.rs rider_rot_motion). */
+export function riderRotMotionReference(actorPos, otherPos, reducedYaw) {
+  // 0x10399939: v = Actor->Location - Other->Location, f32 stores.
+  const v = [sub32(actorPos[0], otherPos[0]), sub32(actorPos[1], otherPos[1]), sub32(actorPos[2], otherPos[2])];
+  // 0x10399978-0x1039999a: coords = UnitCoords *= ReducedRotation.
+  const coords = unitCoordsTimesYaw(0, reducedYaw, 0);
+  // 0x103999d0: t = v.TransformVectorBy(coords).
+  const t = [dot3(v.map(ld), coords[1]), dot3(v.map(ld), coords[2]), dot3(v.map(ld), coords[3])];
+  // 0x10399a27: RotMotion = v - t, per-component f32 stores.
+  return [sub32(v[0], t[0]), sub32(v[1], t[1]), sub32(v[2], t[2])];
+}
+/** A rider's delta (BigInt reference of callers.rs rider_delta): FinalDelta + RotMotion, three f32 adds. */
+export const riderDeltaReference = (finalDelta, rotMotion) =>
+  [add32(finalDelta[0], rotMotion[0]), add32(finalDelta[1], rotMotion[1]), add32(finalDelta[2], rotMotion[2])];
 
 /**
  * Run the rider pass for one MoveActor whose StandingCount is nonzero.
@@ -122,26 +138,20 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
   const rotationChanged = rot[0] !== actorRot[0] || rot[1] !== actorRot[1] || rot[2] !== actorRot[2];
   // 0x10399930: the reduced rotation keeps only the &0xfffc-masked yaw.
   const reducedYaw = ((rot[1] & 0xfffc) - (actorRot[1] & 0xfffc)) | 0;
+  // The Rust core's callers.rs does the arithmetic once the script VM kernel is loaded (docs/live-heap.md "Cut: x87 math in
+  // Rust"); the BigInt expressions are the reference it is compared with (scripts/validate-x87-callers-kernel.mjs).
   const visit = other => {
     const t0 = riderStats ? now() : 0;
+    const kernel = scriptVmKernel?.riders;
     let rotMotion = [0, 0, 0];
     if (rotationChanged) {
-      // 0x10399939: v = Actor->Location - Other->Location, f32 stores.
       const otherPos = location(other);
-      const v = [sub32(actorPos[0], otherPos[0]), sub32(actorPos[1], otherPos[1]),
-        sub32(actorPos[2], otherPos[2])];
-      // 0x10399978-0x1039999a: coords = UnitCoords *= ReducedRotation.
-      const coords = unitCoordsTimesYaw(0, reducedYaw, 0);
-      // 0x103999d0: t = v.TransformVectorBy(coords).
-      const t = [dot3(v.map(ld), coords[1]), dot3(v.map(ld), coords[2]), dot3(v.map(ld), coords[3])];
-      // 0x10399a27: RotMotion = v - t, per-component f32 stores.
-      rotMotion = [sub32(v[0], t[0]), sub32(v[1], t[1]), sub32(v[2], t[2])];
+      rotMotion = kernel ? kernel.rotMotion(actorPos, otherPos, reducedYaw) : riderRotMotionReference(actorPos, otherPos, reducedYaw);
       if (riderStats) riderStats.rotMs += now() - t0;
     }
     const otherRot = rotation(other).map(vv => vv | 0);
     // 0x10399ad1: delta = FinalDelta + RotMotion, three f32 adds.
-    const delta = [add32(finalDelta[0], rotMotion[0]), add32(finalDelta[1], rotMotion[1]),
-      add32(finalDelta[2], rotMotion[2])];
+    const delta = kernel ? kernel.delta(finalDelta, rotMotion) : riderDeltaReference(finalDelta, rotMotion);
     // 0x10399aa4: rot = FRotator(Other.Pitch, Other.Yaw + [ebp+0x2c], Other.Roll).
     const newRot = [otherRot[0], (otherRot[1] + dyaw) | 0, otherRot[2]];
     // 0x10399b51: MoveActor(Other, delta, rot, Hit, 0, 0, 1, 0).

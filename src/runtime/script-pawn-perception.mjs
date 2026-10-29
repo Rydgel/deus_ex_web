@@ -27,6 +27,7 @@
 
 import { actorVisibilityExtended } from './script-ai-visibility.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { vectorToRotator } from './script-decoration-primitives.mjs';
 import {
   x87load, x87add, x87neg, x87mul, x87div, x87sqrt, x87store,
@@ -174,6 +175,40 @@ const magsq3 = v => x87add(
   x87add(x87mul(ld(v[0]), ld(v[0])), x87mul(ld(v[1]), ld(v[1]))),
   x87mul(ld(v[2]), ld(v[2])));
 
+// The sums and products of losWorker and its callers run in the Rust core's callers.rs once the script VM kernel is loaded
+// (docs/live-heap.md "Cut: x87 math in Rust"); the BigInt expressions are the reference it is compared with
+// (scripts/validate-x87-callers-kernel.mjs), and run where the kernel is not loaded.
+/** The BigInt expressions, the reference of callers.rs's los_* (scripts/validate-x87-callers-kernel.mjs). */
+export const losReference = {
+  /** st(magsq3(v)). */
+  magsq3: v => st(magsq3(v)),
+  /** st(x87mul(s, s)) with s = x87mul(ld(a), ld(b)) held extended. */
+  squareProduct: (a, b) => { const s = x87mul(ld(a), ld(b)); return st(x87mul(s, s)); },
+  /** The FOV path's Stimulus (0x103bec11): ((forward . SafeNormal(delta)) - PeripheralVision) * (0.8 above zero, else 0.17) + 0.2. */
+  stimulus: (delta, forward, peripheral) => {
+    const unit = x87safeNormal(delta);
+    const dot = dot3(forward, unit);
+    const t = sub(dot, ld(peripheral));
+    const tIsPos = !(x87compare(t, ZERO).c0 === 1 || x87compare(t, ZERO).c3 === 1);
+    const k = tIsPos ? D08 : D017;
+    return st(x87add(x87mul(t, k), D02));
+  },
+  /** The FOV path's distance: (distSq + (|dz| / divisor)^2) / Stimulus^2 with the quotient stored first. */
+  scaled: (distSq, dzAbs, divisor, stimulus) => {
+    const dzScaled = st(x87div(ld(dzAbs), ld(divisor)));
+    return st(x87div(
+      x87add(ld(distSq), x87mul(ld(dzScaled), ld(dzScaled))),
+      x87mul(ld(stimulus), ld(stimulus))));
+  },
+};
+const los = () => scriptVmKernel?.los ?? losReference;
+const magsqStored = v => los().magsq3(v);
+const squareProduct = (a, b) => los().squareProduct(a, b);
+/** st(x87mul(ld(a), ld(a))). */
+const squareStored = a => scriptVmKernel ? scriptVmKernel.square(a) : st(x87mul(ld(a), ld(a)));
+const fovStimulus = (delta, forward, peripheral) => los().stimulus(delta, forward, peripheral);
+const fovScaledDistance = (distSq, dzAbs, divisor, stimulus) => los().scaled(distSq, dzAbs, divisor, stimulus);
+
 const subVec = (a, b) => [f32(a[0] - b[0]), f32(a[1] - b[1]), f32(a[2] - b[2])];
 
 /** Numeric value of an x87-double object (53-bit sig fits in a JS double). */
@@ -236,7 +271,7 @@ function losWorker(viewer, other, bCheckFOV, bIgnoreDistance, services, level) {
     wr(services, viewer, 'bLOSflag', bLOSflag);
   }
   const delta = subVec(oLoc, vLoc);
-  const distSq = st(magsq3(delta));
+  const distSq = magsqStored(delta);
   const isPawn = services.isA(other, 'Pawn');
   const isPlayer = Boolean(rd(services, viewer, 'bIsPlayer'));
   const model = services.model(level);
@@ -247,8 +282,7 @@ function losWorker(viewer, other, bCheckFOV, bIgnoreDistance, services, level) {
     if (isPawn) {
       const vis = Number(rd(services, other, 'Visibility')) & 0xff;
       const visScale = Math.min((vis + 16) * 0.015, 1);
-      const s = x87mul(ld(visScale), ld(isPlayer ? 5000 : 4000));
-      cap = Math.min(st(x87mul(s, s)), isPlayer ? 25000000 : 16000000);
+      cap = Math.min(squareProduct(visScale, isPlayer ? 5000 : 4000), isPlayer ? 25000000 : 16000000);
     } else {
       cap = 9000000;                    // non-pawn target: fixed 0x10431458
     }
@@ -259,31 +293,22 @@ function losWorker(viewer, other, bCheckFOV, bIgnoreDistance, services, level) {
     if (isPawn) {
       const vis = Number(rd(services, other, 'Visibility')) & 0xff;
       const visScale = Math.min(vis * 0.0078125, 1);
-      const s = x87mul(ld(visScale), ld(rd(services, viewer, 'SightRadius')));
-      cap = Math.min(st(x87mul(s, s)), isPlayer ? 16000000 : 12000000);
+      cap = Math.min(squareProduct(visScale, rd(services, viewer, 'SightRadius')), isPlayer ? 16000000 : 12000000);
     } else {
       const sr = rd(services, viewer, 'SightRadius');
-      cap = st(x87mul(ld(sr), ld(sr)));
+      cap = squareStored(sr);
     }
     // First gate is unconditional: distSq > cap -> return 0 (no bIgnore here).
     if (distSq > cap) return 0;
     // Stimulus: dot = forward(Rotation) . unit(delta); Stimulus=(dot-PV)*k+0.2.
-    const unit = x87safeNormal(delta);
     const fwd = fcoordsAxes(rd(services, viewer, 'Rotation'))[1];
-    const dot = dot3(fwd, unit);
-    const t = sub(dot, ld(rd(services, viewer, 'PeripheralVision')));
-    const tIsPos = !(x87compare(t, ZERO).c0 === 1 || x87compare(t, ZERO).c3 === 1);
-    const k = tIsPos ? D08 : D017;
-    const stimulus = st(x87add(x87mul(t, k), D02));
+    const stimulus = fovStimulus(delta, fwd, rd(services, viewer, 'PeripheralVision'));
     wr(services, viewer, 'Stimulus', stimulus);
     if (!(stimulus > 0)) return 0;
     // dz-scaled distance: (distSq + (|dz|/max(Skill+1,1))^2) / Stimulus^2.
     const dzAbs = Math.abs(oLoc[2] - vLoc[2]);
     const divisor = Math.max(Number(rd(services, viewer, 'Skill')) + 1, 1);
-    const dzScaled = st(x87div(ld(dzAbs), ld(divisor)));
-    scaledOrDist = st(x87div(
-      x87add(ld(distSq), x87mul(ld(dzScaled), ld(dzScaled))),
-      x87mul(ld(stimulus), ld(stimulus))));
+    scaledOrDist = fovScaledDistance(distSq, dzAbs, divisor, stimulus);
     if (scaledOrDist > cap && !bIgnoreDistance) return 0;
     wr(services, viewer, 'Stimulus', 1);          // 0x103bee56 reseeds it to 1.0
     // The trace section reads [ebp+8] = scaled (overwritten for checkFOV=1).
@@ -337,7 +362,7 @@ function nearPath(viewer, other, oLoc, eye, distSq, scaledOrDist,
     [f32(oLoc[0] + cr), f32(oLoc[1] - cr), oLoc[2]],
   ];
   // Skip the argmin/argmax |cp|^2 corners (squared distance from world origin).
-  const mag = cp.map(c => st(magsq3(c)));
+  const mag = cp.map(c => magsqStored(c));
   let iMax = 0, iMin = 0, bMax = mag[0], bMin = mag[0];
   for (let i = 1; i < 4; i++) {
     if (gtU(ld(mag[i]), ld(bMax))) { bMax = mag[i]; iMax = i; }
@@ -435,7 +460,7 @@ function testCanSeeMe(actor, viewer, services, level) {
   if (services.isA(viewer, 'PlayerPawn') && rd(services, viewer, 'ViewTarget') === actor) return 1;
   const aLoc = rd(services, actor, 'Location'), pLoc = rd(services, viewer, 'Location');
   const delta = subVec(aLoc, pLoc);
-  const distSq = st(magsq3(delta));
+  const distSq = magsqStored(delta);
   const aCR = rd(services, actor, 'CollisionRadius');
   const cap = st(x87mul(x87add(ld(aCR), ld64(3.6)), ld64(100000)));
   if (!(distSq < cap)) return 0;
@@ -510,7 +535,7 @@ function pickTarget(call, services, anyTarget) {
     }
     const cLoc = rd(services, cand, 'Location');
     const delta = subVec(cLoc, projStart);
-    const distSq = st(magsq3(delta));
+    const distSq = magsqStored(delta);
     const dot = dot3(fireDir, delta);
     if (x87compare(dot, ZERO).c0 === 1 || x87compare(dot, ZERO).c3 === 1) continue; // dot<=0
     if (!(distSq < 4000000)) continue;

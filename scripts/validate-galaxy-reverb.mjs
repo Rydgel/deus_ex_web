@@ -166,6 +166,7 @@ function LIST(n) { return n === 0 ? 'no' : String(n); }
 // ---- 2. the setup's parameter block ------------------------------------------------------
 /** Update's reverb block (galaxy-audio.mjs, verified against the original by
  * validate-galaxy-music-update.mjs) for a zone's effective values. */
+if (process.env.GALAXY_AUDIO_BODY !== 'js') await (await import('../src/runtime/script-vm-kernel.mjs')).loadScriptVmKernel();
 const {createGalaxyAudio} = await import('../src/runtime/galaxy-audio.mjs');
 function updateBlock(zone) {
   let out = null;
