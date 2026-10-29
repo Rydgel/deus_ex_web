@@ -115,7 +115,7 @@ its own asset store; the worker never sends package bytes.
 | Actor meshes | per drawn preview: handle, mesh resource, the GetFrame plan (4×3 matrix and up to five channel ops), SetupForActor's result, material state (Style, ScaleGlow, environment), group visibility bits per pass; creation records (skins, environment textures) when a handle first appears |
 | Weapon | the RenderOverlays DrawActor commands and the weapon's plan and lighting |
 | Coronas | the corona icons `{x, y, size, color, skin}` after visibility (and, for validation, each icon's placement inputs and the master frame's words) |
-| HUD | the GC command list `{texture, x, y, width, height, u, v, ul, vl, color, style}` (glyphs are already DrawTile commands) |
+| HUD | the GC command list `{texture, x, y, width, height, u, v, ul, vl, color, style}` (glyphs are already DrawTile commands), posted as `stream`: the tiles as a Float64Array with short texture and colour tables, and the viewport, actor and clearZ commands as objects in place among them (`script-window-command-stream.mjs`); the page expands it to the list before it draws ([live heap](live-heap.md) "Cut: HUD step") |
 | Audio | Galaxy voice ops under `?sfx=webaudio` (sound bytes once per key, a speech MP3's every start) and speech decode requests. Galaxy's music and effect voices do not travel in the snapshot: the library service talks to the music worklet on its own MessageChannel (below) |
 | DOM mirror | InfoLink `{visible, title, queued, text}`, notes |
 

@@ -659,6 +659,107 @@ cores, so a real cycle may span more frames.
 Reaching 0.8 MB a frame is a cut of about 2.8×, and 0.5 MB about 4.5×, spread over a dozen subsystems, none more than 13% of
 the total. The heap plan's remaining steps would shorten the cycle, not the frames inside it.
 
+### Cut: HUD step (2026-10-29)
+
+The `hud` step of sim-session.mjs allocated 698 KB of the worker's 2.2 MB a frame, the largest single step after the tick. Host
+representation only: every change below leaves the HUD's commands as they were, and the per-frame hashes say so.
+
+**Where the step's bytes were.** `hitch-run.mjs --heap-sampling` now keeps a step x leaf and step x 5-frame-site breakdown (`byStep`
+in `<out>.heap.json`, `--heap-steps N`) and splits each step by whether it ran inside Galaxy's Update (`game.mjs` runs it inside
+the HUD draw, `script-audio-live.mjs` `update`). In the browser's Island roam the step is about 580 KB, of which Galaxy's Update is
+240 to 250: the x87 BigInt values of `galaxy-audio.mjs`'s `updateLocked` and `fastLineCheck`, not HUD drawing, and not part of this
+cut. The other 330 to 340 KB were:
+* `gcMemory` (every GC native took an object with six closures; a DrawText runs about ten of them);
+* UGC::DrawText per character. The InfoLink and conversation text is a computer window drawn one character at a time
+  (`computerDrawBuffer`), each a full DrawText: a code-unit array, an emit state and a scan state (each given a DataView, which makes
+  the typed array's storage an ArrayBuffer), scanLine's three copies, cursors, pen cells, a glyph record per lookup, a
+  `[0,1,2,3].map` colour and a frozen emit block with two copied arrays per glyph, and four x87 values for the cell coordinates;
+* the tile commands: an object in the window host's `callVirtual`, a copy of the list, and a second object with a new texture
+  object in `plainHudCommands`, each number a boxed double;
+* the Rust GC natives' DrawTile (`js_gc_tile`: an array, an object of fields, a frozen command), `dispatchGcNative`, the window scene
+  frame (36 BigInt dot products a frame), and a `Run` for each script body JavaScript began (about 200 a frame).
+
+**The cut**, in the order it was made (each step's hashes below):
+1. `gcMemory` returns one cached read/write pair per (services, address): a class's methods, and the heap service re-read and
+   compared at each call. `gcIntersect` and `gcCopyGC` lose their array literals.
+2. UGC::DrawText and the computer window's draw: shared unit buffer, emit/scan states, cursors, cells, glyph and extent records
+   (module scratch, zeroed or set at the start of each call; a DrawText runs no other), one DataView per state array, one frozen
+   colour array shared while the four words stay, and, for the window host's `callVirtual`, which reads a glyph's emit block at the
+   call and keeps none of it (`services.transientPayloads`), one block rewritten per glyph. A host without the flag, and the
+   validators' services, still get a frozen block per glyph. The computer window's cell coordinates are `cellBits`
+   (`Math.fround` of the int32 = `f32Bits(S(I(v)))`: fild is exact, fstp rounds once) and its fade tests compare f32s with zero
+   directly (`gt(X(a),X(0))` is `a > 0`, NaN unordered both ways).
+3. The tile commands are built once, in the form the page takes (`game.hud.commands(w, h, view, plain)`), the texture one cached
+   plain object per reference (`script-window-plain-texture.mjs`), the colour the previous command's frozen array while its words
+   stay.
+4. `js_gc_tile` reads the arena words into one reused DrawTile block (same flag); `dispatchGcNative` and the text and button
+   draws drop their closures, `{length}` objects and array spreads.
+5. `buildWindowSceneFrame` keeps the last rotation's rows and the last (FOV, precision control, size)'s tangent, projectionZ and
+   centre; they are functions of those inputs alone.
+6. `RustScriptVm.acquire` reuses one `Run` per depth for the bodies JavaScript begins (`release()` on return clears it); `scanLine`
+   and `gcGetFontHeight` read glyphs into a record of their own.
+7. The tile commands cross as numbers: `HudCommandStream` (`script-window-command-stream.mjs`) writes twelve doubles a command into
+   a reused Float64Array, the texture and colour as indices into the frame's short tables, the viewport, actor and clearZ commands as
+   objects in place among them; `hud({stream: true})` and `frame()` post `snapshot.hud.stream` (exact-length copies), and
+   `main.mjs` `drawFrame` expands it with `expandHudStream` into the list the HUD renderer took before, key for key. The inline mode
+   goes through the same `frame()`.
+
+**Measured.**
+* Exact, headless (`scripts/hud-stream-digest.mjs --alloc`: V8's new-space size around each `session.hud()` call, calls with a
+  scavenge left out, `--min-semi-space-size=64`; Island roam of 1500 frames, a fixed forward/turn/jump schedule that meets a
+  conversation, so about half of the frames draw text), KB a frame:
+
+| | Whole `hud()` | Galaxy's Update inside it | The rest | The rest, text-free (p10) | The rest, median | p90 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Before (0d9c5fd6) | 1750.8 | 474.6 | 1276.2 | 190.0 | 781.5 | 2724.0 |
+| After | 660.6 | 445.7 | 214.9 | 50.2 | 226.5 | 372.9 |
+
+  (Galaxy's share differs by 29 KB between the two runs because it moved with a sound the roam reached; it is not touched here.)
+* Browser, sampling heap profiler (`hitch-run.mjs --heap-sampling all --seconds 60 --mode roam --cdp-port 9352`; two interleaved
+  pairs, the base arm the tree of 0d9c5fd6 with this branch's hitch-run.mjs; the profile's `frames` count, KB a worker frame):
+
+| Run | Worker, all steps | `hud` step | of it Galaxy's Update | `hud` without it | `begin` (the tick) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base 1 | 1857.9 | 588.1 | 245.8 | 342.2 | 721.0 |
+| new 1 | 1601.1 | 314.6 | 227.8 | 86.8 | 729.3 |
+| base 2 | 2200.4 | 573.1 | 241.3 | 331.8 | 1035.3 |
+| new 2 | 2059.2 | 360.5 | 279.9 | 80.6 | 1095.4 |
+
+  The HUD step went from 580 to 337 KB a frame (-243), and without Galaxy's Update from 337 to 84 (-75%). The worker's total fell by
+  257 and 141 KB in the two pairs (14% and 6%): the tick's 720 to 1095 KB varies from run to run by more than that on either arm, since the roam
+  is not pinned and meets different NPCs, so the totals are not a clean comparison; the step is. (An earlier run of each arm,
+  before the harness got its own CDP port, is not used: another heap sampler may have attached to that browser.)
+
+**Checks.**
+* The HUD commands per frame, hashed by exact number bits and key order (`hud-stream-digest.mjs`, `--compare` against the build
+  before): identical for the Island over 3000 frames (the posted stream form, expanded as the page expands it) and 1500 frames
+  (objects, the stream, `GC_NATIVE=verify`, 600 frames also `GC_NATIVE=js` and `SCRIPT_VM=js`), Training over 1200 (the stream,
+  `GC_NATIVE=verify`), the 747 over 900 and UNATCO HQ over 900 (the stream).
+* validate-play-hud; all 53 validate-gc-* (draw-text, -box, -borders, -icon, -texture, -stretched-texture, -pattern, -actor,
+  -actor-host and -actor-play among them; validate-gc-draw-text also replays its Unicorn cases with the transient block, and
+  the mutants of validate-gc-copy-gc and -get-text-extent that matched the changed lines were moved to the new text); validate-gc-get-text-extent;
+  validate-window-native-diff; validate-window-computer-playback (now also `cellBits` against `f32Bits(S(I(v)))` over 300,000
+  int32); validate-window-scene-frame (real x87 through wine: `X87_PROBE_WINE=/usr/bin/wine WINEPREFIX=~/.wine-deusex`, bit-exact
+  at both precision controls, and the kept rows and size values checked against other inputs in between);
+  validate-instructor-conversation, -text-layout-diff, -hitch-log, validate-script-vm-interp, -script-vm-x87, -script-process.
+* bench-sim, 300 ticks (`--bypass --continue --render-feedback --warm 60`, `SCRIPT_VM_CHECK=1`) on the Island, Training and the 747:
+  digests `5adb254a07b1ed6f`, `07816ec472f29b84`, `48d8f27e772e5c70`, the same as the build before on each, no errors (the Island and
+  Training also under `STATE_VERIFY=1 RECEIVER_VERIFY=1`). Unit tests: 850, 846 pass, 4 skipped, among them
+  `test/window-command-stream.test.mjs`.
+* Play: a 25 s worker-mode Island walk with a screenshot (`hitch-run.mjs --screenshot`) draws the conversation's subtitle from the
+  stream, no errors; the four 60 s runs above ran with no errors.
+
+**What is left, and why.**
+* Galaxy's Update, 230 to 280 KB, is now 70% or more of the step. It is `galaxy-audio.mjs` and the x87 BigInt model, and was
+  left to the x87 cut.
+* The step's own 80 to 90 KB (50 KB in a text-free frame of the headless run): the frame objects of the window scripts' bodies
+  (a frame object with its `resume` closure and iterator array, a `FrameLocals`: about 200 bodies a frame, shared VM code), the
+  object-image reads (`readComposite`) and boxed doubles the script values and `gcMemory.read` return, `drawRawBackground`'s clip list
+  and the window projection's x87 values.
+* A Rust port of DrawText was not made: after this cut the JavaScript draw allocates nothing beyond the command it writes, so a
+  port would save CPU, not allocation. gc.rs still covers only SetStyle, SetTileColor, SetTextColor, SetFont, SetAlignments,
+  EnableWordWrap, DrawTexture and DrawPattern, plus PushGC and PopGC; its CPU worth is unmeasured.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do

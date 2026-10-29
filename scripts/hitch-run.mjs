@@ -6,6 +6,7 @@
 //     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
 //     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--headed] [--no-hitchlog] [--worker-patch FILE]
+//     [--screenshot FILE] (a PNG of the page at the end of the run)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
@@ -188,6 +189,8 @@ await page.keyboard.up('KeyW').catch(()=>{});
 if(throttle>1&&cdp)await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
 const status=await page.evaluate(()=>{const s=window.deusExViewer.status(),c=document.getElementById('scene');
   return {map:s.map,sim:s.sim,paused:s.paused,runtimeError:s.runtimeError?.message??s.runtimeError,position:s.position,canvas:[c.width,c.height]};});
+// --screenshot FILE: the page as it is at the end of the run (the HUD drawn from the worker's snapshot)
+if(option('screenshot',null))await page.screenshot({path:option('screenshot',null)});
 const dump=await page.evaluate(()=>window.deusExHitch?window.deusExHitch.dump({full:true}):null);
 let gc=null;
 if(traced){

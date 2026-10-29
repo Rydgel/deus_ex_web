@@ -56,8 +56,8 @@ const {createGame} = await import('../src/viewer/game.mjs');
 const {createSimSession} = await import('../src/viewer/sim-session.mjs');
 const {gameDirectory} = await import('./game-directory.mjs');
 const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
-const {expandHudStream} = await import('../src/runtime/script-window-command-stream.mjs');
 const useStream = argv.includes('--stream');
+const expandHudStream = useStream ? (await import('../src/runtime/script-window-command-stream.mjs')).expandHudStream : null;
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
