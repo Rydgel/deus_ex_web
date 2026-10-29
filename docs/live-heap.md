@@ -159,6 +159,7 @@ image the Rust core reads.
 **Native object bindings.** `bindNativeObject` (`script-runtime.mjs:1105`) binds five
 header fields per native object, each with its own getter and setter closures and
 context. That is about 110 k closure pairs on the Island.
+(Since step 5 the five are shared objects: see "Step 5's results".)
 
 **The decoded map in the simulation.** There is one `map.model`, not copies:
 `CollisionWorld` (`game.mjs:47`), the player scene's `level`, the level queries and the
@@ -221,10 +222,14 @@ Firefox GC markers, not only by heap size.
      `actor-umesh-sim.mjs`, and the page's `actor-mesh-draw.mjs`.
    * Expected: about 0.8 M objects on the Island; it grows with the actor count.
      Measured: see "Step 4's results".
-5. **Bindings without per-object closures.** A binding becomes one object whose
-   getter and setter live on its prototype, or a handler table per field key. Callers
-   that take `binding.get` detached (`script-runtime.mjs:1345`) are adapted.
-   * Expected: about 0.5 M objects.
+5. **Bindings without per-object closures: done 2026-10-30.** A binding is an object whose `get(instance)` and `set(value, instance)`
+   are methods, or a closure pair as before; the header bindings of every object are shared frozen objects, and the callers that took
+   `binding.get` detached (`fieldReference`) read through a storage object. The receivers' image-backed members, the spawned actors'
+   and pawn views' accessors share their functions; the cell masks are tagged and the cells shared; the per-object copies of the
+   class defaults, the authored Maps, the state's locals and probe masks and the slots are shared or made when needed. See "Step 5's
+   results".
+   * Expected: about 0.5 M objects. Measured: the two families from 655 k objects and 3.80 M edges to 143 k and 1.07 M; the worker
+     (240 s roam) from 5.33 M objects, 35.8 M edges and 29.63 M pointer references to 4.29 M, 30.1 M and 24.30 M.
 6. **Class defaults once: first part done 2026-10-29.** `cls.defaults` keeps only defaults that changed after
    load. Reads fall back to the load record's defaults and the class image.
    * Expected: 0.3 to 0.5 M objects. This touches spawn, `defaultValue`,
@@ -1718,6 +1723,155 @@ defaults and children cuts.
   ratios (7.6% and 12% fewer pointer references for 13% and 10% shorter marking) 16% fewer would be expected to shorten it, which is
   a prediction.
 
+## Step 5's results (2026-10-30)
+
+Host representation only: every change below keeps the values its readers see. Branch `worktree-agent-a6895f0594ffa7de5`, from master
+3502f642; ten code commits and a test commit, each checked as listed below.
+
+**What the families held.** In the base worker's snapshot (3502f642, the Island after a 240 s roam: 5.33 M objects, 35.8 M snapshot
+edges, 268 MB; the families are the coordinator's listing of it, outside Git):
+* `ScriptRuntime.instances.bindings`, 340 k objects and 1.80 M edges: the native-bound fields of about 12,000 script objects (2,425
+  map actors, the rest the objects the conversation list loads and objects constructed natively). 72.5 k binding objects
+  `{get, set}`, 80 k getter and 47.5 k setter closures, 61.5 k contexts and 12.6 k Maps. Five bindings of an object are its UObject
+  header (ObjectFlags, Outer, Name, Class, ObjectInternal), the same for every object: their closures captured only the native object
+  or the instance, so about twenty objects an object (a binding object and two closures a field, a context) held nothing that
+  differs from one object to the next.
+* `ScriptRuntime.instances.receiver`, 315 k and 2.00 M: the map actors' hosts and the views over them. 56.7 k AccessorPairs, 128 k
+  closures and 12.5 k contexts. The image-backed members of a map actor (pose, mirror, link and flag-word installers: 24 a host) were
+  each a getter and a setter closed over that host's entry, with a context; the pawn views (`_pawnPhysics`: about ninety accessors
+  each: 19 k objects in the 30 s walk; in the roam, before this step reached them, 125 k under the receivers and 43 k under the
+  identities) and the spawned actors' collision views did the same.
+* The cells: `ScriptProcess.linkedClasses.cells` 76 k objects with 37 k heap numbers, and 91 k with 35 k under
+  `CollisionWorld.actors.<symbol ScriptRuntime instance>` (the same Cell objects, first reached through an actor): the `mask` field.
+* Related, by the same mechanisms: `identities.get touching` 37 k (four element accessors on each host's Touching array),
+  `identities.initialProperty` 65 k (a copy of the class's defaults Map per actor, and a Map per authored property),
+  `ScriptRuntime.instances.state` 66 k (a locals Map and a frozen probe-mask array per object), `ScriptRuntime.instances.slots` 24 k.
+
+**What V8 did.**
+* *A boxed bit mask.* A bool's cell holds its bit mask. With bit 31 set (`entry.mask | 0` is -2147483648) it is not a Smi in the browser
+  (31-bit Smis), so the `mask` field of every Cell had the Double representation and each of the 77 k cells held its own boxed
+  number, the masks that are zero included. Node's 32-bit Smis do not show it. Storing `null` first in the constructor makes the field
+  tagged: a small mask is a Smi, and only the masks that are not Smis (bit 30 or 31: 280 cells in the 30 s walk's snapshot) are boxed.
+* *A closure pair per member.* Every `Object.defineProperty(host, name, {get: () => entry.get(), ...})` made two JSFunctions and their
+  context, kept alive by the host's AccessorPair. Accessor functions made once and finding the host's state through `this` leave
+  the pair itself: V8 makes an AccessorPair for each accessor property of each object (88.6 k in the 30 s walk's base snapshot, 88.9 k
+  after), so the saving is the functions and contexts (the worker's closures fell from 417 k to 169 k and its contexts from 218 k to
+  77 k in that walk), not the pairs.
+* *Late tables.* An empty Map for the locals of every state (11 k) and for every object's slots (12 k), a frozen two-word array per state
+  for its probe mask, and one Map per authored property were made for objects that never use them or hold one element.
+* *The measurement server keeps the first transform of each module* when it does not watch files (the dev server of
+  the heap snapshots is started with `watch: null`). A snapshot taken after an edit needs a restarted server: this step's second snapshot, taken on the same server as
+  its first, repeated the first one's numbers.
+
+**What the structures were and what they are.**
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| Header bindings of a native object | `{get, set}` + two closures a field, one context an object | `NATIVE_HEADER_BINDINGS` (`script-bindings.mjs`): five frozen objects for every object; `get(instance)`, `set(value, instance)` read the instance's `nativeObject` |
+| Header bindings of a loaded object (`prepareLoadedObject`) | five `immutable()` closure pairs and contexts | `LOADED_HEADER_BINDINGS`: five frozen objects; the reference and the resource are two fields of the instance |
+| `Actor.Level` and `LevelInfo.NetMode` of a map actor; the mirror wrapper | closures in `makeBinding`'s context; a wrapper with a `write` closure | `RecordLevelBinding`, `RecordNetModeBinding`, `MirroredBinding` (get/set on the prototype; `mirror` and `mirrored` as before) |
+| A window object's native member | read/write closures, a context, a clone of the layout entry | `FieldBinding` (`script-window-host.mjs`) |
+| `fieldReference` of a bound field | `propertyReference(field, binding.get, binding.set)`, the functions detached | `storageReference` over a `BindingStorage` (the binding and its instance) |
+| Pose, mirror, link and flag-word members of a map actor host | a getter and a setter closure and a context a member | functions shared by every host, made once for a slot symbol and an index (`host-accessors.mjs`), finding `this[slot][index]`; the entries arrays are indexed by the spec's position; the four Touching element accessors share their pairs and find their link through a symbol of the array |
+| A spawned actor's collision view | 23 members, the Touching array's four, `values`' six: closures and contexts | shared functions over a `CollisionView` (`get(name)`, `put(name, value)`, the lazily bound entries); `ScriptRuntime.boundField` returns a `BoundField` object |
+| A map pawn's physics view | about ninety members, a closure pair each, a context for each `bind()` | shared functions over an access object (`ACCESS`); `RegionBinding` is a class; the view's methods are still closures |
+| `Cell` | the mask a boxed number; one cell for every class and property | the mask tagged; a leaf cell (scalar, pointer, vector, rotator) is one object for a property and every class that has it (`sharedCell`), its `ref` never read; struct members and `Actor.Base` stay a class's own |
+| `Pose.stored` | the image value of each of a host's five pose members | only OldLocation's (its fallback is the only reader) |
+| An object's defaults as of its attachment | a copy of the class's Map each (`new Map(cls.defaults)`) | one copy for the objects attached while the class's entries are the same ones (`class-defaults-snapshot.mjs`, compared entry by entry) |
+| The elements a map authors of a property | a `Map` | element 0 alone is the bare value; an `AuthoredElements` for more |
+| `ScriptState` | a locals Map each; a frozen array per probe mask | the Map made at the first frame; one frozen array per value |
+| `ScriptInstance.slots` | a Map each | made on first use |
+
+**Checks.**
+* Fidelity, on the final tree: `frame-alloc-meter --compare` identical on the Island (600 frames, warm 900, `c8cf5fff928609c1`), the 747
+  (400 frames, `f6337bff0cf741fc`) and Training (400 frames, `e4b017e7b1bc0439`); `hud-stream-digest --stream --compare` identical
+  (1500 frames, `16bfe2bd08ed1653`); bench-sim (300 ticks) Island `15e3720088490242`, Training `148077479825af78`, 747
+  `ad8e591a01434df5`. The references were written on the untouched worktree first. The Island's and Training's digests were also
+  checked at the intermediate commits.
+* Differentials: `test/collision-view.test.mjs` (the spawned actor's view of 3502f642 verbatim in
+  `test/helpers/collision-view-reference.mjs` against this one, over logging storage, 12 combinations of bound/unbound, motion word and
+  actor/pawn/projectile: the same members in the same order with the same attributes, the same values and the same storage calls;
+  reading the old version for it showed that its four collision booleans (`collideActors`, `collideWorld`, `blockActors`,
+  `blockPlayers`) were given a function where a descriptor belongs, so they are non-writable `undefined` members; they remain so).
+  The pawn view, ad hoc and outside Git: the old file against the new over logging services, four
+  variants of services and class ancestry, 376 member reads and writes with the same attributes, values and storage calls (the
+  image-backed branches are covered by the digests and validators below). Unit tests for the new modules
+  (`test/script-bindings.test.mjs`, `class-defaults-snapshot.test.mjs`, the state cases in `script-state.test.mjs`): 902 tests pass.
+* Validators, one at a time, each exit 0 (NATIVE_PROBE_PYTHON set; the pawn and spawned-actor commits came last, so the first batch,
+  on the tree without the bound-field commit, was followed by a second of the validators that spawn or move actors, on the final
+  tree): script-vm-interp, -x87, script-process, class-loader, property-destroy, cleanup-destroyed-live, native-actor-physics,
+  native-walking, walk-loop-kernel, rider-move-kernel, pawn-nav, mover-push-play, native-mover-scene (37 cases, no mismatch),
+  triggers, window-computer, window-parent, keypad, play-hud, save-game, save-load-play, save-snapshot, level-save (128 saved
+  levels), load-saves (41 of 41 slots), travel, travel-restore, travel-restore-objects, travel-transitions, travel-endings,
+  island-conversation, instructor-conversation, conversation-binding, object-image, script-frame-ownership, actor-tick-kernel,
+  script-lifecycle, script-cleanup, script-serialization, script-struct-values, name-spelling, class-default-travel, native-config,
+  config-persistence, map-actor-admission, script-startup, script-spawn, script-spawn-touching, script-scripted-actor-spawn,
+  mission-timer, crowbar-crate, item-pickup, decoration-settle-roll, plant-push, world-destroy and decals-play (in the worker-mode
+  page); root-snapshot ran on the first batch's tree. `validate-lodmesh-lod-play` and the other known reds were not run.
+* A 60 s worker-mode Island roam (`hitch-run.mjs --mode roam`, with validators running beside it): 4,685 frames in 61.7 s, 59.4 fps,
+  0 errors, no gap over 50 ms (interval p99 16.8 ms, worker p50 12.0 ms, p95 17.6 ms); the run before the pawn and spawned-actor
+  commits: 4,661 frames, 0 errors.
+* No Rust changed (no `npm run build:wasm` warnings to check).
+
+**Heap**, the Island's worker after a 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam --seconds 240`, `heap-families.mjs`;
+the two roams turn at random, so their routes differ). "Pointer references" leave out the edges to Smis and the weak edges
+(`.work/tools/pointer-refs.mjs`, outside Git); this Chromium counts each Smi as a node, so "objects" in the closure counts further
+down are heap-snapshot nodes.
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (snapshot / used) |
+| --- | ---: | ---: | ---: | ---: |
+| Worker, before (master 3502f642) | 5.33 M | 35.8 M | 29.63 M | 268 MB / 265 MB |
+| Worker, after | 4.29 M (-19.5%) | 30.1 M (-15.9%) | 24.30 M (-18.0%) | 236 MB / 233 MB (-12%) |
+| `ScriptRuntime.instances.bindings` | 340 k / 1.80 M | | | 39 k / 0.26 M |
+| `ScriptRuntime.instances.receiver` | 315 k / 2.00 M | | | 104 k / 0.81 M |
+| Both | 655 k / 3.80 M | | | 143 k / 1.07 M |
+
+The aim was the two families under 0.25 M objects and 1.2 M edges together: they hold 143 k and 1.07 M. The worker's closures fell from
+652 k to 218 k, its contexts from 304 k to 78 k, its heap numbers from 301 k to 208 k; its AccessorPairs from 165 k to 143 k.
+
+Other families of the task's list (objects / edges, base roam to final roam; the first-reach attribution moves members between
+families): `CollisionWorld.actors.<symbol ScriptRuntime instance>` 91 k / 0.76 M to 17.7 k; `ScriptProcess.linkedClasses.cells` 76 k / 0.68 M
+to 13.2 k; `identities.get touching` 37 k to gone (the hosts' element accessors share their functions; 19 k under
+`identities.<symbol actorLinkFields>`, the pairs among them); `ScriptRuntime.instances.state` 66 k to 20 k; `identities.initialProperty`
+65 k / 0.56 M to 25 k / 0.17 M; `ScriptRuntime.instances.slots` 24 k to gone; `identities._pawnPhysics` 19 k (30 s walk) / 43 k (an earlier
+roam) to 13.7 k. Unchanged: `identities.properties` 83 k, `identities.values` 25 to 34 k, `ScriptRuntime.instances.refs` 33 k.
+
+Step by step, on the 30 s walk's snapshots (4.79 M objects, 32.5 M edges, 26.37 M pointer references and 248 MB at 3502f642): the
+bindings, the host accessors, the cell masks and the shared defaults copy took the worker to 4.25 M, 29.6 M and 233 MB; the state,
+slots, authored, cell sharing and pose changes to 4.08 M objects, 28.5 M edges, 22.75 M pointer references (-13.7%) and 225 MB. The
+pawn and spawned-actor views and the bound fields (the roam creates them, the walk hardly: about 11,000 resolved fields of spawned
+actors in the roam) took the 240 s roam from 4.60 M objects, 31.8 M edges, 25.84 M pointer references and 244 MB (the roam before
+those commits) to the figures above.
+
+**Load time and speed.** Three interleaved headless Island boots (`bench-sim`, 300 ticks; the base arm an export of 3502f642 with the
+same Wasm; both arms give the 300-tick digest `15e3720088490242`): on a loaded host (another session's runs) boot 7,670 / 7,234 /
+7,630 ms before, 7,358 / 6,723 / 6,967 ms after, the simulation's CPU per tick 13.25 / 12.48 / 14.14 ms before and 11.71 / 13.87 /
+12.49 ms after; on the final tree on a quiet host boot 6,735 / 6,202 / 6,025 ms before, 6,642 / 6,172 / 6,004 ms after, CPU per
+tick 10.98 / 9.75 / 9.68 ms before, 9.36 / 10.91 / 9.49 ms after: not slower, inside the spread. The headless Island (node, forced
+GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
+
+**What is left, and why.**
+* The hosts' AccessorPairs: V8 makes one for each accessor property of each object, so a map actor still holds 24 (about 58 k) and a
+  pawn view about ninety. They go only with the accessors on a shared prototype, which means hosts built from a class: the host
+  literals are made in `map.mjs` and `game.mjs`, and an enumeration of a host (`Object.keys`, a spread) would lose the members.
+  Not started.
+* The entries behind those accessors: 14 objects a map actor (5 `Pose`, 4 `Mirror`, 2 link, 3 `FlagWord`, their arrays), 40 k on
+  the Island. They could be one object a host, or per class with the instance read through `this`.
+* A pawn view's ~35 methods are closures over its local readers (the 15.6 k anonymous closures of the receiver family in the last roam).
+  Converting them means the view as a class with its state as fields (the work "Step 4's results" describes for the
+  mesh bindings).
+* `instance.bindings` is still a Map for each of the 12 k objects (24 k objects, 0.2 M edges), holding five shared entries. A shared
+  immutable header table with copy on write would drop most of it; every writer (`bindProperty`, the window host, three validators)
+  would go through one method.
+* `identities.properties` (83 k, 0.51 M edges, the decoded map's property tags, read only by `prepareMapProperties`): each is an object with a
+  late-added `byteLength` (a property array each, from the spread in `map.mjs:17`). Not this step's file.
+* `ScriptRuntime.instances.refs` (12 k arrays and their element stores: every class has a reference slot), the Touching arrays' four
+  AccessorPairs each (7 k), the `latent` and `cursor` accessors of each running state frame (1.4 k pairs), and `identities.values`'s
+  boxed floats and accessors.
+* The marking time per major GC on two cores is not measured for this branch. By step 7's and 8's ratios (7.6% and 12% fewer pointer
+  references for 13% and 10% shorter marking) 18% fewer pointer references would be expected to shorten it, which is a prediction.
+  The Mac and Firefox are not measured.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1743,7 +1897,8 @@ defaults and children cuts.
   simulation's data in Wasm memory, fewer objects and pointers) shortens. Step 4 ("Step 4's results") took 730 k objects and 2.0 M
   references out of the worker (the actor mesh faces, per mesh now), and "Steps 2 and 3's results" took its pointer references down
   by a further 16% (37.4 M to 31.3 M) and its objects by 26%; both are merged on master, their marking on two cores is measured in
-  "Steps 2, 3 and 4 on two cores" once that section exists. The Mac (twelve cores, where the concurrent markers take more of it)
+  "Steps 2, 3 and 4 on two cores" once that section exists. Step 5 ("Step 5's results", on its own branch, not merged) took a further 18% of the pointer references
+  (29.63 M to 24.30 M) and 19% of the objects from the 240 s roam's worker; its marking time is not measured. The Mac (twelve cores, where the concurrent markers take more of it)
   and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
