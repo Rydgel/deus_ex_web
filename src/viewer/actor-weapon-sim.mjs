@@ -26,7 +26,9 @@ import {handCoords, weaponCoords, selectedCoords, specialOutcode} from '../runti
 const lower = value => String(value).toLowerCase();
 
 export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRelease, nextIndex, errors, enabled = true, mirrors = true, interleave = true, layout = null}) {
-  const entries = new Map(), owners = new Map(), pawnClass = new WeakMap(), live = new Set(), noIds = new Set();
+  // `live` is a new Set for each update, not one cleared: the tables of a Set in old space are allocated in old space (docs/live-heap.md "Cut: promoted garbage")
+  const entries = new Map(), owners = new Map(), pawnClass = new WeakMap(), noIds = new Set();
+  let live = new Set();
   let disposed = false, epoch = 0;
   // Host timing (scripts/weapon-cost.mjs): the wall time of the weapon layer's calls (update, and the hook the
   // pawns' lighting makes) and the weapon records update made.
@@ -225,7 +227,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     update(bindings, view, records, hideOthers = true) {
       if (disposed || !enabled) return;
       const lit = Boolean(lighting && view.lit && lighting.frame);
-      live.clear();
+      live = new Set();
       for (const binding of bindings) {
         if (!isPawn(binding.actor)) continue;
         const entry = entryFor(binding);

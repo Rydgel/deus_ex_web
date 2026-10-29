@@ -107,6 +107,8 @@ async function handle(data) {
       const [{ AssetStore }, map, simHost, clock, session, digest, library, probe, { createConfigStore }] = await Promise.all([import('../unreal/assets.mjs'),
         import('../unreal/map.mjs'), import('./sim-host.mjs'), import('../runtime/host-clock.mjs'), import('./sim-session.mjs'),
         import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs'), import('../runtime/config-store.mjs')]);
+      // Before the first map is decoded or loaded (allocation-site-warmup.mjs)
+      (await import('../runtime/allocation-site-warmup.mjs')).warmAllocationSites();
       decodeMap = map.decodeMap; createSimHost = simHost.createSimHost; setHostClock = clock.setHostClock; music = library;
       plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe; particleProbe = probe.particleProbe;
       placeProbe = probe.placeProbe; laserProbe = probe.laserProbe;

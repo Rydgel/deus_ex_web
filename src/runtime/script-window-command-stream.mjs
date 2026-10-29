@@ -25,8 +25,9 @@ export class HudCommandStream {
     this.textures.length = 0;
     this.colors.length = 0;
     this.others.length = 0;
-    this.textureAt.clear();
-    this.colorAt.clear();
+    // New maps, not cleared ones: a Map in old space allocates every table it grows or clears into in old space (docs/live-heap.md "Cut: promoted garbage").
+    this.textureAt = new Map();
+    this.colorAt = new Map();
   }
   grow() {
     const next = new Float64Array(this.words.length * 2);

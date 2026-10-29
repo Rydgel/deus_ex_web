@@ -864,6 +864,108 @@ instead of 230. Every cycle still has two frames over 100 ms, as the synthetic p
 long frame"). The cycles did not become rarer in these runs (one or two in each 150 s on both sides). Three base cycles and six
 new ones: the averages are indicative, not a measured effect size.
 
+### Cut: promoted garbage (2026-10-29)
+
+The worker promoted 133 KB a worker frame on the Island roam (9.7 MB/s), 40% of it from `readComposite`. Almost none of it was
+kept by anything.
+
+**What the old generation grows by.** `--trace-gc-nvp` on the worker (`hitch-run.mjs --js-flags '--trace-gc-nvp'`, the slope of
+`end_object_size` over the scavenges between two major GCs): 13.4 MB/s in the first minute, while the scavenger's own `promoted`
+was 3.8 MB/s. A second master run, after its warm-up (25 to 80 s), grew 8.6 MB/s with a major GC at 79.9 s. The rest was allocated
+in old space directly. The same roam under `--no-allocation-site-pretenuring` grew 3.6 MB/s and promoted 34 KB a worker frame
+instead of 133, and everything that vanished is the list of sources below: `readComposite`, the script VM's `run`/`createFrame`/
+`createFrameLocals`, the `update` record of actor-mesh-sim.mjs.
+
+**Four causes, none a long-lived reference.**
+* **A site decided "tenure" by the map load.** `--trace-pretenuring` prints each decision of an allocation site (an array or object
+  literal, an `Array(n)`): "undecided", then "tenure" when at least 100 of its objects were counted in a scavenge and 80% were
+  alive, "don't tenure" when they were counted and fewer were. In a session's log no site ever left "tenure" or "don't tenure"
+  (545 and 47 repeated decisions, none a change), so the first window decides for good. The first windows of a worker are its map
+  load, which keeps what it reads and builds, so the sites it shares with the frame loop were all decided "tenure" there: every
+  vector, struct and script frame made through them since is born in old space and dies there.
+  `src/runtime/allocation-site-warmup.mjs` runs a registered warmer for each such site on fabricated values before the first
+  map is read (the worker's `init`, the inline host's `createSimHost`) and allocates garbage until a scavenge counts them, so
+  the first window has no survivors and the decision is "don't tenure". Warmers: `readComposite`'s vector, rotator, struct,
+  fixed-array and array reads (script-object-image.mjs), the script frame (script-vm.mjs `newFrame`) and the record of an actor
+  mesh update (actor-mesh-sim.mjs `newUpdateRecord`, three lines in that file). A site the frame loop shares with the load and
+  that nothing warms can still be decided "tenure"; `promotion-probe.mjs --sites` against the same run under
+  `--no-allocation-site-pretenuring` names it.
+* **A frame keeps a result until the frame ends.** The actors step keeps each binding's record until the snapshot is posted, so a
+  scavenge inside the step finds them alive and decides their literal "tenure" (6 KB a worker frame in two of three runs, 1 in the
+  third) unless a warmer got there first.
+* **A function literal that is the right side of a property assignment is allocated in old space.** In the interpreter and in
+  optimized code alike (a probe of 3,000 calls each with `%InYoungGeneration`): `o.a = () => x` 0 young, `const f = () => x;
+  o.a = f` 3,000 young, `{a: () => x}`, `return () => x` and `push(() => x)` 3,000 young. The script frame's
+  `frame.resume = () => engine.resumeCompiled(frame)` was that, one closure and context per script call, about 60 KB a worker
+  frame in the headless roam. `resume` is now one shared function over `this` (script-vm.mjs `resumeFrame`).
+* **A Set or Map in old space allocates its tables in old space.** Every table it clears or grows into: an old Set of 40 items
+  refilled 20,000 times grows old space 0.42 KB a fill after `clear()` and 0.00 after `set = new Set()`. actor-weapon-sim.mjs
+  `live` and the HUD command stream's `textureAt`/`colorAt` were cleared each frame; they are new collections now.
+
+Two more cuts of real survivors:
+* **A light record outlives its frame.** A setup keeps the lights it chose after the frame (actor-mesh-sim.mjs `lastSetup`), so a
+  record lives as long as its actor stays out of view, and a Map made for each light was most of it. The fields now sit in fifteen
+  slots of the values object, read through prototype accessors (`UNREAD` marks a slot nobody read, as the Map's `has` did), and the
+  record is a class with a `flickerKey` getter instead of a `defineProperty` closure. The leaf light lists' handles are made once per
+  list. mesh-lighting-view.mjs.
+* **The level membership was rebuilt for every `actorsEpoch` advance.** 11 advances in 1,500 Island ticks, 6 of which changed the
+  slots, all by appending: the kept Map and Set take the new tail when the slots seen last are all unchanged (a rebuild made about
+  300 KB of tables, all promoted). A changed slot still rebuilds. `animationView` (script-anim.mjs), made for every `IsAnimating`
+  poll and `PlayAnim` as an object of twenty accessors and closures, is a class.
+
+**Measured.** Chromium, worker mode, a 60 s Island roam each (`hitch-run.mjs --mode roam`), KB a worker frame. The "before" runs
+are master `314d6501` (exported to its own tree), the "after" this branch.
+
+| `--heap-sampling promoted` | before | after | after 2 |
+| --- | ---: | ---: | ---: |
+| worker frames | 4,548 | 4,733 | 4,749 |
+| **promoted, total** | **133.1** | **27.6** | **28.7** |
+| `readComposite` | 53.0 | 0.2 | 0.2 |
+| script VM `run` + `createFrame` + `createFrameLocals` | 28.9 | 0.1 | 0.1 |
+| `set` (Map) | 9.2 | 3.2 | 4.1 |
+| `update` (actor-mesh-sim.mjs) | 6.4 | 1.0 | 1.3 |
+| `lightRecord` | 5.7 | 2.4 | 2.4 |
+| `add` (Set) | 2.1 | 0.5 | 0.6 |
+| `frameContext` (lodmesh-frame.mjs) | 1.3 | 1.3 | 1.7 |
+| `animationView` | 0.9 | 0.0 | 0.0 |
+| step `begin` (the tick) | 59.1 | 9.2 | 9.5 |
+| step `actors` | 32.1 | 9.8 | 11.9 |
+| step `hud` | 16.2 | 1.8 | 1.4 |
+| step `lightFrame` | 12.3 | 4.9 | 4.5 |
+| step `sprites` / `coronas` | 7.3 / 4.8 | 0.1 / 0.6 | 0.0 / 0.4 |
+
+The target was 25. The same tree under `--no-allocation-site-pretenuring` promotes 30.2 KB, so what is left is real survival, not
+pretenuring: `set` from `reconcile` (actor-mesh-sim.mjs, 1.4 to 1.5: it rebuilds a Set, a list and two Maps of the 2,620 actors at
+every `actorsEpoch` advance, the same pattern as the membership above), `lightRecord` (2.2 real: records live about as long as a
+scavenge interval, the holder is not found), `frameContext` and the `update` plan objects (1.3 to 1.7 each), `runActorRolling`
+(1.0: nine accessors and eight closures made for each rolling decoration's tick), and a tail under 1 KB each in sim-session.mjs,
+script-runtime.mjs and the window host.
+
+| old generation, `--trace-gc-nvp` | master | this branch |
+| --- | ---: | ---: |
+| heap growth, first minute (12 to 44 s / 12 to 58 s) | 13.4 MB/s | 3.5 MB/s |
+| heap growth after warm-up (25 to 80 s / 25 to 93 s) | 8.6 MB/s, a major GC at 79.9 s | 1.6 MB/s, none in 93 s |
+| promoted by the scavenger | 3.8 / 2.2 MB/s | 1.6 / 1.0 MB/s |
+
+Total allocation is unchanged, as it should be (host representation only). Headless, the same fixed route on both trees
+(`scripts/promotion-probe.mjs`, 1,500 frames after 300, tick + sprites + hud): 3,522.5 KB a frame on master, 3,519.2 here; old
+space grows 161.8 KB a frame on master, 20.1 here (12.9 under `--no-allocation-site-pretenuring`). In the browser
+(`--heap-sampling all`, the roam differs from run to run) master 1,325 and 1,287 KB a worker frame, this branch 1,582 and 1,263:
+the first of those runs spent its minute near more moving pawns (`removeActor`, `addActor` and the collision hash allocated about
+50 KB more), the four numbers say only that a roam's allocation varies by a fifth.
+
+**Checks.** bench-sim digests, 300 ticks: the Island `15e3720088490242`, Training `148077479825af78` and the 747
+`ad8e591a01434df5`, all master's. `hud-stream-digest.mjs --frames 1500 --stream` identical to master's (`16bfe2bd08ed1653`).
+`validate-script-vm-interp` (539,583 checks), `-script-vm-x87`, `-script-process`, `-mesh-lighting-play`, `-mesh-light-types-play`,
+`-weapon-order`, `-anim-dilation-play`, `-play-hud`, `-galaxy-effects-play`, `-triggers`, `-object-layout` and
+`-inline-restore-play` (Firefox inline) pass, and the 846 unit tests. Worker-mode Play on the Island: ten roams of 45 to 60 s
+with no error. Not measured: Firefox's and Safari's pretenuring (SpiderMonkey pretenures too and the warm-up runs in its inline host, but
+no allocation was measured there), and the Mac.
+
+**Tools.** `scripts/promotion-probe.mjs` (headless roam; old-space growth and total allocation a frame, `--sites N` for the sampling
+profile of what left the young generation), `hitch-run.mjs --heap-depth N` (frames per site; the default stays 5).
+To find a site that needs a warmer: run the probe with and without `node --no-allocation-site-pretenuring` and read what vanishes.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -881,6 +983,10 @@ new ones: the averages are indicative, not a measured effect size.
   worker frame (1.7 MB a drawn frame), and on two cores its cycles still give two frames over 100 ms ("Both cuts on two cores"),
   as the synthetic says at that level; the thresholds themselves are placed only once a cut takes it under 0.8 MB. Firefox
   inline is not measured against allocation.
+* **Whether the major GCs are rarer and the cycles shorter.** "Cut: promoted garbage" takes the old generation's growth from 8.6 to
+  13.4 MB/s down to 1.6 to 3.5 MB/s and the scavenger's promotion from 133 to 28 KB a worker frame, which should lengthen the
+  interval between major GCs by the same ratio (no major GC in a 93 s run, one at 79.9 s on master). The two-core cycle trace
+  was not rerun, and a cycle's length and its longest frame are not changed by this cut.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the

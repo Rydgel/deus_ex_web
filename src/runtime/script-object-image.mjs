@@ -24,6 +24,7 @@ import {linkedClassLayout, linkedFunctionLayout} from './script-object-layout.mj
 import {noteBaseChange} from './base-epoch.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {nameCellWord} from './script-name-ids.mjs';
+import {registerAllocationSiteWarmer} from './allocation-site-warmup.mjs';
 
 const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, ROTATOR = 8, STRUCT = 9, FIXED = 10, POINTER = 11,
   NAME = 12;
@@ -405,3 +406,28 @@ export function handleSlots(cells) {
   for (const cell of cells.values()) visit(cell, 0);
   return slots;
 }
+
+let sink = null;
+// readComposite's literals and `Array(n)` build the vectors, rotators, structs and fixed arrays every property read returns. A map
+// load keeps what it reads, so without this V8 decides those sites "tenure" there and allocates every later read in old space
+// (allocation-site-warmup.mjs). The fabricated cells read a scratch image and the values are dropped. The samples are fractions
+// and integers as the images' are, so the sites' elements kinds are the production ones.
+registerAllocationSiteWarmer(count => {
+  const image = new DataView(new ArrayBuffer(96)), refs = [[1, 2, 3], 'text'];
+  for (let word = 0; word < 24; word++) image.setFloat32(word * 4, word + 0.5, true);
+  const vector = new Cell(VECTOR, 0, 0), rotator = new Cell(ROTATOR, 12, 0), array = new Cell(ARRAY, 0, 1);
+  const struct = (offset, ...members) => {
+    members.forEach((member, index) => { member.key = `warm.${index}`; member.ref = 0; });
+    return new Cell(STRUCT, offset, 0, {members});
+  };
+  const mixed = struct(24, new Cell(FLOAT, 0, 0), new Cell(VECTOR, 4, 0), new Cell(INT, 16, 0), new Cell(BOOL, 20, 0, {mask: 1}));
+  const nested = struct(48, new Cell(ROTATOR, 0, 0), new Cell(FLOAT, 12, 0));
+  const fixedVectors = new Cell(FIXED, 0, 0, {dim: 4, stride: 12, element: vector});
+  const fixedFloats = new Cell(FIXED, 0, 0, {dim: 4, stride: 4, element: new Cell(FLOAT, 0, 0)});
+  for (let i = 0; i < count; i++) {
+    sink = readCell(vector, image, refs); sink = readCell(rotator, image, refs); sink = readCell(array, image, refs);
+    sink = readCell(mixed, image, refs); sink = readCell(nested, image, refs);
+    sink = readCell(fixedVectors, image, refs); sink = readCell(fixedFloats, image, refs);
+  }
+  sink = null;
+});

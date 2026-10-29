@@ -41,6 +41,7 @@ import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 import { detailTable, detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
 import { createDetailDraw } from '../runtime/detail-draw.mjs';
+import { warmAllocationSites } from '../runtime/allocation-site-warmup.mjs';
 
 // The handle limit when each host started (script-object-handles.mjs): a
 // host's identities are the handles from its start to the next host's.
@@ -49,6 +50,8 @@ const hostStarts = [];
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, fullscreen = null, scene = null, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, restore = false, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {}, process = null }) {
+  // Before the first load keeps what it reads: the allocation sites the frame loop shares with the load are decided here (allocation-site-warmup.mjs)
+  warmAllocationSites();
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   // The load's steps on this thread's clock (performance.now()), for the page's load timeline (main.mjs loadTimings).
   const loadMarks = [['host', performance.now()]], loadMark = name => loadMarks.push([name, performance.now()]);
