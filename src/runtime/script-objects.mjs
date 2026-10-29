@@ -62,7 +62,9 @@ export class ScriptObjects {
     const entry = asset.pkg.exports[index - 1];
     if (!Number.isInteger(index) || index <= 0 || !entry)
       throw new Error(`Invalid canonical export ${asset.name}:${index}`);
-    const resolved = {asset, index, entry, key: `${asset.name}.${entry.path}`};
+    // A small integer (it indexes the export table), kept as a Smi: a heap number stored here would make V8 box `index` in
+    // every identity (docs/live-heap.md "Steps 2 and 3's results").
+    const resolved = {asset, index: index | 0, entry, key: `${asset.name}.${entry.path}`};
     const key = resolved.key.toLowerCase(), table = this.tableOf(asset, entry);
     let identity = table.get(key);
     if (!identity) {

@@ -285,7 +285,8 @@ function compactDecode(bytes) {
         operation: 'FCompactIndex', slot: 'archive raw',
       });
     }
-    magnitude += (byte & (index === 4 ? 0x1f : 0x7f)) * (2 ** (6 + (index - 1) * 7));
+    // Integer arithmetic (as Reader.compact): a `2 ** n` product is a heap number, which boxes any field it is stored in.
+    magnitude += index === 4 ? (byte & 0x1f) * 134217728 : (byte & 0x7f) << (6 + (index - 1) * 7);
     more = index < 4 && (byte & 0x80) !== 0;
   }
   if (more || magnitude > 0x7fffffff) {

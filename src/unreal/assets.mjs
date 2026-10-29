@@ -108,7 +108,9 @@ export class AssetStore {
   async resolve(asset, ref) {
     const entry = objectAt(asset.pkg, ref);
     if (!entry) throw new Error('Null object reference');
-    if (ref > 0) return { asset, index: ref, entry, key: `${asset.name}.${entry.path}` };
+    // `ref | 0`: objectAt accepted `ref` as a table position, so it is a small integer. A caller may hold it as a heap number (read
+    // back from a double-represented field), and storing one makes V8 box this field in every object of the shape.
+    if (ref > 0) return { asset, index: ref | 0, entry, key: `${asset.name}.${entry.path}` };
     return importedObject(await this.get(entry.path.split('.')[0]), entry);
   }
 
@@ -117,7 +119,7 @@ export class AssetStore {
   resolveLoaded(asset, ref) {
     const entry = objectAt(asset.pkg, ref);
     if (!entry) throw new Error('Null object reference');
-    if (ref > 0) return { asset, index: ref, entry, key: `${asset.name}.${entry.path}` };
+    if (ref > 0) return { asset, index: ref | 0, entry, key: `${asset.name}.${entry.path}` };
     const target = this.loaded(entry.path.split('.')[0]);
     return target ? importedObject(target, entry) : null;
   }
@@ -127,5 +129,5 @@ export class AssetStore {
 function importedObject(target, entry) {
   const index = target.exportsByPath.get(entry.path.split('.').slice(1).join('.').toLowerCase());
   if (!index) throw new Error(`Missing object: ${entry.path}`);
-  return { asset: target, index, entry: target.pkg.exports[index - 1], key: `${target.name}.${target.pkg.exports[index - 1].path}` };
+  return { asset: target, index: index | 0, entry: target.pkg.exports[index - 1], key: `${target.name}.${target.pkg.exports[index - 1].path}` };
 }
