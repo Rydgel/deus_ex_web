@@ -647,7 +647,12 @@ export class ScriptRuntime {
     // Check before reusing the pending field: a by-value cycle would otherwise
     // await its own promise instead of reporting the invalid linked layout.
     if(struct&&ancestry.includes(struct.key))throw new Error(`Cyclic by-value script struct: ${struct.key}`);
-    if(!record.fieldPending)record.fieldPending=(async()=>{
+    // The pending link is kept while it runs; once it has finished the record only says so (a resolved promise on each of the Island's
+    // 20,000 properties was an object kept for nothing: docs/live-heap.md "Load records and functions"). A caller still gets a promise
+    // of the record, one already resolved as before, so the ticks it waits are the same.
+    if(record.fieldPending===true)return Promise.resolve(record);
+    if(!record.fieldPending){
+    const pending=(async()=>{
       if(record.metadata.type==='array'&&record.metadata.innerRef){
         const inner=await this.objects.resolve(record.asset,record.metadata.innerRef);
         // Dynamic container cycles need their own VM/value contract. Linking
@@ -664,6 +669,9 @@ export class ScriptRuntime {
       }
       return record;
     })();
+    record.fieldPending=pending;
+    pending.then(()=>{record.fieldPending=true;},()=>{});
+    }
     return record.fieldPending;
   }
   async structFields(record,ancestry=[]) {
