@@ -1158,6 +1158,137 @@ allocation (about 1 MB a worker frame against 1.6) makes possible: a step is one
 frame. Frames over 100 ms are halved (34 to 17 in two runs each), the longest frame falls from 356 and 358 ms to 237 and 267, and
 frames over 50 ms barely change (64 to 56): what is left is the marking itself, about 250 ms of it per cycle on the frame thread.
 
+### Cut: world queries and actors (2026-10-29)
+
+The coronas (95 to 119 KB a worker frame), the actors (189 to 246), the tick's collision and walking glue, the stamps (35) and the
+sprites (25) were the steps left after the tick-and-actors cut. Host representation only: nothing the simulation computes changes.
+Most of it was the mechanisms already seen in the earlier cuts, plus these:
+
+* **A kernel call that was never made.** The corona pass asked `level.hash.lineCheck(..., lineModel())` for each light, and a
+  `worldModel` argument always took the JavaScript reference path (`modelLine`: `singleLineCheck`, `multiLineCheck`, the hash's cell
+  arrays, `copyHit`, the Proxy over the tracker's nodes with a node object per first read). The tracker's collision model is the same
+  block of memory the kernel imports for every other line check, so while the tracker lives `lineProbe` (level-queries.mjs) asks
+  lc_line for the two answers the helper reads, `outside` and `actor`, and writes them into one record (collision-kernel.mjs `probe`).
+  Mesh lighting's visibility trace does the same through `traceRayClear` (ray.mjs, trace-kernel.mjs `rayClear`), with no hit object.
+  `lineModel()`'s view is built only where the JavaScript path runs (the validators, `?trackedCollision=off`, a kernel hand-back).
+  `LINE_PROBE_DIFFERENTIAL=1` (or the hash and trace differentials) compares every probe and trace with the reference.
+* **A typed array per read.** bsp-occlusion's `words()` made a new `Uint32Array` over the kernel's memory for every tracker header word
+  (`live()`, `generation()` and `count()`, each read for a line check's world model) and every node; decal-kernel's `setRotation` one
+  per surface per mover per AttachDecal; move-pawn-kernel one for each move's hit records and result. They are kept while
+  `memory.buffer` is the same object.
+* **`length = 0` is not free.** An array emptied by `length = 0` drops its backing store (measured in Node: 300 pushes after it
+  allocate 7 KB, none when written by index). The actor layer's record list was `[]` pushed to for every binding each frame; it is a
+  `RecordList` written by index and copied out once, exact.
+* **Words above the small-integer range.** The flat draw lists read each entry's `polyFlags` and `zoneKey`, which that form drops: a
+  word above 2^30 is a heap number for each read below TurboFan, as the earlier cut found for object fields. Play's decode also keeps
+  a sprite as five words in a `Uint32Array` instead of two objects, a span and an array.
+* **Scratch and pools** where nothing outlives the call: `movingLightLeafList` walks its path in module scratch arrays (three typed
+  arrays per level before); `packDynamics` reuses its entry objects and sorts them with a stable merge in scratch (the main frame's
+  call only); the pawn physics host keeps its pair of contexts at each depth; `js_move_hits` reads its query into one scratch;
+  `walkingSurfacePrelude` of a pawn whose scan runs in the kernel fills one set of inputs, and `surfaceScan` answers into kept objects
+  (valid until the next scan: WalkTexture's event copies its arguments, validate-collision-kernel's log copies what it keeps);
+  `moveActorRiders` and `laserIteratorItems` hold no closure; the stamps step keeps its by-id Map of the bindings while the list is the
+  same, and the layer's `all()` is one exact array; one frozen `{root:false}` serves every binding a child pass does not draw (a
+  weapon's decision, which the sim marks `flipSide`, is a copy); the actor layer, the corona scan and `reconcile` extend their sets in
+  place when Level.Actors only gained slots at its end.
+
+**Measured, browser** (`hitch-run.mjs --heap-sampling all --heap-steps 10 --heap-leaves 30 --seconds 60 --mode roam`, Chromium, worker
+mode, the Island, one dev server per tree on CDP port 9472; KB a worker frame, 4,530 to 4,672 frames a run). The "before" is an export
+of master `76495d62` run on this machine, the "after" the branch (code at `81eb06a4`):
+
+| Step | before 1 | before 2 | after 1 | after 2 |
+| --- | ---: | ---: | ---: | ---: |
+| **whole worker** | **1,007.8** | **962.0** | **742.0** | **696.7** |
+| tick (`begin`) | 495.8 | 454.5 | 427.5 | 392.8 |
+| actors | 194.3 | 193.4 | 115.7 | 113.2 |
+| coronas | 120.3 | 121.9 | 20.7 | 17.2 |
+| hud | 107.9 | 103.3 | 104.5 | 100.8 |
+| stamps | 35.2 | 35.0 | 19.2 | 18.7 |
+| sprites | 25.0 | 24.8 | 24.6 | 24.6 |
+| lightFrame | 12.2 | 12.0 | 9.8 | 9.7 |
+
+The whole worker fell by 26% (962 to 1,008 KB down to 697 to 742). The tick moves with the roam (the earlier cut saw 405 to 503 between
+runs of the same code, and most of it is in the other agent's files); the leaves in this cut's files fell from about 58 to 19 KB.
+Leaves (KB a worker frame, before 1 and 2 | after 1 and 2):
+
+| Leaf | before | after |
+| --- | ---: | ---: |
+| coronas: `vector`, `multiLineCheck`, `get` (bsp-occlusion), `map`, `singleLineCheck`, `visit` | 18.7 19.2; 14.9 15.5; 12.4 12.5; 9.4 9.5; 7.5 7.8; 7.0 7.1 | 0 0; 0 0; 0 0; 0.6 0.6; 0 0; 0.4 0.3 |
+| coronas: `actorLineCheck`, `collisionHashLineBounds`, `movingLightLeafList`, `lineCheck`, `modelLine`, `fround` | 4.2 4.1; 4.1 4.2; 4.1 4.1; 2.7 3.1; 2.7 2.7; 2.6 2.9 | 0 0; 0 0; 0.5 0.6; 0 0; 0 0; 0 0 |
+| actors: `drawnOf`, `packDynamics`, `movingLightLeafList`, `reconcile`, `setZoneSkies`, `from` | 11.1 11.3; 10.4 10.5; 8.4 9.3; 6.8 6.6; 2.5 2.6; 3.2 3.1 | 0 0 each |
+| actors: `update` (actor-mesh-sim), `decode`, `next`, `map`, `updateDrawn` | 10.4 10.1; 10.3 9.9; 8.3 8.1; 5.5 5.7; 4.6 4.7 | 7.5 7.2; 5.4 5.1; 3.5 2.9; 3.7 4.0; 3.8 4.1 |
+| stamps: `set` (the by-id Map and the decisions' Maps), `framePasses` | 11.5 11.8; 12.1 11.2 | 0.5 0.3; 9 (`framePass`, below) |
+| tick: `followDecalTracker`, `surfaceScanInputs`, `tracked`, `js_move_hits`, `moveActorRiders` | 9.0 8.9; 6.4 5.8; 5.9 5.2; 5.1 4.6; 4.7 4.4 | 0 0 each |
+| tick: `rider`, `begin` (pawn-physics-kernel), `scanHit` + `surfaceScan` | 6.1 6.0; 5.8 5.4; 7.9 7.7 | 4.7 4.3; 3.7 3.4; 0 0 |
+| tick: `primitiveCollisionBounds`; `lineCheck` + `hitObjects` (collision-kernel) | 4.5 4.3; 3.7 3.2 | 4.3 4.5; 6.3 6.0 |
+
+**Headless** (`frame-alloc-meter.mjs`, KB a frame, mean without the 1% largest frames; before from the references written on the
+untouched tree, after at the branch head):
+
+| Map (frames after warm-up) | tick | actors | coronas | sprites | whole call (trimmed mean / median) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Island (600 after 900) | 763.9 to 645.7 | 292.8 to 185.3 | 293.6 to 25.4 | 56.8 to 55.9 | 1,545.7 to 1,048.9 / 1,396.0 to 936.6 |
+| 747 (400 after 200) | 426.2 to 407.7 | 65.9 to 43.6 | 89.0 to 21.1 | 5.5 to 5.5 | 812.6 to 703.1 |
+| Training (400 after 200) | 647.1 to 624.4 | 97.5 to 61.6 | 292.7 to 56.3 | 0.8 to 0.8 | 1,730.3 to 1,429.2 |
+
+The Node tiers differ from Chromium's (the corona line checks were the JavaScript reference path in both, and cost 293 here against 95
+to 119 there), so the headless meter orders the changes and the browser profile is the number.
+
+**What each change was, in the order made** (the commits have the detail):
+1. `lineProbe` and the kept memory views (coronas 295 to 28 KB headless; the browser's 120 to 20): corona-scan keeps its frame state
+   and the light's float32 Location in objects made once, so `update` and `visit` hold no closure; `coronaSeenAt` takes the actors list
+   instead of a closure; the zero extent is shared.
+2. Flat draw lists into kept scratch and exact typed arrays (`drawnOf` takes the frame's whole node list as one view), pooled
+   candidate entries, the record list, the sky records read once per sky actor, `reconcile`'s and the corona scan's sets extended.
+3. The tick glue: pooled pawn physics contexts, `js_move_hits`' scratch, kept views, mesh lighting's traces in the kernel,
+   the by-id Map, `all()`, `meshChanged` without a closure per binding per frame.
+4. The shared not-in-frame decision, the laser iterator without closures, `finishSetup` by index.
+5. The kernel scan's inputs and hits in scratch, `moveActorRiders` without closures.
+6. Play's sprites as typed arrays, the unread draw words, the by-index record list.
+
+**Checks.**
+* `frame-alloc-meter.mjs --compare` against references written on the untouched tree (every key of `session.frame()` but its
+  timings, numbers by exact bits): identical on the Island (600 frames after 900 of warm-up, `c8cf5fff928609c1`), the 747 (400,
+  `f6337bff0cf741fc`) and Training (400, `e4b017e7b1bc0439`), and, against `76495d62`'s own output, on ShipFan (the fan lamps behind
+  the movers), Paris_Club (mirrors) and HongKong_Helibase (200 frames each). `LINE_PROBE_DIFFERENTIAL=1` ran the Island and ShipFan
+  (200-frame runs: 7,192 and 3,632 corona probes, 3,096 of them blocked on ShipFan), UNATCO HQ and Helibase with every probe and every mesh-light
+  trace compared with the JavaScript reference: no difference.
+* bench-sim digests (300 ticks): Island `15e3720088490242`, Training `148077479825af78`, 747 `ad8e591a01434df5`; the HUD stream
+  (`hud-stream-digest.mjs --frames 1500 --stream`) `16bfe2bd08ed1653`. All as on master.
+* `test/moving-light-leaf-list.test.mjs` (new): `movingLightLeafList` against the full Filter walk on 120 random BSP trees, leaf by
+  leaf (also with the lights' kept locations), and `movingLightInView` against the destructuring body on 400 random planes and
+  spheres. 852 unit tests, 848 pass, 4 skipped.
+* Validators (exit 0): coronas, coronas-tracked, coronas-play, leaf-lights, collision-kernel, tracked-collision,
+  fast-line-check-tracked, native-encroachment, native-hash, native-hash-radius, brush-bounds-kernel, native-fast-trace, native-level,
+  bsp-occlusion, child-frames, occlusion-flat-draw, sprite-setup, pawn-physics-kernel, pawn-move-kernel, walk-loop-kernel, walk-kernel,
+  actor-tick-kernel, actor-physics-kernel, native-walking-surface, native-ladder, x87-callers-kernel, native-mover-push,
+  npc-door-encroach, decal-attach, decal-order, decals-play, plant-push, decoration-settle-roll, level-tick, lodmesh-frame, pawn-nav,
+  mesh-lighting-play, lasers-play, mirrors-play, sky-in-mirror-play, iterator-frames-play, weapon-order. The page validators and the
+  physics kernels were rerun at the head after their last change, the others at the commit that touched their family.
+  validate-collision-kernel's log and validate-occlusion-flat-draw's comparison were adapted to the two representation changes
+  (the kept scan hits; the sprite lists as typed arrays). `reports/movement` was copied from the main checkout for
+  validate-native-encroachment, which reads an earlier validator's report.
+* `npm run build:wasm`: no cargo warnings (no Rust file changed). The four 60 s worker-mode Island runs of the branch ended with no errors.
+
+**What is left, and why.**
+* Per-binding records: `update` 7.5 (the `{id, visible, childOnly}` record of each of 324 bindings; the page needs one for each to hide
+  it, and the records are posted), `updateDrawn` 4 (its context and closures: a 250-line function whose closures capture the LOD and
+  lighting state), and the per-drawn-actor arrays of `finishSetup`, `setupMesh`, `lightFrame` and the GPU plan (`viewBox`,
+  `advanceChannelBox`, `lodMeshFrameMatrix`, `frameContext`), 2 to 4 KB each.
+* The decode's result objects (child requests with their spans, the flat lists' six views, the sprite and screen arrays): `decode` 5.
+  Their shape is read by validators; lazy views would remove about 1.5 KB.
+* The stamps' pass decisions (`framePass` 9): the decision objects of the bindings a child frame draws (their group bits and spheres)
+  and the `decisions` Map of every posed binding, 320 entries a pass, which the page reads by id.
+* Lasers (`laserIteratorItems`, `float3`, `readLaserState`, about 8 KB over the sprites and actors steps): the beams' vectors are arrays
+  read and converted for `laserCurrentItem`'s BigInt x87 model; a Rust port would carry the x87 PC24 chain and the random-beam
+  rejection loop, which was not started.
+* The tick's collision glue: `hitObjects` and the `cellTriple`/bounds arrays of the hash registrations (a moved pawn's remove and add
+  each build `{min, max}`), `primitiveCollisionBounds` 4, `rider` 4.5, `begin` 3.5. They are result objects the JavaScript move body
+  reads; moving MoveActor's hit selection and the rider pass to Rust would remove them.
+* Not in this cut's files and larger than all of the above together: `readComposite` (about 16 KB in the actors step, 9 in the sprites),
+  the VM's `copyScalar`, frames and `bindingSet` in the tick, and the HUD step.
+* Not measured: the two-core traces (the coordinator's), Firefox, the Mac.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
