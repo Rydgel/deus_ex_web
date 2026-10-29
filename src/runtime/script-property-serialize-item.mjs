@@ -165,7 +165,7 @@ function archiveWord(archive, services, offset, names, context = {}, fallback = 
   }
   const slots = archive?.nativeSlots;
   if (slots instanceof NativeSlots && slots.has(offset)) return Number(slots.value(offset));
-  if (slots && typeof slots === 'object' && own(slots, offset)) return Number(fieldValue(slots[offset]));
+  if (slots && typeof slots === 'object' && !(slots instanceof NativeSlots) && own(slots, offset)) return Number(fieldValue(slots[offset]));
   for (const name of names) {
     if (own(supplied, name)) return Number(fieldValue(supplied[name]));
     if (own(archive, name)) return Number(fieldValue(archive[name]));

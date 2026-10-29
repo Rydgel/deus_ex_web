@@ -9,6 +9,7 @@ import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMe
 import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
+import { FunctionRecord } from './script-function-record.mjs';
 import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
@@ -668,7 +669,12 @@ export class ScriptRuntime {
     // Check before reusing the pending field: a by-value cycle would otherwise
     // await its own promise instead of reporting the invalid linked layout.
     if(struct&&ancestry.includes(struct.key))throw new Error(`Cyclic by-value script struct: ${struct.key}`);
-    if(!record.fieldPending)record.fieldPending=(async()=>{
+    // The pending link is kept while it runs; once it has finished the record only says so (a resolved promise on each of the Island's
+    // 20,000 properties was an object kept for nothing: docs/live-heap.md "Load records and functions"). A caller still gets a promise
+    // of the record, one already resolved as before, so the ticks it waits are the same.
+    if(record.fieldPending===true)return Promise.resolve(record);
+    if(!record.fieldPending){
+    const pending=(async()=>{
       if(record.metadata.type==='array'&&record.metadata.innerRef){
         const inner=await this.objects.resolve(record.asset,record.metadata.innerRef);
         // Dynamic container cycles need their own VM/value contract. Linking
@@ -685,6 +691,9 @@ export class ScriptRuntime {
       }
       return record;
     })();
+    record.fieldPending=pending;
+    pending.then(()=>{record.fieldPending=true;},()=>{});
+    }
     return record.fieldPending;
   }
   async structFields(record,ancestry=[]) {
@@ -853,12 +862,14 @@ export class ScriptRuntime {
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const fields=[];
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
-    record.function={record,script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
-      result:fields.find(field=>field.metadata.return)??null};
+    record.function=new FunctionRecord(record,script,fields);
     // The serialized children were read to find the parameters' identities, whose own metadata Play uses (fields, parameters, result):
     // the function's copies of them, and the list built from them, are released (docs/live-heap.md, steps 2 and 3).
     script.children=NO_CHILDREN;script.parameters=NO_CHILDREN;
-    // Most linked bodies never run: the tree goes until the first run decodes it again (docs/live-heap.md step 8).
+    // The decoded metadata goes too: the function keeps the fields it reads (docs/live-heap.md "Load records and functions").
+    script.compact();
+    // Most linked bodies never run: the tree goes until the first run decodes it again (docs/live-heap.md step 8), and the compiled body
+    // itself is made at the first read of `function.compiled` (script-function-record.mjs).
     compiled.release();
     return record;
   }

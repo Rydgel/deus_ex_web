@@ -1,4 +1,5 @@
 import {propertyReference} from './script-values.mjs';
+import {cloneMetadata} from './clone-metadata.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
 import {identityOfHandle} from './script-object-handles.mjs';
 
@@ -8,7 +9,7 @@ const plainStruct=field=>['core.object.vector','core.object.rotator'].includes(f
 
 function elementReference(field,ref,index) {
   if(field.metadata.arrayDim===1)return ref;
-  const scalar={...field,metadata:{...field.metadata,arrayDim:1,arrayDimension:1}};
+  const scalar={...field,metadata:cloneMetadata(field.metadata,{arrayDim:1,arrayDimension:1})};
   return propertyReference(scalar,()=>ref.get()[index],value=>{
     const array=ref.get();array[index]=value;ref.set(array);
   });

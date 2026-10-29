@@ -542,7 +542,8 @@ function decodeTree(fn) {
   return { decoded, statements, discarded };
 }
 
-export function compileFunction(fn) { return new CompiledFunction(fn); }
+// `released`: the body as preparation leaves it (script-runtime.mjs prepareFunction): no tree, decoded again at its first use.
+export function compileFunction(fn, released = false) { return new CompiledFunction(fn, released); }
 
 // createFrame's options when the caller gives none: read, never written, so one object serves every call.
 const NO_FRAME_OPTIONS = Object.freeze({});
@@ -576,10 +577,10 @@ registerAllocationSiteWarmer(count => {
  * keyed by expression offset, which names one expression of the body in every decode. Its JavaScript engine (about twenty
  * closures) is built at its first run, since most linked bodies never run. */
 class CompiledFunction {
-  constructor(fn) {
+  constructor(fn, released = false) {
     this.name = fn.entry.path; this.size = fn.size; this.script = fn;
     this.displayName = fn.name??fn.objectName??'script';
-    this.tree = decodeTree(fn);
+    this.tree = released ? null : decodeTree(fn);
     this.built = null;
   }
   held() { return this.tree ??= decodeTree(this.script); }

@@ -208,14 +208,17 @@ function write(object, offset, value, services, names = [], width = 4) {
   if (services.writeSlot) services.writeSlot(object, offset, value, width);
   if (present) slots.assign(offset, value);
   else if (slots) slots.set(offset, value, width);
-  for (const name of names) if (slots === null || !SLOT_ONLY_NAMES.has(name)) object[name] = value;
+  for (const name of names) if (slots === null || RECORD_FIELDS.has(name)) object[name] = value;
   return value;
 }
 
-// Aliases only slot() reads, after the object's native slot: a record with native slots keeps these in the slot alone (three more
-// properties on every struct and function record, each a heap number in the browser, and nothing reads them: docs/live-heap.md,
-// steps 2 and 3). An object without native slots keeps them.
-const SLOT_ONLY_NAMES = new Set(['line', 'textPos', 'textPosition']);
+// What a record with native slots keeps beside its slots: the fields that stand for the record itself and are read by name (`name`,
+// `objectFlags`, `base`, `defaults`, `names`; makeRecord's literal and the class-bind and enum readers). Every other alias below
+// (`flags`, `superField`, `super`, `next`, `hashNext`, `iNative`, `numParms`, `repOffset`, the state and class words, `line`,
+// `textPos`...) lived in the slot alone for the three that only slot() read (docs/live-heap.md, steps 2 and 3), and now all do: they
+// were written beside every slot and read by nothing, a property array of up to thirty properties on every record (docs/live-heap.md
+// "Load records and functions"). An object without native slots (a fixture) keeps all of them.
+const RECORD_FIELDS = new Set(['name', 'objectFlags', 'base', 'defaults', 'names']);
 
 const NAMES = freeze({
   0x0c: ['frame', 'stateFrame'],

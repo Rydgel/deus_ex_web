@@ -2,6 +2,7 @@
  * See docs/script-load-graph.md for original authority and remaining services.
  */
 import {readClass} from '../unreal/classes.mjs';
+import {ClassMetadata} from './class-metadata.mjs';
 import {createScriptLoadGraph} from './script-load-graph.mjs';
 import {loadConfigCache} from './config-cache.mjs';
 import {createOriginalLoadTracker} from './original-loaded.mjs';
@@ -221,10 +222,10 @@ export class ScriptClassLoader {
     // Preserve source metadata for bytecode/debug consumers. Runtime state and
     // default values below come from the serialized native records, not tags
     // decoded by readClass. This decoder is not a native loader substitute.
-    const metadata = {...readClass(record.asset, record.index),
+    const metadata = new ClassMetadata(record.asset, record.index, readClass(record.asset, record.index), {
       classFlags: slotOf(loaded, 0x484), probeMask: slotOf(loaded, 0x6c),
       ignoreMask: slotOf(loaded, 0x74), stateFlags: slotOf(loaded, 0x7c),
-      labelTableOffset: slotOf(loaded, 0x80), scriptSize: slotOf(loaded, 0x48)};
+      labelTableOffset: slotOf(loaded, 0x80), scriptSize: slotOf(loaded, 0x48)});
     const cls = {record, metadata, base, loadRecord: loaded, nameCounter: 0,
       fields: new Map(), methods: new Map(), states: new Map(), stateOrder: [],
       propertyOrder: [], defaults: new Map(), defaultsSource: 'original-linker-serialized'};
