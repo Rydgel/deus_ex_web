@@ -28,12 +28,15 @@
  */
 import {readCell, writeCell, scalarCell, vectorCell} from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
+import {defineEntryAccessor} from './host-accessors.mjs';
 
 const ZERO = Object.freeze([0, 0, 0]);
 // `name`: the host `values` slot makeBinding fell back to while the host
 // member was absent (none for pointers, which fell back to None).
-const spec = (prop, key, offset, kind, name, zero) => Object.freeze({prop, key, offset, kind, name, zero});
-export const MIRROR_FIELDS = Object.freeze([
+const spec = (prop, key, offset, kind, name, zero) => Object.freeze({prop, key, offset, kind, name, zero, index: 0});
+// Each spec keeps its position in the table: the index of its entry under MIRRORS (host-accessors.mjs).
+const indexed = list => Object.freeze(list.map((item, index) => Object.freeze({...item, index})));
+export const MIRROR_FIELDS = indexed([
   spec('physics', 'engine.actor.physics', 0x30, 'byte', 'Physics', 0),
   spec('standingCount', 'engine.actor.standingcount', 0xd8, 'byte', 'StandingCount', 0),
   spec('velocity', 'engine.actor.velocity', 0x144, 'vector', 'Velocity', ZERO),
@@ -54,7 +57,7 @@ export const MIRROR_FIELDS = Object.freeze([
   spec('realRotation', 'engine.mover.realrotation', 0x524, 'rotator', 'RealRotation', ZERO),
   spec('clientUpdate', 'engine.mover.clientupdate', 0x530, 'int', 'ClientUpdate', 0),
 ]);
-export const PAWN_LIST = spec('pawnList', 'engine.levelinfo.pawnlist', 0x54c, 'object', null, null);
+export const PAWN_LIST = Object.freeze({...spec('pawnList', 'engine.levelinfo.pawnlist', 0x54c, 'object', null, null), index: MIRROR_FIELDS.length});
 const BY_KEY = new Map([...MIRROR_FIELDS, PAWN_LIST].map(item => [item.key, item]));
 
 // The controlled player's `physics` and `velocity` members are its movement
@@ -130,22 +133,28 @@ export function installMirrorFields(host, instance, fields, {values = {}, exclud
     if (!item || exclude?.has(field.key) || (item === PAWN_LIST) !== (target !== host)) continue;
     const cell = mirrorCell(instance, field.key);
     if (!cell) continue;
-    if (installed.some(entry => entry.spec === item)) throw new Error(`Mirror ${item.prop} is already installed: ${host.name}`);
+    if (installed[item.index] !== undefined) throw new Error(`Mirror ${item.prop} is already installed: ${host.name}`);
     const existing = Object.getOwnPropertyDescriptor(target, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
     const entry = new Mirror(instance, item, cell, field, values);
     entry.set(existing?.value === undefined ? entry.fallback() : existing.value);
-    Object.defineProperty(target, item.prop, {configurable: false, enumerable: true,
-      get: () => entry.get(), set: value => entry.set(value)});
-    installed.push(entry);
+    defineEntryAccessor(target, item.prop, MIRRORS, item.index);
+    installed[item.index] = entry;
   }
   if (!target[MIRRORS] && installed.length) Object.defineProperty(target, MIRRORS, {value: installed});
+}
+
+/** The installed entry of the host member `prop` (two specs, Mover's and Inventory's MyMarker, share `marker`). */
+function mirrorEntry(host, prop) {
+  const list = host?.[MIRRORS];
+  if (list) for (const entry of list) if (entry?.spec.prop === prop) return entry;
+  return undefined;
 }
 
 /** Return a host member to the value makeBinding showed after `delete`: the
  * binding's fallback. A member that is no mirror is deleted. */
 export function resetMirrorField(host, prop) {
-  const entry = host?.[MIRRORS]?.find(item => item.spec.prop === prop);
+  const entry = mirrorEntry(host, prop);
   if (entry) entry.set(entry.fallback());
   else delete host[prop];
 }
@@ -164,7 +173,7 @@ export function imageField(instance, field) {
  * field (the native reach workers restore Velocity component by component,
  * script-pawn-nav.mjs). Null when `prop` is no vector mirror of `host`. */
 export function liveVector(host, prop) {
-  const entry = host?.[MIRRORS]?.find(item => item.spec.prop === prop);
+  const entry = mirrorEntry(host, prop);
   if (entry?.spec.kind !== 'vector') return null;
   const vector = new Array(3);
   for (let index = 0; index < 3; index++) Object.defineProperty(vector, index, {enumerable: true,
