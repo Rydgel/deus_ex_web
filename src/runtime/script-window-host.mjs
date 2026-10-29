@@ -105,6 +105,7 @@ import {releaseHandle} from './script-object-handles.mjs';
 import {createWindowFArray} from './script-window-farray.mjs';
 import {potCeiling} from './script-root-snapshot.mjs';
 import {constructNativeObject} from './script-player-log.mjs';
+import {plainTexture} from './script-window-plain-texture.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -1770,12 +1771,30 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   W.setU32(canvas,0x80,renderBase);
   put(viewport,0x64,renderInterface);put(renderInterface,0,renderTable);put(renderTable,0x7c,3);
   gcServices.texCache={records:Array.from({length:5},()=>heap.allocRaw(0x84)),static:heap.allocRaw(0x84),head:0,count:0};
+  // A draw whose caller takes the tile commands in the form the page does (sim-session.mjs plainHudCommands: the texture as plain
+  // data) gets them so, built once; the colour array is the previous command's while its three words stay (a text is drawn in a
+  // colour or two), frozen as shared.
+  let plainTiles=false,tileColor=Object.freeze([NaN,NaN,NaN]),tileColorBits=[-1,-1,-1];
+  const colorOf=bits=>{
+    const r=bits[0],g=bits[1],b=bits[2],last=tileColorBits;
+    if(r!==last[0]||g!==last[1]||b!==last[2]){
+      tileColor=Object.freeze([bitsToF32(r)*255,bitsToF32(g)*255,bitsToF32(b)*255]);last[0]=r;last[1]=g;last[2]=b;
+    }
+    return tileColor;
+  };
   gcServices.callVirtual=(slot,object,command)=>{
     if(slot===1){put(command.record,0,object);return;}
     if(slot===2)return;
     if(slot!==3&&slot!==4)boundary(`Unknown HUD renderer virtual ${slot}`);
     const pointer=slot===3?heap.mem.read(command.record,'u32'):command.texture;
     const resource=resourceImages.get(pointer);if(!resource)boundary(`Unknown HUD texture pointer ${pointer}`);
+    if(plainTiles){
+      drawCommands.push({texture:plainTexture(resource.ref),x:bitsToF32(command.x),y:bitsToF32(command.y),
+        width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
+        ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),color:colorOf(command.color),
+        style:command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1});
+      return;
+    }
     drawCommands.push({texture:resource.ref,x:bitsToF32(command.x),y:bitsToF32(command.y),
       width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
       ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),
@@ -1910,7 +1929,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     /** The 3D view's rect in drawing-buffer pixels for a width x height
      * viewport: XRootWindow PreRender's frame edit (script-root-render-viewport). */
     renderViewport(root,width,height){return rootRenderViewport(W,root,{x:0,y:0,width,height});},
-    draw(root,width,height,view){
+    draw(root,width,height,view,plain=false){
       resizeViewport(width,height);
       // The root's frame (+0x740) is the canvas frame after PreRender's edit
       // and ComputeRenderSize, so projection centres on the render rect
@@ -1926,7 +1945,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // (script-vm-gc.mjs open: only when this host's dispatch would).
       const gcNatives=runtime.scriptVm?.gc;
       gcNatives?.open({heap,services:gcServices,handleNative:lifecycle.handleNative});
-      try{T.paintWindows(W,root,canvas);}finally{gcNatives?.close();}
+      plainTiles=plain===true;
+      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;gcNatives?.close();}
       return drawCommands.slice();
     },
     install() {

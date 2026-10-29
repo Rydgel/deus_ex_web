@@ -150,6 +150,10 @@ for (let i = 0; i < frames; i++) {
 }
 const digest = total.digest('hex').slice(0, 16);
 if (wantAlloc) {
+  // the rest of the call (without Galaxy's update): the quantiles of its KB, text-free frames at the low end
+  const rest = allocated.map((total, i) => (total - audioAllocated[i]) / 1024).sort((x, y) => x - y);
+  const quantile = q => rest[Math.min(rest.length - 1, Math.floor(rest.length * q))];
+  console.log(`hud() minus Galaxy's update, KB a frame: min ${rest[0].toFixed(1)}, p10 ${quantile(.1).toFixed(1)}, median ${quantile(.5).toFixed(1)}, p90 ${quantile(.9).toFixed(1)}, max ${rest[rest.length - 1].toFixed(1)}`);
   allocated.sort((x, y) => x - y);
   const mean = allocated.reduce((x, y) => x + y, 0) / allocated.length / 1024, median = allocated[allocated.length >> 1] / 1024;
   const audioMean = audioAllocated.reduce((x, y) => x + y, 0) / audioAllocated.length / 1024;

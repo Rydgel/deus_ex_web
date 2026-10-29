@@ -3,6 +3,7 @@
  * frame's results come back as plain data for the drawing side. Steps not
  * yet moved here still run from main.mjs. */
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
+import { plainTexture } from '../runtime/script-window-plain-texture.mjs';
 import { createSpriteScan } from './sprite-scan.mjs';
 import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/script-render-iterator.mjs';
 import * as THREE from 'three';
@@ -29,11 +30,11 @@ export const plainError = error => ({ name: error?.name ?? 'Error', message: Str
 
 /** A HUD texture reference as plain data: the page decodes it from its own
  * asset store. */
-export const plainTexture = ref => ref.dynamic ? { key: ref.key, dynamic: true, width: ref.width, height: ref.height }
-  : { key: ref.key, package: ref.asset.name, index: ref.index };
+export { plainTexture };
 /** The window host's GC draw commands (script-window-host.mjs callVirtual)
  * as plain data. */
-export const plainHudCommands = commands => commands.map(command => command.kind === 'clearZ' ? { kind: 'clearZ' }
+export const plainHudCommands = (commands, tilesPlain = false) => commands.map(command => command.kind === undefined && tilesPlain ? command
+  : command.kind === 'clearZ' ? { kind: 'clearZ' }
   // GC.DrawActor's mesh draw (script-window-host.mjs, docs/gc-draw-actor.md): the planner's binding id, frame record and decision.
   : command.kind === 'actor' ? { kind: 'actor', actor: command.actor, draw: command.draw }
   : command.kind === 'viewport'
@@ -925,7 +926,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         game.hud.host?.setViewportPlanner?.(planViewportPass);
         game.hud.host?.setActorDrawPlanner?.(planHudActor);
         viewportFrames = 0; lastViewportPlans = [];
-        commands = plainHudCommands(game.hud.commands(width, height, view));
+        // (the window host builds the tile commands in this form already: draw's fourth argument)
+        commands = plainHudCommands(game.hud.commands(width, height, view, true), true);
         infoLink = infoLinkText();
         // UGameEngine::Draw's flash planes for UD3DRenderDevice::EndFlash (docs/screen-flash.md), read where the
         // original reads them: the viewport actor's FlashScale and FlashFog after the tick, at the HUD draw.

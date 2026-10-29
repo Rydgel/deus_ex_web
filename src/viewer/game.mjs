@@ -309,8 +309,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   let audioMs = 0;
   if (hud) {
     const draw = hud.commands.bind(hud);
-    hud.commands = (width, height, view) => {
-      const out = draw(width, height, view), start = performance.now();
+    hud.commands = (width, height, view, plain) => {
+      const out = draw(width, height, view, plain), start = performance.now();
       doors.scriptRuntime?.runtime?.audio?.update(view);
       audioMs += performance.now() - start;
       return out;
