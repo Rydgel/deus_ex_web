@@ -14,7 +14,7 @@
  * The first-half/second-half split of a channel (`pre`, `angle`, `post`) is
  * FPATAN: the host's `atan2` runs between them, as `services.atan2` does in
  * the JavaScript body. */
-export const IO_WORDS = 192;
+export const IO_WORDS = 256;
 // galaxy.rs's block.
 const C_DT = 0, C_LISTENER = 2, C_ORIGIN = 5, C_AXES = 8, C_AMBIENT = 17, C_DOPPLER = 18, C_SOUND = 19, C_SPEECH = 20,
   C_REVERSE = 21, C_SURROUND = 22;
@@ -24,6 +24,7 @@ const H_LOC = 32, H_TIME = 35, H_RADIUS = 36, H_VOLUME = 37, H_PITCH = 38, H_OCC
 const O_TIME = 48, O_PRIORITY = 49, O_LOCAL = 50, O_ATAN_X = 53, O_OCCLUSION = 54, O_VOLUME = 55, O_PAN = 56, O_FREQUENCY = 57,
   O_AMB_VOLUME = 58, O_AMB_DOUBLE = 59, O_AMB_LIGHT = 60, O_AMB_RADIUS = 61, O_AMB_PITCH = 62;
 const T_IDS = 64, T_PRIORITIES = 128;
+const R_MASTER = 192, R_CUTOFF = 193, R_DELAYS = 194, R_GAINS = 200, O_REVERB = 224;
 const F_OCCLUDED = 1, F_SPEECH = 2, F_DOPPLER = 4;
 // Words 46 and 47 are the host's scratch for a float32 argument and the word it turns into (galaxy.rs never touches them).
 const S_ARG = 46, S_BITS = 47;
@@ -128,6 +129,15 @@ export function createGalaxyUpdateKernel(x, memory) {
       f32[S_ARG] = eyeHeight; f32[S_BITS] = z;
       u32[S_BITS] = x.galaxy_eye(u32[S_ARG], u32[S_BITS]);
       return f32[S_BITS];
+    },
+    /** Update's reverb tail for a reverb zone (MasterGain, CutoffHz, the six Delay and Gain bytes): the 27 words of the glxReverb
+     * block, written into `block` (an Int32Array). */
+    reverb(masterGain, cutoff, delays, gains, block) {
+      sync();
+      u32[R_MASTER] = masterGain; i32[R_CUTOFF] = cutoff | 0;
+      for (let i = 0; i < 6; i++) { u32[R_DELAYS + i] = delays[i]; u32[R_GAINS + i] = gains[i]; }
+      x.galaxy_reverb();
+      for (let i = 0; i < 27; i++) block[i] = i32[O_REVERB + i];
     },
     /** float(next + 0.1), step 12's analysis time. */
     addTenth(next) {

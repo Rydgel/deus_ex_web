@@ -224,12 +224,14 @@ runs it, and so does any host where the kernel is not loaded.
   scale, radius, pitch); each channel's play time, priority and listener-space
   location; the pan, distance factor, occlusion ramp, category ratio, voice
   volume, Doppler shift (through `safe_normal`) and voice frequency; the
-  listener's eye (`EyeHeight + z`); step 12's `next + 0.1`; and
-  `ambientInRangeExact`'s extended compare.
+  listener's eye (`EyeHeight + z`); step 12's `next + 0.1`;
+  `ambientInRangeExact`'s extended compare; and the reverb tail's block (volume,
+  HFDamp and six clamped Time and Gain pairs) at the game thread's 64 bits (the
+  validators' replays at 53 and 24 bits stay on the BigInt body).
 * **Still JavaScript**, because they are JavaScript objects or services: the
   world reads (`read`), the channel records with their actors, sounds and
   voices, the services (`fastLineCheck`, `globalLighting`, the voices, `sample`,
-  `lipSync`), the music section and the reverb tail. FPATAN is the host's
+  `lipSync`) and the music section. FPATAN is the host's
   `services.atan2`, as before: a channel's step is `pre` (Rust: time, priority,
   listener-space location and appAtan2's two operands), the host's `atan2`,
   then `post` (Rust: everything after). The order of the services' calls is the
@@ -246,7 +248,8 @@ runs it, and so does any host where the kernel is not loaded.
   tiny locations and radii, every delta-time edge, zero volumes, 1 to 64
   channels, Doppler speeds of 0 and below) on fresh audio objects. Every
   return, voice call, request and channel record word after each call is
-  compared as float32 words and integers. Where the BigInt body cannot run a case
+  compared as float32 words and integers, and 4,000 random reverb zones (every clamp
+  and byte mask) hand the library the same 27-word block. Where the BigInt body cannot run a case
   (a NaN reaching `x87sqrt` throws there; the hardware quiets it, and so does the
   kernel) the case is counted and not compared. `validate-native-galaxy-audio.mjs`
   runs the Rust path against the original by default (`GALAXY_AUDIO_BODY=js` the

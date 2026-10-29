@@ -15,8 +15,9 @@
  */
 import assert from 'node:assert/strict';
 import {loadScriptVmKernel,scriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
-import {ambientInRangeExact,ambientInRange} from '../src/runtime/galaxy-audio.mjs';
+import {ambientInRangeExact,ambientInRange} from "../src/runtime/galaxy-audio.mjs";
 import {buildCases,runCase,rng} from './galaxy-audio-cases.mjs';
+import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
 
 await loadScriptVmKernel();
 const kernel=scriptVmKernel.galaxy;
@@ -108,7 +109,28 @@ for(let i=0;i<sweep;i++){
   compare(`sweep ${i}`,c,{lipSync:random()<.5});
 }
 
-// 3. ambientInRangeExact's compare: the kernel's extended compare over values at, around and far from the radius.
+// 3. Update's reverb tail: the glxReverb block handed to the library for random reverb zones (every clamp and the byte masks).
+const identityCoords = {origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1]};
+const reverbBlockOf = (zone, options) => {
+  let out = null;
+  const player = {Region: {'engine.actor.pointregion.zone': zone}};
+  createGalaxyAudio({effectsChannels: 16, ambientFactor: 0.7, dopplerSpeed: 6500, soundVolume: 204, speechVolume: 255, useSurround: 0,
+    reverseStereo: 0, useReverb: 1}, {listener: () => ({actor: player, viewTarget: null}),
+    read: (object, name) => name === 'Location' ? [0, 0, 0] : name === 'ShowFlags' ? 0 : object[name],
+    library: {lock() {}, unlock() {}, setSampleReverb: words => { out = Array.from(words); return 0; }}}, options).update(0, identityCoords);
+  return out;
+};
+let reverbZones = 0, reverbSet = 0;
+for (let i = 0; i < 4000; i++) {
+  const byte = () => pick([0, 1, 2, 127, 128, 254, 255, 256, 300, Math.floor(random() * 256), Math.floor(random() * 4096)]);
+  const zone = {bReverbZone: random() < 0.9, MasterGain: byte(), CutoffHz: pick([-5, 0, 1, 44099, 44100, 44101, 2 ** 31 + 5, Math.floor(random() * 50000), -(2 ** 31)]),
+    Delay: Array.from({length: 6}, byte), Gain: Array.from({length: 6}, byte)};
+  const expected = reverbBlockOf(zone, {kernel: null}), actual = reverbBlockOf(zone, {kernel});
+  assert.deepEqual(actual, expected, `reverb block ${JSON.stringify(zone)}`);
+  reverbZones++; reverbSet += expected ? 1 : 0;
+}
+
+// 4. ambientInRangeExact's compare: the kernel's extended compare over values at, around and far from the radius.
 let rangeChecks=0,rangeInside=0;
 for(let i=0;i<20000;i++){
   const radiusByte=pick([0,1,15,63,255,256,Math.floor(random()*256)]),reach=((radiusByte&0xff)+1)*25;
@@ -129,6 +151,6 @@ for(const [dx,dy,dz,byte] of [[3,4,0,0],[0,0,25,0],[0,0,26,0],[75,100,0,4],[1e30
   assert.equal(kernel.inRangeExact(loc,origin,byte),expected,`inRangeExact ${[dx,dy,dz,byte]}`);rangeChecks++;
 }
 
-console.log(JSON.stringify({...stats,rangeChecks,rangeInside}));
+console.log(JSON.stringify({...stats,reverbZones,reverbSet,rangeChecks,rangeInside}));
 if(stats.mismatches)process.exitCode=1;
 else if(!stats.kernelRuns||!stats.voiceCalls)throw new Error('the cases exercised nothing');

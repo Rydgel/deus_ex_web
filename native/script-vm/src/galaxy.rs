@@ -22,7 +22,7 @@
 use crate::x87::Ext;
 
 /// IO block words. The layout is mirrored by galaxy-update-kernel.mjs.
-pub const IO_WORDS: usize = 192;
+pub const IO_WORDS: usize = 256;
 // The Update's context (written once per Update).
 const C_DT: usize = 0; // f64 (2 words): the prologue's clamped delta time
 const C_LISTENER: usize = 2; // 3: the listener's Location
@@ -62,6 +62,12 @@ const O_AMB_DOUBLE: usize = 59;
 const O_AMB_LIGHT: usize = 60;
 const O_AMB_RADIUS: usize = 61;
 const O_AMB_PITCH: usize = 62;
+// The reverb tail's zone fields in, and the 27-word glxReverb block out.
+const R_MASTER: usize = 192; // MasterGain (a byte)
+const R_CUTOFF: usize = 193; // CutoffHz, clamped by the host's | 0 to an int
+const R_DELAYS: usize = 194; // 6: Delay bytes
+const R_GAINS: usize = 200; // 6: Gain bytes
+const O_REVERB: usize = 224; // 27 words
 // PlaySound's channel table: the Id and the Priority of each channel.
 const MAX_CHANNELS: usize = 64;
 const T_IDS: usize = 64;
@@ -369,4 +375,44 @@ pub extern "C" fn galaxy_eye(eye_height: u32, z: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn galaxy_add_tenth(next: u32) -> u32 {
     Ext::load(next).add(c64(0.1)).store()
+}
+
+/// Update's reverb tail (0x1060aa15..0x1060ab93, docs/galaxy-music/reverb.md §2) for a
+/// reverb zone: a zeroed 27-word glxReverb at O_REVERB with Volume (+0xc) =
+/// float(MasterGain * 1/255), HFDamp (+0x10) = float(clamp(CutoffHz, 0, 44100)) and, for six
+/// delays at +0x34 + 8i, Time = float(clamp(Delay * 0.002f, 0.001f, 0.34f)) and Gain =
+/// float(clamp(Gain * (1/255)f, 0.001f, 0.999f)), each clamp an FCOM (below or unordered)
+/// and a replacement. At the game thread's precision control, as galaxy-audio.mjs's
+/// `precisionMul` at 64.
+#[no_mangle]
+pub extern "C" fn galaxy_reverb() {
+    const TIME_SCALE: u32 = 0x3b03_126f; // 0.002f (0x1063d6c4)
+    const MIN: u32 = 0x3a83_126f; // 0.001f (0x1063d6c0)
+    const MAX_TIME: u32 = 0x3eae_147b; // 0.34f (0x1063d6bc)
+    const MAX_GAIN: u32 = 0x3f7f_be77; // 0.999f (0x1063d6b8)
+    for i in 0..27 {
+        put(O_REVERB + i, 0);
+    }
+    put(O_REVERB + 3, Ext::load_i32((io(R_MASTER) & 0xff) as i32).mul(c64(1.0 / 255.0)).store());
+    let cutoff = (io(R_CUTOFF) as i32).clamp(0, 44100);
+    put(O_REVERB + 4, Ext::load_i32(cutoff).store());
+    // value < low -> low; else not below high -> high; else value.
+    let clamp = |value: Ext, low: u32, high: u32| -> u32 {
+        if below(cmp(value, ld_const(low))) {
+            low
+        } else if below(cmp(value, ld_const(high))) {
+            value.store()
+        } else {
+            high
+        }
+    };
+    for i in 0..6 {
+        let time = Ext::load_i32((io(R_DELAYS + i) & 0xff) as i32).mul(ld_const(TIME_SCALE));
+        put(O_REVERB + 13 + 2 * i, clamp(time, MIN, MAX_TIME));
+        let gain = Ext::load_i32((io(R_GAINS + i) & 0xff) as i32).mul(ld_const(0x3b80_8081));
+        put(O_REVERB + 14 + 2 * i, clamp(gain, MIN, MAX_GAIN));
+    }
+}
+fn ld_const(bits: u32) -> Ext {
+    Ext::load(bits)
 }

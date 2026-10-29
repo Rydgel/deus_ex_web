@@ -439,7 +439,11 @@ export function createGalaxyAudio(config, services, options = {}) {
     reverbBlock.fill(0);
     if (config.useReverb) {
       const zone = read(listener, 'Region')?.['engine.actor.pointregion.zone'] ?? null;
-      if (zone && read(zone, 'bReverbZone')) {
+      const kernel = kernelOf(), reverbZone = zone && read(zone, 'bReverbZone');
+      if (reverbZone && kernel && (config.precision ?? 64) === 64) {
+        // The tail's products at the game thread's 64 bits (galaxy.rs galaxy_reverb); other widths are the validators' replays.
+        kernel.reverb(read(zone, 'MasterGain'), read(zone, 'CutoffHz'), read(zone, 'Delay'), read(zone, 'Gain'), reverbBlock);
+      } else if (reverbZone) {
         reverbBlock[3] = floatBits(f32(precisionMul(x87int32(read(zone, 'MasterGain') & 0xff), INV_255)));
         const cutoff = read(zone, 'CutoffHz') | 0;
         reverbBlock[4] = floatBits(f32(x87int32(cutoff < 0 ? 0 : cutoff >= 44100 ? 44100 : cutoff)));
