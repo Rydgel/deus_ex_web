@@ -831,6 +831,39 @@ cut. The other 330 to 340 KB were:
   port would save CPU, not allocation. gc.rs still covers only SetStyle, SetTileColor, SetTextColor, SetFont, SetAlignments,
   EnableWordWrap, DrawTexture and DrawPattern, plus PushGC and PopGC; its CPU worth is unmeasured.
 
+### Both cuts on two cores (2026-10-29)
+
+Master `2d041a9a` (the two cuts above merged) against `0d9c5fd6`.
+
+**Allocation.** The same 60 s Island roam (`hitch-run.mjs --heap-sampling all`, Chromium worker mode, not pinned): 1,413 KB a
+worker frame, 1,699 KB a drawn frame (4,664 and 3,879 frames), against about 2.2 MB a drawn frame before. By step, KB a drawn
+frame against the table in "Where the worker allocates": the tick (`begin`) 863 (893), actors 376 (378), the HUD 165 (698),
+coronas 149 (147). The tick is now half of what is left; its largest leaves are object-image reads (`readComposite`), Map and Set
+operations, the actor tick kernel's `run`, the actor mesh layer's `update`, `tickStandaloneLevel` and collision-hash vectors.
+
+**Two cores.** `taskset -c 0,1`, a 150 s Island roam each (`hitch-run.mjs --trace --js-flags '--trace-gc
+--trace-incremental-marking'`, read by `gc-marking-cycles.mjs`), each tree served by its own dev server, run in the order new,
+new, base, base, new (the first two base runs found their server refusing `.work/`, so they were run again). The two longest frames
+of each complete major GC cycle of the worker, with the incremental steps on allocation inside each:
+
+| | Cycle | Longest frame | Second |
+| --- | --- | --- | --- |
+| base 1 | 88.5 s | 226 ms (34 steps) | 144 ms (12) |
+| base 2 | 77.1 s | 183 ms (26) | 176 ms (20) |
+| base 2 | 121.3 s | 280 ms (39) | 83 ms (2) |
+| new 1 | 75.7 s | 168 ms (17) | 141 ms (20) |
+| new 1 | 107.4 s | 229 ms (24) | 153 ms (21) |
+| new 2 | 78.6 s | 195 ms (19) | 179 ms (24) |
+| new 2 | 160.8 s | 205 ms (23) | 135 ms (20) |
+| new 3 | 49.5 s | 173 ms (26) | 135 ms (20) |
+| new 3 | 106.1 s | 189 ms (23) | 133 ms (21) |
+
+A cycle's main-thread work is unchanged (40 to 48 steps on allocation, 221 to 261 ms; atomic pause 24 to 35 ms; 300 to 347 ms
+long). What moved is how it splits: at most 26 steps in a frame instead of 26 to 39, and a cycle's longest frame 193 ms on average
+instead of 230. Every cycle still has two frames over 100 ms, as the synthetic puts it at 1.4 MB a frame ("Allocation sets the
+long frame"). The cycles did not become rarer in these runs (one or two in each 150 s on both sides). Three base cycles and six
+new ones: the averages are indicative, not a measured effect size.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -844,10 +877,10 @@ cut. The other 330 to 340 KB were:
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.
-* **The allocation thresholds on the worker.** The 0.8 and 0.5 MB a frame come from the synthetic. The worker itself has not
-  run below today's 2.2 MB (after "Cut: x87 math in Rust" 1.6 MB a worker frame, 2.1 to 2.3 MB a drawn frame, whose count is lower and varies more from run to run; not traced on two cores yet); a cut of a
-  large source, then a two-core trace, would place it. Firefox inline is not measured
-  against allocation.
+* **The allocation thresholds on the worker.** The 0.8 and 0.5 MB a frame come from the synthetic. The worker is now at 1.4 MB a
+  worker frame (1.7 MB a drawn frame), and on two cores its cycles still give two frames over 100 ms ("Both cuts on two cores"),
+  as the synthetic says at that level; the thresholds themselves are placed only once a cut takes it under 0.8 MB. Firefox
+  inline is not measured against allocation.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the
