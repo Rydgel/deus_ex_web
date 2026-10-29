@@ -22,14 +22,15 @@
  * reads or writes through the arena's current view, so no view outlives a
  * memory growth.
  *
- * The controlled player keeps both bindings: its `base` is the movement
+ * A host keeps one LinkSet (its instance and Touching array) over the class's BaseField and TouchingField
+ * (docs/live-heap.md, "Actor hosts and mesh bindings"). The controlled player keeps both bindings: its `base` is the movement
  * port's (player.mjs), stage 1e step 6.
  */
 import {readCell, writeCell, readFixedElement, writeFixedElement, isFixedCell, scalarCell, cellKind}
   from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
-import {defineEntryAccessor} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries} from './host-accessors.mjs';
 
 export const BASE_KEY = 'engine.actor.base';
 export const TOUCHING_KEY = 'engine.actor.touching';
@@ -38,8 +39,8 @@ const SPECS = Object.freeze({
   [TOUCHING_KEY]: Object.freeze({prop: 'touching', key: TOUCHING_KEY, offset: 0xe8, kind: 'fixed', index: 1}),
 });
 
-// Installed entries of a host (non-enumerable, so no host walk sees them), by the spec's index: the host's accessors find
-// theirs through it (host-accessors.mjs).
+// The state of a host (non-enumerable, so no host walk sees it): the host's accessors find it through this symbol
+// (host-accessors.mjs) and ask it for the member at the spec's index.
 const LINKS = Symbol('actorLinkFields');
 
 // Cells (one per class and field) checked against the retail layout.
@@ -74,46 +75,71 @@ const released = instance => Boolean(instance.imageToken?.released);
 function check(instance) {
   if (released(instance)) throw new Error('Script object allocation has been released');
 }
+// The Touching array finds its host's LinkSet through TOUCH_LINK, so its four element accessors are shared by every host's array.
+const TOUCH_LINK = Symbol('actorTouchingLink');
 const SLOT_ACCESSORS = [0, 1, 2, 3].map(index => Object.freeze({
   get() {
     const link = this[TOUCH_LINK], instance = link.instance;
     check(instance);
-    return readFixedElement(link.cell, instance.arena.view, instance.refs, index, instance.base);
+    return readFixedElement(link.fields[1].cell, instance.arena.view, instance.refs, index, instance.base);
   },
   set(value) {
     const link = this[TOUCH_LINK], instance = link.instance;
     check(instance);
-    writeFixedElement(link.cell, instance.arena.view, instance.refs, index, pointer(value), instance.base);
+    writeFixedElement(link.fields[1].cell, instance.arena.view, instance.refs, index, pointer(value), instance.base);
   },
 }));
-/** The `base` member: the pointer cell as a handle. */
-class BaseLink {
-  constructor(spec, instance, cell, codec) { this.spec = spec; this.cell = cell; this.instance = instance; this.codec = codec; }
-  get() { const instance = this.instance; check(instance); return readCell(this.cell, instance.arena.view, instance.refs, instance.base); }
-  set(value) {
-    const instance = this.instance;
+/** The `base` member of a class: the pointer cell as a handle. Shared by every host of the class that has the cell; the
+ * instance is the host's LinkSet's. */
+class BaseField {
+  constructor(spec, cell, codec) { this.spec = spec; this.cell = cell; this.codec = codec; }
+  get(link) { const instance = link.instance; check(instance); return readCell(this.cell, instance.arena.view, instance.refs, instance.base); }
+  set(link, value) {
+    const instance = link.instance;
     check(instance);
     // writeCell counts the Base change for the rider lists.
     writeCell(this.cell, instance.arena.view, instance.refs, this.codec.copy(pointer(value)), instance.base);
   }
 }
-/** The `touching` member: one array of four elements over the pointer cells; the member reads the same array. The array
- * finds its link through TOUCH_LINK, so its four element accessors are shared by every host's array. */
-const TOUCH_LINK = Symbol('actorTouchingLink');
-class TouchingLink {
-  constructor(spec, instance, cell) { this.spec = spec; this.instance = instance; this.cell = cell; this.array = null; }
-  get() { return this.array; }
-  set(value) {
+/** The `touching` member of a class: one array of four elements per host over the pointer cells; the member reads the same
+ * array (the LinkSet's). */
+class TouchingField {
+  constructor(spec, cell) { this.spec = spec; this.cell = cell; }
+  get(link) { return link.array; }
+  set(link, value) {
     if (!Array.isArray(value) || value.length !== 4) throw new Error('Original Touching requires four explicit slots');
-    const array = this.array;
+    const array = link.array;
     for (let index = 0; index < 4; index++) array[index] = value[index];
   }
+}
+// The BaseField of a cell (and codec) and the TouchingField of a cell: one for every class that has the cell.
+const baseFields = new WeakMap(), touchingFields = new WeakMap();
+function baseFieldOf(item, cell, codec) {
+  let list = baseFields.get(cell);
+  if (list === undefined) baseFields.set(cell, list = []);
+  for (const shared of list) if (shared.codec === codec) return shared;
+  const shared = new BaseField(item, cell, codec);
+  list.push(shared);
+  return shared;
+}
+function touchingFieldOf(item, cell) {
+  let shared = touchingFields.get(cell);
+  if (shared === undefined) touchingFields.set(cell, shared = new TouchingField(item, cell));
+  return shared;
 }
 const pointer = value => {
   if (value !== null && value !== undefined && typeof value !== 'object')
     throw new TypeError(`An actor pointer cannot hold a ${typeof value} value (${String(value)})`);
   return value ?? null;
 };
+
+/** What a host keeps of its Base and Touching members: its instance, its Touching array and the class's fields at the
+ * spec's indices (an interned array, a hole for a member it does not have). */
+class LinkSet {
+  constructor(instance) { this.instance = instance; this.array = null; this.fields = []; }
+  get(index) { return this.fields[index].get(this); }
+  set(index, value) { this.fields[index].set(this, value); }
+}
 
 /** Replace `host`'s `base` and `touching` members by accessors over its
  * image. `base` first takes the member's current value, or None while the
@@ -123,7 +149,8 @@ const pointer = value => {
  * The accessors are non-configurable, so a leftover `delete` throws instead
  * of splitting the storage again. Returns the installed props. */
 export function installLinkFields(host, instance, fields) {
-  const installed = host[LINKS] ?? [];
+  let set = host[LINKS] ?? null;
+  const installed = set ? set.fields.slice() : [];
   const added = [];
   for (const field of fields) {
     const item = SPECS[field.key];
@@ -138,26 +165,31 @@ export function installLinkFields(host, instance, fields) {
     if (item.kind === 'object') {
       writeCell(cell, instance.arena.view, instance.refs, codec.copy(pointer(existing?.value)), instance.base);
       bumpBaseEpoch();
-      entry = new BaseLink(item, instance, cell, codec);
+      entry = baseFieldOf(item, cell, codec);
     } else {
       if (!Array.isArray(existing?.value) || existing.value.length !== 4) continue;
       const array = new Array(4);
-      entry = new TouchingLink(item, instance, cell);
-      entry.array = array;
-      Object.defineProperty(array, TOUCH_LINK, {value: entry});
+      entry = touchingFieldOf(item, cell);
+      if (!set) set = new LinkSet(instance);
+      set.array = array;
+      set.fields = installed;
+      installed[item.index] = entry;
+      Object.defineProperty(array, TOUCH_LINK, {value: set});
       for (let index = 0; index < 4; index++) Object.defineProperty(array, index, {enumerable: true, ...SLOT_ACCESSORS[index]});
       for (let index = 0; index < 4; index++) array[index] = existing.value[index];
     }
     defineEntryAccessor(host, item.prop, LINKS, item.index);
     installed[item.index] = entry;
     added.push(item.prop);
+    if (!set) set = new LinkSet(instance);
+    set.fields = installed;
   }
-  if (!host[LINKS] && installed.length) Object.defineProperty(host, LINKS, {value: installed});
+  if (set) { set.fields = internEntries(installed); if (!host[LINKS]) Object.defineProperty(host, LINKS, {value: set}); }
   return added;
 }
 
 /** Whether `host` has its `prop` (base or touching) installed as a link. */
-export const hasLinkField = (host, prop) => Boolean(host?.[LINKS]?.some(entry => entry?.spec.prop === prop));
+export const hasLinkField = (host, prop) => Boolean(host?.[LINKS]?.fields.some(entry => entry?.spec.prop === prop));
 
 /** Whether `prop` is a link member name. */
 export const isLinkProp = prop => prop === 'base' || prop === 'touching';
@@ -168,7 +200,7 @@ export const isLinkProp = prop => prop === 'base' || prop === 'touching';
  * field, which the property reset has just restored, so its cells stay. A
  * member that is not installed is deleted, as the other resets do. */
 export function resetLinkField(host, prop) {
-  const entry = host?.[LINKS]?.find(item => item?.spec.prop === prop);
+  const entry = host?.[LINKS]?.fields.find(item => item?.spec.prop === prop);
   if (!entry) { delete host[prop]; return; }
   if (prop === 'base') host.base = null;
 }

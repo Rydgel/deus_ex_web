@@ -100,22 +100,41 @@ export function actorWordOf(instance) {
   return instance.arena.view.getUint32(instance.base + ACTOR_WORD.offset, true) >>> 0;
 }
 
+
+/** What an installed host keeps of its flag words: its instance, and for each of the three words its description (the same
+ * constant for every host) when it is installed, else null. The readers test truthiness (docs/live-heap.md, "Actor hosts
+ * and mesh bindings"). */
+class ActorWords {
+  constructor(instance, collision, actor, motion) { this.instance = instance; this.collision = collision; this.actor = actor; this.motion = motion; }
+}
+
 /** Whether `host` carries image-backed flag words, and which. */
 export const flagWordsOf = host => host?.[FLAG_WORDS] ?? null;
 
+// The masked dword of a word at an instance's image (the FlagWord of a host outside the installer does the same).
+const readWord = (instance, word) => {
+  if (instance.imageToken?.released) throw new Error('Script object allocation has been released');
+  return (instance.arena.view.getUint32(instance.base + word.offset, true) & word.mask) >>> 0;
+};
+const writeWord = (instance, word, value) => {
+  if (instance.imageToken?.released) throw new Error('Script object allocation has been released');
+  const view = instance.arena.view, at = instance.base + word.offset;
+  view.setUint32(at, ((view.getUint32(at, true) & ~word.mask) | (value & word.mask)) >>> 0, true);
+};
+
 // The members' functions are shared by every host and find the host's words through `this` (host-accessors.mjs).
-const wordMember = name => Object.freeze({
-  get() { return this[FLAG_WORDS][name].get(); },
-  set(value) { this[FLAG_WORDS][name].set(value >>> 0); },
+const wordMember = word => Object.freeze({
+  get() { return readWord(this[FLAG_WORDS].instance, word); },
+  set(value) { writeWord(this[FLAG_WORDS].instance, word, value >>> 0); },
 });
-const bitMember = (name, mask) => Object.freeze({get() { return Boolean(this[FLAG_WORDS][name].get() & mask); }});
+const bitMember = (word, mask) => Object.freeze({get() { return Boolean(readWord(this[FLAG_WORDS].instance, word) & mask); }});
 const SHARED = Object.freeze({
-  flags: wordMember('collision'),
-  collisionBits: Object.freeze({get() { return this[FLAG_WORDS].collision.get() & ~0x2; }}),
-  collideActors: bitMember('collision', 0x1), collideWorld: bitMember('collision', 0x2),
-  blockActors: bitMember('collision', 0x4), blockPlayers: bitMember('collision', 0x8), blocking: bitMember('collision', 0x8),
-  actorFlags: wordMember('actor'), static: bitMember('actor', 0x1), movable: bitMember('actor', 0x80000),
-  motionFlags: wordMember('motion'),
+  flags: wordMember(COLLISION_WORD),
+  collisionBits: Object.freeze({get() { return readWord(this[FLAG_WORDS].instance, COLLISION_WORD) & ~0x2; }}),
+  collideActors: bitMember(COLLISION_WORD, 0x1), collideWorld: bitMember(COLLISION_WORD, 0x2),
+  blockActors: bitMember(COLLISION_WORD, 0x4), blockPlayers: bitMember(COLLISION_WORD, 0x8), blocking: bitMember(COLLISION_WORD, 0x8),
+  actorFlags: wordMember(ACTOR_WORD), static: bitMember(ACTOR_WORD, 0x1), movable: bitMember(ACTOR_WORD, 0x80000),
+  motionFlags: wordMember(MOTION_WORD),
 });
 const member = (prop, {get, set}) => ({get, set, enumerable: true, configurable: false});
 const shared = props => Object.fromEntries(props.map(prop => [prop, member(prop, SHARED[prop])]));
@@ -127,33 +146,30 @@ const shared = props => Object.fromEntries(props.map(prop => [prop, member(prop,
 export function installActorFlagWords(host, instance, {collision = false, actor = false, motion = false}) {
   checkLayout(instance);
   if (host[FLAG_WORDS]) throw new Error(`Actor flag words are already installed: ${host.name}`);
-  const words = {collision: null, actor: null, motion: null};
   const expect = (prop, word, value) => {
-    const stored = word.get();
+    const stored = readWord(instance, word);
     if ((value >>> 0) !== stored)
       throw new Error(`${host.name}.${prop} 0x${(value >>> 0).toString(16)} differs from its image word 0x${stored.toString(16)}`);
   };
   if (collision) {
-    const word = words.collision = new FlagWord(instance, COLLISION_WORD);
-    expect('flags', word, host.flags);
+    expect('flags', COLLISION_WORD, host.flags);
     Object.defineProperties(host, shared(['flags', 'collisionBits', 'collideActors', 'collideWorld', 'blockActors', 'blockPlayers', 'blocking']));
   }
   if (actor) {
-    const word = words.actor = new FlagWord(instance, ACTOR_WORD);
-    expect('actorFlags', word, host.actorFlags);
-    if (host.static !== undefined && host.static !== Boolean(word.get() & 0x1)) throw new Error(`${host.name}.static differs from bStatic`);
-    if (host.movable !== undefined && host.movable !== Boolean(word.get() & 0x80000)) throw new Error(`${host.name}.movable differs from bMovable`);
+    expect('actorFlags', ACTOR_WORD, host.actorFlags);
+    if (host.static !== undefined && host.static !== Boolean(readWord(instance, ACTOR_WORD) & 0x1)) throw new Error(`${host.name}.static differs from bStatic`);
+    if (host.movable !== undefined && host.movable !== Boolean(readWord(instance, ACTOR_WORD) & 0x80000)) throw new Error(`${host.name}.movable differs from bMovable`);
     Object.defineProperties(host, shared(['actorFlags', 'static', 'movable']));
   }
   if (motion) {
-    const word = words.motion = new FlagWord(instance, MOTION_WORD);
-    if (host.motionFlags !== undefined) expect('motionFlags', word, host.motionFlags);
+    if (host.motionFlags !== undefined) expect('motionFlags', MOTION_WORD, host.motionFlags);
     // A reset returns bJustTeleported to the serialized value
     // (player-scene.mjs prepareActor), which is where the image starts.
-    if (Boolean(word.get() & 0x100) !== Boolean(host.values?.bJustTeleported))
+    if (Boolean(readWord(instance, MOTION_WORD) & 0x100) !== Boolean(host.values?.bJustTeleported))
       throw new Error(`${host.name}.bJustTeleported image differs from its serialized value`);
     Object.defineProperty(host, 'motionFlags', member('motionFlags', SHARED.motionFlags));
   }
-  Object.defineProperty(host, FLAG_WORDS, {value: Object.freeze(words)});
+  const words = Object.freeze(new ActorWords(instance, collision ? COLLISION_WORD : null, actor ? ACTOR_WORD : null, motion ? MOTION_WORD : null));
+  Object.defineProperty(host, FLAG_WORDS, {value: words});
   return words;
 }

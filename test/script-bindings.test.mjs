@@ -91,14 +91,15 @@ test('record level bindings are mirrored and read the record', () => {
   net.set(1);
 });
 
-test('entry accessors are shared pairs that find each host\'s own entry', () => {
+test('entry accessors are shared pairs that find each host\'s own state', () => {
   const SLOT = Symbol('slot');
   assert.equal(entryAccessor(SLOT, 2), entryAccessor(SLOT, 2));
   assert.notEqual(entryAccessor(SLOT, 1), entryAccessor(SLOT, 2));
-  const entry = initial => ({value: initial, get() { return this.value; }, set(v) { this.value = v * 2; }});
+  // A state answers for member `index`: this one stores twice the value it is given.
+  const state = (a, b) => ({values: [a, b], get(index) { return this.values[index]; }, set(index, v) { this.values[index] = v * 2; }});
   const make = (a, b) => {
     const host = {name: 'h', position: [9, 9, 9]};
-    Object.defineProperty(host, SLOT, {value: [entry(a), entry(b)]});
+    Object.defineProperty(host, SLOT, {value: state(a, b)});
     defineEntryAccessor(host, 'position', SLOT, 0);
     defineEntryAccessor(host, 'rotation', SLOT, 1);
     return host;
@@ -108,7 +109,7 @@ test('entry accessors are shared pairs that find each host\'s own entry', () => 
   assert.equal(two.rotation, 20);
   one.position = 5;
   assert.equal(one.position, 10);
-  assert.equal(two.position, 10, 'the other host\'s entry is its own');
+  assert.equal(two.position, 10, 'the other host\'s state is its own');
   two.position = 4;
   assert.equal(one.position, 10);
   assert.equal(two.position, 8);

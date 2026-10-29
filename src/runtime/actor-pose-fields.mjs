@@ -15,15 +15,19 @@
  *   +0x1d4 CollisionRadius     +0x1d8 CollisionHeight (floats)
  *
  * Each access reads or writes the cell through the arena's current view, so
- * no view outlives a memory growth. A vector or rotator read returns a fresh
+ * no view outlives a memory growth; a vector or rotator read returns a fresh
  * array (the host members were only ever replaced, never mutated in place);
  * a write stores through the field's codec (float32 components, int32
  * rotator components, a float32), which in both maps' runs never changed a
  * host value: every host write was already exact.
+ *
+ * A host keeps one PoseSet: its instance, its `values` and the class's
+ * PoseFields (a member's spec, cell and codec, shared by every host that has
+ * the cell: docs/live-heap.md, "Actor hosts and mesh bindings").
  */
 import {readCell, writeCell, scalarCell, vectorCell} from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
-import {defineEntryAccessor} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries} from './host-accessors.mjs';
 
 const ZERO = Object.freeze([0, 0, 0]);
 // `name`: the host `values` slot makeBinding fell back to while the host
@@ -43,8 +47,8 @@ const BY_PROP = new Map(POSE_FIELDS.map(item => [item.prop, item]));
 // reset code restores them, inside the hash's remove/re-add where needed.
 const LIVE_ACROSS_RESET = new Set(['position', 'rotation', 'radius', 'height']);
 
-// Installed entries of a host (non-enumerable, so no host walk sees them), by the spec's index: the host's accessors find
-// theirs through it (host-accessors.mjs).
+// The state of a host (non-enumerable, so no host walk sees it): the host's accessors find it through this symbol
+// (host-accessors.mjs) and ask it for the member at the spec's index.
 const POSES = Symbol('actorPoseFields');
 
 const checkedCells = new WeakSet();
@@ -71,38 +75,58 @@ export function posesField(instance, field) {
 }
 
 const released = instance => Boolean(instance.imageToken?.released);
-class Pose {
-  constructor(host, instance, item, cell, field, values) {
-    this.host = host; this.instance = instance; this.spec = item; this.cell = cell;
-    this.codec = propertyCodec(field); this.values = values;
-    this.stored = null; // OldLocation: the image value the binding fell back to
-  }
-  read() {
-    const instance = this.instance;
+/** One pose member of a class: its spec, cell and codec, shared by every host that installs it. The instance is the host's
+ * (the caller passes it). */
+class PoseField {
+  constructor(item, cell, codec) { this.spec = item; this.cell = cell; this.codec = codec; }
+  read(instance) {
     return readCell(this.cell, instance.arena.view, instance.refs, instance.base);
   }
-  write(value) {
-    const instance = this.instance;
+  write(instance, value) {
     writeCell(this.cell, instance.arena.view, instance.refs, this.codec.copy(value), instance.base);
   }
-  get() {
-    if (released(this.instance)) throw new Error('Script object allocation has been released');
-    return this.read();
+  get(instance) {
+    if (released(instance)) throw new Error('Script object allocation has been released');
+    return this.read(instance);
   }
-  set(value) {
-    if (released(this.instance)) throw new Error('Script object allocation has been released');
-    this.write(value);
+  set(instance, value) {
+    if (released(instance)) throw new Error('Script object allocation has been released');
+    this.write(instance, value);
   }
   /** The value makeBinding's getter gave while the host member was absent:
    * a mover's interpolation state, the `values` slot, else zero; for
    * OldLocation, the image cell as the attach built it (a property reset
-   * restores the same value). */
-  fallback() {
+   * restores the same value). `stored` is the host's. */
+  fallback(host, values, stored) {
     const {prop, name, zero} = this.spec;
-    if (!name) return this.codec.copy(this.stored);
-    const interpolation = prop === 'position' || prop === 'rotation' ? this.host?.interpolation?.[prop] : undefined;
-    return this.codec.copy(interpolation ?? this.values[name] ?? zero);
+    if (!name) return this.codec.copy(stored);
+    const interpolation = prop === 'position' || prop === 'rotation' ? host?.interpolation?.[prop] : undefined;
+    return this.codec.copy(interpolation ?? values[name] ?? zero);
   }
+}
+// The PoseField of a cell (and codec): one for every class that has the cell.
+const poseFields = new WeakMap();
+function poseFieldOf(item, cell, field) {
+  const codec = propertyCodec(field);
+  let list = poseFields.get(cell);
+  if (list === undefined) poseFields.set(cell, list = []);
+  for (const shared of list) if (shared.codec === codec && shared.spec === item) return shared;
+  const shared = new PoseField(item, cell, codec);
+  list.push(shared);
+  return shared;
+}
+
+/** What a host keeps of its pose members: its instance, its `values`, OldLocation's stored image value, and the class's
+ * PoseFields at the spec's indices (an interned array, holes for the members it does not have). */
+class PoseSet {
+  constructor(host, instance, values) {
+    this.host = host; this.instance = instance; this.values = values;
+    this.stored = null; // OldLocation: the image value the binding fell back to
+    this.fields = [];
+  }
+  get(index) { return this.fields[index].get(this.instance); }
+  set(index, value) { this.fields[index].set(this.instance, value); }
+  fallback(index) { return this.fields[index].fallback(this.host, this.values, this.stored); }
 }
 
 /** Replace `host`'s pose members by accessors over its image. Each cell first
@@ -113,7 +137,8 @@ class Pose {
  * non-configurable, so a leftover `delete` throws instead of splitting the
  * storage again. Returns the installed props. */
 export function installPoseFields(host, instance, fields, {values = {}, oldLocation = false} = {}) {
-  const installed = host[POSES] ?? [];
+  let set = host[POSES] ?? null;
+  const installed = set ? set.fields.slice() : [];
   const added = [];
   for (const field of fields) {
     const item = BY_KEY.get(field.key);
@@ -123,22 +148,26 @@ export function installPoseFields(host, instance, fields, {values = {}, oldLocat
     if (installed[item.index] !== undefined) throw new Error(`Pose ${item.prop} is already installed: ${host.name}`);
     const existing = Object.getOwnPropertyDescriptor(host, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
-    const entry = new Pose(host, instance, item, cell, field, values);
-    if (!item.name) entry.stored = entry.read();   // only OldLocation's fallback reads it
-    entry.write(existing?.value === undefined ? entry.fallback() : existing.value);
+    const entry = poseFieldOf(item, cell, field);
+    let stored = null;
+    if (!item.name) stored = entry.read(instance);   // only OldLocation's fallback reads it
+    entry.write(instance, existing?.value === undefined ? entry.fallback(host, values, stored) : existing.value);
     defineEntryAccessor(host, item.prop, POSES, item.index);
     installed[item.index] = entry; added.push(item.prop);
+    if (!set) set = new PoseSet(host, instance, values);
+    if (!item.name) set.stored = stored;
+    set.fields = installed;
   }
-  if (!host[POSES] && installed.length) Object.defineProperty(host, POSES, {value: installed});
+  if (set) { set.fields = internEntries(installed); if (!host[POSES]) Object.defineProperty(host, POSES, {value: set}); }
   return added;
 }
 
 /** Return a pose member to the value makeBinding showed after `delete`: the
  * binding's fallback. A member that is not installed is deleted. */
 export function resetPoseField(host, prop) {
-  const entry = host?.[POSES]?.[BY_PROP.get(prop)?.index];
-  if (!entry) { delete host[prop]; return; }
-  entry.set(entry.fallback());
+  const set = host?.[POSES], index = BY_PROP.get(prop)?.index;
+  if (!set?.fields[index]) { delete host[prop]; return; }
+  set.set(index, set.fallback(index));
 }
 
 /** Whether `prop` is a pose member name. */
@@ -151,10 +180,11 @@ export const isPoseProp = prop => BY_PROP.has(prop);
  * when they were host members the restore never touched. Returns the
  * function that puts them back after the restore. */
 export function keepLivePose(host) {
-  const entries = host?.[POSES]?.filter(entry => LIVE_ACROSS_RESET.has(entry.spec.prop) && !released(entry.instance));
-  if (!entries?.length) return () => {};
-  const saved = entries.map(entry => entry.read());
-  return () => { entries.forEach((entry, index) => entry.write(saved[index])); };
+  const set = host?.[POSES], instance = set?.instance;
+  const kept = set?.fields.filter(entry => LIVE_ACROSS_RESET.has(entry.spec.prop) && !released(instance));
+  if (!kept?.length) return () => {};
+  const saved = kept.map(entry => entry.read(instance));
+  return () => { kept.forEach((entry, index) => entry.write(instance, saved[index])); };
 }
 
 /** One pose field of an attached instance as a {spec, get, set} triple over
@@ -164,6 +194,6 @@ export function keepLivePose(host) {
 export function imagePoseField(instance, field) {
   const item = BY_KEY.get(field.key), cell = item && poseCell(instance, field.key);
   if (!cell) return null;
-  const entry = new Pose(null, instance, item, cell, field, {});
-  return {spec: item, get: () => entry.get(), set: value => entry.set(value)};
+  const entry = poseFieldOf(item, cell, field);
+  return {spec: item, get: () => entry.get(instance), set: value => entry.set(instance, value)};
 }
