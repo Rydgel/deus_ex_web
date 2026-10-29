@@ -300,15 +300,14 @@ export function readPropertyMetadata(asset, index) {
     defaultValue: null,
     defaultValueSupported: false,
     unsupported: classType ? null : `No original type serializer recorded for ${entry.className}`,
+    // (in the literal: fields added after it were an out-of-line property array on every property)
+    parameter: Boolean(flags & PROPERTY_FLAGS.Parm),
+    out: Boolean(flags & PROPERTY_FLAGS.OutParm),
+    return: Boolean(flags & PROPERTY_FLAGS.ReturnParm),
+    optional: Boolean(flags & PROPERTY_FLAGS.OptionalParm),
+    coerce: Boolean(flags & PROPERTY_FLAGS.CoerceParm),
+    skip: Boolean(flags & PROPERTY_FLAGS.SkipParm),
   };
-
-  if (flags & PROPERTY_FLAGS.Parm) metadata.parameter = true;
-  else metadata.parameter = false;
-  metadata.out = Boolean(flags & PROPERTY_FLAGS.OutParm);
-  metadata.return = Boolean(flags & PROPERTY_FLAGS.ReturnParm);
-  metadata.optional = Boolean(flags & PROPERTY_FLAGS.OptionalParm);
-  metadata.coerce = Boolean(flags & PROPERTY_FLAGS.CoerceParm);
-  metadata.skip = Boolean(flags & PROPERTY_FLAGS.SkipParm);
 
   // The type serializers below are the exact additional fields observed in
   // Core.dll.  A BoolProperty bit mask is omitted by the original package
