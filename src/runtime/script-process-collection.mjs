@@ -35,6 +35,7 @@ import { releaseHandle, identityOfHandle } from './script-object-handles.mjs';
 import { cleanupPlan } from './script-runtime.mjs';
 import { RESOURCE_KINDS } from './script-objects.mjs';
 import { NativeSlots } from './native-slots.mjs';
+import {exportObject} from './linker-exports.mjs';
 
 const RF_NATIVE = 0x04000000;
 const CPF_NATIVE = 0x1000;
@@ -188,7 +189,7 @@ export function createProcessCollection(process) {
   // The graph record behind a registry record, if the graph has created it.
   const graphRecordOf = resource => {
     const identity = resource.object;
-    return recordOfIdentity(identity) ?? graph.linkers.get(resource.asset?.name.toLowerCase())?.exports[resource.index - 1]?.object ?? null;
+    return recordOfIdentity(identity) ?? exportObject(graph.linkers.get(resource.asset?.name.toLowerCase())?.exports, resource.index - 1) ?? null;
   };
 
   /** The resource registry's records the mark reaches (script-resources.mjs; the objects of the packages Play reads outside the graph, a

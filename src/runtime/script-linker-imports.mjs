@@ -39,11 +39,25 @@ function isA(object, cls, services) {
   }
   return false;
 }
-function recordAt(records, index, kind) {
+// A linker's exports are a LinkerExports table (linker-exports.mjs: columns over the package's entries, no record per export) or, in
+// fixtures, a plain array of records. The walks below read single fields, so the table allocates nothing.
+const exportRecord = (exports, index) => Array.isArray(exports) ? exports[index] : exports.record(index);
+const exportClassIndex = (exports, index) => Array.isArray(exports) ? exports[index].classIndex : exports.classIndex(index);
+const exportObjectName = (exports, index) => Array.isArray(exports) ? exports[index].objectName : exports.objectName(index);
+const exportObjectFlags = (exports, index) => Array.isArray(exports) ? exports[index].objectFlags : exports.objectFlags(index);
+const exportHashNext = (exports, index) => Array.isArray(exports) ? exports[index].hashNext : exports.hashNext(index);
+function setExportHashNext(exports, index, next) {
+  if (Array.isArray(exports)) exports[index].hashNext = next;
+  else exports.setHashNext(index, next);
+}
+function checkIndex(records, index, kind) {
   if (!Number.isInteger(index) || index < 0 || index >= records.length) {
     fail('INDEX', `${kind} index ${index} requires the unsupported native bounds diagnostic`);
   }
-  return records[index];
+}
+function recordAt(records, index, kind) {
+  checkIndex(records, index, kind);
+  return exportRecord(records, index);
 }
 function incrementImports(services) {
   if (!Number.isInteger(services.state?.importCount)) fail('SERVICE', 'Linker import requires the Core import counter');
@@ -51,15 +65,15 @@ function incrementImports(services) {
 }
 
 /** The class identity read by the original hash builder and VerifyImport. */
-function exportClass(linker, record, services) {
-  if (record.classIndex < 0) {
-    const cls = recordAt(linker.imports, -1 - record.classIndex, 'class import');
+function exportClass(linker, classIndex, services) {
+  if (classIndex < 0) {
+    const cls = recordAt(linker.imports, -1 - classIndex, 'class import');
     const pkg = recordAt(linker.imports, -1 - cls.packageIndex, 'class package import');
     return {name: cls.objectName, package: pkg.objectName};
   }
-  if (record.classIndex > 0) {
-    return {name: recordAt(linker.exports, record.classIndex - 1, 'class export').objectName,
-      package: read(linker.root, 'name', services)};
+  if (classIndex > 0) {
+    checkIndex(linker.exports, classIndex - 1, 'class export');
+    return {name: exportObjectName(linker.exports, classIndex - 1), package: read(linker.root, 'name', services)};
   }
   return {name: 0x29b, package: 0x14};
 }
@@ -68,11 +82,11 @@ const hash = (name, cls, pkg) => (name + cls * 7 + (pkg === 0x18 ? 0x17 : pkg) *
 /** Original constructor fragment: ascending exports prepend to 256 buckets. */
 export function buildLinkerExportHash(linker, services = {}) {
   linker.exportHash = new Int32Array(256).fill(-1);
-  for (let index = 0; index < linker.exports.length; index += 1) {
-    const record = linker.exports[index];
-    const cls = exportClass(linker, record, services);
-    const bucket = hash(record.objectName, cls.name, cls.package);
-    record.hashNext = linker.exportHash[bucket];
+  const exports = linker.exports;
+  for (let index = 0; index < exports.length; index += 1) {
+    const cls = exportClass(linker, exportClassIndex(exports, index), services);
+    const bucket = hash(exportObjectName(exports, index), cls.name, cls.package);
+    setExportHashNext(exports, index, linker.exportHash[bucket]);
     linker.exportHash[bucket] = index;
   }
   return linker.exportHash;
@@ -84,7 +98,7 @@ export function linkerIndexToObject(linker, reference, services = {}) {
   }
   if (reference === 0) return null;
   if (reference > 0) {
-    recordAt(linker.exports, reference - 1, 'export');
+    checkIndex(linker.exports, reference - 1, 'export');
     return call(services, 'createExport', linker, reference - 1);
   }
   return createLinkerImport(linker, -1 - reference, services);
@@ -143,27 +157,28 @@ export function verifyLinkerImport(linker, index, services = {}) {
   for (;;) {
     let candidateIndex = source.exportHash[hash(record.objectName, record.className, record.classPackage)];
     while (candidateIndex !== -1) {
-      const candidate = recordAt(source.exports, candidateIndex, 'source export');
-      const cls = exportClass(source, candidate, services);
+      checkIndex(source.exports, candidateIndex, 'source export');
+      const cls = exportClass(source, exportClassIndex(source.exports, candidateIndex), services);
       const alias = record.classPackage === 0x17 && cls.package === 0x18;
-      let matches = candidate.objectName === record.objectName && cls.name === record.className &&
+      let matches = exportObjectName(source.exports, candidateIndex) === record.objectName && cls.name === record.className &&
         (cls.package === record.classPackage || alias);
       if (matches && record.packageIndex < 0) {
         const outer = recordAt(linker.imports, -1 - record.packageIndex, 'outer import');
         if (outer.sourceLinker) {
+          const candidate = exportRecord(source.exports, candidateIndex);
           matches = outer.sourceIndex === -1 ? candidate.packageIndex === 0
             : candidate.packageIndex === outer.sourceIndex + 1 || candidate.packageIndex === 0;
         }
       }
       if (matches) {
-        if (!(candidate.objectFlags & 4)) {
+        if (!(exportObjectFlags(source.exports, candidateIndex) & 4)) {
           if (linker.loadFlags & 0x1000) fail('FORGIVING', 'Private import forgiving-load diagnostics are unsupported');
           fail('PRIVATE', `Private import ${call(services, 'nameText', record.objectName)} requires native error formatting`);
         }
         record.sourceIndex = candidateIndex;
         break;
       }
-      candidateIndex = candidate.hashNext;
+      candidateIndex = exportHashNext(source.exports, candidateIndex);
     }
     if (call(services, 'nameText', record.className).toLowerCase() !== 'mesh') break;
     record.className = call(services, 'nameIndex', 'LodMesh', 1);

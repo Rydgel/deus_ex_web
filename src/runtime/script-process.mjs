@@ -1,4 +1,5 @@
 import { releaseHandle } from './script-object-handles.mjs';
+import {exportsHaveObject} from './linker-exports.mjs';
 
 /** The script state of the original's process that outlives a level (docs/class-graph-design.md "The process and the level", migration
  * steps 2-3). One per realm (the worker, or the page when the simulation runs inline). A ScriptRuntime is one level and attaches to a
@@ -54,7 +55,7 @@ export class ScriptProcess {
     for (const name of names) {
       const linker = graph?.linkers.get(name);
       // a package with a loaded export is not unloaded by Play (none is expected: the mark reaches every held object's package)
-      if (linker?.exports.some(entry => entry.object)) continue;
+      if (linker && exportsHaveObject(linker.exports)) continue;
       unloaded.push(name);
     }
     if (!unloaded.length) return unloaded;

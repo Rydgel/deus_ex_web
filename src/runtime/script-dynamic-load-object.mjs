@@ -4,6 +4,7 @@ import {
   STATIC_LOAD_OBJECT_CONTRACT,
 } from './script-static-load-object.mjs';
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
+import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
 
 // The live DataLink capture reaches this package export before an
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
@@ -129,10 +130,10 @@ export class PreparedDynamicLoadGraph{
       entry.objects.push(object);
       this.firstLoadPackages.set(packageKey,entry);
       const linker=this.linkerByPackage.get(packageKey);
-      if(linker)linker.exports[object.index-1].object=object;
+      if(linker)setExportObject(linker.exports,object.index-1,object);
     }else{
       const linker=await this.linker(object.asset);
-      linker.exports[object.index-1].object=object;
+      setExportObject(linker.exports,object.index-1,object);
     }
     this.prepared.set(objectKey,object);
     return object;
@@ -167,7 +168,7 @@ export class PreparedDynamicLoadGraph{
     // constructor.  Raw Serialize/Tell/Seek remain explicit reader services;
     // StaticLoadObject only needs the non-null identity for BeginLoad.
     const reader={kind:'GFileManagerReader',asset,source:'package-bytes'};
-    const linker={kind:'ULinkerLoad',asset,outer,reader,exports:[],hashHeads:Array(256).fill(-1),
+    const linker={kind:'ULinkerLoad',asset,outer,reader,exports:null,hashHeads:Array(256).fill(-1),
       loadFlags:flags,
       constructor:{thunk:STATIC_LOAD_OBJECT_CONTRACT.createLinkerLoadThunk,
         body:STATIC_LOAD_OBJECT_CONTRACT.createLinkerLoadBody},
@@ -186,23 +187,22 @@ export class PreparedDynamicLoadGraph{
     // so the export hash and later FName(text,1) share one identity.
     this.nameIndex(asset.name);
     for(const entry of asset.pkg.imports)this.nameIndex(entry.name);
-    for(const entry of asset.pkg.exports)this.nameIndex(entry.name);
+    const entries=asset.pkg.exports,names=new Int32Array(entries.length);
+    for(let index=0;index<entries.length;index++)names[index]=this.nameIndex(entries[index].name);
 
-    for(let index=0;index<asset.pkg.exports.length;index++){
-      const entry=asset.pkg.exports[index];
-      linker.exports.push({classIndex:entry.classIndex,outerIndex:entry.outer,
-        nameIndex:this.nameIndex(entry.name),object:this.objects.lookup(
-          `${asset.name}.${entry.path}`.toLowerCase())??null,nextHash:-1});
-    }
+    // The package's own export entries stay the package's; the table keeps this linker's names, objects and hash chain
+    // (docs/live-heap.md "Steps 2 and 3's results").
+    const table=linker.exports=new LinkerExports(entries,names,DynamicExportRecord);
+    for(let index=0;index<entries.length;index++)
+      table.objects[index]=this.objects.lookup(`${asset.name}.${entries[index].path}`.toLowerCase())??null;
     // FindExportIndex's recovered hash depends on the referenced class FName
     // pair and object FName. Link each serialized export into that exact bucket.
-    for(let index=0;index<linker.exports.length;index++){
-      const record=linker.exports[index];
-      const identity=this.exportClassIdentity(linker,record);
+    for(let index=0;index<entries.length;index++){
+      const identity=this.exportClassIdentity(linker,entries[index].classIndex);
       if(identity===null)continue;
       const normalizedOuter=identity.outer===0x18?0x17:identity.outer;
-      const bucket=(identity.name*7+normalizedOuter*31+record.nameIndex)&0xff;
-      record.nextHash=linker.hashHeads[bucket];linker.hashHeads[bucket]=index;
+      const bucket=(identity.name*7+normalizedOuter*31+names[index])&0xff;
+      table.hashNexts[index]=linker.hashHeads[bucket];linker.hashHeads[bucket]=index;
     }
     return linker;
   }
@@ -217,20 +217,20 @@ export class PreparedDynamicLoadGraph{
     if(existing)return existing;
     const linker=this.buildLinker(prepared.asset,root,{flags});
     this.linkerByPackage.set(packageKey,linker);this.linkers.push(linker);
-    for(const object of prepared.objects)linker.exports[object.index-1].object=object;
+    for(const object of prepared.objects)setExportObject(linker.exports,object.index-1,object);
     return linker;
   }
 
-  exportClassIdentity(linker,record){
-    if(record.classIndex<0){
-      const entry=linker.asset.pkg.imports[-record.classIndex-1];
+  exportClassIdentity(linker,classIndex){
+    if(classIndex<0){
+      const entry=linker.asset.pkg.imports[-classIndex-1];
       if(!entry||entry.outer>=0)return null;
       const outer=linker.asset.pkg.imports[-entry.outer-1];
       if(!outer)return null;
       return {name:this.nameIndex(entry.name),outer:this.nameIndex(outer.name)};
     }
-    if(record.classIndex>0){
-      const entry=linker.asset.pkg.exports[record.classIndex-1];
+    if(classIndex>0){
+      const entry=linker.asset.pkg.exports[classIndex-1];
       return entry?{name:this.nameIndex(entry.name),outer:this.nameIndex(linker.asset.name)}:null;
     }
     return {name:0x29b,outer:0x14};
@@ -304,7 +304,7 @@ export class PreparedDynamicLoadGraph{
         return this.nameIndex(text);
       },
       readHashHead:(linker,bucket)=>linker.hashHeads[bucket],
-      readExport:(linker,index)=>linker.exports[index],
+      readExport:(linker,index)=>linker.exports.record(index),
       readImportWord:(linker,offset)=>this.readImportWord(linker,offset),
       createLinkerLoad:args=>this.createFirstLoadLinker(args),
       createExport:({record,existing})=>{

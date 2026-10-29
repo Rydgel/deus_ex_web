@@ -13,6 +13,7 @@ import {
 } from './script-linker-preload.mjs';
 import {createLinkerExport, CREATE_EXPORT_CONTRACT} from './script-create-export.mjs';
 import {buildLinkerExportHash, verifyLinkerImports, linkerIndexToObject} from './script-linker-imports.mjs';
+import {LinkerExports, exportObject, exportRecord, setExportObject} from './linker-exports.mjs';
 import {bindScriptClassConstructor} from './script-class-bind.mjs';
 import {bindScriptFunction, getFieldOwnerClass, getScriptClassNameCPP} from './script-function-bind.mjs';
 import {conditionalPostLoad, postLoadObject, postLoadField, postLoadStruct,
@@ -441,16 +442,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       root: packageRoot(file.name),
       names: pkg.names.map(entry => intern(entry.name)),
       nameText,
-      exports: pkg.exports.map(entry => ({
-        classIndex: entry.classIndex,
-        superIndex: entry.superIndex,
-        packageIndex: entry.outer,
-        objectName: intern(entry.name),
-        objectFlags: entry.flags,
-        serialSize: entry.serialSize,
-        serialOffset: entry.serialOffset,
-        object: null,
-      })),
+      // The package's own export entries, plus what this linker owns: each name's FName index, the created objects, the hash chain.
+      exports: new LinkerExports(pkg.exports, Int32Array.from(pkg.exports, entry => intern(entry.name))),
       imports: pkg.imports.map(entry => ({
         classPackage: intern(entry.classPackage),
         className: intern(entry.className),
@@ -553,8 +546,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // ---------------------------------------------------------------------------
 
   const createExportServices = accessorMembers({
-    readExport: (linker, index) => linker.exports[index],
-    writeExportObject: (linker, index, object) => { linker.exports[index].object = object; },
+    readExport: (linker, index) => exportRecord(linker.exports, index),
+    writeExportObject: (linker, index, object) => { setExportObject(linker.exports, index, object); },
     contextFlags: linker => linker.contextFlags,
     linkerRoot: linker => linker.root,
     indexToObject,
@@ -1042,7 +1035,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const preloadServices = {
     preloadStack,
     isValidLinker: linker => linker != null,
-    readExport: (linker, index) => linker.exports[index],
+    readExport: (linker, index) => exportRecord(linker.exports, index),
     indexToObject,
     serialize: serializeDispatch,
     serializeExpr(object, archive, cursor) {
@@ -1382,10 +1375,10 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       }),
     };
     const exportView = (linker, index) => {
-      const record = linker.exports[index];
+      const record = exportRecord(linker.exports, index);
       return {classIndex: record.classIndex, outerIndex: record.packageIndex,
         nameIndex: record.objectName, nextHash: record.hashNext,
-        get object() { return linker.exports[index].object; }};
+        get object() { return exportObject(linker.exports, index); }};
     };
     const createExport = ({linker, index}) => importServices.createExport(linker, index);
     createExport.body = CREATE_EXPORT_CONTRACT.body;
@@ -1472,7 +1465,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
      * and an import that resolved to it resolves again on its next use. */
     detachExport(record) {
       const linker = slotOf(record, 0x10), index = slotOf(record, 0x14);
-      if (linker?.exports?.[index]?.object === record) linker.exports[index].object = null;
+      if (linker?.exports && exportObject(linker.exports, index) === record) setExportObject(linker.exports, index, null);
       const key = `${addr(slotOf(record, 0x18))}:${slotOf(record, 0x20)}:${addr(slotOf(record, 0x24))}`;
       if (objectHash.get(key) === record) objectHash.delete(key);
       recordsByAddress.delete(addr(record));
