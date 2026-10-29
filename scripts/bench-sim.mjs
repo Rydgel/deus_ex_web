@@ -101,10 +101,11 @@ if (argv.includes('--bound-reads')) {
   const bindProperty = ScriptRuntime.prototype.bindProperty;
   ScriptRuntime.prototype.bindProperty = function (receiver, field, binding) {
     const count = kind => { const key = `${kind} ${field.key}`; boundReads.set(key, (boundReads.get(key) ?? 0) + 1); };
+    // A binding's get(instance) and set(value, instance) are methods (script-bindings.mjs); `mirror` may be on its prototype.
     const {get, set} = binding;
-    return bindProperty.call(this, receiver, field, {...binding,
-      get: () => { if (globalThis.__boundReadsOn) count('get'); return get(); },
-      set: value => { if (globalThis.__boundReadsOn) count('set'); return set(value); }});
+    return bindProperty.call(this, receiver, field, {...binding, mirror: binding.mirror,
+      get: (...args) => { if (globalThis.__boundReadsOn) count('get'); return get.apply(binding, args); },
+      set: (...args) => { if (globalThis.__boundReadsOn) count('set'); return set.apply(binding, args); }});
   };
 }
 const root = gameDirectory(), files = [];

@@ -6,8 +6,9 @@ import {defaultsSnapshot} from './class-defaults-snapshot.mjs';
  * the same value script-load-graph.mjs installs on every game linker. */
 const STANDALONE_CONTEXT_FLAGS = 0x00030000;
 
-/** The elements a map authors of one property by array index, as the Map it replaces (get, has, set, values and entries in insertion
- * order) with the first element inline: nearly every property has one, and the Island's 1,752 authored actors held 25,000 Maps. */
+/** The elements a map authors of one property by array index, when there is more than element 0 (get, has, set, values and entries in
+ * insertion order, as the Map it replaces). Nearly every authored property has only element 0, which `authored` then holds as the bare
+ * value: the Island's 1,752 authored actors held 25,000 Maps for them, and then 23,500 one-element objects. */
 class AuthoredElements {
   constructor(index, value) { this.index = index; this.value = value; this.rest = null; }
   get(index) { return index === this.index ? this.value : this.rest?.get(index); }
@@ -19,6 +20,21 @@ class AuthoredElements {
   *entries() { yield [this.index, this.value]; if (this.rest !== null) yield* this.rest; }
   *values() { yield this.value; if (this.rest !== null) yield* this.rest.values(); }
   [Symbol.iterator]() { return this.entries(); }
+}
+/** Element `index` of the property `key` of an `authored` table, or undefined. */
+function authoredElement(authored, key, index) {
+  const entry = authored.get(key);
+  if (entry instanceof AuthoredElements) return entry.get(index);
+  return index === 0 && authored.has(key) ? entry : undefined;
+}
+/** Record element `index` of `key`: the bare value while it is element 0 alone, else an AuthoredElements. Returns whether `key` is new. */
+function authoredSet(authored, key, index, value) {
+  const entry = authored.get(key);
+  if (entry === undefined && !authored.has(key)) { authored.set(key, index === 0 ? value : new AuthoredElements(index, value)); return true; }
+  if (entry instanceof AuthoredElements) entry.set(index, value);
+  else if (index === 0) authored.set(key, value);
+  else { const elements = new AuthoredElements(0, entry); elements.set(index, value); authored.set(key, elements); }
+  return false;
 }
 
 /**
@@ -89,7 +105,7 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
       const raw=property.data?property:rawProperties[ordinal];
       if(!raw||raw.name!==property.name||raw.arrayIndex!==property.arrayIndex||raw.type!==property.type)
         throw new Error(`Original map property order changed: ${actor.name}.${property.name}`);
-      const initial=authored.get(field.key)?.get(property.arrayIndex)??cls.defaults.get(field.key)?.get(property.arrayIndex);
+      const initial=authoredElement(authored,field.key,property.arrayIndex)??cls.defaults.get(field.key)?.get(property.arrayIndex);
       value=await runtime.authoredStructProperty(asset,field,raw,initial,resolveMapObject);
     } else if (property.type === 9) {
       // A dynamic array tag: the element count, then each element as its inner property serializes it (UArrayProperty::SerializeItem).
@@ -104,16 +120,24 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
     // (12_Vandenberg_Computer's FlagTrigger0.FlagName `Heliosborn` is DeusExConText's `HeliosBorn`: unreal/name-spelling.mjs). decodeMap reads its own copy of
     // the package, which no table spells.
     else if (property.type === 6 && runtime.nameSpelling) value=runtime.nameSpelling.spell(value);
-    const elements = authored.get(field.key);
-    if (elements === undefined) { authored.set(field.key, new AuthoredElements(property.arrayIndex, value)); authoredFields.push(field); }
-    else elements.set(property.arrayIndex, value);
+    if (authoredSet(authored, field.key, property.arrayIndex, value)) authoredFields.push(field);
   }
   const snapshot = defaultsSnapshot(cls);
   // The initial value of one field: its authored elements over the class
   // defaults. `authoredFields` lists the fields the map authors.
   return Object.assign(field => {
     const overrides = authored.get(field.key);
-    if (!overrides) return runtime.defaultValue(cls, field, snapshot);
+    if (overrides === undefined && !authored.has(field.key)) return runtime.defaultValue(cls, field, snapshot);
+    if (!(overrides instanceof AuthoredElements)) {
+      // element 0 alone, held as the bare value
+      if (overrides?.unsupported) throw new Error(overrides.unsupported);
+      if (field.metadata.arrayDim > 1) {
+        const value = runtime.defaultValue(cls, field, snapshot);
+        value[0] = overrides;
+        return value;
+      }
+      return overrides;
+    }
     for (const value of overrides.values()) if (value?.unsupported) throw new Error(value.unsupported);
     if (field.metadata.arrayDim > 1) {
       const value = runtime.defaultValue(cls, field, snapshot);
