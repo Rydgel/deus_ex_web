@@ -400,44 +400,52 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
      * world-space (the default, transformed here by the frame's Coords) or,
      * with `cameraSpace`, the output of GetFrame called with the frame's own
      * Coords (and morphed in that space), which the original lights as they
-     * are. `faces` are the mesh faces in draw order ({vertices, flags}).
-     * Returns per-face corner diffuse colours in [0,1], three corners per face
-     * in face-vertex order, as D3D's FISTP bytes. `prepared` is a setupMesh
-     * result already taken for this draw (SetupForActor runs once). */
+     * are. `faces` are the mesh faces in draw order: the packed words (four a
+     * face, [v0, v1, v2, flags]: MeshFaces.words, which Play passes), or
+     * {vertices, flags} objects (the reference form; the Wasm path then takes
+     * `faceWords`). Returns per-face corner diffuse colours in [0,1], three
+     * corners per face in face-vertex order, as D3D's FISTP bytes. `prepared`
+     * is a setupMesh result already taken for this draw (SetupForActor runs
+     * once). */
     lightMesh(actor, points, faces, faceWords = null, prepared = null, ctx = null, cameraSpace = false) {
       if (ctx) return withFrame(ctx, () => view.lightMesh(actor, points, faces, faceWords, prepared, null, cameraSpace));
       prepared ??= view.setupMesh(actor);
       if (!prepared) return null;
       const { setup, flags } = prepared;
+      const isWords = faces instanceof Uint32Array, faceCount = isWords ? faces.length / 4 : faces.length;
       if(view.kernel&&ArrayBuffer.isView(points)){
-        if(!(faceWords instanceof Uint32Array)||faceWords.length!==faces.length*4)
+        if(isWords)faceWords = faces;
+        if(!(faceWords instanceof Uint32Array)||faceWords.length!==faceCount*4)
           throw new TypeError('Wasm mesh lighting requires packed face topology');
         const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,mirror:frame.mirror,
           ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit:prepared.unlit,lights:setup.lights,flags,cameraSpace});
         return {colors,setup,flags,vertices:null};
       }
       if(ArrayBuffer.isView(points))points=Array.from({length:points.length/3},(_,i)=>Array.from(points.subarray(i*3,i*3+3)));
+      const faceOf = isWords ? i => ({ vertices: [faces[i * 4], faces[i * 4 + 1], faces[i * 4 + 2]], flags: faces[i * 4 + 3] }) : i => faces[i];
       // DrawLodMesh: camera-space vertices, summed face normals over every
       // face, then per-vertex light for vertices of faces that are drawn.
       const camera = cameraSpace ? points.map(point => [...point]) : points.map(point => view.toCamera(point));
       const normals = camera.map(() => [0, 0, 0]);
-      const drawn = new Uint8Array(faces.length), lit = new Uint8Array(camera.length);
-      faces.forEach((face, i) => {
+      const drawn = new Uint8Array(faceCount), lit = new Uint8Array(camera.length);
+      for (let i = 0; i < faceCount; i++) {
+        const face = faceOf(i);
         const [a, b, c] = face.vertices;
         const unit = accumulateFaceNormal(camera[a], camera[b], camera[c], normals[a], normals[b], normals[c]);
         const p = camera[a];
         // PF_Invisible (0x1) faces still add to the normals but are not drawn;
         // the dot is times the frame's Mirror (0x10b0ffbb).
         if (faceKept(unit, p, frame.mirror, face.flags)) { drawn[i] = 1; lit[a] = lit[b] = lit[c] = 1; }
-      });
+      }
       const planes = camera.map((point, i) => lit[i] ? vertexNormalPlane(point, normals[i]) : null);
       const light = camera.map((point, i) => lit[i] ? lightVertex(setup, point, planes[i], flags) : null);
       const vertexLight = light.slice();
       // The face helper (0x10b0bab0) overwrites PF_Unlit faces' vertex light
       // with the unlit colour in draw order; later faces see the new value.
       const unlit = prepared.unlit;
-      const colors = new Float32Array(faces.length * 9);
-      faces.forEach((face, i) => {
+      const colors = new Float32Array(faceCount * 9);
+      for (let i = 0; i < faceCount; i++) {
+        const face = faceOf(i);
         const faceFlags = face.flags | flags;
         if (drawn[i] && faceFlags & PF.Unlit) for (const v of face.vertices) light[v] = unlit;
         face.vertices.forEach((v, corner) => {
@@ -447,7 +455,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
           colors[at] = ((packed >>> 16) & 255) / 255; colors[at + 1] = ((packed >>> 8) & 255) / 255;
           colors[at + 2] = (packed & 255) / 255;
         });
-      });
+      }
       // `vertices` keeps Light's inputs and outputs for the composition check
       // (scripts/validate-mesh-lighting-play.mjs).
       return { colors, setup, flags, vertices: { camera, planes, light: vertexLight } };

@@ -38,42 +38,55 @@ export function keyframeBoxes(payload,vertices) {
   return entry;
 }
 
-const union=(box,source,frame)=>{
+/** A group's boxes in one Float64Array: the local boxes of the channels -1 to 3 (six numbers each, [minX, minY, minZ, maxX, maxY,
+ * maxZ], NaN while unknown) and then the view box (`viewBox`'s output, which the group also holds as a view of its own). A group
+ * used to hold six arrays of its own for these (docs/live-heap.md "Step 4's results"). `channelAt` is a channel's offset. */
+export const CHANNEL_BOXES=5,BOX_WORDS=6,VIEW_BOX_AT=CHANNEL_BOXES*BOX_WORDS;
+export const newGroupBoxes=()=>new Float64Array((CHANNEL_BOXES+1)*BOX_WORDS).fill(NaN);
+export function channelAt(channel) {
+  const at=(channel+1)*BOX_WORDS;
+  if(!(at>=0&&at<VIEW_BOX_AT))throw new RangeError(`GPU mesh: channel ${channel} has no box`);
+  return at;
+}
+
+const union=(boxes,at,source,frame)=>{
   const p=frame*6;
   for(let axis=0;axis<3;axis++){
-    box[axis]=Math.min(box[axis],source[p+axis]);box[3+axis]=Math.max(box[3+axis],source[p+3+axis]);
+    boxes[at+axis]=Math.min(boxes[at+axis],source[p+axis]);boxes[at+3+axis]=Math.max(boxes[at+3+axis],source[p+3+axis]);
   }
 };
-/** Advance one channel's local box through a planned GetFrame operation:
+/** Advance one channel's local box (in `group.channelBoxes`) through a planned GetFrame operation, with the group's keyframe boxes
+ * (`group.boxes`, keyframeBoxes):
  * a keyframe operation bounds the cache pose by its two frames (every
  * interpolated coordinate lies between them); a tween stays within the
  * previous box and the target frame. */
-export function advanceChannelBox(box,op,boxes) {
-  const source=op.blend?boxes.diffs:boxes.poses;
-  const valid=frame=>Number.isInteger(frame)&&frame>=0&&frame<boxes.frames;
+export function advanceChannelBox(group,op) {
+  const boxes=group.channelBoxes,keyframes=group.boxes,at=channelAt(op.channel);
+  const source=op.blend?keyframes.diffs:keyframes.poses;
+  const valid=frame=>Number.isInteger(frame)&&frame>=0&&frame<keyframes.frames;
   if(!op.tween){
-    if(!valid(op.first)||op.alpha>0&&!valid(op.second)){box.fill(NaN);return;}
-    box[0]=box[1]=box[2]=Infinity;box[3]=box[4]=box[5]=-Infinity;
-    union(box,source,op.first);
-    if(op.alpha>0)union(box,source,op.second);
+    if(!valid(op.first)||op.alpha>0&&!valid(op.second)){boxes.fill(NaN,at,at+BOX_WORDS);return;}
+    boxes[at]=boxes[at+1]=boxes[at+2]=Infinity;boxes[at+3]=boxes[at+4]=boxes[at+5]=-Infinity;
+    union(boxes,at,source,op.first);
+    if(op.alpha>0)union(boxes,at,source,op.second);
   } else if(op.alpha>0){
-    if(!valid(op.second)){box.fill(NaN);return;}
-    union(box,source,op.second);
+    if(!valid(op.second)){boxes.fill(NaN,at,at+BOX_WORDS);return;}
+    union(boxes,at,source,op.second);
   }
 }
 
 /** The view-space box ([y, z, -x] of the world box) containing every group
  * vertex GetFrame publishes for `plan`, given each channel's local box, with
  * a margin for the f32 stores of the publication. NaN when unknown. */
-export function viewBox(plan,channelBoxes,out) {
-  const m=plan.matrix,o=plan.origin;
+export function viewBox(plan,group) {
+  const m=plan.matrix,o=plan.origin,boxes=group.channelBoxes,out=group.viewBox;
   const min=[0,0,0],max=[0,0,0],magnitude=[0,0,0];
   for(const op of plan.channels){
-    const box=channelBoxes[op.channel+1];
+    const at=channelAt(op.channel);
     for(let row=0;row<3;row++){
       const r=m[row+1];
       for(let j=0;j<3;j++){
-        const lo=op.blend?box[j]:box[j]-o[j]-m[0][j],hi=op.blend?box[3+j]:box[3+j]-o[j]-m[0][j];
+        const lo=op.blend?boxes[at+j]:boxes[at+j]-o[j]-m[0][j],hi=op.blend?boxes[at+3+j]:boxes[at+3+j]-o[j]-m[0][j];
         const a=r[j]*lo,b=r[j]*hi;
         min[row]+=Math.min(a,b);max[row]+=Math.max(a,b);magnitude[row]+=Math.max(Math.abs(a),Math.abs(b));
       }

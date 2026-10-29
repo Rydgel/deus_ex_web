@@ -168,11 +168,12 @@ zones, leaves). `BspCollider` adds one hull per collision bound. The Rust kernel
 JavaScript readers of `model.nodes[i]` remain. Whether the legacy `BspCollider` sweep
 (`player.mjs`, `doors.mjs`) still runs per tick in Play is unverified.
 
-**Actor mesh faces.** `actor-mesh-sim.mjs:191` reads each binding's faces through
-`readLodMeshSurfaces` (`lodmesh-materials.mjs:56`). A face is
-`{wedges, vertices, uv[3], material, flags, texture}`, about nine objects. Nothing
-shares them between bindings of the same mesh. The topology already exists typed
-(`lodMeshTopology`, `faceWords`).
+**Actor mesh faces (before step 4).** `actor-mesh-sim.mjs:191` read each binding's faces through
+`readLodMeshSurfaces` (`lodmesh-materials.mjs:56`). A face was
+`{wedges, vertices, uv[3], material, flags, texture}`, about nine objects (fifteen in the heap snapshot,
+with the arrays' element stores). Nothing shared them between bindings of the same mesh. The topology already
+existed typed (`lodMeshTopology`, `faceWords`). Since step 4 every binding of a mesh reads one typed block
+(`src/runtime/mesh-faces.mjs`); see "Step 4's results".
 
 ## Plan
 
@@ -213,12 +214,13 @@ Firefox GC markers, not only by heap size.
    * Expected: about 1 M objects in the worker, plus the page's share.
    * A later, larger step makes `pkg.exports` itself columnar behind accessors, since
      about 130 reads use `entry.*`.
-4. **Mesh faces once per mesh.** A per-mesh typed face block (the existing
+4. **Mesh faces once per mesh: done 2026-10-29.** A per-mesh typed face block (the existing
    `faceWords`, plus UVs and material indices) shared by every binding of a mesh,
-   cached per mesh.
-   * Readers to convert: `mesh-lighting-view.mjs`, `meshFaceGroups`,
+   cached per mesh. See "Step 4's results".
+   * Readers converted: `mesh-lighting-view.mjs`, `meshFaceGroups`,
      `actor-umesh-sim.mjs`, and the page's `actor-mesh-draw.mjs`.
    * Expected: about 0.8 M objects on the Island; it grows with the actor count.
+     Measured: see "Step 4's results".
 5. **Bindings without per-object closures.** A binding becomes one object whose
    getter and setter live on its prototype, or a handler table per field key. Callers
    that take `binding.get` detached (`script-runtime.mjs:1345`) are adapted.
@@ -1477,6 +1479,108 @@ second memory-reducer cycle (225.6 to 233.8 s) with its own task cycle, or task 
 a cycle is about 0.5 GB on both: the count of cycles now follows the memory reducer and the 32 MB slack after each cycle, and the
 cost of each follows the live heap that is marked, not the allocation of a frame.
 
+## Step 4's results (2026-10-29)
+
+**What the faces held.** In the base worker's snapshot (07de3088, the Island after a 30 s walk) the `host.actorSim` family held 874 k
+objects, 2.97 M snapshot edges and 30.7 MB. 635 k of the objects were faces: every one of the 324 bindings read its own copy of its
+mesh's faces through `readLodMeshSurfaces`, one `{wedges, vertices, uv, material, flags, texture}` object a face, each with its
+arrays of arrays (`uv` 390 k objects, `wedges` 98 k, `vertices` 98 k, the face objects 49 k). Bindings of the same mesh shared
+nothing, and the Island's 324 bindings draw 88 meshes. The page held its faces once a mesh (`meshSource`), as objects
+too.
+
+**The change.** Host representation only; every value is the one the object readers gave.
+* `src/runtime/mesh-faces.mjs`: a mesh's faces as one `MeshFaces` block, built on first use and kept per decoded payload (a
+  WeakMap), so every binding of a mesh reads the same block. `words` (four per face: the three corners' vertex indices with the
+  special prefix, then PolyFlags: the `faceWords` the lighting kernel, the GPU layout and the LOD already took), `wedges` (Uint16),
+  `uv` (the six U and V bytes, Uint8), `material` and `texture`. A classic UMesh builds the same block from its triangles (no
+  wedges). `readLodMeshSurfaces` and `readUMeshSurfaces` are now `faceObjects(buildLodMeshFaces(...))`: the objects the
+  validators and `getActorMeshSurfaces` return, and `validate-lodmesh-materials` compares them with the original's Render ranges
+  as before. The Rust lodmesh kernel keeps its uploaded lighting topology by the identity of the `words` array, so one upload now
+  serves every binding of a mesh.
+* The readers read the block: `meshFaceGroups(faces, skin(flags, texture))`, `groupCorners`, `createMeshLod` (its reduced lighting
+  topologies keep only their words), `lightMesh` (the packed words in place of the `{vertices, flags}` list; the objects still work
+  for the reference path and the tests), `actor-mesh-sim.mjs`, `actor-umesh-sim.mjs` and the page's `actor-mesh-draw.mjs`.
+* Also per mesh, found by the same snapshots (all inside `host.actorSim`):
+  * The GPU layout's per-mesh vertex adjacency and LOD vertex lists were an array of arrays each (24 k objects); they are offset
+    and item arrays now (`vertexFaceLists`, `lodVertexLists`, read by `gpu-mesh.mjs`'s upload).
+  * The payload view's arrays (`lodmesh-payload.mjs`) were objects of three getter closures each (about 25 heap objects a
+    mesh array, 40 k objects for the family's payloads); they are `ProjectedArray` instances with the getters on the prototype
+    (about 16 k objects fewer). `lodMeshTopology` spread such an array into a new object; it now reads the fields it needs, since a
+    spread copies the own properties only (the first try at this change turned the LOD off for every mesh, which the frame digest
+    caught at frame 0).
+* Per binding, not per mesh, but the same kind of waste:
+  * A group's five channel boxes and view box were six Float64Arrays, and its sorted vertex list an array kept after it had
+    served `keyframeBoxes`; the boxes are one array with offsets (`gpu-mesh-bounds.mjs`), the view box a view of it, the list
+    dropped.
+  * The 23 field accessors of a binding (`fieldAccessors`: an arrow function, two contexts and the replacing function, about
+    four objects each) are `fieldReaders` (`actor-fields.mjs`): methods of a class made once for the list, with one slot a name
+    holding the field handle. The Mesh accessor of every actor in the level (2.6 k) is a `FieldReader` object, not a closure pair.
+    `test/actor-fields.test.mjs` runs both forms against a logging runtime double: the same calls in the same order, for linked
+    and unlinked receivers, a released object and a first read that throws.
+  * A binding kept its creation record (the message that goes to the page: groups, first plan, posed pose, about forty objects)
+    for its life; the layer drops it once it has emitted it.
+
+**Checks.**
+* References first, on the untouched tree: frame-alloc-meter Island (600 frames, warm 900) `c8cf5fff928609c1`, 03_NYC_747
+  `f6337bff0cf741fc`, 00_Training `e4b017e7b1bc0439`, `hud-stream-digest --frames 1500 --stream` `16bfe2bd08ed1653`. After:
+  `--compare` reports identical frames on all four, and bench-sim (300 ticks) gives Island `15e3720088490242`, 00_Training
+  `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`.
+* Differentials: `test/mesh-faces.test.mjs` (the object readers verbatim in `test/helpers/mesh-faces-reference.mjs` against the
+  blocks: every field of random meshes with and without PolyFlags, the errors of malformed data, the face groups and corners,
+  the adjacency and LOD lists) and `scripts/validate-mesh-faces.mjs` (every LodMesh and classic Mesh of the game's 20 code packages and the
+  Island, Training and 747: 437 meshes, 85,827 faces field by field, 1,108 face groups with their corners, and 432 meshes' GPU
+  adjacency and LOD vertex lists). 868 unit tests pass (872, 4 skipped).
+* Validators, each exit 0: lodmesh-materials, mesh-faces, lodmesh-lod, lodmesh-frame, mesh-payload, mesh-load-graph, mesh-lighting,
+  mesh-environment, mesh-light-types, mesh-path-frames, umesh-draw, umesh-frame, umesh-wasm, actor-mesh-scene, weapon-attach,
+  weapon-construction, weapon-lod, weapon-view-model, weapon-select, and in the browser (worker mode) gpu-mesh (run twice, at the first commit
+  and at the head), mesh-lighting-play, anim-dilation-play, weapon-order, weapon-mirror-play, weapon-gpu-play, weapon-play,
+  mirrors-play, iterator-frames-play, context-loss-play, umesh-play, easter-egg-play, mesh-light-types-play and npc-mesh-preview.
+  `validate-lodmesh-lod-play` does not finish (900 s with no output on the Island, 600 s on Training); a base checkout of 07de3088
+  does not finish either (300 s on Training): it is one of the page checks of the known red list (docs/class-graph-design.md), so the LOD in Play rests on
+  validate-gpu-mesh's LOD variants (morph, dropped faces, child frames), validate-weapon-lod and validate-lodmesh-lod.
+* A 60 s worker-mode Island roam (`hitch-run.mjs`): 4,726 frames, no error. `npm run build:wasm`: no Rust file changed, no cargo
+  warnings.
+
+**Heap**, the Island's worker after a 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam --seconds 240`; both runs
+walked and turned at random, so the routes differ; the base family was 874 k objects after the 30 s walk and 878 k after the roam,
+with 324 bindings in the walk and 313 in the roam after). "Pointer references" leave out the edges
+to Smi nodes and the weak edges.
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (used of total) |
+| --- | ---: | ---: | ---: | ---: |
+| Worker, before (master `07de3088`) | 8.21 M | 45.3 M | 39.0 M | 336 of 350 MB |
+| Worker, after | 7.48 M (-8.9%) | 43.3 M (-4.4%) | 37.3 M (-4.4%) | 312 of 323 MB |
+| `host.actorSim`, before | 878,052 | 2,977,601 | 2,727,424 | 30.9 MB (10.6 MB native) |
+| `host.actorSim`, after | 126,312 (-85.6%) | 739,284 (-75.2%) | 682,027 (-75.0%) | 6.9 MB (10.6 MB native) |
+| Page, used heap | 115 MB | | | 108 MB |
+
+Step by step, on the 30 s walk's snapshots: the faces alone took `host.actorSim` from 877 k to 229 k objects (2.97 M to 1.26 M edges;
+the whole worker 7.69 M to 7.05 M objects, 42.2 M to 40.5 M edges), the per-mesh lists, payload views, group boxes and field
+readers to 146 k (0.88 M edges), the creation record and the one-slot readers to the figures above. The family's 10.6 MB of native memory
+(typed arrays' backing stores) is unchanged.
+
+**Load time.** Three interleaved headless Island boots (bench-sim `bootMs`, the base arm an archive of 07de3088 with the same
+Wasm): 7,147 / 7,180 / 6,861 ms before, 7,215 / 7,028 / 6,927 ms after: inside the spread. Both give the 3-tick digest
+`c449c4831f1804dd`.
+
+**What is left, and why.**
+* The family is at 126 k objects (the aim was 150 k) and 0.74 M edges (the aim was 0.6 M). What is left in it:
+  * Per binding, the closures of `meshBindingSteps` (`actor-mesh-sim.mjs`): 30 k closures over 313 bindings (96 a binding: the
+    returned object's methods, the 24 helpers of the `try` block, the helpers of the generator's scope), 180 k edges, with their
+    contexts (the generator scope has 72 slots, the `try` block's 41) and 787 out-of-object property arrays (34 k edges), about
+    250 k of the edges in all.
+    Removing them takes the binding as a class with its state as fields and the helpers as prototype methods (the work step 5
+    describes for script bindings, here for ~900 lines of closure code); it is not started.
+  * Script instances which this family reaches first through `binding.actor` (on the 30 s walk's snapshot: 19 k objects and 135 k
+    edges, among them 2.5 k `Cell` objects, still 2.5 k after the roam): the script object model, not the mesh layer.
+  * The decoded mesh payloads (88 meshes, 24 k objects: sequences with their notifies, name references, the typed arrays), shared by
+    their bindings; the bindings' `Map`s (3.2 k Maps with their tables, 35 k edges); the 2.6 k `FieldReader` objects.
+* Not changed: a binding's reduced-LOD lighting topologies (up to six `Uint32Array`s a binding, uploaded to the kernel each) could
+  be shared per mesh and count.
+* Not measured: the marking time per major GC on two cores, Firefox, the Mac. The whole worker has 9% fewer objects and 4% fewer
+  references, a small step on the scale of steps 7 and 8; the family it empties was 11% of the worker's objects and 7% of its
+  references.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1500,7 +1604,8 @@ cost of each follows the live heap that is marked, not the allocation of a frame
   100 ms are as many as on 76495d62 (14 against 14), the longest shorter (192 and 281 ms against 302 and 295). Cutting allocation
   further does not reach them; what is left is the marking of the worker's 0.5 GB live heap, which only a smaller heap (the
   simulation's data in Wasm memory, fewer objects and pointers) shortens. The Mac (twelve cores, where the concurrent markers take
-  more of it) and Firefox inline are not measured against these cuts.
+  more of it) and Firefox inline are not measured against these cuts. Step 4 ("Step 4's results") took 730 k objects and 2.0 M
+  references out of the worker (the actor mesh faces, per mesh now); its marking time on two cores is not measured.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the

@@ -26,18 +26,44 @@ export const WEAPON_GPU_MESH_CAPACITIES={vertexCapacity:1<<13,faceCapacity:1<<14
  * count are the entries whose resolved corner is that vertex, in the order
  * DrawLodMesh adds them. */
 export function lodVertexLists(topology,V) {
-  const {faces,faceCount,wedges,collapseWedges,special}=topology,lists=Array.from({length:V},()=>[]);
-  for(let face=0;face<faceCount;face++)for(let corner=0;corner<3;corner++){
-    let wedge=faces[face*4+corner];
-    for(let steps=0;steps<=wedges.length;steps++){
-      const list=lists[(wedges[wedge]&0xffff)+special],entry=face*4+corner;
-      if(list.at(-1)!==entry)list.push(entry);
-      const next=collapseWedges[wedge];
-      if(next===wedge)break;
-      wedge=next;
+  const {faces,faceCount,wedges,collapseWedges,special}=topology;
+  // Two passes over the same walk, the first counting each vertex's entries and the second filling them (`last` is each vertex's
+  // latest entry of the pass, which a repeat of the same entry skips).
+  const starts=new Uint32Array(V+1),last=new Int32Array(V);
+  const walk=(visit)=>{
+    last.fill(-1);
+    for(let face=0;face<faceCount;face++)for(let corner=0;corner<3;corner++){
+      let wedge=faces[face*4+corner];
+      for(let steps=0;steps<=wedges.length;steps++){
+        const vertex=(wedges[wedge]&0xffff)+special,entry=face*4+corner;
+        if(vertex>=V)throw new Error('GPU mesh: LOD wedge vertex out of range');
+        if(last[vertex]!==entry){last[vertex]=entry;visit(vertex,entry);}
+        const next=collapseWedges[wedge];
+        if(next===wedge)break;
+        wedge=next;
+      }
     }
+  };
+  walk(vertex=>{starts[vertex+1]++;});
+  for(let v=0;v<V;v++)starts[v+1]+=starts[v];
+  const items=new Uint32Array(starts[V]),cursor=starts.slice(0,V);
+  walk((vertex,entry)=>{items[cursor[vertex]++]=entry;});
+  return {starts,items};
+}
+
+/** Per frame vertex, the faces that have it as a corner, in ascending face order (a vertex that occurs twice in a face is listed
+ * twice, as the kernel adds it twice): the same CSR pair as lodVertexLists, `starts` (V + 1 offsets) and `items`. */
+export function vertexFaceLists(faceWords,F,V) {
+  const starts=new Uint32Array(V+1);
+  for(let face=0;face<F;face++)for(let k=0;k<3;k++){
+    const v=faceWords[face*4+k];
+    if(v>=V)throw new Error('GPU mesh: face vertex out of range');
+    starts[v+1]++;
   }
-  return lists;
+  for(let v=0;v<V;v++)starts[v+1]+=starts[v];
+  const items=new Uint32Array(starts[V]),cursor=starts.slice(0,V);
+  for(let face=0;face<F;face++)for(let k=0;k<3;k++)items[cursor[faceWords[face*4+k]]++]=face;
+  return {starts,items};
 }
 
 export class Arena {
@@ -82,7 +108,7 @@ export function createGpuMeshLayout(capacities={}) {
   /** Static mesh data shared by every actor with that mesh: its texel bases
    * and the vertex → face adjacency lists (each vertex's faces in ascending
    * face order, with repeats for a vertex that occurs twice in a face, as
-   * the kernel adds it twice). */
+   * the kernel adds it twice), as `starts`/`items` pairs (vertexFaceLists). */
   function mesh(key,payload,faceWords) {
     let record=meshes.get(key);
     if(record){record.users++;return {record,created:false};}
@@ -91,19 +117,13 @@ export function createGpuMeshLayout(capacities={}) {
     const keyTexels=data.byteLength/8;
     if(!Number.isInteger(keyTexels)||data.byteOffset%2)throw new Error('GPU mesh: unexpected keyframe record layout');
     const keyBase=keyArena.allocate(keyTexels),faceBase=meshFaceArena.allocate(F),vertBase=meshVertexArena.allocate(V);
-    const lists=Array.from({length:V},()=>[]);
-    for(let face=0;face<F;face++)for(let k=0;k<3;k++){
-      const v=faceWords[face*4+k];
-      if(v>=V)throw new Error('GPU mesh: face vertex out of range');
-      lists[v].push(face);
-    }
-    const total=lists.reduce((sum,list)=>sum+list.length,0);
+    const lists=vertexFaceLists(faceWords,F,V),total=lists.items.length;
     const adjacencyBase=adjacencyArena.allocate(total+4);
     // The LOD's static data (actor-mesh-lod.mjs meshLodTopology): every
     // GPU-path mesh has it, the corner pass resolves corners through it.
     const lod=meshLodTopology(payload);
     if(!lod||lod.faceCount!==F)throw new Error('GPU mesh: no LOD topology');
-    const lodLists=lodVertexLists(lod,V),lodTotal=lodLists.reduce((sum,list)=>sum+list.length,0);
+    const lodLists=lodVertexLists(lod,V),lodTotal=lodLists.items.length;
     const W=lod.wedges.length,wedgeBase=wedgeArena.allocate(W),lodListBase=lodListArena.allocate(lodTotal+4);
     if([keyBase,faceBase,vertBase,adjacencyBase,wedgeBase,lodListBase].some(base=>base<0)){
       for(const [arena,base,count] of [[keyArena,keyBase,keyTexels],[meshFaceArena,faceBase,F],[meshVertexArena,vertBase,V],

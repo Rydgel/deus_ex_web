@@ -17,7 +17,7 @@ import {handleOf} from '../runtime/script-object-handles.mjs';
 import {createUMeshFrameCache,getUMeshFrame,publishUMeshOps,umeshCameraMatrix} from '../runtime/umesh-frame.mjs';
 import {drawUMesh,packUMeshDraw,umeshTopology} from '../runtime/umesh-draw.mjs';
 import {UMESH_STATUS} from '../runtime/umesh-wasm.mjs';
-import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
+import {meshFaces} from '../runtime/mesh-faces.mjs';
 import {lightVertex,PF} from '../runtime/mesh-lighting.mjs';
 import {meshFaceGroups} from './actor-mesh-skins.mjs';
 import {setupSequence} from '../runtime/bsp-occlusion.mjs';
@@ -49,12 +49,12 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   const kernel=ctx.kernel??null,umesh=kernel?.umesh&&umeshMode()!=='js'&&kernel.umesh.acquire(payload)?kernel.umesh:null;
   const {copyPositions,setMeshBounds}=helpers;
   const key=meshKey??meshReference.key;
-  const faces=readUMeshSurfaces(payload);
+  const faces=meshFaces(payload),faceWords=faces.words;
   const cache=createUMeshFrameCache(),services={cache,read,kernel,objectIndex:object=>{
     if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
     return ctx.originalObjectIndex;
   }};
-  const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  const hasEnvironment=faces.anyFlags(POLY.Environment);
   const environmentTexture=()=>{
     const direct=read(actor,'Texture');if(direct)return direct;
     const region=read(actor,'Region'),zone=region['engine.actor.pointregion.zone'];
@@ -80,7 +80,7 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
     return (Math.sqrt(farthest)+Math.hypot(origin[0],origin[1],origin[2]))*Math.max(...payload.scale.map(Math.abs));
   })();
   const cullSphere=new THREE.Sphere();
-  const partition=meshFaceGroups(faces,face=>face.flags&POLY.Environment?environmentTexture():meshTexture(face.texture));
+  const partition=meshFaceGroups(faces,(flags,texture)=>flags&POLY.Environment?environmentTexture():meshTexture(texture));
   if(partition.error)throw new Error(`${actorName} ${partition.error}`);
   for(const [groupKey,group] of partition.groups) {
     try {
@@ -89,7 +89,7 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
       // FTextureInfo (UTexture::Lock): the base size, UScale/VScale, and the texture's PolyFlags whose Masked bit DrawMesh adds.
       infos.set(group.reference.key,{uSize:first.width,vSize:first.height,uScale:scale,vScale:scale,flags:data.values.bMasked?POLY.Masked:0});
       const indices=[];
-      for(const faceIndex of group.faces){const face=faces[faceIndex];for(const corner of [0,2,1])indices.push(face.vertices[corner]);}
+      for(const faceIndex of group.faces)for(const corner of [0,2,1])indices.push(faceWords[faceIndex*4+corner]);
       groups.set(groupKey,{key:groupKey,reference:group.reference,flags:group.flags,faces:group.faces,indices,
         environment:Boolean(group.flags&POLY.Environment),sphere:new THREE.Sphere(),positions:null,bounds:{}});
     } catch(error) {
@@ -133,7 +133,7 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   const creation={id,handle:handleOf(actor),actorName,attached:false,mesh:{...plainRef(meshReference),key},classic:true,
     path:'cpu',environment:hasEnvironment,groups:[...groups.values()].map(group=>({key:group.key,texture:plainRef(group.reference),flags:group.flags,faces:group.faces})),
     plan:null,spheres:null,posed:posedCopy(),toCpu:null};
-  const summary={actor:actorName,mesh:meshReference.key,skipped,triangles:faces.length,textures:[...new Set([...groups.values()].map(g=>g.reference.key))],
+  const summary={actor:actorName,mesh:meshReference.key,skipped,triangles:faces.count,textures:[...new Set([...groups.values()].map(g=>g.reference.key))],
     animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original',
     path:'cpu',gpuFallback:null,classic:true};
   /** DrawMesh in the lighting frame: the camera-space pose, the corners' Light and the environment UVs. The Rust kernel (umesh.rs)
@@ -143,7 +143,7 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
     const result=drawUMesh(payload,points,{frame:{mirror:frame.mirror,prj:frame.prj??null,uncoords},polyFlags:(prepared.polyFlags|PF.Flat)>>>0,
       setup:prepared.setup,fatness:own.Fatness(),unlit:prepared.unlit,textureInfo:index=>textures[index]??null,environment,
       light:(index,point,plane,flags)=>[...lightVertex(prepared.setup,point,plane,flags),0]});
-    return {...packUMeshDraw(result,faces,hasEnvironment),points:result.points??points};
+    return {...packUMeshDraw(result,umeshTopology(payload).triangles,hasEnvironment),points:result.points??points};
   }
   function drawKernel(points,prepared,frame,uncoords,textures,environment) {
     const result=umesh.draw(payload,points,{frame:{mirror:frame.mirror,prj:frame.prj??null,uncoords},polyFlags:(prepared.polyFlags|PF.Flat)>>>0,

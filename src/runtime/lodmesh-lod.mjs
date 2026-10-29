@@ -83,7 +83,10 @@ const u32 = (array, size, label) => {
  * +150 and Wedges +15c (vertex word, U and V bytes, as one dword). */
 export function lodMeshTopology(mesh) {
   const scalar = offset => mesh.scalarBits.get(offset) >>> 0;
-  const faces = u16({...mesh.arrays.get(0x144), elementSize: 2, num: mesh.arrays.get(0x144).num * 4}, 'Faces');
+  // (the Faces array read as 16-bit words, four a face; its fields are read one by one: the payload view's arrays keep num and
+  // data as prototype getters, which a spread does not copy)
+  const facesArray = mesh.arrays.get(0x144);
+  const faces = u16({data: facesArray.data, elementSize: 2, num: facesArray.num * 4}, 'Faces');
   return {
     modelVerts: scalar(0x180) | 0, special: scalar(0x184) | 0, meshScaleMax: bitsFloat(scalar(0x188)),
     lodStrengthBits: scalar(0x18c), lodStrength: bitsFloat(scalar(0x18c)), lodMinVerts: scalar(0x190) | 0,

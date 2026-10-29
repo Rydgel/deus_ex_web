@@ -22,6 +22,10 @@ test('mesh light records remain live when static collection is deferred',()=>{
   assert.equal(view.frame.lights.has(light),false,'static light is not eagerly materialized');
   assert.ok(!reads.some(([actor,name])=>actor===light&&name==='LightHue'));
   const result=view.lightMesh(mesh,[[0,0,0],[1,0,0],[0,1,0]],[{vertices:[0,1,2],flags:256}]);
+  // the packed face words (MeshFaces.words, what Play passes) light the same corners as the {vertices, flags} objects
+  const packedResult=view.lightMesh(mesh,[[0,0,0],[1,0,0],[0,1,0]],Uint32Array.of(0,1,2,256));
+  assert.deepEqual(packedResult.colors,result.colors);
+  assert.deepEqual(packedResult.vertices,result.vertices);
   assert.equal(view.frame.lights.get(light).values.LightBrightness,128,'static permeating light is still available');
   assert.ok(result.setup.lights.some(info=>info.light.actor===light));
   light.bDynamicLight=true;light.LightBrightness=64;light.LightHue=25;
