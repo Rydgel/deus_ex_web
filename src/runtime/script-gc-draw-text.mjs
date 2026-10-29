@@ -47,9 +47,9 @@
 import {GC, GC_DLL, GC_FLAGS, GC_TEXT_FLAGS, gcMemory} from './script-gc-state-model.mjs';
 import {GC_DRAW, bitsToF32, f32Bits, ftolBiased} from './script-gc-draw-model.mjs';
 import {uFontGlyph} from './script-font-model.mjs';
-import {copyTextFloats, gcTextExtentUnits, nextChar, scanLine,
+import {copyTextFloats, gcTextExtentUnitsInto, nextChar, scanLine,
         STATE_AMP, STATE_BOLD, STATE_COLOR, STATE_SIZE, stateView,
-        textUnits} from './script-gc-get-text-extent.mjs';
+        textScratch, textUnitsShared} from './script-gc-get-text-extent.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';
 import {gcIntersect} from './script-gc-intersect.mjs';
 import {gcPopGC} from './script-gc-pop-gc.mjs';
@@ -185,14 +185,48 @@ function gcTextRealize(L, canvas, tex) {
   return rec;
 }
 
+const GLYPH_FOG = freeze([0, 0, 0, 0]);
+// The glyph emit block for a host whose callVirtual reads it at the call and keeps none of it (`services.transientPayloads`, the
+// window host's): one object with the block's keys in order, rewritten for each glyph. A frozen block per glyph is what the
+// validators' services record, and what a host without the flag gets.
+const GLYPH_PAYLOAD = {op: 'DrawGlyphTile', node: 0, record: 0, x: 0, y: 0, xl: 0, yl: 0, u: 0, v: 0, ul: 0, vl: 0,
+  spanBuffer: 0, z: 0, color: GLYPH_FOG, fog: GLYPH_FOG, polyFlags: 0};
+// The glyph colour as one frozen array shared while the four words stay the same: a text is drawn in a colour or two.
+let glyphColorCache = freeze([-1, -1, -1, -1]);
+function glyphColor(view) {
+  const c0 = view.getUint32(STATE_COLOR, true), c1 = view.getUint32(STATE_COLOR + 4, true),
+    c2 = view.getUint32(STATE_COLOR + 8, true), c3 = view.getUint32(STATE_COLOR + 12, true);
+  const cached = glyphColorCache;
+  if (c0 !== cached[0] || c1 !== cached[1] || c2 !== cached[2] || c3 !== cached[3]) glyphColorCache = freeze([c0, c1, c2, c3]);
+  return glyphColorCache;
+}
+
 /** The 21-dword glyph emit block handed to FRenderInterface::DrawTile —
  *  DrawTile's full layout: the scene-node/FTextureInfo pair leads, the fog
  *  plane is a constant (0,0,0,0) (the FPlane ctor reads the four zero args),
- *  and the text polyflags (GC+0x50) are the trailing arg. */
+ *  and the text polyflags (GC+0x50) are the trailing arg. `color` is a frozen
+ *  array of the four colour words, shared between glyphs of one colour. */
 function glyphCommand(L, canvas, sceneNode, record, wx, wy, w, h, u, v, color) {
   const hMult = L.read(L.base + GC_DRAW.hMultiplier, 'i32');
   const vMult = L.read(L.base + GC_DRAW.vMultiplier, 'i32');
   const polyFlags = L.read(L.base + GC.textPolyFlags, 'u32');
+  if (L.services.transientPayloads === true) {
+    const payload = GLYPH_PAYLOAD;
+    payload.node = sceneNode;
+    payload.record = record;
+    payload.x = f32Bits(Math.imul(ftolBiased(wx), hMult));
+    payload.y = f32Bits(Math.imul(ftolBiased(wy), vMult));
+    payload.xl = f32Bits(Math.imul(ftolBiased(w), hMult));
+    payload.yl = f32Bits(Math.imul(ftolBiased(h), vMult));
+    payload.u = f32Bits(ftolBiased(u));
+    payload.v = f32Bits(ftolBiased(v));
+    payload.ul = f32Bits(ftolBiased(w));
+    payload.vl = f32Bits(ftolBiased(h));
+    payload.z = L.read(canvas + GC_DRAW.canvasZ, 'u32');
+    payload.color = color;
+    payload.polyFlags = polyFlags;
+    return payload;
+  }
   return freeze({
     op: 'DrawGlyphTile',
     node: sceneNode,
@@ -207,8 +241,8 @@ function glyphCommand(L, canvas, sceneNode, record, wx, wy, w, h, u, v, color) {
     vl: f32Bits(ftolBiased(h)),
     spanBuffer: 0,
     z: L.read(canvas + GC_DRAW.canvasZ, 'u32'),
-    color: freeze([...color]),
-    fog: freeze([0, 0, 0, 0]),
+    color,
+    fog: GLYPH_FOG,
     polyFlags,
   });
 }
@@ -220,11 +254,13 @@ function glyphCommand(L, canvas, sceneNode, record, wx, wy, w, h, u, v, color) {
  * ({v} cells — penX advances by the raw f32(uSize), glyphH takes the raw
  * f32(vSize), both written before any clipping).
  */
+const DRAW_GLYPH = {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};   // (the glyph record: one drawGlyph is in flight at a time)
+
 export function drawGlyph(L, font, ch, state, x, y, penX, glyphH) {
   const base = L.base;
   const canvas = L.read(base + GC.canvas, 'u32');
   const sceneNode = L.read(canvas + TEXT_DRAW.canvasSceneNode, 'u32');
-  const glyph = uFontGlyph(L, font, ch);
+  const glyph = uFontGlyph(L, font, ch, 0, DRAW_GLYPH);
   const record = gcTextRealize(L, canvas, glyph.texture);
   const originX = L.read(base + GC.originX, 'f32');
   const originY = L.read(base + GC.originY, 'f32');
@@ -260,7 +296,7 @@ export function drawGlyph(L, font, ch, state, x, y, penX, glyphH) {
   if (!(w > 0) || !(h > 0)) return;
 
   const view = stateView(state);
-  const color = [0, 1, 2, 3].map(i => view.getUint32(STATE_COLOR + 4 * i, true));
+  const color = glyphColor(view);
   const ri = L.read(L.read(sceneNode, 'u32') + TEXT_DRAW.viewportRI, 'u32');
   callSlot(L, ri, TEXT_DRAW.glyphSlot,
     glyphCommand(L, canvas, sceneNode, record, wx, wy, w, h, u, v, color),
@@ -303,6 +339,12 @@ export function drawGlyph(L, font, ch, state, x, y, penX, glyphH) {
     'DrawGlyphTile');
 }
 
+// The method's emit and scan states, cursors, pen and glyph-height cells and extent record, shared by every call: a DrawText
+// runs no other (its leaves are the host's callVirtual and the GC stack), and the HUD calls it for each computer-window character.
+const DRAW_STATE_A = new Uint8Array(STATE_SIZE), DRAW_STATE_B = new Uint8Array(STATE_SIZE);
+const DRAW_CURSOR = {pos: 0}, DRAW_EMIT = {pos: 0}, DRAW_PEN = {v: 0}, DRAW_H = {v: 0};
+const DRAW_EXTENT = {xExtent: 0, yExtent: 0};
+
 /**
  * Method 0x10028180 translated.  `text` is the string value; 0 models the
  * null FString data pointer (the method's early-out gate).  The exec
@@ -319,14 +361,18 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
   // The gate is on the FString data pointer, not emptiness: the exec body
   // substitutes a valid empty wstring for num == 0, so '' still runs.
   if (text === 0 || text === null || text === undefined) return;
-  const units = typeof text === 'string' ? textUnits(text) : Uint16Array.from(text);
+  // (the units in a shared buffer, `end` their count; an array text, which no shipped script passes, is copied as it was)
+  const unitCount = typeof text === 'string' ? textUnitsShared(text) : -1;
+  const units = unitCount >= 0 ? textScratch.units : Uint16Array.from(text);
+  const end = unitCount >= 0 ? unitCount : units.length;
 
   const dx = bitsToF32(destX);
   const dy = bitsToF32(destY);
   const dw = bitsToF32(destWidth);
   const dh = bitsToF32(destHeight);
 
-  const stateA = new Uint8Array(STATE_SIZE);   // emit state [ebp-0x58]
+  const stateA = DRAW_STATE_A;                 // emit state [ebp-0x58] (zeroed: a fresh array per call was a typed array per DrawText)
+  stateA.fill(0);
   copyTextFloats(L, base, stateA);             // color = GC+0x6c
   let curFont = L.read(base + GC.normalFont, 'u32');   // [ebp-0x1c]
   let curBold = 0;                                     // [ebp+0x1b]
@@ -339,7 +385,7 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
   let lineY = dy;                              // [ebp+0xc] — current line origin
   const vAlign = L.read(base + GC.vAlign, 'u8');
   if (vAlign !== 0) {
-    const m = gcTextExtentUnits(L, f32(wrapInt), units);
+    const m = gcTextExtentUnitsInto(L, f32(wrapInt), units, end, DRAW_EXTENT);
     if (vAlign === 1) {
       const half = Math.trunc(Math.trunc(dh - m.yExtent) / 2) | 0;
       lineY = f32(half + lineY);
@@ -348,9 +394,10 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
     }
   }
 
-  const stateB = new Uint8Array(STATE_SIZE);   // scan state [ebp-0x6c]
-  const cursor = {pos: 0};                     // [ebp-0x2c] — scan cursor
-  const end = units.length;
+  const stateB = DRAW_STATE_B;                 // scan state [ebp-0x6c]
+  stateB.fill(0);
+  const cursor = DRAW_CURSOR;                  // [ebp-0x2c] — scan cursor
+  cursor.pos = 0;
   for (;;) {
     stateB.set(stateA);                        // loop-head copy A -> B
     const line = scanLine(L, base, cursor, end, stateB, units, f32(wrapInt));
@@ -369,9 +416,12 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
       penX = dx;
     }
 
-    const emitCur = {pos: line.start};         // [ebp-0x3c]
-    const penCell = {v: penX};                 // [ebp-0x14] in/out
-    const hCell = {v: 0};                      // [ebp+0x14] — glyphH out
+    const emitCur = DRAW_EMIT;                 // [ebp-0x3c]
+    emitCur.pos = line.start;
+    const penCell = DRAW_PEN;                  // [ebp-0x14] in/out
+    penCell.v = penX;
+    const hCell = DRAW_H;                      // [ebp+0x14] — glyphH out
+    hCell.v = 0;
     let lineMaxH = 0;                          // [ebp-0x18]
     for (;;) {
       const ch = nextChar(L, base, emitCur, lineEnd, stateA, units);
@@ -388,7 +438,7 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
     }
 
     if (!(lineMaxH >= 1) && curFont !== 0)
-      lineMaxH = f32(uFontGlyph(L, curFont, 0x20).vSize);
+      lineMaxH = f32(uFontGlyph(L, curFont, 0x20, 0, DRAW_GLYPH).vSize);
     lineY = f32(lineMaxH + L.read(base + GC.textVSpacing, 'f32') + lineY);
     stateA.set(stateB);                        // line end: A <- B
   }

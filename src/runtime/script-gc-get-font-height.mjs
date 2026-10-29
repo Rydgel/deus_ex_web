@@ -55,6 +55,8 @@ const fail = (message, details) => {
   throw new GcGetFontHeightBoundaryError(message, details);
 };
 
+const HEIGHT_GLYPH = {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};   // (the space's glyph record, read at once)
+
 export function gcGetFontHeightMethod(object, bIncludeSpace, services = {}) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function'))
     fail('GC.GetFontHeight requires a canonical GC object', {kind: 'REFERENCE', value: object});
@@ -62,12 +64,12 @@ export function gcGetFontHeightMethod(object, bIncludeSpace, services = {}) {
   let height = 0;
   const normal = L.read(L.base + GC.normalFont, 'u32');
   if (normal !== 0) {
-    const spaceH = uFontGlyph(L, normal, 0x20).vSize;
+    const spaceH = uFontGlyph(L, normal, 0x20, 0, HEIGHT_GLYPH).vSize;
     if (spaceH > 0) height = spaceH;
   }
   const bold = L.read(L.base + GC.boldFont, 'u32');
   if (bold !== 0) {
-    const spaceH = uFontGlyph(L, bold, 0x20).vSize;
+    const spaceH = uFontGlyph(L, bold, 0x20, 0, HEIGHT_GLYPH).vSize;
     if (!(height >= spaceH)) height = spaceH;
   }
   if (bIncludeSpace)

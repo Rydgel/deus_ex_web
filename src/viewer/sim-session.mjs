@@ -3,6 +3,7 @@
  * frame's results come back as plain data for the drawing side. Steps not
  * yet moved here still run from main.mjs. */
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
+import { plainTexture } from '../runtime/script-window-plain-texture.mjs';
 import { createSpriteScan } from './sprite-scan.mjs';
 import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/script-render-iterator.mjs';
 import * as THREE from 'three';
@@ -29,11 +30,11 @@ export const plainError = error => ({ name: error?.name ?? 'Error', message: Str
 
 /** A HUD texture reference as plain data: the page decodes it from its own
  * asset store. */
-export const plainTexture = ref => ref.dynamic ? { key: ref.key, dynamic: true, width: ref.width, height: ref.height }
-  : { key: ref.key, package: ref.asset.name, index: ref.index };
+export { plainTexture };
 /** The window host's GC draw commands (script-window-host.mjs callVirtual)
  * as plain data. */
-export const plainHudCommands = commands => commands.map(command => command.kind === 'clearZ' ? { kind: 'clearZ' }
+export const plainHudCommands = (commands, tilesPlain = false) => commands.map(command => command.kind === undefined && tilesPlain ? command
+  : command.kind === 'clearZ' ? { kind: 'clearZ' }
   // GC.DrawActor's mesh draw (script-window-host.mjs, docs/gc-draw-actor.md): the planner's binding id, frame record and decision.
   : command.kind === 'actor' ? { kind: 'actor', actor: command.actor, draw: command.draw }
   : command.kind === 'viewport'
@@ -916,23 +917,30 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * after the frame), then the InfoLink text the page mirrors for
      * accessibility. An error stops the simulation like the frame's other
      * steps. */
-    hud({ width, height, view }) {
+    hud({ width, height, view, stream = false }) {
       // (a live replay's frame after a window scene's typed command that the original's held frames did not draw after: live-probe.mjs `noPaint`)
-      if (game.liveReplay?.noPaint) return { errors: [], commands: [], infoLink: null, flash: null };
+      if (game.liveReplay?.noPaint) return { errors: [], commands: [], stream: null, infoLink: null, flash: null };
       const errors = [];
-      let commands = [], infoLink = null, flash = null;
+      let commands = [], hudStream = null, infoLink = null, flash = null;
       try {
         game.hud.host?.setViewportPlanner?.(planViewportPass);
         game.hud.host?.setActorDrawPlanner?.(planHudActor);
         viewportFrames = 0; lastViewportPlans = [];
-        commands = plainHudCommands(game.hud.commands(width, height, view));
+        // (the window host builds the tile commands in this form already: draw's fourth argument). `stream`: the tiles as numbers
+        // (script-window-command-stream.mjs), which the page expands where it draws them; the commands of the other kinds are
+        // converted here, in place among them.
+        if (stream) {
+          hudStream = game.hud.commands(width, height, view, 'stream');
+          hudStream.others = plainHudCommands(hudStream.others, true);
+          commands = null;
+        } else commands = plainHudCommands(game.hud.commands(width, height, view, true), true);
         infoLink = infoLinkText();
         // UGameEngine::Draw's flash planes for UD3DRenderDevice::EndFlash (docs/screen-flash.md), read where the
         // original reads them: the viewport actor's FlashScale and FlashFog after the tick, at the HUD draw.
         const viewer = game.player.collisionActor;
         flash = viewportFlash({ flashScale: runtime.readNamed(viewer, 'FlashScale'), flashFog: runtime.readNamed(viewer, 'FlashFog') });
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, commands, infoLink, flash };
+      return { errors, commands, stream: hudStream, infoLink, flash };
     },
     /** SetupDynamics' sprite scan with the render iterators (sprite-scan.mjs):
      * the sprite records in draw order. The laser DT_Mesh items stay in
@@ -1179,9 +1187,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       time('weapon');
       if (input.play && game.hud && view) {
-        const hud = this.hud({ width, height, view });
+        const hud = this.hud({ width, height, view, stream: true });
         collect(hud.errors);
-        snapshot.hud = { commands: hud.commands, infoLink: hud.infoLink, flash: hud.flash };
+        // `stream` (the tiles as numbers) or, after an error, `commands`: the page draws the list `expandHudStream` makes of the stream
+        snapshot.hud = { commands: hud.commands ?? (hud.stream ? null : []), stream: hud.stream, infoLink: hud.infoLink, flash: hud.flash };
       }
       // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
       snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;

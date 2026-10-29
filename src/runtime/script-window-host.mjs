@@ -105,6 +105,8 @@ import {releaseHandle} from './script-object-handles.mjs';
 import {createWindowFArray} from './script-window-farray.mjs';
 import {potCeiling} from './script-root-snapshot.mjs';
 import {constructNativeObject} from './script-player-log.mjs';
+import {plainTexture} from './script-window-plain-texture.mjs';
+import {HudCommandStream} from './script-window-command-stream.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -1326,7 +1328,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
           hidden: origin && runtime.readNamed(origin, 'bHidden') ? [origin.name] : [],
           behindView: Boolean(runtime.readNamed(viewer, 'bBehindView')), pass: null};
         if (viewportPlanner) command.pass = viewportPlanner(command);
-        drawCommands.push(command);
+        emitOther(command);
       },
       finishMasterFrame() {
         for (const frame of viewportFrames.keys()) heap.free(frame);
@@ -1717,7 +1719,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // deletes it (destroyGc). The first text DrawText of a window's GC makes one (the Underworld capture's GC519..GC521,
   // docs/object-index-captures.md). Its slot holder, by the node's address.
   const pushedNodes = new Map();
-  const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
+  // `transientPayloads`: callVirtual below reads a glyph's emit block at the call and keeps none of it, so UGC::DrawText may hand it
+  // one object rewritten for each glyph (script-gc-draw-text.mjs glyphCommand).
+  const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object), transientPayloads: true,
     allocateObject: () => {
       const node = heap.allocRaw(GC.size), holder = {name: nextName(gcClass)};
       takeOriginalSlot(holder, 'GC');
@@ -1727,6 +1731,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     constructUObject: ()=>{},
   };
   const drawCommands=[];
+  // draw's mode 'stream': the tiles go into commandStream as numbers (script-window-command-stream.mjs), the other kinds beside them
+  const commandStream=new HudCommandStream();
+  let streaming=false;
+  const emitOther=command=>{if(streaming)commandStream.other(command);else drawCommands.push(command);};
   // GC.DrawActor / GC.ClearZ (script-gc-draw-actor.mjs, docs/gc-draw-actor.md). The XGC body runs on the HUD canvas' render graph
   // and the Actor's own fields; its three leaves are these services. ClearZ and DrawActor queue ordered 'clearZ' and 'actor'
   // commands among the tile commands. An actor command carries the planner's draw (sim-session.mjs planHudActor: the mesh
@@ -1748,11 +1756,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
   };
   gcServices.render={
-    clearZ:()=>{drawCommands.push({kind:'clearZ'});},
+    clearZ:()=>{emitOther({kind:'clearZ'});},
     drawActor:(_render,frame,actor)=>{
       const command={kind:'actor',actor:actor.name,draw:null};
       if(actorPlanner)command.draw=actorPlanner(actor,{x:W.i32(frame,0xb0),y:W.i32(frame,0xb4),width:W.i32(frame,0xa8),height:W.i32(frame,0xac)});
-      drawCommands.push(command);
+      emitOther(command);
     },
     computeRenderSize:()=>boundary('GC.DrawActor bConstrain resizes the HUD frame (FSceneNode::ComputeRenderSize) and draws in the clip box: not modelled (no shipped script passes bConstrain)'),
   };
@@ -1768,12 +1776,36 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   W.setU32(canvas,0x80,renderBase);
   put(viewport,0x64,renderInterface);put(renderInterface,0,renderTable);put(renderTable,0x7c,3);
   gcServices.texCache={records:Array.from({length:5},()=>heap.allocRaw(0x84)),static:heap.allocRaw(0x84),head:0,count:0};
+  // A draw whose caller takes the tile commands in the form the page does (sim-session.mjs plainHudCommands: the texture as plain
+  // data) gets them so, built once; the colour array is the previous command's while its three words stay (a text is drawn in a
+  // colour or two), frozen as shared.
+  let plainTiles=false,tileColor=Object.freeze([NaN,NaN,NaN]),tileColorBits=[-1,-1,-1];
+  const colorOf=bits=>{
+    const r=bits[0],g=bits[1],b=bits[2],last=tileColorBits;
+    if(r!==last[0]||g!==last[1]||b!==last[2]){
+      tileColor=Object.freeze([bitsToF32(r)*255,bitsToF32(g)*255,bitsToF32(b)*255]);last[0]=r;last[1]=g;last[2]=b;
+    }
+    return tileColor;
+  };
   gcServices.callVirtual=(slot,object,command)=>{
     if(slot===1){put(command.record,0,object);return;}
     if(slot===2)return;
     if(slot!==3&&slot!==4)boundary(`Unknown HUD renderer virtual ${slot}`);
     const pointer=slot===3?heap.mem.read(command.record,'u32'):command.texture;
     const resource=resourceImages.get(pointer);if(!resource)boundary(`Unknown HUD texture pointer ${pointer}`);
+    if(plainTiles){
+      if(streaming){
+        commandStream.tile(plainTexture(resource.ref),bitsToF32(command.x),bitsToF32(command.y),bitsToF32(command.xl),bitsToF32(command.yl),
+          bitsToF32(command.u),bitsToF32(command.v),bitsToF32(command.ul),bitsToF32(command.vl),colorOf(command.color),
+          command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1);
+        return;
+      }
+      drawCommands.push({texture:plainTexture(resource.ref),x:bitsToF32(command.x),y:bitsToF32(command.y),
+        width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
+        ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),color:colorOf(command.color),
+        style:command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1});
+      return;
+    }
     drawCommands.push({texture:resource.ref,x:bitsToF32(command.x),y:bitsToF32(command.y),
       width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
       ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),
@@ -1908,7 +1940,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     /** The 3D view's rect in drawing-buffer pixels for a width x height
      * viewport: XRootWindow PreRender's frame edit (script-root-render-viewport). */
     renderViewport(root,width,height){return rootRenderViewport(W,root,{x:0,y:0,width,height});},
-    draw(root,width,height,view){
+    draw(root,width,height,view,plain=false){
       resizeViewport(width,height);
       // The root's frame (+0x740) is the canvas frame after PreRender's edit
       // and ComputeRenderSize, so projection centres on the render rect
@@ -1919,13 +1951,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         value:writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5})};W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
-      drawCommands.length=0;
+      drawCommands.length=0;commandStream.reset();
       // The Rust core may run the GC natives while this paint runs
       // (script-vm-gc.mjs open: only when this host's dispatch would).
       const gcNatives=runtime.scriptVm?.gc;
       gcNatives?.open({heap,services:gcServices,handleNative:lifecycle.handleNative});
-      try{T.paintWindows(W,root,canvas);}finally{gcNatives?.close();}
-      return drawCommands.slice();
+      plainTiles=plain===true||plain==='stream';streaming=plain==='stream';
+      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;streaming=false;gcNatives?.close();}
+      return plain==='stream'?commandStream.finish():drawCommands.slice();
     },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};

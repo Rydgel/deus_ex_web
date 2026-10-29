@@ -127,7 +127,32 @@ export function textUnits(text) {
   return units;
 }
 
-export const stateView = state => new DataView(state.buffer, state.byteOffset, STATE_SIZE);
+/** The code units of `text` in a buffer shared by the callers that read them at once (UGC::DrawText, GetTextExtent): returns the
+ *  count, the units are `textScratch.units[0..count)`. A buffer per call was one typed array a DrawText, and the HUD draws its
+ *  computer-window text one character at a time. */
+export const textScratch = {units: new Uint16Array(512)};
+export function textUnitsShared(text) {
+  if (typeof text !== 'string')
+    fail('GC.GetTextExtent requires the text string', {kind: 'REFERENCE', value: text});
+  let len = text.indexOf('\0');
+  if (len < 0) len = text.length;
+  if (len > textScratch.units.length) textScratch.units = new Uint16Array(Math.max(len, 2 * textScratch.units.length));
+  const units = textScratch.units;
+  for (let i = 0; i < len; i++) units[i] = text.charCodeAt(i);
+  return len;
+}
+
+// One DataView per state array: building a view reads `state.buffer`, which turns a small typed array's on-heap storage into an
+// ArrayBuffer, and the glyph path asked for a view of the emit state for every glyph.
+const stateViews = new WeakMap();
+export const stateView = state => {
+  let view = stateViews.get(state);
+  if (view === undefined) {
+    view = new DataView(state.buffer, state.byteOffset, STATE_SIZE);
+    stateViews.set(state, view);
+  }
+  return view;
+};
 const writeStateF32 = (state, offset, value) =>
   stateView(state).setFloat32(offset, Math.fround(value), true);
 export const copyTextFloats = (L, gcBase, state) => {
@@ -157,8 +182,10 @@ function parseHexByte(cur, end, units, byteOut) {
 }
 
 /** 0x100293d0: '|cRRGGBB' — three hex bytes into state+4/+8/+0xc as f32. */
+const HEX_R = {v: 0}, HEX_G = {v: 0}, HEX_B = {v: 0};   // (the three out cells, shared: the escape runs for every |c in a text)
 function parseColor(cur, end, state, units) {
-  const r = {v: 0}, g = {v: 0}, b = {v: 0};
+  const r = HEX_R, g = HEX_G, b = HEX_B;
+  r.v = 0; g.v = 0; b.v = 0;
   if (parseHexByte(cur, end, units, r) && parseHexByte(cur, end, units, g))
     parseHexByte(cur, end, units, b);
   writeStateF32(state, STATE_COLOR, r.v * TEXT_COLOR_SCALE);
@@ -250,12 +277,22 @@ export function nextChar(L, gcBase, cur, end, state, units) {
  * Returns {start, len, width(f32), progress} — progress 0 models the
  * wrapper's null return (line-start pointer on success).
  */
+// scanLine's three 20-byte copies and its cursor, shared by every call (it calls nothing that scans again); the result object is
+// shared too and holds until the next scanLine. A fresh set per call was five allocations a DrawText.
+const SCAN_WORK = new Uint8Array(STATE_SIZE), SCAN_SNAP_A = new Uint8Array(STATE_SIZE), SCAN_SNAP_B = new Uint8Array(STATE_SIZE);
+const SCAN_CURSOR = {pos: 0};
+const SCAN_GLYPH = {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};
+const SCAN_RESULT = {start: 0, len: 0, width: 0, progress: 0};
+
 export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
   let destW = destWidth;
   if (!(destW > 0)) destW = 500000;
   const savedByte2 = state[STATE_CONTINUED];
   const start = cursor.pos;
-  const work = state.slice();
+  // (a state array of another size takes the copies the first version made)
+  const standard = state.length === STATE_SIZE;
+  const work = standard ? SCAN_WORK : state.slice();
+  if (standard) work.set(state);
   work[STATE_CONTINUED] = 0;
   let font = work[STATE_BOLD] ? L.read(gcBase + GC.boldFont, 'u32')
                               : L.read(gcBase + GC.normalFont, 'u32');
@@ -266,9 +303,11 @@ export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
   let wordStart = 0;
   let wordEnd = 0;
   let wrapped = 0;
-  const snapA = new Uint8Array(STATE_SIZE);
-  const snapB = new Uint8Array(STATE_SIZE);
-  const cur = {pos: start};
+  const snapA = standard ? SCAN_SNAP_A : new Uint8Array(STATE_SIZE);
+  const snapB = standard ? SCAN_SNAP_B : new Uint8Array(STATE_SIZE);
+  if (standard) { snapA.fill(0); snapB.fill(0); }
+  const cur = standard ? SCAN_CURSOR : {pos: start};
+  cur.pos = start;
   let outCursor, outLenEnd, outW;
   for (;;) {
     snapB.set(work);
@@ -303,7 +342,7 @@ export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
       font = work[STATE_BOLD] ? L.read(gcBase + GC.boldFont, 'u32')
                               : L.read(gcBase + GC.normalFont, 'u32');
     if (font === 0) { firstChar = 0; continue; }
-    const sum = runW + uFontGlyph(L, font, ch).uSize;
+    const sum = runW + uFontGlyph(L, font, ch, 0, SCAN_GLYPH).uSize;
     if (!(sum > destW)) { runW = Math.fround(sum); firstChar = 0; continue; }
     if (firstChar !== 0) { runW = Math.fround(sum); firstChar = 0; continue; }
     if (wordEnd === 0) {
@@ -327,8 +366,13 @@ export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
   }
   cursor.pos = outCursor;
   state.set(work);
-  return {start, len: outLenEnd - start, width: outW,
-          progress: outCursor > start || savedByte2 !== 0 ? 1 : 0};
+  if (!standard) return {start, len: outLenEnd - start, width: outW,
+                         progress: outCursor > start || savedByte2 !== 0 ? 1 : 0};
+  SCAN_RESULT.start = start;
+  SCAN_RESULT.len = outLenEnd - start;
+  SCAN_RESULT.width = outW;
+  SCAN_RESULT.progress = outCursor > start || savedByte2 !== 0 ? 1 : 0;
+  return SCAN_RESULT;
 }
 
 /**
@@ -337,9 +381,24 @@ export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
  * f32(wrapInt) when its vAlign byte is non-zero.
  */
 export function gcTextExtentUnits(L, destWidth, units) {
-  const state = new Uint8Array(STATE_SIZE);
-  const cursor = {pos: 0};
-  const end = units.length;
+  return gcTextExtentUnitsInto(L, destWidth, units, units.length, {xExtent: 0, yExtent: 0});
+}
+
+// The measurement's state, its two cursors and the glyph record are shared by every call (the body scans, never measures within a
+// measurement); `out` receives the extents.
+const EXTENT_STATE = new Uint8Array(STATE_SIZE);
+const EXTENT_CURSOR = {pos: 0}, EXTENT_RESCAN = {pos: 0};
+const EXTENT_GLYPH = {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};
+const EXTENT_OUT = {xExtent: 0, yExtent: 0};
+
+/** gcTextExtentUnits over `units[0..end)` into `out`: UGC::DrawText measures a line with the units it already holds, in a buffer
+ *  longer than the text (textUnitsShared). */
+export function gcTextExtentUnitsInto(L, destWidth, units, end, out) {
+  const state = EXTENT_STATE;
+  state.fill(0);
+  const cursor = EXTENT_CURSOR;
+  cursor.pos = 0;
+  const rescan = EXTENT_RESCAN;
   let totalY = 0;
   let lineH = 0;
   let maxX = 0;
@@ -349,7 +408,8 @@ export function gcTextExtentUnits(L, destWidth, units) {
     const line = scanLine(L, L.base, cursor, end, state, units, destWidth);
     if (!line.progress) break;
     const lineEnd = line.start + line.len;
-    const rescan = {pos: line.start};
+    const lineWidth = line.width;
+    rescan.pos = line.start;
     for (;;) {
       const ch = nextChar(L, L.base, rescan, lineEnd, state, units);
       if (ch === 0) break;
@@ -360,23 +420,26 @@ export function gcTextExtentUnits(L, destWidth, units) {
         bold = cl;
       }
       if (ch === 0x0a || font === 0) continue;
-      const h = uFontGlyph(L, font, ch).vSize;
+      const h = uFontGlyph(L, font, ch, 0, EXTENT_GLYPH).vSize;
       if (!(lineH >= h)) lineH = h;
     }
     if (!(lineH >= 1) && font !== 0)
-      lineH = uFontGlyph(L, font, 0x20).vSize;
-    if (!(maxX >= line.width)) maxX = line.width;
+      lineH = uFontGlyph(L, font, 0x20, 0, EXTENT_GLYPH).vSize;
+    if (!(maxX >= lineWidth)) maxX = lineWidth;
     totalY = Math.fround(lineH + L.read(L.base + GC.textVSpacing, 'f32') + totalY);
     lineH = 0;
   }
-  return {xExtent: maxX, yExtent: Math.fround(lineH + totalY)};
+  out.xExtent = maxX;
+  out.yExtent = Math.fround(lineH + totalY);
+  return out;
 }
 
 export function gcGetTextExtentMethod(object, destWidth, writeX, writeY, text, services = {}) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function'))
     fail('GC.GetTextExtent requires a canonical GC object', {kind: 'REFERENCE', value: object});
   const L = gcMemory(object, services);
-  const m = gcTextExtentUnits(L, destWidth, textUnits(text));
+  const length = textUnitsShared(text);
+  const m = gcTextExtentUnitsInto(L, destWidth, textScratch.units, length, EXTENT_OUT);
   return {xExtent: writeX ? m.xExtent : null, yExtent: writeY ? m.yExtent : null};
 }
 

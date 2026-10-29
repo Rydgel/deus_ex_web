@@ -37,6 +37,7 @@ const TANGENTS = new Map([
 ].map(([fov, bits]) => [fov, doubleFromBits(bits)]));
 export const sceneFrameMeasuredFovs = Object.freeze([...TANGENTS.keys()]);
 
+let sizeKept = null;   // buildWindowSceneFrame's size-dependent values for the last FOV, precision control and size
 const sub = (a, b) => A(a, N(b));
 const dot = (v, axis) => S(A(A(M(v[0], X(axis[0])), M(v[1], X(axis[1]))), M(v[2], X(axis[2]))));
 
@@ -63,10 +64,21 @@ export function coordsDivideRotator(rotation) {
   return {origin, xAxis, yAxis, zAxis};
 }
 
+// The rotation's rows of ComputeRenderCoords at 64 bits (viewCoords): 36 dot products of BigInt x87 values, a function of the three
+// rotator ints alone, so the last rotation's rows are kept; the view turns in a few frames of many. The rows are never changed.
+let viewRotation = null, viewRows = null;
+function viewRotationRows(rotation) {
+  if (viewRotation !== null && viewRotation[0] === rotation[0] && viewRotation[1] === rotation[1] && viewRotation[2] === rotation[2]) return viewRows;
+  const rows = divideRotator([[0, 0, 0], [0, 1, 0], [0, 0, -1], [1, 0, 0]], rotation);
+  viewRotation = [rotation[0], rotation[1], rotation[2]];
+  viewRows = rows;
+  return rows;
+}
+
 function viewCoords(rotation, location) {
-  const fields = divideRotator([[0, 0, 0], [0, 1, 0], [0, 0, -1], [1, 0, 0]], rotation);
-  fields[0] = fields[0].map((v, i) => S(A(X(v), X(location[i]))));
-  return fields.flat();
+  const fields = viewRotationRows(rotation);
+  const origin = fields[0].map((v, i) => S(A(X(v), X(location[i]))));
+  return [...origin, ...fields[1], ...fields[2], ...fields[3]];
 }
 
 /** Normal perspective input: original camera location/rotation arrays,
@@ -91,23 +103,33 @@ export function buildWindowSceneFrame({location, rotation, width, height, fov, r
   // edited frame (0x1003a8cd, inside the render pass). At 24 bits the FMUL
   // by the double pi/360 rounds before the qword store, so appTan's argument
   // is not the one the measured tangents were taken for.
-  const pass = x87PrecisionControl() === 24;
-  const argument = double(M(X(fov), DEG_HALF));
-  const tangents = appTan ? [appTan(argument)] : !pass && TANGENTS.has(fov) ? [TANGENTS.get(fov)] : x87TanCandidates(argument);
-  if (!tangents || !tangents.every(t => Number.isFinite(t) && t > 0))
-    throw new Error(`Scene frame requires the original appTan for FOV ${fov}`);
-  const fx = S(I(width)), fy = S(I(height));
-  const projections = new Set(tangents.map(t => S(D(M(X(fx), HALF), X64(t)))));
-  if (projections.size !== 1)
-    throw new Error(`Scene frame FOV ${fov}: FPTAN's last bit decides projectionZ, which is unmeasured`);
+  const precision = x87PrecisionControl(), pass = precision === 24;
+  // The size-dependent part (the tangent, projectionZ, the centre) is a function of the FOV, the precision control and the size alone
+  // when no appTan service is given: the last one's values are kept, and a frame at the same size and FOV (all of them, but a resize
+  // or a zoom) takes them.
+  const kept = !appTan && sizeKept !== null && sizeKept.fov === fov && sizeKept.precision === precision && sizeKept.width === width && sizeKept.height === height
+    ? sizeKept : null;
+  let fx, fy, center0, center1, projectionZ;
+  if (kept !== null) ({fx, fy, center0, center1, projectionZ} = kept);
+  else {
+    const argument = double(M(X(fov), DEG_HALF));
+    const tangents = appTan ? [appTan(argument)] : !pass && TANGENTS.has(fov) ? [TANGENTS.get(fov)] : x87TanCandidates(argument);
+    if (!tangents || !tangents.every(t => Number.isFinite(t) && t > 0))
+      throw new Error(`Scene frame requires the original appTan for FOV ${fov}`);
+    fx = S(I(width)); fy = S(I(height));
+    const projections = new Set(tangents.map(t => S(D(M(X(fx), HALF), X64(t)))));
+    if (projections.size !== 1)
+      throw new Error(`Scene frame FOV ${fov}: FPTAN's last bit decides projectionZ, which is unmeasured`);
+    projectionZ = [...projections][0];
+    center0 = S(M(I(width), HALF)); center1 = S(M(X(fy), HALF));
+    if (!appTan) sizeKept = {fov, precision, width, height, fx, fy, center0, center1, projectionZ};
+  }
   // The coordinates are CreateMasterFrame's ComputeRenderCoords (the game
   // thread, 64 bits); PreRender's edit does not recompute them.
   const previous = setX87Precision(64);
   let coords;
   try { coords = viewCoords(rotation, location); } finally { setX87Precision(previous); }
-  return {coords, width: fx, height: fy,
-    center: [S(M(I(width), HALF)), S(M(X(fy), HALF))],
-    projectionZ: [...projections][0]};
+  return {coords, width: fx, height: fy, center: [center0, center1], projectionZ};
 }
 
 /** Core appTan's qword result for Actor.FOVAngle `fov` as ComputeRenderSize

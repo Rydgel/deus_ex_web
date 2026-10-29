@@ -64,7 +64,8 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
     // PreRenderWindows (the PreRender event) and PostRenderWindows' paint
     // (PostRenderFlash) run inside the render pass, at x87 precision control
     // 24 (render-precision.mjs); Galaxy's Update (game.mjs) stays outside.
-    commands(width,height,view){return inRenderPass(runtime,()=>scoped(()=>host.draw(root,width,height,view)));},
+    // `plain`: the tile commands in the form the page takes (sim-session.mjs plainHudCommands), built once (host.draw)
+    commands(width,height,view,plain=false){return inRenderPass(runtime,()=>scoped(()=>host.draw(root,width,height,view,plain)));},
     renderViewport(width,height){return scoped(()=>host.renderViewport(root,width,height));},
     tick(delta){scoped(()=>host.tick(root,delta));},
     key(key,action){return scoped(()=>host.key(root,key,action));},

@@ -6,12 +6,14 @@
 //     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
 //     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--headed] [--no-hitchlog] [--worker-patch FILE]
+//     [--screenshot FILE] (a PNG of the page at the end of the run)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
 //   Chromium: [--angle metal|gl] (default metal on macOS, gl elsewhere) [--exe PATH] [--throttle 4] [--trace] (V8 GC events in the JSON's
 //     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
-//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
+//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--heap-steps 8] (<out>.heap.json: the totals by site, leaf, sim-session step and
+//     file, and `byStep`: each of the N largest steps' top leaves and top 5-frame sites; the KB a frame is printed) [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
 //     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
@@ -187,6 +189,8 @@ await page.keyboard.up('KeyW').catch(()=>{});
 if(throttle>1&&cdp)await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
 const status=await page.evaluate(()=>{const s=window.deusExViewer.status(),c=document.getElementById('scene');
   return {map:s.map,sim:s.sim,paused:s.paused,runtimeError:s.runtimeError?.message??s.runtimeError,position:s.position,canvas:[c.width,c.height]};});
+// --screenshot FILE: the page as it is at the end of the run (the HUD drawn from the worker's snapshot)
+if(option('screenshot',null))await page.screenshot({path:option('screenshot',null)});
 const dump=await page.evaluate(()=>window.deusExHitch?window.deusExHitch.dump({full:true}):null);
 let gc=null;
 if(traced){
@@ -200,19 +204,37 @@ if(traced){
 }
 if(heapSampling&&workerSession){
   const {result}=await send('HeapProfiler.stopSampling',{},workerSession);
-  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map();let total=0;
+  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map(),stepLeaf=new Map(),stepSites=new Map(),stepAudio=new Map();let total=0;
   const label=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}:${f.lineNumber+1}`;
   const fn=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}`;
   const bump=(m,k,v)=>m.set(k,(m.get(k)??0)+v);
   // The step is the callee of sim-session's frame(): the first function below `frame viewer/sim-session.mjs` on the stack.
-  (function visit(node,stack,stepName){const here=[...stack,label(node.callFrame)];total+=node.selfSize;
+  (function visit(node,stack,stepName,inAudio){const here=[...stack,label(node.callFrame)];total+=node.selfSize;
     let st=stepName;
+    // Galaxy's Update runs inside the HUD step (game.mjs wraps hud.commands): its share is kept apart (script-audio-live.mjs `update`)
+    const audio=inAudio||/^update runtime\/script-audio-live\.mjs/.test(fn(node.callFrame));
     if(stack.length&&/^frame viewer\/sim-session\.mjs/.test(stack[stack.length-1]))st=fn(node.callFrame);
     if(node.selfSize){bump(sites,here.slice(-5).reverse().join(' < '),node.selfSize);bump(leaf,fn(node.callFrame),node.selfSize);
-      bump(step,st??'(outside frame)',node.selfSize);bump(file,node.callFrame.url.split('/').slice(-2).join('/').split('?')[0]||'(native)',node.selfSize);}
-    for(const c of node.children)visit(c,here,st);})(result.profile.head,[],null);
+      bump(step,st??'(outside frame)',node.selfSize);bump(file,node.callFrame.url.split('/').slice(-2).join('/').split('?')[0]||'(native)',node.selfSize);
+      // the step x leaf and step x 5-frame-site cells (the leaf's own file and function, so a step's allocation shows what builds it)
+      if(audio)bump(stepAudio,st??'(outside frame)',node.selfSize);
+      bump(stepLeaf,`${st??'(outside frame)'}\t${fn(node.callFrame)}`,node.selfSize);bump(stepSites,`${st??'(outside frame)'}\t${here.slice(-5).reverse().join(' < ')}`,node.selfSize);}
+    for(const c of node.children)visit(c,here,st,audio);})(result.profile.head,[],null,false);
   const top=(m,n)=>[...m].sort((a,b)=>b[1]-a[1]).slice(0,n);
-  await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60)}));
+  // --heap-steps N (default 8): the N largest steps each get their top leaves and top 5-frame sites (byStep), and a KB-per-frame summary is printed.
+  const frames=dump?.summary?.frames??null,stepCount=Number(option('heap-steps',8));
+  const byStep={};
+  for(const [name,bytes] of top(step,stepCount)){
+    const cell=m=>top(new Map([...m].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),25);
+    byStep[name]={bytes,audioBytes:stepAudio.get(name)??0,leaf:cell(stepLeaf),sites:top(new Map([...stepSites].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),15)};
+  }
+  await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,frames,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60),byStep}));
+  const kb=bytes=>frames?(bytes/1024/frames).toFixed(1):'-';
+  console.log(`heap sampling ${heapSampling}: ${(total/1048576).toFixed(0)} MB over ${frames} frames = ${kb(total)} KB a frame`);
+  for(const [name,entry] of Object.entries(byStep)){
+    console.log(`  ${kb(entry.bytes).padStart(7)} KB/frame  ${name}${entry.audioBytes?` (Galaxy's Update inside it: ${kb(entry.audioBytes)})`:''}`);
+    for(const [leafName,bytes] of entry.leaf.slice(0,6))console.log(`      ${kb(bytes).padStart(7)}  ${leafName}`);
+  }
 }
 if(workerProfiled){const {result}=await send('Profiler.stop',{},workerSession);await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(result.profile));}
 await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));

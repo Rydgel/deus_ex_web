@@ -128,6 +128,22 @@ const drawFail = (message, details) => {
  * native sink pushes; `texture`/`canvas` are heap pointers canonicalised by
  * the capture service.
  */
+// The DrawTile block for a host whose callVirtual reads it at the call and keeps none of it (`services.transientPayloads`): one
+// object with drawTileCommand's keys in order, rewritten for each tile, its colour the frozen array shared while the four words stay.
+const TILE_FOG = freeze([0, 0, 0, 0]);
+const TILE_BLOCK = {op: 'DrawTile', texture: 0, x: 0, y: 0, xl: 0, yl: 0, u: 0, v: 0, ul: 0, vl: 0, spanBuffer: 0, z: 0,
+  color: TILE_FOG, fog: TILE_FOG, polyFlags: 0};
+let tileColor = freeze([-1, -1, -1, -1]);
+export function transientTileCommand(texture, x, y, xl, yl, u, v, ul, vl, z, c0, c1, c2, c3, polyFlags) {
+  const block = TILE_BLOCK;
+  block.texture = texture; block.x = x; block.y = y; block.xl = xl; block.yl = yl;
+  block.u = u; block.v = v; block.ul = ul; block.vl = vl; block.z = z;
+  const held = tileColor;
+  if (c0 !== held[0] || c1 !== held[1] || c2 !== held[2] || c3 !== held[3]) tileColor = freeze([c0, c1, c2, c3]);
+  block.color = tileColor;
+  block.polyFlags = polyFlags >>> 0;
+  return block;
+}
 export function drawTileCommand({texture, x, y, xl, yl, u, v, ul, vl, z, color, fog, polyFlags}) {
   return freeze({
     op: 'DrawTile',

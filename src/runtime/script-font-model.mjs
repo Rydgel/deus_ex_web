@@ -174,7 +174,7 @@ export function writeFontImage(heap, decoded) {
  * shared heap) and a negative remainder would index before the glyph run —
  * both are rejected here as unverifiable boundaries.
  */
-export function uFontGlyph(L, font, ch, texOut = 0) {
+export function uFontGlyph(L, font, ch, texOut = 0, out = null) {
   ch &= 0xffff;
   const cpp = L.read(font + UFONT.charsPerPage, 'i32');
   if (cpp === 0)
@@ -198,12 +198,16 @@ export function uFontGlyph(L, font, ch, texOut = 0) {
   } else if (texOut) {
     L.write(texOut, 'u32', 0);
   }
-  if (!hit) return {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};
-  return {
-    startU: L.read(glyph + FONT_GLYPH.startU, 'i32'),
-    startV: L.read(glyph + FONT_GLYPH.startV, 'i32'),
-    uSize:  L.read(glyph + FONT_GLYPH.uSize, 'i32'),
-    vSize:  L.read(glyph + FONT_GLYPH.vSize, 'i32'),
-    texture,
-  };
+  // `out`, when given, is the record to fill (the text path looks up a glyph for every character and keeps none of them).
+  const record = out === null ? {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0} : out;
+  if (!hit) {
+    record.startU = 0; record.startV = 0; record.uSize = 0; record.vSize = 0; record.texture = 0;
+    return record;
+  }
+  record.startU = L.read(glyph + FONT_GLYPH.startU, 'i32');
+  record.startV = L.read(glyph + FONT_GLYPH.startV, 'i32');
+  record.uSize = L.read(glyph + FONT_GLYPH.uSize, 'i32');
+  record.vSize = L.read(glyph + FONT_GLYPH.vSize, 'i32');
+  record.texture = texture;
+  return record;
 }
