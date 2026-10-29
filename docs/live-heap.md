@@ -1718,6 +1718,51 @@ defaults and children cuts.
   ratios (7.6% and 12% fewer pointer references for 13% and 10% shorter marking) 16% fewer would be expected to shorten it, which is
   a prediction.
 
+### Steps 2, 3 and 4 on two cores
+
+Master 3502f642 (steps 2, 3 and 4 merged) against 89bd1edd (07de3088 with the profiler's roam), the method of "The script VM and
+world query cuts on two cores": four interleaved 300 s Island roams on two cores (`taskset -c 0,1`, `hitch-run.mjs --trace`), each
+tree on its own dev server; 19,120 to 19,257 worker frames a run. V8's marking log was not captured this time (the runs left out
+`DEBUG=pw:browser`, which forwards it), so the cycles are read from the trace alone with `scripts/gc-trace-cycles.mjs`: a cycle's
+main-thread marking is the sum of the `V8.GC_MC_INCREMENTAL` events on the worker thread since the previous `MajorGC`, its atomic
+pause the `MajorGC` event, and a GC frame is a worker frame over 100 ms with at least 20 ms of either inside.
+
+The heap first (Island, 240 s roam, forced GCs; `.cache/perf/heap-island-r6-roam240`): the worker holds 5.33 M objects, 35.8 M
+snapshot edges and 268 MB of JS heap, from 8.21 M, 45.3 M and 336 MB at 07de3088; the page's used heap is 106 MB (115 MB).
+
+| run | worker major GCs | main-thread marking a cycle, mean (max) | atomic pause, mean | GC frames over 100 ms (longest) | other frames over 100 ms (longest) | first 20 s (longest) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 89bd1edd, 1 | 4 | 267 ms (285) | 46 ms | 10 (169 ms) | 2 (122 ms) | 3 (366 ms) |
+| 89bd1edd, 2 | 5 | 224 ms (276) | 60 ms | 10 (326 ms) | 1 (143 ms) | 3 (348 ms) |
+| 3502f642, 1 | 8 | 91 ms (251) | 40 ms | 7 (259 ms) | 4 (158 ms) | 3 (340 ms) |
+| 3502f642, 2 | 4 | 113 ms (218) | 40 ms | 4 (215 ms) | 3 (203 ms) | 2 (429 ms) |
+
+**The marking per cycle halves, the worst cycles do not.** With 35% fewer objects and 21% fewer edges the worker thread marks
+91 and 113 ms a cycle on average against 267 and 224, and the GC frames over 100 ms fall from 20 to 11 in two runs. The cycles
+are of two kinds on the merged tree: most finish in 68 to 154 short steps with 16 to 90 ms of main-thread marking, but four of
+twelve (the memory reducer's at 111 to 120 s among them) still mark 170 to 251 ms in 33 to 48 steps, the base's kind (all nine
+of its cycles: 132 to 285 ms in 43 to 83 steps), and those give the longest GC frames (259 and 215 ms against 169 and 326). Which
+kind a cycle is was not traced to its cause; on two cores the concurrent markers share the cores with the page and the worker,
+and how much of a cycle they take is the likely difference (the background marking events cannot be told apart by isolate in the
+trace). One run had eight cycles against four or five on the others, every one of them cheaper.
+
+**What else is long.** The first frames after the map's load are 340 to 429 ms on both trees, with no GC in them (the tick).
+Frames over 50 ms without GC are more numerous on the merged tree (67 and 60 against 26 and 45), most in clusters where the
+roam meets something (29 within 70 to 80 s in one run, 25 within 250 to 280 s in the other; the base's second run has 16 within
+210 to 220 s); the worker's tick p90 is 12.4 and 12.5 ms against 11.1 and 11.9. An interleaved headless A/B (`bench-sim.mjs
+--ticks 600`, four rounds a map, both trees on cores 4 to 7) gives equal tick medians on the Island (6.94 and 6.95 ms) and the
+747 (1.78 and 1.73), Training 1.80 against 2.38 within a spread of 1.2 to 2.5 on both, and boots 0.1 to 0.7 s shorter: no tick
+cost is established, and the next two-core A/B rechecks the 50 to 100 ms frames.
+
+The merged tree's checks: the bench-sim digests (Island 15e3720088490242, Training 148077479825af78, the 747 ad8e591a01434df5),
+`hud-stream-digest --frames 1500 --stream` (16bfe2bd08ed1653) and `frame-alloc-meter --compare` on the Island, the 747 and Training
+are identical to 07de3088's; 877 unit tests pass; 30 validators of both branches' families exit 0 (class-loader,
+class-loader-struct-bools, linker-preload, linker-imports, process-collection, script-process, script-vm-interp, script-vm-x87,
+dynamic-load-object, font-load-graph, mesh-load-graph, static-load-object, create-export, end-load, script-serialization,
+property-serialize-item, class-default-travel, config-persistence, native-config, load-saves (41 desktop saves), save-game,
+save-load-play, travel, travel-endings, island-conversation, instructor-conversation, conversation-binding, mesh-faces, gpu-mesh,
+play-hud), after the 31 mesh validators of step 4 on 243f2b2b.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1742,8 +1787,9 @@ defaults and children cuts.
   further does not reach them; what is left is the marking of the worker's 0.5 GB live heap, which only a smaller heap (the
   simulation's data in Wasm memory, fewer objects and pointers) shortens. Step 4 ("Step 4's results") took 730 k objects and 2.0 M
   references out of the worker (the actor mesh faces, per mesh now), and "Steps 2 and 3's results" took its pointer references down
-  by a further 16% (37.4 M to 31.3 M) and its objects by 26%; both are merged on master, their marking on two cores is measured in
-  "Steps 2, 3 and 4 on two cores" once that section exists. The Mac (twelve cores, where the concurrent markers take more of it)
+  by a further 16% (37.4 M to 31.3 M) and its objects by 26%. "Steps 2, 3 and 4 on two cores": together they halve the worker's
+  main-thread marking a cycle (267 and 224 to 91 and 113 ms) and the GC frames over 100 ms (20 to 11 in two runs), but a third of
+  the cycles still mark 170 to 250 ms within a few frames. The Mac (twelve cores, where the concurrent markers take more of it)
   and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
