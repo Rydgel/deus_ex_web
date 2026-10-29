@@ -58,7 +58,10 @@ export class Reader {
     for (let index = 1; more; index++) {
       byte = this.u8();
       if (index === 4 && byte > 0x1f) throw new PackageError('Compact index overflow', start);
-      value += (byte & (index === 4 ? 0x1f : 0x7f)) * 2 ** (6 + (index - 1) * 7);
+      // Integer arithmetic only: `2 ** n` yields a heap number in the interpreter, and a heap number stored once makes V8 box
+      // that field in every object of the shape (docs/live-heap.md "Steps 2 and 3's results"). The fourth group's 2 ** 27 is a
+      // literal factor, which stays a small integer while the product fits.
+      value += index === 4 ? (byte & 0x1f) * 134217728 : (byte & 0x7f) << (6 + (index - 1) * 7);
       more = index < 4 && (byte & 0x80) !== 0;
     }
     if (value > (negative ? 0x80000000 : 0x7fffffff)) {
@@ -148,22 +151,23 @@ export function parsePackage(input) {
     }
     return names[index].name;
   }
+  // Every field is declared in the literal, so an entry has no out-of-line property array (`path` and `className` are filled
+  // below).
   const imports = table('imports', 7, () => ({
     classPackage: nameAt(r.compact()),
     className: nameAt(r.compact()),
     outer: r.i32(),
     name: nameAt(r.compact()),
+    path: '',
   }));
   const exports = table('exports', 12, () => {
-    const entry = {
-      classIndex: r.compact(), superIndex: r.compact(), outer: r.i32(),
-      name: nameAt(r.compact()), flags: r.u32(), serialSize: r.compact(),
-    };
-    entry.serialOffset = entry.serialSize > 0 ? r.compact() : null;
-    if (entry.serialSize < 0 || (entry.serialSize > 0 && (
-      entry.serialOffset < headerSize || entry.serialSize > r.bytes.length - entry.serialOffset
-    ))) throw new PackageError(`Invalid export payload for ${entry.name}`, r.offset);
-    return entry;
+    const classIndex = r.compact(), superIndex = r.compact(), outer = r.i32();
+    const name = nameAt(r.compact()), flags = r.u32(), serialSize = r.compact();
+    const serialOffset = serialSize > 0 ? r.compact() : null;
+    if (serialSize < 0 || (serialSize > 0 && (
+      serialOffset < headerSize || serialSize > r.bytes.length - serialOffset
+    ))) throw new PackageError(`Invalid export payload for ${name}`, r.offset);
+    return { classIndex, superIndex, outer, name, flags, serialSize, serialOffset, className: '', path: '' };
   });
   tableRanges.sort((a, b) => a[0] - b[0]);
   for (let i = 1; i < tableRanges.length; i++) {

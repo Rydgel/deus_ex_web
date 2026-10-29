@@ -199,21 +199,21 @@ Firefox GC markers, not only by heap size.
    operations as `THREE.Sphere.setFromPoints`. `validate-texel-sphere` checks that
    both give the same doubles for every lit surface of the Island and Training, and
    for the Island under a mover's matrix: 18,602 records, 6.6 M texels.
-2. **Copies nothing reads (both realms).**
-   * Drop `metadata.serialized`.
-   * Drop the per-function bytecode copy once decoded; the package bytes stay.
-   * Remove the `ScriptProcess.functions` Map.
-   * Build `contextResults` at the first None receiver instead of at link.
-   * Release `map.triangles` after the world build on the page.
-   * Expected: a few hundred thousand objects and their buffers. Each removal needs a
-     reader check across `scripts/` validators too.
-3. **One export table.** The class loader's linkers and `PreparedDynamicLoadGraph`
-   read `pkg.exports` (or columns built from it) instead of copying each export.
-   They keep only their own mutable parts (the created object, the hash chains) as
-   typed arrays and one array of objects.
-   * Expected: about 1 M objects in the worker, plus the page's share.
-   * A later, larger step makes `pkg.exports` itself columnar behind accessors, since
-     about 130 reads use `entry.*`.
+2. **Copies nothing reads (both realms): done 2026-10-29, except two items.**
+   * Dropped `metadata.serialized` and the serializer tail `extra`, the superField and next views, and the unread UField prefix
+     objects (marker, base, next, scriptText, name).
+   * The per-function bytecode copy is a view of the package bytes. `ScriptProcess.functions` is no longer filled. A function
+     drops its children and parameters copies once its parameters' identities are linked.
+   * Not done: `contextResults` stay built at link. They resolve and load classes (`loadClass` is asynchronous and changes the
+     load order), and the null-Context read that needs them is synchronous inside a script event; a body without a result now
+     shares one empty Map and a descriptor one zero function. `map.triangles` on the page is not done (not this step's files).
+   * See "Steps 2 and 3's results".
+3. **One export table: done 2026-10-29 for the linkers.** The class loader's linkers and `PreparedDynamicLoadGraph` read the
+   package's export entries through a `LinkerExports` table (`linker-exports.mjs`) that owns only the interned names, the created
+   objects and the hash chain; a record the native services read is a view.
+   * Measured with step 2's and the integer fixes: see "Steps 2 and 3's results".
+   * Left: `pkg.exports` and `pkg.names` themselves as columns behind accessors (about 130 reads of `entry.*` and about 45 of
+     `names[i].name`).
 4. **Mesh faces once per mesh: done 2026-10-29.** A per-mesh typed face block (the existing
    `faceWords`, plus UVs and material indices) shared by every binding of a mesh,
    cached per mesh. See "Step 4's results".
@@ -225,10 +225,13 @@ Firefox GC markers, not only by heap size.
    getter and setter live on its prototype, or a handler table per field key. Callers
    that take `binding.get` detached (`script-runtime.mjs:1345`) are adapted.
    * Expected: about 0.5 M objects.
-6. **Class defaults once.** `cls.defaults` keeps only defaults that changed after
+6. **Class defaults once: first part done 2026-10-29.** `cls.defaults` keeps only defaults that changed after
    load. Reads fall back to the load record's defaults and the class image.
    * Expected: 0.3 to 0.5 M objects. This touches spawn, `defaultValue`,
      `classDefaultReference` and `refreshConfigDefaults`.
+   * Done (see "Steps 2 and 3's results"): a field a class inherits with its base's values shares the base's Map; the
+     per-class Map of Maps stays, so no reader changed. Left: the outer Map per class and the Maps of the fields a
+     subclass overrides.
 7. **Load-graph records without slot objects: done 2026-10-28.** A record's `nativeSlots`
    is a `NativeSlots` (`src/runtime/native-slots.mjs`): one array of key/value pairs, the
    key packing the offset and the width. `loadEdges` is a `LoadEdges`
@@ -1581,6 +1584,140 @@ Wasm): 7,147 / 7,180 / 6,861 ms before, 7,215 / 7,028 / 6,927 ms after: inside t
   references, a small step on the scale of steps 7 and 8; the family it empties was 11% of the worker's objects and 7% of its
   references.
 
+## Steps 2 and 3's results (2026-10-29)
+
+Host representation only: every change below keeps the values its readers see. Branch `worktree-agent-afe3513ed502b8fc4`, from master
+07de3088; eight code commits, each checked as listed below.
+
+**What V8 did to these structures.** Two costs the plan had set aside as "V8-only" were the largest single item.
+* *Boxed integers.* A field whose shape has ever stored a heap number holds a heap number for every object of that shape. The first
+  store came from `Reader.compact`: its `value += byte * 2 ** n` is a heap number in the interpreter whatever its value, so every
+  export entry's `classIndex`, `superIndex`, `serialSize` and `serialOffset` (and every record copied from them, and every
+  `readRef` index of the metadata) was an object of its own: 1.5 M of the worker's 8.2 M objects were heap numbers. Then one boxed
+  `index` spread: object literals that start with the same keys (`{asset, index, entry, key}`, the metadata, the resource records)
+  share a transition tree, and a value read back from a double-represented field (the map's `properties[].value`, a float field
+  that also holds object references) is a heap number again, which `AssetStore.resolve` stored. In the browser the Smi range is 31 bits, so what the headless node run does not show:
+  the synthetic record addresses (0x70000000 and up), the flag words with a high bit and the CRCs are heap numbers there.
+* *Late-added properties.* An entry's `serialOffset`, `className` and `path`, the six flag booleans of a property's metadata and
+  an import's `path` were added after the literal: an out-of-line property array each.
+
+**What the structures were and what they are.** (The "What each structure is" section above describes the state at 07de3088.)
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| Export entry (`parsePackage`) | 4 heap numbers + a property array + the object | one object, every field in the literal, indices Smis (`Reader.compact` in integer arithmetic; also `compactDecode` of the property serializer) |
+| Index of an identity, a metadata, a resource | a heap number once `assets.resolve` took one from a double field | `ref \| 0` where a table position enters (`AssetStore.resolve`, `exportIdentity`): a Smi |
+| Class loader linker, per export | an object of 8 fields + a `hashNext` property | `LinkerExports` (`linker-exports.mjs`): the package's entries, an `Int32Array` of interned names, an array of created objects, an `Int32Array` hash chain; the FObjectExport slots the native services read are views (live: `object` and `hashNext` read and write the table), the export hash and VerifyImport's candidate scan read columns |
+| DynamicLoadObject graph, per export | an object of 5 fields | the same table with the view FindExportIndex reads (`classIndex`, `outerIndex`, `nameIndex`, `nextHash`, `object`) |
+| Property metadata | 36 keys, the export's bytes and its tail copied, a flag-bit table, two reference views | the same keys minus `serialized`, `extra`, `superField`, `next` (nothing reads them), one frozen flag-bit table per distinct flag word, the six booleans in the literal |
+| Function, state, struct, class metadata | a copy of the script bytes, five UField prefix objects (marker, base, next, scriptText, name) | a view of the package bytes; the indices only; a function without FUNC_Net shares one `replication` |
+| `record.function.script.children/parameters` | a second parse of every parameter's property metadata, kept | released once the parameters' identities are linked (`prepareFunction`) |
+| `ScriptProcess.functions` | a Map filled by `prepareFunction`, read by nothing | stays a (now empty) Map for the identity check in `validate-script-process` |
+| Null-Context result | an object + a `zero` closure and its context; a Map per body | the descriptor shares one `zero` function (`this`); a body with no result shares one empty Map |
+| Load record `nativeAddress`, `address`, `objectFlags` | 2 or 3 heap numbers per record in the browser | start as `null`, assigned after the literal: V8 keeps the field tagged, a flag word is a Smi, the two addresses are one number |
+| `recordsByAddress` keys | one heap number (the synthetic address) per record | a negative Smi ordinal for the synthetic range (the registered classes keep their native addresses) |
+| Load record `instanceValues` | an empty Map + table on every record | `null` until a resource is constructed (or first written) |
+| Load record `line`, `textPos`, `textPosition` | written beside the native slot by linker preload; only `slot()` read them, after the slot | slot only (an object without native slots keeps them) |
+| Class defaults | a Map per class per field of the whole chain | an inherited field whose values are `Object.is`-equal to the base's shares the base's Map (nothing changes a defaults Map in place: a changed default replaces the class's entry) |
+| Face-conversation baseline | a `[field, value]` pair array per property of every object the conversation list attached (71,000 arrays on the Island) | the class's field list (shared) and one array of values per object |
+
+**Checks.**
+* Fidelity, at every commit and on the final tree: `frame-alloc-meter --compare` identical on the Island (600 frames,
+  `c8cf5fff928609c1`), the 747 (400, `f6337bff0cf741fc`) and Training (400, `e4b017e7b1bc0439`); `hud-stream-digest --stream
+  --compare` identical (1500 frames, `16bfe2bd08ed1653`); bench-sim digests (300 ticks) Island `15e3720088490242`, Training
+  `148077479825af78`, 747 `ad8e591a01434df5`.
+* Differentials, old reader against new (ad hoc scripts, outside Git):
+  * `parsePackage` on all 219 packages of Maps and System, Textures, Sounds and Music: 391,089 exports and 26,929 imports, every
+    value and every key in order equal; the entries' `Object.is` of each field.
+  * `readScriptMetadata` of 29,365 function, state, struct, class and property exports of the script packages: every key the new
+    metadata has equals the old one's (the dropped keys are listed above).
+  * The linkers' export tables: the Island's, Training's and the 747's class loader graph (20 linkers, 40,984 exports) and
+    DynamicLoadObject graph (5 linkers, 74,248, 73,765 and 74,660 exports): every view field equals the per-export record's value,
+    and the export hash rebuilt by the plain-array path of `buildLinkerExportHash` (the code the records ran through) gives the
+    same heads and chains.
+  * `cls.defaults` of every linked class against the unshared computation: 967 (Island), 910 (Training), 907 (747) classes, 219,386,
+    203,784 and 201,263 fields, 0 mismatches; 75,126 of 90,212 entries of the Island are shared with a base.
+* 863 unit tests (five new: `test/linker-exports.test.mjs`).
+* Validators, one at a time (NATIVE_PROBE_PYTHON set), all exit 0: process-collection, original-loaded, original-lookups,
+  script-process, linker-imports, linker-preload, class-loader, object-layout, inventory-spawn, weapon-construction,
+  script-vm-interp, script-vm-x87, script-serialization, static-load-createexport, create-export, dynamic-load-object,
+  font-load-graph, font-load, sound-load-graph, music-load-graph, mesh-load-graph, mesh-payload, texture-load, script-resources,
+  sound-archive-integration, sound-period, galaxy-music-loader, -play, -update, gm-trench-play-anim, process-memory,
+  object-image, map-actor-admission, script-state-queries, script-sound-admission, script-conversation-construction,
+  script-conversation-events, script-datalink-transmission, script-string-operations, conversation-binding,
+  instructor-conversation (the face baseline's reset), datalink-transfer-object, training-datalink-live, and the save, load and
+  travel set: class-default-travel, level-save, load-game, load-saves (41 desktop saves), save-directory, save-game,
+  save-info-corpus, save-snapshot, root-snapshot, travel, travel-restore, travel-restore-objects, travel-transitions,
+  travel-endings, rotating-brush-save, restored-speech. The window, native-operator and gc-draw
+  validators that read `readFunctionMetadata` also pass (window-lower, window-parent, native-at-string, native-chr,
+  native-divide-int, gc-draw-icon, core-damage-primitives, native-object-log, window-text). `validate-linker-imports`' mutation
+  anchors still hold (the module keeps the original comparison text); `validate-linker-preload` and `validate-process-collection`
+  now read the export table through `exportRecord`, `exportObject` and `exportsHaveObject`.
+* No Rust changed. A 60 s worker-mode Island roam (`hitch-run.mjs --mode roam`): 4,538 worker frames, 0 errors, 58.9 fps, no
+  interval over 34 ms, no gap over 50 ms.
+
+**Heap**, the Island's worker (Chromium, Linux), 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam`), before the
+snapshot of 07de3088 (`heap-island-r4-roam240`). "Pointer references" leave out the edges to Smis and to the snapshot's own number-value
+strings (counted as in step 7); this Chromium's snapshots count each Smi as a node, so "objects" below include 96,000 (before)
+and 184,000 (after) of them.
+
+| | Objects | References (snapshot edges) | Pointer references | Heap numbers | JS heap (snapshot / used) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before (07de3088) | 8.21 M | 45.3 M | 37.40 M | 1,495,000 | 340 MB / 352.7 MB |
+| After | 6.09 M (-25.8%) | 38.2 M (-15.7%) | 31.28 M (-16.4%) | 301,000 | 292 MB / 303.7 MB (-14%) |
+
+The 30 s walk (the quick snapshot) at an intermediate commit (1d718e05 plus the address keys, before the defaults and `instanceValues`
+cuts) read 7.69 M to 5.78 M objects, 42.2 M to 35.3 M edges and 34.45 M to 28.49 M pointer references.
+
+Per family of the task's list (`heap-families.mjs` depth 2, objects / edges; first-reach attributions, so a shared object can appear
+under another family: `ScriptRuntime.instances.receiver` went from 171 k to 252 k objects while the total fell):
+
+| Family | Before | After |
+| --- | ---: | ---: |
+| ScriptProcess.packageObjects.function | 630 k / 3.55 M | 258 k / 1.70 M |
+| ScriptProcess.packageObjects.loadRecord | 498 k / 3.86 M | 356 k / 3.45 M |
+| ScriptProcess.packageObjects.metadata | 275 k / 1.67 M | 41 k / 0.79 M |
+| ScriptProcess.packageObjects.entry | 222 k / 0.82 M | 92 k / 0.44 M |
+| AssetStore.ready.pkg | 471 k / 2.25 M | 230 k / 1.53 M |
+| ScriptClassLoader.graph.linkers | 217 k / 0.87 M | 5 k / 0.12 M |
+| ScriptClassLoader.graph.buildLinker | 75 k / 0.40 M | 41 k / 0.29 M |
+| PreparedDynamicLoadGraph.linkers.exports | 166 k / 0.83 M | gone |
+| host.disposeAudio | 148 k / 0.90 M | 111 k / 0.81 M |
+| ScriptProcess.linkedClasses.defaults | 179 k / 0.62 M | 27 k / 0.31 M |
+| Doors.scriptRuntime.faceConversations | 152 k / 0.61 M | 28 k / 0.18 M |
+| ScriptProcess.packageObjects, PreparedDynamicLoadGraph.names, AssetStore.ready.exportsByPath, NameSpelling.entries | 95 k, 63 k, 42 k, 155 k | unchanged |
+
+The listed families lose 1.84 M of the 2.12 M objects and 6.8 M of the 7.1 M references. `host.disposeAudio` is the decoded map's
+property tags (`{name, type, struct, arrayIndex, value, decoded, byteLength}`, 44 k of them, and the actors' `values`) reached through
+a closure of the host: the entries it held were the export entries of the sound packages.
+
+**Load time.** The headless Island boot (`bench-sim`, interleaved pairs, the base arm an export of 07de3088's tree; both arms gave
+the same 3-tick digest). Three pairs at load average 3: 7,763, 7,781 and 7,858 ms before, 6,970, 7,071 and 7,080 ms after. Three
+pairs on the final tree at load average 8 (another session's runs): 8,888, 9,712 and 10,672 ms before, 10,184, 8,497 and 9,798 ms
+after, medians 9,712 and 9,798, within the 1,800 ms spread of each arm. Not slower.
+
+**The headless Island at each commit** (node, 60 ticks after a boot, forced GCs; node's Smi range is 32 bits, so the browser-only
+heap numbers above are not in it): 6.35 M objects and 30.2 M edges at 07de3088; 5.19 M and 27.6 M after the integer fixes
+(4f4a6c68); 5.04 M and 27.1 M with the export table; 4.81 M and 25.9 M with the metadata; 4.35 M and 24.4 M with the record,
+defaults and children cuts.
+
+**What is left.**
+* `pkg.names` is one `{name, flags}` object per name (97 k on the headless Island, about 94 k in the worker) and `pkg.exports`
+  one object per export (105 k): columns behind accessors would need the 130 reads of `entry.*` and the 46 of `names[i].name` (and the
+  aliases of `pkg.names`) converted. Not done.
+* The metadata objects of functions still have about 40 own keys (a property array each, and the `script` view); a function
+  built as one literal, with the derived keys (`flags`, `size`, `repOffset`, `native`) on a prototype, would need the spread
+  copies of `field.metadata` in `script-cleanup`, `script-values`, `script-struct-values` and `script-reference-serialization`
+  to keep working.
+* The alias properties linker preload writes beside each native slot (`flags`, `iNative`, `stateFlags`, ...; `flags` is still one heap
+  number a record in the browser, 16 k) and the `NativeSlots` wrapper object (3 objects a record) remain.
+* `contextResults` stay built at link (see step 2). The identities' late properties (`loadRecord`, `function`, `metadata`,
+  `fieldPending`) are still a property array each (31 k): declaring them up front would trade the arrays for 5 undefined slots on every
+  identity, more edges.
+* The marking per major GC on two cores (the method of "Step 7's results") is not measured for this branch. By step 7's and 8's
+  ratios (7.6% and 12% fewer pointer references for 13% and 10% shorter marking) 16% fewer would be expected to shorten it, which is
+  a prediction.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1603,9 +1740,11 @@ Wasm): 7,147 / 7,180 / 6,861 ms before, 7,215 / 7,028 / 6,927 ms after: inside t
   32 MB slack after each cycle), and most still mark 180 to 250 ms on the worker's thread within two to four frames: frames over
   100 ms are as many as on 76495d62 (14 against 14), the longest shorter (192 and 281 ms against 302 and 295). Cutting allocation
   further does not reach them; what is left is the marking of the worker's 0.5 GB live heap, which only a smaller heap (the
-  simulation's data in Wasm memory, fewer objects and pointers) shortens. The Mac (twelve cores, where the concurrent markers take
-  more of it) and Firefox inline are not measured against these cuts. Step 4 ("Step 4's results") took 730 k objects and 2.0 M
-  references out of the worker (the actor mesh faces, per mesh now); its marking time on two cores is not measured.
+  simulation's data in Wasm memory, fewer objects and pointers) shortens. Step 4 ("Step 4's results") took 730 k objects and 2.0 M
+  references out of the worker (the actor mesh faces, per mesh now), and "Steps 2 and 3's results" took its pointer references down
+  by a further 16% (37.4 M to 31.3 M) and its objects by 26%; both are merged on master, their marking on two cores is measured in
+  "Steps 2, 3 and 4 on two cores" once that section exists. The Mac (twelve cores, where the concurrent markers take more of it)
+  and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the

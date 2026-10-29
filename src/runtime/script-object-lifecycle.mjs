@@ -2,11 +2,12 @@
  * The record holds identity/index/flags/outer/linker/linkerIndex; script storage
  * and native subclass destruction are supplied by the runtime. See the source
  * addresses and supported property cleanup in docs/script-object-lifecycle.md. */
+import {exportObject,setExportObject} from './linker-exports.mjs';
 export function setObjectLinker(object,linker,index) {
   if(object.linker){
-    const entry=object.linker.exports[object.linkerIndex];
-    if(!entry?.object||entry.object!==object.identity)throw new Error('Original linker export/object identity mismatch');
-    entry.object=null;
+    const exported=exportObject(object.linker.exports,object.linkerIndex);
+    if(!exported||exported!==object.identity)throw new Error('Original linker export/object identity mismatch');
+    setExportObject(object.linker.exports,object.linkerIndex,null);
   }
   object.linker=linker;object.linkerIndex=index;
 }

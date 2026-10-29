@@ -17,6 +17,10 @@ const HOST_NATIVE_BINDING = Object.freeze({
   readPointer: () => 0,
 });
 
+// Scratch for linkClassBody's per-property default values (the loader links one class at a time between awaits of nothing but the
+// loads that precede this loop, and the loop itself does not await).
+const scratchIndices = [], scratchValues = [];
+
 export class ScriptClassLoader {
   constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null,
     resourceServices = null, lifecycle = {}}) {
@@ -247,12 +251,26 @@ export class ScriptClassLoader {
     for (const field of cls.propertyLink) {
       const property = field.loadRecord;
       if (!property) throw new Error(`Native default property is not loaded: ${field.key}`);
-      const values = new Map();
+      // The values of this property, per index, in a scratch list (no Map yet): a field the base class links too usually has the base's
+      // raw defaults, and then the same values; the base's Map stands for them (nothing changes a defaults Map in place: a changed
+      // default replaces the class's entry). A subclass otherwise held its own Map and table for every inherited field
+      // (docs/live-heap.md, steps 2 and 3).
+      scratchIndices.length = 0; scratchValues.length = 0;
       for (let index = 0; index < slotOf(property, 0x34); index += 1) {
         const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
-        if (data.has(offset)) values.set(index, this.value(property, data.get(offset)));
+        if (data.has(offset)) { scratchIndices.push(index); scratchValues.push(this.value(property, data.get(offset))); }
       }
-      if (values.size) cls.defaults.set(field.key, values);
+      if (!scratchIndices.length) continue;
+      const baseValues = base?.defaults.get(field.key);
+      let same = baseValues !== undefined && baseValues.size === scratchIndices.length;
+      for (let i = 0; same && i < scratchIndices.length; i += 1)
+        same = baseValues.has(scratchIndices[i]) && Object.is(baseValues.get(scratchIndices[i]), scratchValues[i]);
+      if (same) cls.defaults.set(field.key, baseValues);
+      else {
+        const values = new Map();
+        for (let i = 0; i < scratchIndices.length; i += 1) values.set(scratchIndices[i], scratchValues[i]);
+        cls.defaults.set(field.key, values);
+      }
     }
     // Class-valued defaults (class'WeaponAssaultGun' inside InitialInventory)
     // must carry linked ancestry before the VM can cast them. The original

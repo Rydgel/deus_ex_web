@@ -23,6 +23,7 @@
  *   lists actors destroyed and not yet collected) and the highest number is the dump's (Shadow 1..19, 20..72, 73..91).
  *
  *   node scripts/validate-process-collection.mjs [--captures .work/travel/gc2] */
+import {exportsHaveObject} from '../src/runtime/linker-exports.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import './census-stage5-drivers.mjs';
@@ -114,7 +115,7 @@ const playResources = () => {
 const STOP_LEVELS = { dx: 'dx', training: '00_training', island: '01_nyc_unatcoisland', training2: '00_training' };
 const playPackages = stop => {
   const process = session.c.runtime.process, graph = process.classLoader.graph, out = new Set();
-  for (const [name, linker] of graph.linkers) if (linker.exports.some(entry => entry.object)) out.add(name);
+  for (const [name, linker] of graph.linkers) if (exportsHaveObject(linker.exports)) out.add(name);
   for (const resource of process.resources?.resources.values() ?? []) if (resource.asset?.name) out.add(resource.asset.name.toLowerCase());
   for (const identity of process.packageObjects.values()) if (identity.asset?.name) out.add(identity.asset.name.toLowerCase());
   for (const name of process.assets.ready.keys()) out.add(name);

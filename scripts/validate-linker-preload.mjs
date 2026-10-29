@@ -49,6 +49,7 @@
  *     unsupported — no export in this closure carries it.
  */
 
+import {exportObject, exportRecord} from '../src/runtime/linker-exports.mjs';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFile, readdir} from 'node:fs/promises';
@@ -134,7 +135,7 @@ function verifyClassExport(className, {linker = deusExLinker} = {}) {
   const asset = {pkg: linker.pkg, bytes: linker.bytes, name: linker.packageName};
   const index = linker.pkg.exports.findIndex(e => e.name === className && e.className === 'Class');
   assert.ok(index >= 0, `${linker.packageName} exports a Class named ${className}`);
-  const exportEntry = linker.exports[index];
+  const exportEntry = exportRecord(linker.exports, index);
 
   // Preload may be a no-op here: a class already serialized as another set
   // member's superclass returns {preloaded: false, reason: 'loaded'}.  The
@@ -433,7 +434,7 @@ assert.equal(loadedObjects.length, 0, 'Verify never adds constructed exports to 
 
 const dviIndex = deusExLinker.pkg.exports.findIndex(e => e.name === 'DataVaultImage');
 assert.ok(dviIndex >= 0, 'DeusEx.u exports DataVaultImage');
-const dviExport = deusExLinker.exports[dviIndex];
+const dviExport = exportRecord(deusExLinker.exports, dviIndex);
 
 // DataVaultImage's SuperField reference is an import that must resolve
 // through Engine's own ULinkerLoad.
@@ -468,7 +469,7 @@ assert.equal(slotOf(dviObject, 0x14), dviIndex, 'DataVaultImage LinkerIndex is i
 const inventoryRecord = indexToObject(deusExLinker, superImportRef);
 const engineInventoryExportIndex = engineLinker.pkg.exports.findIndex(e => e.path === 'Inventory');
 assert.ok(engineInventoryExportIndex >= 0);
-assert.equal(inventoryRecord, engineLinker.exports[engineInventoryExportIndex].object,
+assert.equal(inventoryRecord, exportObject(engineLinker.exports, engineInventoryExportIndex),
   'the import resolves through Engine\'s own ULinkerLoad');
 assert.equal(addr(inventoryRecord), ENGINE_CLASSES.Inventory.staticClass,
   'the Engine.Inventory export aliases the registered class object');
@@ -504,8 +505,8 @@ assert.equal(slotOf(dviObject, 0x3c), layout.dataVaultImagePropertiesSize,
 // 0x10301ff0) — if the closure constructed it, Bind must have landed the
 // real constructor rather than the missing-record fallback.
 const playerPawnExportIndex = engineLinker.pkg.exports.findIndex(e => e.path === 'PlayerPawn');
-if (playerPawnExportIndex >= 0 && engineLinker.exports[playerPawnExportIndex].object) {
-  const pp = engineLinker.exports[playerPawnExportIndex].object;
+if (playerPawnExportIndex >= 0 && exportObject(engineLinker.exports, playerPawnExportIndex)) {
+  const pp = exportObject(engineLinker.exports, playerPawnExportIndex);
   assert.equal(pp.nativeConstructor, ENGINE_CLASSES.PlayerPawn.internalCtor,
     'PlayerPawn binds its registered Engine constructor');
 }

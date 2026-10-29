@@ -155,13 +155,22 @@ export async function prepareFaceConversations(runtime, { assets, level, package
   // ConEventRandomLabel cycle state GetRandomLabel advances.
   const restored = new Set(objects);
   for (const loaded of runtime.conversationListObjects?.values() ?? []) for (const object of loaded) restored.add(object);
-  // Preserve canonical ObjectProperty identities, copying owned typed values.
-  const baseline = [...restored].map(object => ({ object, fields:
-    runtime.instance(object).cls.propertyLink.filter(field => !field.key.startsWith('core.object.'))
-      .map(field => [field, copyValue(field, runtime.fieldReference(object, field).get())]) }));
+  // Preserve canonical ObjectProperty identities, copying owned typed values. Each object keeps its class's field list (shared by every
+  // object of the class) and one array of values in that order: a [field, value] pair array per property was 71,000 arrays and as many
+  // element stores on the Island (docs/live-heap.md "Steps 2 and 3's results").
+  const fieldLists = new Map();
+  const fieldsOf = cls => {
+    let fields = fieldLists.get(cls);
+    if (!fields) fieldLists.set(cls, fields = cls.propertyLink.filter(field => !field.key.startsWith('core.object.')));
+    return fields;
+  };
+  const baseline = [...restored].map(object => {
+    const fields = fieldsOf(runtime.instance(object).cls);
+    return { object, fields, values: fields.map(field => copyValue(field, runtime.fieldReference(object, field).get())) };
+  });
   const reset = () => {
-    for (const {object, fields} of baseline)
-      for (const [field, value] of fields) runtime.fieldReference(object, field).set(copyValue(field, value));
+    for (const {object, fields, values} of baseline)
+      for (let i = 0; i < fields.length; i++) runtime.fieldReference(object, fields[i]).set(copyValue(fields[i], values[i]));
   };
   return { conversations, preparedObjects, missionNumber, reset };
 }
