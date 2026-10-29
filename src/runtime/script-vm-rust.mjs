@@ -267,6 +267,8 @@ export class RustScriptVm {
     // the frame stack after a call, so a callee whose arguments are still
     // being evaluated keeps its id through nested calls.
     this.frames = [];
+    // One past the highest id `frames` holds a run at (cutFrames).
+    this.framesTop = 0;
     // The Run of the last body JavaScript began at each depth: a Run is dropped when its body returns (frames is cut back), and the
     // HUD alone begins some 200 bodies a frame, so the next body at that depth takes the same object (acquire).
     this.runPool = [];
@@ -922,7 +924,7 @@ export class RustScriptVm {
       return frame.result;
     } finally {
       run.release();
-      this.frames.length = id;
+      this.cutFrames(id);
       this.depth = id;
       this.arena.view.setUint32(this.budgetAt, outerBudget, true);
       if (stack.top !== stackTop || stack.index !== stackIndex) stack.restore(stackIndex, stackTop);
@@ -978,7 +980,7 @@ export class RustScriptVm {
       return frame.result;
     } finally {
       run.release();
-      this.frames.length = id;
+      this.cutFrames(id);
       this.depth = id;
       this.arena.view.setUint32(this.budgetAt, outerBudget, true);
       if (stack.top !== stackTop || stack.index !== stackIndex) stack.restore(stackIndex, stackTop);
@@ -1015,7 +1017,15 @@ export class RustScriptVm {
       template.layout, view.getUint32(at + 8, true), template.resultField);
     built.serial = serial;
     this.frames[id] = built;
+    if (id >= this.framesTop) this.framesTop = id + 1;
     return built;
+  }
+  /** `frames` cut back to the runs below `id`. Its entries are cleared where they stand: setting the array's length to 0 gave it a new
+   * backing store at the next body, for each of the some 200 bodies the HUD begins a frame. */
+  cutFrames(id) {
+    const frames = this.frames;
+    for (let at = this.framesTop - 1; at >= id; at--) frames[at] = undefined;
+    if (this.framesTop > id) this.framesTop = id;
   }
   /** A Run for the body JavaScript begins at depth `id`: the pooled one made ready again, which nothing else holds (the previous body
    * at this depth has returned: the run ids are the stack's depth). */
@@ -1027,6 +1037,7 @@ export class RustScriptVm {
   /** Run `id` is JavaScript's: RUNS[id] no longer names a Rust body. */
   own(id, run) {
     this.frames[id] = run;
+    if (id >= this.framesTop) this.framesTop = id + 1;
     if (id < MAX_RUNS) this.arena.view.setUint32(this.events.runsAt + 16 * id + 12, 0, true);
   }
   /** js_call_begin: runtime.invoke's resolution and callFunction's checks

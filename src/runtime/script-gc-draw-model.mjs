@@ -313,8 +313,8 @@ export function gcDrawTileSink(L, args) {
   const canvas = L.read(L.base + GC_DRAW.canvas, 'u32');
   const hMult = L.read(L.base + GC_DRAW.hMultiplier, 'i32');
   const vMult = L.read(L.base + GC_DRAW.vMultiplier, 'i32');
-  const color = [L.read(L.base + GC_DRAW.tilePlane, 'u32'), L.read(L.base + GC_DRAW.tilePlane + 4, 'u32'),
-    L.read(L.base + GC_DRAW.tilePlane + 8, 'u32'), L.read(L.base + GC_DRAW.tilePlane + 12, 'u32')];
+  const color = new Array(4);
+  for (let i = 0; i < 4; i++) color[i] = L.read(L.base + GC_DRAW.tilePlane + 4 * i, 'u32');
   const command = drawTileCommand({
     texture: args.texture,
     x: f32Bits(Math.imul(ftolBiased(s.x), hMult)),
