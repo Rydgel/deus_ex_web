@@ -1434,6 +1434,47 @@ to 119 there), so the headless meter orders the changes and the browser profile 
   the VM's `copyScalar`, frames and `bindingSet` in the tick, and the HUD step.
 * Not measured: the two-core traces (the coordinator's), Firefox, the Mac.
 
+### The script VM and world query cuts on two cores
+
+Master 2d93b472 (the script VM values and the world queries and actors cuts merged on 76495d62) against 76495d62, the runs of
+"Both 2026-10-29 cuts on two cores": four interleaved 300 s Island roams on two cores (`taskset -c 0,1`, `--trace`, V8's marking
+log), each tree on its own dev server, read with `scripts/gc-marking-cycles.mjs`; 17,754 to 17,922 worker frames a run, from 5 s
+after the map's load.
+
+Allocation first (`hitch-run.mjs --heap-sampling all`, 60 s Island roams on all cores, two runs): 580 and 604 KB a worker frame
+against 942 to 1,176 on 76495d62. The steps: `begin` 286 and 304, actors 117 and 118, HUD 89 and 90, sprites 23 and 24, stamps 20
+and 19, coronas 16 and 20, outside the frame 17, `lightFrame` 10.
+
+| run | cycles | frames over 50 ms | over 100 ms | longest frame | a cycle's longest frame, mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 76495d62, 1 | 5 | 27 | 6 | 302 ms | 202 ms |
+| 76495d62, 2 | 5 | 26 | 8 | 295 ms | 189 ms |
+| 2d93b472, 1 | 5 | 24 | 8 | 192 ms | 139 ms |
+| 2d93b472, 2 | 5 | 24 | 6 | 281 ms | 181 ms |
+
+The merged tree's checks: the bench-sim digests (Island 15e3720088490242, Training 148077479825af78, the 747 ad8e591a01434df5),
+`hud-stream-digest --frames 1500 --stream` (16bfe2bd08ed1653) and `frame-alloc-meter --compare` on the Island (600 frames), the 747
+and Training (400 each) are identical to 76495d62's; 858 unit tests pass; 53 validators of both cuts' families exit 0 (the round-2
+list, with native-hash-radius, the coronas (coronas, -tracked, -play, -mover-play, corona-tiles-play), leaf-lights,
+iterator-frames-play, mirrors-play, mirror-plan-play, sky-in-mirror-play, occlusion-flat-draw, sprite-tiles-play, decals-play,
+decal-attach, gc-draw-texture, window-computer, window-computer-playback, keypad, datacube-read, infolink-shell,
+conversation-binding, property-destroy, cleanup-destroyed-live, the walking natives and kernels, walk-loop-branches,
+rider-move-kernel, native-set-rotation-riders, mover-push-play and native-mover-push).
+
+**Allocation no longer sets the long frames.** A worker frame allocates 40% less, and the frames over 100 ms are as many as before
+(14 in two runs on each tree), the frames over 50 ms nearly so (48 against 53). The longest frame and a cycle's mean longest fall
+(192 and 281 ms against 302 and 295; 139 and 181 against 202 and 189), within the spread of the runs. At most 32 steps on allocation
+land in one frame against 67, but each cycle still runs 330 to 450 ms of wall time on both trees, and three or four of a run's five still
+mark 180 to 250 ms on allocation within two to four frames (the others spread 70 to 125 ms over six to ten). That fits V8 pacing its incremental marking by time as well as by
+allocation: with fewer steps, each does more (not checked against V8's source). The synthetic's thresholds (0.8 and 0.5 MB a
+frame) were measured on a smaller heap and do not carry over to the worker's 0.5 GB old generation.
+
+**What starts the cycles.** Both trees have five worker cycles a run and the same pattern: the memory reducer at 111 to 119 s
+(the V8 heap at 681 to 718 MB), a "Start (task)" cycle 8 to 17 s later with 24 to 31 MB of slack (486 to 508 MB), then either a
+second memory-reducer cycle (225.6 to 233.8 s) with its own task cycle, or task cycles every 39 to 52 s. The old generation after
+a cycle is about 0.5 GB on both: the count of cycles now follows the memory reducer and the 32 MB slack after each cycle, and the
+cost of each follows the live heap that is marked, not the allocation of a frame.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1451,12 +1492,13 @@ to 119 there), so the headless meter orders the changes and the browser profile 
   worker frame (1.7 MB a drawn frame), and on two cores its cycles still give two frames over 100 ms ("Both cuts on two cores"),
   as the synthetic says at that level; the thresholds themselves are placed only once a cut takes it under 0.8 MB. Firefox
   inline is not measured against allocation.
-* **What remains of the two-core freezes.** "Both 2026-10-29 cuts on two cores": the major GCs are rarer (8 to 5.5 per
-  five minutes, the steady ones 33 to 82 s apart against 12 to 13) and their frames shorter (frames over 100 ms halved, the
-  longest 357 to 252 ms), but every cycle still marks about 250 ms on the worker's thread, and the memory reducer's cycle (about
-  100 s after the last one) still lands in two frames. Only a smaller live heap (the simulation's data in Wasm memory) shortens the
-  marking itself; allocation under the 0.5 MB threshold would spread it over more frames. The Mac (twelve cores, where the
-  concurrent markers take more of it) and Firefox inline are not measured against these cuts.
+* **What remains of the two-core freezes.** "The script VM and world query cuts on two cores": with the worker at about 0.6 MB
+  a frame (from 1.6 two cuts ago) the major GCs are as many as before (five in five minutes, set by the memory reducer and the
+  32 MB slack after each cycle), and most still mark 180 to 250 ms on the worker's thread within two to four frames: frames over
+  100 ms are as many as on 76495d62 (14 against 14), the longest shorter (192 and 281 ms against 302 and 295). Cutting allocation
+  further does not reach them; what is left is the marking of the worker's 0.5 GB live heap, which only a smaller heap (the
+  simulation's data in Wasm memory, fewer objects and pointers) shortens. The Mac (twelve cores, where the concurrent markers take
+  more of it) and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the
