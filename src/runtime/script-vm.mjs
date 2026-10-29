@@ -10,6 +10,7 @@ import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { X87_INDEFINITE, x87mul32, x87div32, x87add32, x87sub32 } from './x87-nan.mjs';
 import { x87Precision, x87PrecisionControl, setX87Precision } from './x87-precision.mjs';
 import { CORE_CASTS } from './script-core-casts.mjs';
+import { registerAllocationSiteWarmer } from './allocation-site-warmup.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([214,112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -543,6 +544,28 @@ function decodeTree(fn) {
 
 export function compileFunction(fn) { return new CompiledFunction(fn); }
 
+// createFrame's options when the caller gives none: read, never written, so one object serves every call.
+const NO_FRAME_OPTIONS = Object.freeze({});
+
+/** A function frame (createFrame). Its literals are the script VM's busiest allocation sites: a frame per script call, hundreds
+ * per worker frame, all dead when the call returns. Kept in this one function so the warm-up below can decide them before a map
+ * load does (allocation-site-warmup.mjs). `resume` is one shared function over `this`, not a closure per frame: the closure and its
+ * context were allocated in old space whatever the sites' state (an audit of 80,894 frames in the interpreter tier found none of the
+ * closures young), and with the closure gone the headless roam's old-space growth fell by 60 KB a frame (docs/live-heap.md). */
+function newFrame(engine, script, instance, locals, services, offset, state) {
+  return { instance, locals, script, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services, engine, resume: resumeFrame };
+}
+function resumeFrame() { return this.engine.resumeCompiled(this); }
+let warmSink = null;
+registerAllocationSiteWarmer(count => {
+  const engine = { resumeCompiled() { return undefined; } }, locals = {}, services = {};
+  for (let i = 0; i < count; i++) {
+    warmSink = newFrame(engine, null, null, locals, services, 0, false);
+    warmSink = newFrame(engine, null, null, locals, services, 4, true);
+  }
+  warmSink = null;
+});
+
 /** A linked function or state body. Its decoded tree is held only while the body may run (docs/live-heap.md step 8): prepare
  * releases it after the link, before the body first runs, and the first read decodes it again from the function's bytes and keeps
  * it. Nothing outside a held tree keys on its nodes: the linked operands, the null-Context results and the discarded calls are
@@ -571,12 +594,10 @@ class CompiledFunction {
   // body on the operand values the Rust interpreter used (an out native's
   // target as a reference the caller supplies), without services.
   primitive(index, values) { return this.engine.native(index, values, undefined, NO_SERVICES, undefined); }
-  createFrame(instance, locals = {}, services = {}, options = {}) {
+  createFrame(instance, locals = {}, services = {}, options = NO_FRAME_OPTIONS) {
     if (REFERENCE_ENGINE) return this.createReferenceFrame(instance, locals, services, options);
-    const { offset = 0, state = false } = options, engine = this.engine;
-    const frame = { instance, locals, script: this.script, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services };
-    frame.resume = () => engine.resumeCompiled(frame);
-    return frame;
+    const { offset = 0, state = false } = options;
+    return newFrame(this.engine, this.script, instance, locals, services, offset, state);
   }
   createReferenceFrame(instance, locals, services, options) { return this.engine.referenceFrame(instance, locals, services, options); }
   run(instance, locals = {}, services = {}) { return this.createFrame(instance,locals,services).resume(); }
