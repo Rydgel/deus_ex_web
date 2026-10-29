@@ -12,7 +12,7 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
-import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference } from './script-bindings.mjs';
+import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference, NO_BINDINGS, setBindingOf, deleteBindingOf } from './script-bindings.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
@@ -289,7 +289,7 @@ class ScriptInstance {
     this.defaultsSnapshot=storage.complete?undefined:defaultsSnapshot(cls);
     // The logical storage of the properties without an image cell: made when first asked for (`slots`), since an object with a cell
     // for every property never has one.
-    this.slotMap=slots.size?slots:null;this.bindings=new Map();this.state=state;this.singular=false;
+    this.slotMap=slots.size?slots:null;this.bindings=NO_BINDINGS;this.state=state;this.singular=false;
     // The Rust VM's binding set of this object (script-vm-rust.mjs bindingSet) is kept while no binding was added or replaced.
     this.bindingsVersion=0;this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
     // The image is [base, base+size) of the runtime's object arena (R0).
@@ -303,6 +303,9 @@ class ScriptInstance {
     this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
   }
   get slots(){return this.slotMap??=new Map();}
+  /** Bind `key` to `binding`: the only writer of `bindings` (script-bindings.mjs setBindingOf). */
+  setBinding(key,binding){setBindingOf(this,key,binding);}
+  deleteBinding(key){return deleteBindingOf(this,key);}
   /** The image addressed from zero, for callers outside the access paths. */
   get image(){return this.base?this.arena.window(this.base,this.size):null;}
   // An actor's pendingKill is its bDeleteMe and cannot be assigned; another
@@ -3256,9 +3259,9 @@ export class ScriptRuntime {
     if(field.key==='engine.actor.base')bumpBaseEpoch();else bumpActorsEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
-      if(mirrored){instance.bindings.set(field.key,mirrored);instance.bindingsVersion++;bumpReceiverEpoch();return;}
+      if(mirrored){instance.setBinding(field.key,mirrored);instance.bindingsVersion++;bumpReceiverEpoch();return;}
     }
-    instance.bindings.set(field.key,binding);instance.bindingsVersion++;bumpReceiverEpoch();
+    instance.setBinding(field.key,binding);instance.bindingsVersion++;bumpReceiverEpoch();
     this.noteBoundKey(field.key);
   }
   /** A binding whose value changes only through its setter keeps a copy in

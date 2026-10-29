@@ -142,7 +142,7 @@ function restore(saved) {
   // The runtime never removes a binding, and the kernel's cached mask
   // (instance.tickDesc) relies on that: drop it with the removed bindings.
   for (const key of [...instance.bindings.keys()]) if (!saved.bindings.has(key)) {
-    instance.bindings.delete(key);
+    instance.deleteBinding(key);
     instance.tickDesc = undefined;
   }
   instance.poison = saved.poison;

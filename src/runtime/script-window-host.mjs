@@ -579,7 +579,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const layout = layoutFor(cls), instance = runtime.instance(object);
     for (const entry of layout.fields.values()) {
       const binding = bindingFor(object, entry);
-      instance.bindings.set(entry.field.key, binding);
+      instance.setBinding(entry.field.key, binding);
       instance.bindingsVersion++;
       // The object is BOUND now: the Rust receiver table computes it again.
       bumpReceiverEpoch();
