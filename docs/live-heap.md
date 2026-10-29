@@ -239,6 +239,8 @@ Firefox GC markers, not only by heap size.
    reference per record. See "Step 7's results".
    * Expected: 1.5 to 2.5 M objects. Measured: 1.72 M objects and 5.0 M pointer
      references.
+   * Since 2026-10-30 a record is its own slot store: the values are elements under a shared slot shape, with no wrapper or pair array
+     ("Load records and functions").
 8. **Bytecode trees released after lowering: first part done 2026-10-28.** Nothing
    outside a body's tree keys on its nodes any more: the linked operands, the null-Context
    results and the discarded calls are keyed by expression offset. A body's tree is
@@ -250,6 +252,9 @@ Firefox GC markers, not only by heap size.
      arguments included; and operands as handle arrays the Rust VM reads.
    * This is the Rust core's target ([Rust core](rust-core.md) "Target architecture").
      Verify against the interpreter's existing verify modes.
+   * 2026-10-30: the nodes of a held tree are single literals (no property array), a prepared function's compiled body is made at its first
+     use, and the lowered family fell from 94 k to 64 k objects ("Load records and functions"). The engines of the bodies that ran (closure
+     pairs, scopes, the held tree) remain.
 9. **The BSP model as typed arrays: done 2026-10-30.** `readModel` gives the nodes as the
    original 64-byte FBspNode block and the other records as small typed tables; the
    collision hulls are Float64Arrays built on first use; every simulation and page reader
@@ -1878,6 +1883,133 @@ before, 7,224 / 6,988 / 6,975 ms after (the hulls and the partition planes are n
   them as the reference that `validate-collision-hulls` compares with the original's hull data.
 * Unverified: `validate-native-mover-scene` and `-far-move-scene` against the original (see above); the Rust kernels' import of tracked nodes is
   unchanged and covered by `validate-tracked-collision` and `validate-tracked-linecheck`.
+
+## Load records and functions (2026-10-30)
+
+Host representation only: every change keeps the values its readers see. Branch `worktree-agent-a52aaa2f93aa98ff5`, from master 3c906c6d
+(steps 2, 3, 4 and 9 merged); nine code commits, each checked as listed below. The families are the ones of "Steps 2, 3 and 4 on two
+cores" that were left: the script process's package objects (load records, functions, metadata, identities), the load graph's records
+and their slots, the class and property metadata, and the trees the lowerings reach.
+
+**How the structures were read.** Two throwaway tracers (a `Proxy` over each structure, installed with `node --import`, outside Git)
+counted the reads, writes and enumerations of every key with sampled callers, over bench-sim on the three maps and about 30 class-graph
+and save validators:
+* A load record: none of the alias properties the linker preload wrote beside each slot (`flags`, `superField`, `super`, `next`,
+  `hashNext`, `iNative`, `numParms`, `repOffset`, the state and class words, `guid`, `dependencies`, `constValue`, `enumNames`...) was
+  read; `name`, `objectFlags`, `base`, `defaults` and `names` were.
+* A linked class's metadata: `entry`, `classFlags`, `probeMask`, `ignoreMask` and `scriptSize` (and the two words the loader overrides). The
+  rest was the spread of `readClass`: the dependency list, the decoded default properties with their byte copies.
+* A function's metadata: `functionFlags` and `nativeIndex` (on every script event, 2.1 and 0.9 M reads in the traced runs), `size`, `entry`,
+  `name`, `asset`, `pkg`, `bytes` (once a decode) and `children`/`parameters` (written once).
+* A property's metadata: 14 of its 31 to 36 keys are read as stored values; the others are fixed by the export (`className`, `path`,
+  `name`, the six parameter booleans, `flagBits`, `category`, the unset `defaultValue`...). The only enumeration is the spread that makes
+  an array property's element metadata.
+
+**What the structures were and what they are.**
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| Alias properties of a load record | up to 30 written beside each slot (an out-of-line property array on every record, 18,000 on the Island) | none for a record with native slots; `name`, `objectFlags`, `base`, `defaults`, `names` stay (`RECORD_FIELDS`, script-linker-preload.mjs) |
+| Native slots of a record | the record, a `NativeSlots` wrapper, and an array of (key, value) pairs: the same few dozen keys in every record | `NativeSlots` holds its values as elements under a shared `SlotShape` (the key list per distinct write order, with a position table: a lookup is a table read, not a scan); `LoadRecord extends NativeSlots`, so a record is one object and its elements |
+| Replication list of a class | a `{field, index}` copy of each of its base's entries: 53,600 objects | the base's entries shared (nothing writes one) |
+| Null-Context result | an 11-key literal, then `{...descriptor, contextOffset, encodedSize}`: a property array each | one literal with all its keys |
+| Class metadata | the spread of `readClass`: 19,000 dependency entries with boxed CRCs, 10,800 decoded default properties with byte copies; 79,600 objects | `ClassMetadata`: the seven fields read; any other key decodes the export again on its first use |
+| Package identity | a six-key literal, the load record, function, metadata and link added later (a property array each, 31,600), and a resolved promise kept on each of 20,000 properties | one literal with the four keys declared; `fieldPending` is the promise while the link runs and `true` after (a caller still gets a resolved promise, so waits the same ticks) |
+| Function metadata | 37 keys and their property array, a view object of the bytes and a typed-array view | `FunctionMetadata`: 13 fields; the bytes are a range of the asset's array; every other key reads the export again on first use; released after preparation (`compact`) |
+| Prepared function | a `CompiledFunction` for each of 7,000 functions (about a tenth ever run), two property lists | `FunctionRecord`: the compiled body is made at the first read of `compiled` (released, as preparation leaves it); no property: one shared empty list; all parameters: one list for both |
+| Property metadata | 31 to 36 keys | `PropertyMetadata`: 14 fields and the type's own; the derived keys are prototype getters; the four element copies use `cloneMetadata` |
+| Decoded bytecode node | `{op, offset}`, then `token`, `end` and the opcode's keys added: a property array on each of the 100,000 held nodes | one literal per opcode, the same keys in the same order |
+
+**What was tried and left out.** The 256-bucket hash tables of the state records (1,200 arrays, 310,000 references) as a sparse `Map`,
+expecting most buckets empty: a state derived from Actor copies its base's whole chain, so its table is dense, and the Maps were 5 MB
+larger (the headless Island's used heap 298.5 to 303.5 MB). Reverted. They remain arrays.
+
+**Checks.**
+* Fidelity, at every commit and on the final tree: `frame-alloc-meter --compare` identical on the Island (600 frames,
+  `c8cf5fff928609c1`), the 747 (400, `f6337bff0cf741fc`) and Training (400, `e4b017e7b1bc0439`); `hud-stream-digest --stream --compare`
+  identical (1500 frames, `16bfe2bd08ed1653`); bench-sim digests (300 ticks) Island `15e3720088490242`, Training `148077479825af78`, 747
+  `ad8e591a01434df5`. The first try at the identity as a class changed bench-sim's digest (it hashes an object by its prototype, and
+  an identity with another one is hashed as `<ExportIdentity>`): identities stay plain literals, and `ClassMetadata`, `FunctionMetadata`
+  and `PropertyMetadata` are never hashed.
+* Differentials (ad hoc scripts, outside Git):
+  * `decodeScript`, the old and the new, over the 8,469 function and state bodies of all 126 packages of Maps and System: the same
+    statements and expressions as text, key order included, and the same errors.
+  * `readPropertyMetadata` and `readFunctionMetadata`, the old plain objects against the classes, over 24,441 property and 8,208 function
+    exports: every key of the old object answers the same value on the new one (1,088,537 keys), and the new one has no other own key.
+  * `test/native-slots.test.mjs` (random operations against a Map of cells and widths, 300 offsets, past the near table) passes on the shape
+    store; `test/load-record.test.mjs` is new (shared shapes, width changes, slots added during `forEach`).
+* 884 unit tests pass. One test failed on the first try of the shape store, and showed the one hazard of elements: five readers fall
+  back to `own(slots, offset)`/`slots[offset]` for a raw-object store (script-property-destroy, script-property-serialize-item,
+  script-sound-lifecycle), which a `NativeSlots` store's indexed elements would answer; they skip a `NativeSlots`.
+* Validators, one at a time (NATIVE_PROBE_PYTHON set), all exit 0: class-loader, class-loader-struct-bools, linker-preload, linker-imports,
+  process-collection, script-process, script-vm-interp, script-vm-x87, dynamic-load-object, font-load-graph, mesh-load-graph,
+  sound-load-graph, music-load-graph, static-load-object, create-export, end-load, script-serialization, property-serialize-item,
+  class-default-travel, config-persistence, native-config, script-linker-lazy-loader, script-loaded-objects, original-loaded, save-game,
+  save-load-play, travel, island-conversation, instructor-conversation, play-hud, object-layout, object-image, inventory-spawn,
+  weapon-construction, load-saves (41 of 41 slots load), travel-endings; and the ones that read function or property metadata
+  (the native operator validators, window and gc-draw ones, script-conversation-events, script-datalink-transmission, script-sound-admission,
+  script-string-operations, script-state-queries, trigger-actions, property-copy, property-destroy, script-construction,
+  script-struct-values, script-struct-layout, script-sound-construction, native-actor-constructors).
+* No Rust changed; `npm run build:wasm` builds with no cargo warning. A 60 s worker-mode Island roam (`hitch-run.mjs --mode roam`):
+  4,901 worker frames, 0 errors, no gap over 100 ms.
+
+**Heap**, the Island's worker (Chromium, Linux), 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam`), before is a clean
+export of 3c906c6d. "Pointer references" as before (strong edges that do not go to a Smi node or a number-value string).
+
+| | Objects | References (snapshot edges) | Pointer references | Snapshot JS heap | Heap used / total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Worker, before (3c906c6d) | 4.55 M | 32.4 M | 26.40 M | 242 MB | 251.6 / 261.4 MB |
+| Worker, after | 4.23 M (-7.0%) | 30.0 M (-7.4%) | 25.09 M (-5.0%) | 233 MB | 241.8 / 249.1 MB |
+| Page, used heap | | | | | 94.5 to 93.9 MB |
+
+The headless Island (a boot, then forced GCs) went from 318.6 to 294.8 MB used at the steps: 308.6 after the aliases, the identities, the
+class metadata and the replication lists; 305.2 with the function metadata and record; 298.5 with the shape-store records (and the node
+literals); 294.8 with the property metadata.
+
+Per family of the task's list (`heap-shapes.mjs`, depth 2, objects / edges; first-reach, so an object can move between families: the
+records that `LoadEdges.records` reached first now carry their slot values):
+
+| Family | Before | After |
+| --- | ---: | ---: |
+| ScriptProcess.packageObjects.loadRecord | 326 k / 3.29 M | 225 k / 2.56 M |
+| LoadEdges.records.nativeSlots | 48 k / 0.90 M | gone |
+| LoadEdges.records | 32 k / 0.50 M | 28 k / 0.61 M |
+| ScriptProcess.packageObjects.function | 260 k / 1.71 M | 196 k / 1.22 M |
+| ScriptProcess.packageObjects | 95 k / 0.71 M | 69 k / 0.59 M |
+| ScriptProcess.packageObjects.entry | 92 k / 0.44 M | 92 k / 0.44 M |
+| ScriptProcess.packageObjects.metadata | 41 k / 0.79 M | 31 k / 0.42 M |
+| RustScriptVm.lowerings.lowered | 94 k / 0.51 M | 64 k / 0.41 M |
+| ScriptProcess.linkedClasses.metadata | 78 k / 0.41 M | 1 k / 0.04 M |
+| ScriptProcess.contextResults | 28 k / 0.22 M | 17 k / 0.19 M |
+| ScriptProcess.packageObjects.fieldPending | 20 k / 0.06 M | gone |
+| Together | 814 k / 9.5 M | 723 k / 6.5 M |
+
+The families lost 11% of their objects and 32% of their edges (the aim was under half, 4.5 M). By the shapes of the two snapshots the edges
+went with the pair arrays' repeated keys (about 0.5 M of their 1.0 M), the replication entries (0.2 M), the class metadata (0.4 M), the
+function and property metadata (about 0.8 M) and the record aliases (0.3 M); the objects with the wrappers and pair arrays (two a record),
+the metadata views and property arrays, and the class metadata. The worker as a whole lost 0.32 M objects, 2.4 M edges and 1.3 M pointer references: marking follows
+the objects and the references to objects, and the family figures include 1 M or so edges to Smis and booleans that the collector steps
+over.
+
+**Load time.** The headless Island boot (`bench-sim --ticks 3`, three interleaved pairs on a moderately loaded host, the base arm a clean
+export of 3c906c6d): 6,332, 6,238 and 6,264 ms before, 5,977, 5,967 and 5,957 ms after. Both give the 3-tick digest `c449c4831f1804dd`.
+
+**What is left.**
+* The script engines of the bodies that ran (about 900 on the Island): the JavaScript engine builds a closure pair and a scope for each
+  node a lowering leaves to JavaScript (`{ev, rv}` with two closures and their contexts, about 85 objects a body, 14,000 contexts and
+  10,000 closures in the headless Island) and keeps the tree beside them; with the nodes now literals, these and the lowered entries are the
+  larger part of the `function` and `lowered` families. Dropping them takes either the Rust VM taking those leaves or an interpreter that
+  does not compile closures per node.
+* Records still hold an address as a heap number each in the browser (the synthetic addresses are past the 31-bit Smi range; about
+  36,000 records, `nativeAddress` and `address` the same number), and 19,500 dependency entries `{classIndex, class, deep, scriptCRC}` hold a boxed CRC:
+  both would take a getter over a Smi where readers use `Object.hasOwn` and the serializer assigns `scriptCRC`.
+* The 1,200 hash tables of 256 slots (310,000 references), the class defaults' FArray headers (18,000 `{num, max, data}`), the
+  `packageImports` and the resources' byte arrays are data the original keeps.
+* State metadata (`readStateMetadata`, 250 on the Island) still has the full key set, and `pkg.exports`/`pkg.names` the objects of
+  "Steps 2 and 3's results".
+* The marking per major GC on two cores is not measured for this branch (the method of "Steps 2, 3 and 4 on two cores"): the worker's
+  objects fell by 7% and its pointer references by 5%, so by step 7's and 8's ratios a few percent of the marking would be expected,
+  which is a prediction. Firefox and the Mac are not measured.
 
 ## Open
 
