@@ -154,12 +154,14 @@ export function pawnPhysicsView(actor, services) {
     : (name, value) => field(actor, name).set(value);
   const zone = () => services.zoneFields(pawn.region.zone ?? level.pointRegion(pawn.position).zone);
   if (typeof services.isA !== 'function') unsupported('Pawn physics requires original class ancestry');
-  const pawn = { self: actor, worldActor, isPawn: true, pawn: true,
-    controlledPlayer: false,
-    decoration: false, movingBrush: false,
-    projectile: false, model: actor.model ?? null };
-  // `controlledPlayer` was a getter of the literal: the same property, in the same place, over a shared function.
+  const pawn = { self: actor, worldActor, isPawn: true, pawn: true };
+  // `controlledPlayer` was a getter of the literal: the same property, in the same place, over a shared function. It is defined here,
+  // between the literal's fourth and fifth members, not turned from the literal's data property into an accessor: that conversion made
+  // the view a dictionary-mode object (an AccessorPair and a table slot for each of its hundred members); a view whose accessors are
+  // all new properties keeps its hidden class, whose descriptors hold the pairs once for every view (docs/live-heap.md, "Actor hosts
+  // and mesh bindings").
   Object.defineProperty(pawn, 'controlledPlayer', { ...SHARED.controlledPlayer, enumerable: true, configurable: true });
+  pawn.decoration = false; pawn.movingBrush = false; pawn.projectile = false; pawn.model = actor.model ?? null;
   const access = { actor, services, level, get, set, zone, water: null, isPlayerPawn: false, region: null, footRegion: null, headRegion: null };
   Object.defineProperty(pawn, ACCESS, { value: access });
   // The view stands for `actor` in the IsBasedOn/SetBase walks, and
