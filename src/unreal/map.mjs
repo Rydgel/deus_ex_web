@@ -14,7 +14,10 @@ export function decodeMap(bytes, { triangles: withTriangles = true } = {}) {
     const object = readObject(pkg, bytes, ref);
     return {
       index: ref, name: object.entry.name, className: object.entry.className,
-      properties: object.properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length })),
+      // Every field in the literal, in the order of the tag (readProperties) with `byteLength` for `data`: a late-added `byteLength` was a
+      // property array of its own on each of the Island's 83,000 tags.
+      properties: object.properties.map(({ name, type, struct, arrayIndex, value, decoded, data }) =>
+        ({ name, type, struct, arrayIndex, value, decoded, byteLength: data.length })),
       values: object.values, nativeBytes: object.reader.bytes.length - object.reader.offset,
       // The saved FStateFrame (RF_HasStack exports): Node, StateNode, ProbeMask, LatentAction and the code offset (a saved level).
       stack: object.stack,

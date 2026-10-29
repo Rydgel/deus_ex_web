@@ -66,6 +66,22 @@ const PROPERTY_TAG_TYPES = Object.freeze({ ByteProperty: 1, IntProperty: 2, Bool
   StringProperty: 7, ClassProperty: 5, ArrayProperty: 9, StructProperty: 10, VectorProperty: 11, RotatorProperty: 12, StrProperty: 13,
   MapProperty: 14, FixedArrayProperty: 15 });
 
+/** The tags of a map actor whose decoded copy was released (releaseMapPropertyTags): read again from the package as decodeMap reads
+ * them, with their payloads (the shape script-doors gives a restored object's tags). */
+function readMapPropertyTags(asset, actor) {
+  return readObject(asset.pkg, asset.bytes, actor.index).properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length, data }));
+}
+
+/** Release the decoded tags of the map's actors once their properties are bound (createScriptDoors attaches every map actor, and
+ * prepareMapProperties reads each actor's tags once): 83,000 objects on the Island that the simulation worker held for the life of
+ * the level (docs/live-heap.md, "Actor hosts and mesh bindings"). `properties` becomes null on the decoded actors and on their host
+ * copies (`hosts`: the spread copies createGame made, the live LevelInfo); a prepareMapProperties after this, a second createGame on
+ * the same decoded map, reads the tags again from the package instead. */
+export function releaseMapPropertyTags(map, hosts) {
+  for (const actor of map.actors) actor.properties = null;
+  for (const host of hosts) if (host.properties !== undefined) host.properties = null;
+}
+
 /** Bind serialized map properties to canonical script identities. Class defaults
  * keep their original package provenance; only map-authored refs use map indices.
  * See docs/script-map-actors.md. */
@@ -83,7 +99,7 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
     if(object?.kind==='Class')await runtime.loadClass(source,index);
     return object;
   };
-  for (const [ordinal,property] of (actor.properties ?? []).entries()) {
+  for (const [ordinal,property] of (actor.properties === null ? readMapPropertyTags(asset, actor) : actor.properties ?? []).entries()) {
     const field = runtime.lookupMember(cls, 'fields', property.name);
     if (!field) throw new Error(`Map property is not linked: ${actor.name}.${property.name}`);
     await runtime.field(field);

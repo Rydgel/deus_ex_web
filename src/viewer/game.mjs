@@ -17,7 +17,7 @@ import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { isHighlighted } from '../runtime/interaction.mjs';
 import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
-import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
+import { mapActorArray, mapExportAdmitted, releaseMapPropertyTags } from '../runtime/script-map-properties.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
 import { wheelMessage } from './wheel-input.mjs';
@@ -213,6 +213,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
     musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null,process});
+  releaseMapPropertyTags(map, actors.values());
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   // LoadMap 0x1038dc59: a saved level continues its clock, ULevel.TimeSeconds (a double) = LevelInfo.TimeSeconds (a float).
   if (savedPlayer) timeSeconds = levelTime.get();
