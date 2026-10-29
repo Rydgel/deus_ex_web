@@ -2,6 +2,7 @@ import { brushToWorld } from './coords.mjs';
 import { traceKernel, TRACE_DIFFERENTIAL } from './trace-kernel.mjs';
 
 const f = Math.fround;
+const ZERO3 = Object.freeze([0, 0, 0]);
 // BRUSH_BOUNDS=js keeps the reference alone for a benchmark A/B that leaves the other kernels in place (TRACE_KERNEL=js drops them all).
 const REFERENCE_ONLY = typeof process !== 'undefined' && process.env?.BRUSH_BOUNDS === 'js';
 // This native corner expression retains 64-bit x87 significands. A quarter-turn
@@ -96,6 +97,7 @@ export function brushCollisionBoundsReference(model, owner) {
 export function primitiveCollisionBounds(model, owner = null) {
   if (owner == null) return copyBounds(model);
   const radius = f(owner.CollisionRadius ?? 0) + 1, height = f(f(owner.CollisionHeight ?? 0) + 1);
-  const extent = [f(radius), radius, height], location = (owner.Location ?? [0, 0, 0]).map(f);
-  return { min: location.map((v,i) => f(v - extent[i])), max: location.map((v,i) => f(v + extent[i])), valid: true };
+  // (the extent and the rounded location without arrays of their own)
+  const location = owner.Location ?? ZERO3, ex = f(radius), x = f(location[0]), y = f(location[1]), z = f(location[2]);
+  return { min: [f(x - ex), f(y - radius), f(z - height)], max: [f(x + ex), f(y + radius), f(z + height)], valid: true };
 }

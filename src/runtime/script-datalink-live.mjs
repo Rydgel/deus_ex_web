@@ -239,7 +239,7 @@ export async function createLiveDataLinkRuntime({
     const objects=object?Object.fromEntries(['Portrait','Static','Name','Queued','Text','Line'].map(name=>
       [name.toLowerCase(),get(runtime,object,'win'+name)])):{};
     return {root:windowHost.root,hud:windowHost.hud,object,objects,
-      readNative:windowHost.raw.read,isDestroyed:windowHost.isDestroyed,withLifecycle:fn=>fn()};
+      readNative:windowHost.raw.read,isDestroyed:windowHost.isDestroyed,withLifecycle:(fn,a,b,c)=>fn(a,b,c)};
   }
   return {catalog,routes,conversations,observe,
     shell,receivedItems,active:()=>observe(),presentation:()=>{observe();return lastPresentation;},

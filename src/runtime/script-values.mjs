@@ -337,6 +337,8 @@ const copyString = value => value == null ? '' : String(value);
 // UObjectProperty/ClassProperty copies the pointer.  Object identity is
 // the value in the original VM; cloning a linked object would be wrong.
 const copyPointer = value => value ?? null;
+const copyStringItem = item => item == null ? '' : String(item);
+const copyIntItem = item => Number(item) | 0;
 const simpleScalarCopies = new Map([['byte', copyByte], ['int', copyInt], ['float', copyFloat],
   ['name', copyName], ['string', copyString], ['object', copyPointer], ['class', copyPointer]]);
 
@@ -353,7 +355,7 @@ function copyScalar(value, descriptor, operation = 'copyValue') {
     case 'array':
       if(!Array.isArray(value))throw new TypeError(`${operation} requires an Array for ${descriptor.key}`);
       if(descriptor.innerType==='object')return value.map(copyPointer);
-      return descriptor.innerType==='string'?value.map(item=>item==null?'':String(item)):value.map(item=>Number(item)|0);
+      return descriptor.innerType==='string'?value.map(copyStringItem):value.map(copyIntItem);
     case 'struct': {
       const key = descriptor.structKey;
       if (!SUPPORTED_STRUCTS.has(key)) return copyGenericStruct(value, metadata, descriptor, operation);
@@ -361,9 +363,10 @@ function copyScalar(value, descriptor, operation = 'copyValue') {
       if (!Array.isArray(value) || value.length !== 3) {
         throw new TypeError(`${operation} requires three components for ${descriptor.key}`);
       }
+      // (the three components in place of a map with a closure: a vector is copied for every write of a Location)
       return key === 'core.object.rotator'
-        ? value.map(component => Number(component ?? 0) | 0)
-        : value.map(component => Math.fround(Number(component ?? 0)));
+        ? [Number(value[0] ?? 0) | 0, Number(value[1] ?? 0) | 0, Number(value[2] ?? 0) | 0]
+        : [Math.fround(Number(value[0] ?? 0)), Math.fround(Number(value[1] ?? 0)), Math.fround(Number(value[2] ?? 0))];
     }
     default:
       // scalarDescriptor catches this; retain an explicit error if a caller

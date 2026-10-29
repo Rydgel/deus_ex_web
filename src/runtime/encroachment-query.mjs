@@ -9,7 +9,12 @@ const valuesOf=actor=>actor.collisionValues??actor.values;
  * Keeps existing registration unchanged and returns original APPENDED order. */
 export function actorEncroachmentCheck(hash,actor,position,rotation,extra=0){
  if(!actor)throw Error('Original ActorEncroachmentCheck requires an actor');
- const posed={...valuesOf(actor),Location:position.map(f),Rotation:rotation.map(v=>v|0)};
+ // The posed copy of the actor's values: only the fields the bounds and the point checks below read (brushToWorld, the bounds
+ // kernel and primitiveCollisionBounds). A spread of the whole `values` read every field of the facade (Tag, Location, Rotation,
+ // Physics, ...) just to replace two of them, a few KB for each query.
+ const own=valuesOf(actor);
+ const posed={Location:position.map(f),Rotation:rotation.map(v=>v|0),CollisionRadius:own.CollisionRadius,CollisionHeight:own.CollisionHeight,
+  PrePivot:own.PrePivot,PostScale:own.PostScale,MainScale:own.MainScale};
  const bounds=actor.model?brushCollisionBounds(actor.model,posed):primitiveCollisionBounds(null,posed);
  return hash.actorEncroachmentCheck({bounds},candidate=>{
   const values=valuesOf(candidate),isBrush=candidate.lineage?.includes('engine.brush')??false;

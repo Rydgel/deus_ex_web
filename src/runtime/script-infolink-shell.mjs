@@ -402,9 +402,10 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
       runtime.instance(next);runtime.instance(nextRoot);runtime.instance(nextHud);
       player=next;playerTheme=runtime.namedReference(next,'ThemeManager');root=nextRoot;hud=nextHud;
     },
-    withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
+    // (the callback's arguments come after it, so a caller that runs once per actor makes no closure)
+    withLifecycle(callback,a,b,c){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
       runtime.windowLifecycle=sharedLifecycle;if(!windowHost)playerTheme.set(manager);
-      try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
+      try{return callback(a,b,c);}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
     readNative:(object,offset,kind)=>memory.read(object,offset,kind),
     // Adopt a runtime-attached object (e.g. the live DataLink harness's
     // HUDReceivedDisplay) into the shell's native window storage so Window

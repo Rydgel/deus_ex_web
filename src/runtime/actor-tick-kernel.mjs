@@ -273,6 +273,9 @@ export class ActorTickHost {
     this.f64At = x.tick_f64_ptr();
     this.spAt = x.tick_sp_ptr();
     this.spAllianceAt = x.tick_sp_alliance_ptr();
+    // tick_record's arguments (tick.rs TickArgs): seconds and time at +0 and +8, then the words ctx, handle, base, mask lo, mask hi,
+    // flags, tick type, tick tag and events from +16.
+    this.argsAt = x.tick_args_ptr();
     this.vm.arena.view.setUint32(x.tick_empty_name_ptr(), nameCellWord(''), true);
     // The probe index of each js_tick_probing name, for tick.rs `probing`.
     const probes = x.tick_probe_names_ptr();
@@ -282,8 +285,12 @@ export class ActorTickHost {
   /** Fill the table's missing entries from the registry. An entry, once
    * written, never changes (the registry keeps a key's cell or drops it). */
   table() {
+    if (this.registryVersion !== fieldImageCellVersion()) this.fillTable();
+  }
+  /** table()'s slow path, a function of its own: the closures below make the function that holds them allocate a context object
+   * on entry (scripts/closure-context-scan.mjs), and table() runs for every actor of every tick. */
+  fillTable() {
     const version = fieldImageCellVersion();
-    if (this.registryVersion === version) return;
     this.registryVersion = version;
     const expected = this.expected ??= TICK_FIELDS.map(() => null);
     let added = this.spTable();
@@ -380,9 +387,14 @@ export class ActorTickHost {
    * bindings are only ever added (bindProperty), so an unchanged count is
    * an unchanged key set. */
   describe(instance, receiver) {
-    const d = instance.tickDesc, names = instance.fieldTable;
+    const d = instance.tickDesc;
     if (d !== undefined && d.version === this.version && d.bindings === instance.bindings.size &&
-      d.names === names.size) return d;
+      d.names === instance.fieldTable.size) return d;
+    return this.describeNew(instance, receiver);
+  }
+  /** describe()'s slow path (see fillTable). */
+  describeNew(instance, receiver) {
+    const names = instance.fieldTable;
     const info = this.classInfo(instance.cls, instance.cells, names);
     let lo = info.lo, hi = info.hi, flags = info.flags, splo = info.splo, sphi = info.sphi;
     if (instance.bindings.size) {
@@ -396,8 +408,11 @@ export class ActorTickHost {
         if (i < 32) splo &= ~(1 << i); else sphi &= ~(1 << (i - 32));
       });
     }
+    // `words`: the masks as a typed array, which the per-tick stores into the image read without making a heap number of each
+    // (a mask above the small-integer range read from an object field is one in the tiers below TurboFan): lo, hi, splo, sphi.
     return instance.tickDesc = {version: this.version, bindings: instance.bindings.size, names: names.size,
-      lo: lo >>> 0, hi: hi >>> 0, flags, scripted: info.scripted, splo: splo >>> 0, sphi: sphi >>> 0, handle: handleOf(receiver)};
+      lo: lo >>> 0, hi: hi >>> 0, flags, scripted: info.scripted, splo: splo >>> 0, sphi: sphi >>> 0, handle: handleOf(receiver),
+      words: Uint32Array.of(lo, hi, splo, sphi)};
   }
   /** Whether every field access of the instance takes the JavaScript path:
    * no image here, a poisoned value, a released allocation. */
@@ -426,8 +441,9 @@ export class ActorTickHost {
     if (d.flags & C_PLAYERPAWN) return this.handback('PlayerPawn');
     // A ScriptedPawn whose fields are not all in its image runs AScriptedPawn::Tick in JavaScript (processActorTick).
     if (d.scripted && (!(d.flags & C_SCRIPTEDPAWN) || d.splo !== SP_FULL_LO || d.sphi !== SP_FULL_HI)) return this.handback('scripted pawn fields');
-    this.vm.arena.view.setUint32(this.stateAt + 20, d.splo, true);
-    this.vm.arena.view.setUint32(this.stateAt + 24, d.sphi, true);
+    const view = this.vm.arena.view, words = d.words;
+    view.setUint32(this.stateAt + 20, words[2], true);
+    view.setUint32(this.stateAt + 24, words[3], true);
     const ctx = this.depth, c = this.contexts[ctx] ??= new TickContext();
     c.receiver = receiver; c.instance = instance; c.services = services; c.level = level;
     c.view = null; c.notify = null; c.log = DIFFERENTIAL ? [] : null;
@@ -446,7 +462,20 @@ export class ActorTickHost {
     if (ctx >= 32) throw new Error('Actor.Tick nesting beyond the tick kernel\'s 32 contexts');
     let result;
     try {
-      result = x.tick_actor(ctx, d.handle, instance.base, d.lo, d.hi, d.flags, seconds, tickType, level.timeSeconds, level.tickTag, events);
+      // The arguments go through memory (tick.rs `tick_record`): as call arguments, the doubles and the masks would be heap numbers.
+      const at = this.argsAt;
+      view.setFloat64(at, seconds, true);
+      view.setFloat64(at + 8, level.timeSeconds, true);
+      view.setUint32(at + 16, ctx, true);
+      view.setUint32(at + 20, d.handle, true);
+      view.setUint32(at + 24, instance.base, true);
+      view.setUint32(at + 28, words[0], true);
+      view.setUint32(at + 32, words[1], true);
+      view.setUint32(at + 36, d.flags, true);
+      view.setUint32(at + 40, tickType, true);
+      view.setUint32(at + 44, level.tickTag, true);
+      view.setUint32(at + 48, events, true);
+      result = x.tick_record();
     } catch (error) {
       // An import that throws unwinds past the Rust frames: the shadow
       // stack, then the frame stack, hang budget and events word as the
@@ -486,10 +515,11 @@ export class ActorTickHost {
     else {
       const d = this.describe(instance, c.receiver);
       view.setUint32(at, instance.base, true);
-      view.setUint32(at + 4, d.lo, true);
-      view.setUint32(at + 8, d.hi, true);
-      view.setUint32(at + 20, d.splo, true);
-      view.setUint32(at + 24, d.sphi, true);
+      const words = d.words;
+      view.setUint32(at + 4, words[0], true);
+      view.setUint32(at + 8, words[1], true);
+      view.setUint32(at + 20, words[2], true);
+      view.setUint32(at + 24, words[3], true);
     }
     view.setUint32(at + 12, c.level.demoRecDriver !== null ? 1 : 0, true);
   }

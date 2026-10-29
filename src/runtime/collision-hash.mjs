@@ -81,9 +81,34 @@ export function collisionHashCell(value) {
   return cell(f32(value));
 }
 
+// vector(value, label).map(cell) without the two intermediate arrays: the same checks in the same order, the same cells.
+function cellTriple(value, label) {
+  if (Array.isArray(value) && value.length === 3 && 0 in value && 1 in value && 2 in value) {
+    const x = value[0], y = value[1], z = value[2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new TypeError(`${label} must contain three finite numbers`);
+    const a = f32(x), b = f32(y), c = f32(z);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) throw new RangeError(`${label} exceeds float32`);
+    return [cell(a), cell(b), cell(c)];
+  }
+  return vector(value, label).map(cell);
+}
+// Whether `value` is the registered hash location: vector(value, label) compared with `expected`, without the array.
+function sameVector(value, label, expected) {
+  if (Array.isArray(value) && value.length === 3 && 0 in value && 1 in value && 2 in value) {
+    const x = value[0], y = value[1], z = value[2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new TypeError(`${label} must contain three finite numbers`);
+    const a = f32(x), b = f32(y), c = f32(z);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) throw new RangeError(`${label} exceeds float32`);
+    return a === expected[0] && b === expected[1] && c === expected[2];
+  }
+  return !vector(value, label).some((v, i) => v !== expected[i]);
+}
+const sameCells = (a, b) => a.min[0] === b.min[0] && a.min[1] === b.min[1] && a.min[2] === b.min[2] &&
+  a.max[0] === b.max[0] && a.max[1] === b.max[1] && a.max[2] === b.max[2];
+
 export function collisionHashBounds(bounds) {
-  const min = vector(bounds.min, 'bounds.min').map(cell);
-  const max = vector(bounds.max, 'bounds.max').map(cell);
+  const min = cellTriple(bounds.min, 'bounds.min');
+  const max = cellTriple(bounds.max, 'bounds.max');
   return { min, max };
 }
 
@@ -162,6 +187,23 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
     const count = Math.max(0, max[0] - min[0] + 1) * Math.max(0, max[1] - min[1] + 1) * Math.max(0, max[2] - min[2] + 1);
     if (count > maxCells) throw new RangeError(`Hash operation exceeds explicit ${maxCells} cell budget`);
   }
+  // The bucket writes of the JavaScript store, apart from addActor and removeActor: a closure in those would make each call allocate a
+  // context object on entry (scripts/closure-context-scan.mjs), and the kernel store never runs them.
+  function linkActor(actor, cells) {
+    each(cells, (bucket, packed) => buckets.set(bucket, { actor, tag: packed, next: buckets.get(bucket) }));
+  }
+  function unlinkActor(actor, cells) {
+    each(cells, bucket => {
+      let head = buckets.get(bucket), previous;
+      for (let link = head; link; link = link.next) {
+        if (link.actor === actor) {
+          if (previous) previous.next = link.next;
+          else head = link.next;
+        } else previous = link;
+      }
+      if (head) buckets.set(bucket, head); else buckets.delete(bucket);
+    });
+  }
   function each(cells, callback) {
     for (let x = cells.min[0]; x <= cells.max[0]; x++) for (let y = cells.min[1]; y <= cells.max[1]; y++) for (let z = cells.min[2]; z <= cells.max[2]; z++) {
       const packed = tag(x, y, z);
@@ -178,10 +220,11 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
       const cells = collisionHashBounds(bounds); check(cells);
       const hashLocation = vector(location, 'location');
       if (store) store.add(actor, cells);
-      else each(cells, (bucket, packed) => buckets.set(bucket, { actor, tag: packed, next: buckets.get(bucket) }));
+      else linkActor(actor, cells);
       const registration = { cells, hashLocation };
       registrations.set(actor, registration);
-      return { cells: { min: [...cells.min], max: [...cells.max] }, hashLocation: [...hashLocation] };
+      // (the registration itself: no caller changes the arrays it holds, and a copy of each was made for every call)
+      return registration;
     },
     removeActor(actor, bounds, { collideActors = true, objectFlags = actor.objectFlags ?? 0, actorFlags = actor.actorFlags ?? objectFlags, location } = {}) {
       if (busy()) throw new Error('Hash mutation during primitive queries is unsupported');
@@ -189,20 +232,11 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
       if (actorFlags & 0x80) return false;
       const registration = registrations.get(actor);
       if (!registration) return false;
-      if (location && vector(location, 'location').some((v, i) => v !== registration.hashLocation[i])) throw new Error('Remove actor before changing its registered location');
+      if (location && !sameVector(location, 'location', registration.hashLocation)) throw new Error('Remove actor before changing its registered location');
       const cells = bounds ? collisionHashBounds(bounds) : registration.cells;
-      if ([...cells.min, ...cells.max].some((v, i) => v !== [...registration.cells.min, ...registration.cells.max][i])) throw new Error('Remove actor before changing its registered bounds');
+      if (!sameCells(cells, registration.cells)) throw new Error('Remove actor before changing its registered bounds');
       if (store) store.remove(actor, cells);
-      else each(cells, bucket => {
-        let head = buckets.get(bucket), previous;
-        for (let link = head; link; link = link.next) {
-          if (link.actor === actor) {
-            if (previous) previous.next = link.next;
-            else head = link.next;
-          } else previous = link;
-        }
-        if (head) buckets.set(bucket, head); else buckets.delete(bucket);
-      });
+      else unlinkActor(actor, cells);
       registrations.delete(actor);
       return true;
     },

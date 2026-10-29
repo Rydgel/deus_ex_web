@@ -12,8 +12,8 @@
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
 //   Chromium: [--angle metal|gl] (default metal on macOS, gl elsewhere) [--exe PATH] [--throttle 4] [--trace] (V8 GC events in the JSON's
 //     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
-//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--heap-steps 8] (<out>.heap.json: the totals by site, leaf, sim-session step and
-//     file, and `byStep`: each of the N largest steps' top leaves and top 5-frame sites; the KB a frame is printed) [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
+//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--heap-steps 8] [--heap-leaves 25] (<out>.heap.json: the totals by site, leaf, sim-session step and
+//     file, and `byStep`: each of the N largest steps' top M leaves and top 5-frame sites; the KB a frame is printed) [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
 //     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
@@ -222,10 +222,10 @@ if(heapSampling&&workerSession){
     for(const c of node.children)visit(c,here,st,audio);})(result.profile.head,[],null,false);
   const top=(m,n)=>[...m].sort((a,b)=>b[1]-a[1]).slice(0,n);
   // --heap-steps N (default 8): the N largest steps each get their top leaves and top 5-frame sites (byStep), and a KB-per-frame summary is printed.
-  const frames=dump?.summary?.frames??null,stepCount=Number(option('heap-steps',8));
+  const frames=dump?.summary?.frames??null,stepCount=Number(option('heap-steps',8)),leafCount=Number(option('heap-leaves',25));
   const byStep={};
   for(const [name,bytes] of top(step,stepCount)){
-    const cell=m=>top(new Map([...m].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),25);
+    const cell=m=>top(new Map([...m].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),leafCount);
     byStep[name]={bytes,audioBytes:stepAudio.get(name)??0,leaf:cell(stepLeaf),sites:top(new Map([...stepSites].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),15)};
   }
   await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,frames,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60),byStep}));

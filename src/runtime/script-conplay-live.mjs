@@ -352,7 +352,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   return {handleNative,reset,spawned,sounds,soundRequests,galaxy,
     // Call reset against the old player before adopting the next Login result.
     bindPlayer(next){runtime.instance(next);player=next;},
-    withLifecycle:fn=>shell.withLifecycle(fn),
+    withLifecycle:(fn,a,b,c)=>shell.withLifecycle(fn,a,b,c),
     active:()=>get(player,'conPlay'),
     tick:(seconds,options)=>shell.withLifecycle(()=>{
       for(const play of spawned)if(!runtime.instance(play).pendingKill)runtime.processActorTick(play,seconds,options);
