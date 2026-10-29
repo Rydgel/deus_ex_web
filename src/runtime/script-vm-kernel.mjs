@@ -11,6 +11,7 @@
  * (instantiateScriptVm). */
 import {rotationSineTable} from './coords.mjs';
 import {RESERVED} from './script-object-arena.mjs';
+import {createGalaxyUpdateKernel} from './galaxy-update-kernel.mjs';
 
 const f32io = new DataView(new ArrayBuffer(4));
 const bits = v => (f32io.setFloat32(0, Math.fround(v), true), f32io.getUint32(0, true));
@@ -176,6 +177,9 @@ export function createScriptVmKernel(instance, memory) {
       real: () => new Uint32Array(memory.buffer, x.lipsync_real_ptr(), 1024).slice(),
       imag: () => new Uint32Array(memory.buffer, x.lipsync_imag_ptr(), 1024).slice(),
     }),
+    // UGalaxyAudioSubsystem's PlaySound and Update arithmetic (galaxy.rs, docs/galaxy-audio.md "Update in Rust"), driven by
+    // galaxy-audio.mjs; null when the loaded core predates it.
+    galaxy: typeof x.galaxy_io_ptr !== 'function' ? null : createGalaxyUpdateKernel(x, memory),
     // Render.dll's volumetric fog loop (fog.rs, docs/volumetric-fog.md):
     // volumetric-fog.mjs fogMapKernel writes the square-root table once, the
     // lights' words and colour tables and the camera-space grid, then reads

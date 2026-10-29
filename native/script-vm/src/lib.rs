@@ -25,6 +25,7 @@ mod fly;
 mod light;
 mod spatial;
 mod fog;
+mod galaxy;
 mod gc;
 mod lipsync;
 mod loco;

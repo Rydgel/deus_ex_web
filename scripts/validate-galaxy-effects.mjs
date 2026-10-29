@@ -32,7 +32,11 @@ import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
 import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
+import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {gameDirectory} from './game-directory.mjs';
+
+// PlaySound and Update's arithmetic runs in the Rust core, as in Play (galaxy.rs; GALAXY_AUDIO_BODY=js is the BigInt reference).
+if (process.env.GALAXY_AUDIO_BODY !== 'js') await loadScriptVmKernel();
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 const ORACLE = 'scripts/native-galaxy-effects-oracle.py';

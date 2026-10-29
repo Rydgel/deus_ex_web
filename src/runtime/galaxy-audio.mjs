@@ -1,6 +1,7 @@
 import { x87Arithmetic } from './galaxy-music.mjs';
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x87store, x87storeDouble,
   x87sqrt, x87ftol, x87safeNormal } from './script-vm.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 
 /** UGalaxyAudioSubsystem's channel logic (Galaxy.dll 606e71d1…, vtable
  * 0x1063d0e4; docs/galaxy-audio.md): PlaySound (0x10608100), StopSound
@@ -26,7 +27,14 @@ import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x
  * start)` UModel::FastLineCheck (true when clear), `globalLighting(realtime,
  * actor, volume)` URender::GlobalLighting's volume, `sample(sound)` the
  * registered Galaxy sample ({rate}, RegisterSound when absent) and
- * `isValid(actor)`. */
+ * `isValid(actor)`.
+ *
+ * The x87 arithmetic of PlaySound and Update runs in the Rust core
+ * (native/script-vm/src/galaxy.rs through galaxy-update-kernel.mjs,
+ * docs/galaxy-audio.md "Update in Rust") once the script VM kernel is loaded;
+ * the BigInt bodies below stay as the reference it is validated against
+ * (scripts/validate-galaxy-audio-kernel.mjs), and run when it is not loaded
+ * or `options.kernel` is null. */
 const X = x87load;
 const ZERO = x87double(0), ONE = x87double(1), HALF = x87double(0.5), TWO = x87double(2);
 const FLOOR = x87double(0.33), TENTH = x87double(0.1), INV_PI = x87double(0.3183098861837907);
@@ -67,18 +75,25 @@ export function ambientInRangeExact(location, listener, soundRadius) {
  * terms are non-negative, so no rounding on either side can cross that gap. A
  * NaN or infinite distance, and the gap itself, take the exact path. Update
  * asks for every ambient actor of the level every frame; the exact path builds
- * a dozen BigInt records each time. */
-export function ambientInRange(location, listener, soundRadius) {
+ * a dozen BigInt records each time. `kernel` is the Rust core's galaxy.rs, whose
+ * exact path allocates nothing; null is the BigInt reference. */
+export function ambientInRange(location, listener, soundRadius, kernel = scriptVmKernel?.galaxy ?? null) {
   const reach = ((soundRadius & 0xff) + 1) * 25, reach2 = reach * reach;
   const dx = location[0] - listener[0], dy = location[1] - listener[1], dz = location[2] - listener[2];
   const d2 = dx * dx + dy * dy + dz * dz, gap = d2 - reach2, margin = (reach2 + d2) * 1e-9;
   if (gap > margin) return false;
   if (-gap > margin) return true;
-  return ambientInRangeExact(location, listener, soundRadius);
+  return kernel ? kernel.inRangeExact(location, listener, soundRadius) : ambientInRangeExact(location, listener, soundRadius);
 }
 
-export function createGalaxyAudio(config, services) {
+export function createGalaxyAudio(config, services, options = {}) {
   const channelCount = config.effectsChannels;
+  // The Rust core's PlaySound/Update arithmetic when it is loaded and holds this many channels; `options.kernel` null forces the
+  // BigInt reference (galaxy.rs can be compared with it), an object supplies the kernel.
+  const kernelOf = () => {
+    const kernel = options.kernel !== undefined ? options.kernel : scriptVmKernel?.galaxy ?? null;
+    return kernel && channelCount <= kernel.maxChannels ? kernel : null;
+  };
   // `reverb`: the glxReverb Update last handed the library (+0x88e, zeroed by
   // Init 0x10605f54), as 27 int32 words.
   const state = { channels: Array.from({ length: channelCount }, RECORD), counter: 0, reverb: new Int32Array(REVERB_WORDS) };
@@ -104,10 +119,13 @@ export function createGalaxyAudio(config, services) {
 
   /** 0x10608100. Returns whether a channel took the sound. */
   function playSound(actor, id, sound, location, volume, radius, pitch) {
-    if (x87cmp(X(radius), X(0)) === 'eq') throw new Error('Galaxy PlaySound: Radius == 0 (original appFailAssert)');
+    const kernel = kernelOf();
+    // x87cmp(X(radius), X(0)) === 'eq': the float32 of the radius is a zero (a NaN is unordered).
+    if (kernel ? Math.fround(radius) === 0 : x87cmp(X(radius), X(0)) === 'eq') throw new Error('Galaxy PlaySound: Radius == 0 (original appFailAssert)');
     const { actor: viewActor } = services.listener();
     if (!viewActor || !sound) return false;
     if ((id & 0xe) === 0) { state.counter = (state.counter - 1) | 0; id = (state.counter << 4) | 0; }
+    if (kernel) return takeChannel(kernel, actor, id, sound, location, listenerLocation(), volume, radius, pitch);
     const root = appSqrt(distanceSquared(location, listenerLocation()));
     let running = x87mul(sub(ONE, x87div(root, X(radius))), X(volume));
     const priority = f32(running);
@@ -127,9 +145,20 @@ export function createGalaxyAudio(config, services) {
     return true;
   }
 
+  /** PlaySound's priority, channel choice (steps 3 to 5) in galaxy.rs, from the listener's Location. */
+  function takeChannel(kernel, actor, id, sound, location, listener, volume, radius, pitch) {
+    const chosen = kernel.play(state.channels, channelCount, id, location, listener, radius, volume);
+    if (chosen < 0) return false;
+    const priority = kernel.priority();
+    stopSound(chosen);
+    Object.assign(state.channels[chosen], { actor, id, sound, location: location.map(Math.fround),
+      volume: Math.fround(volume), radius: Math.fround(radius), pitch: Math.fround(pitch), priority });
+    return true;
+  }
+
   const ambientRadius = actor => x87mul(x87int32((read(actor, 'SoundRadius') & 0xff) + 1), TWENTY_FIVE);
   const inAmbientRange = (actor, listener) => {
-    return ambientInRange(read(actor, 'Location'), listener, read(actor, 'SoundRadius'));
+    return ambientInRange(read(actor, 'Location'), listener, read(actor, 'SoundRadius'), null);
   };
   const ambientVolume = actor => x87mul(x87mul(x87int32(read(actor, 'SoundVolume') & 0xff), X(config.ambientFactor)), INV_255);
 
@@ -144,11 +173,116 @@ export function createGalaxyAudio(config, services) {
     // rest of Update runs under the Galaxy lock, so the music section's
     // library calls form one batch (galaxy-music-library.mjs).
     library?.lock();
-    try { updateLocked(viewActor, viewTarget, deltaTime, coords); }
+    try {
+      const kernel = kernelOf();
+      if (kernel) updateLockedKernel(kernel, viewActor, viewTarget, deltaTime, coords);
+      else updateLockedReference(viewActor, viewTarget, deltaTime, coords);
+    }
     finally { library?.unlock(); }
   }
 
-  function updateLocked(viewActor, viewTarget, deltaTime, coords) {
+  /** The Update body of the Rust core (galaxy.rs): the same steps in the same
+   * order as `updateLockedReference`, with the world reads, the records and the
+   * services here and every x87 value in the kernel. Reads that the reference
+   * makes more than once of one actor (its Location) are made once: Update does
+   * not change the world. */
+  function updateLockedKernel(kernel, viewActor, viewTarget, deltaTime, coords) {
+    // The prologue's clamp to [0, 1] against FCOM m64 0.0 and 1.0: a NaN is below zero, a -0 is not.
+    const elapsed = +deltaTime;
+    const dtValue = elapsed !== elapsed || elapsed < 0 ? 0 : elapsed >= 1 ? 1 : elapsed;
+    const source = viewTarget ?? viewActor;
+    const listener = read(source, 'Location');
+    kernel.begin(dtValue, listener, coords, config);
+    const channels = state.channels;
+    // Ambient scan: ShowFlags & 0x4800 and an empty Level.Pauser.
+    let ambientActive = false;
+    if ((read(viewActor, 'ShowFlags') & 0x4800) && read(read(source, 'Level'), 'Pauser') === '') {
+      ambientActive = true;
+      const actors = services.ambientActors?.() ?? services.actors();
+      scan: for (let index = 0; index < actors.length; index++) {
+        const actor = actors[index];
+        if (!actor) continue;
+        const ambient = read(actor, 'AmbientSound');
+        if (!ambient) continue;
+        const location = read(actor, 'Location'), soundRadius = read(actor, 'SoundRadius');
+        if (!ambientInRange(location, listener, soundRadius, kernel)) continue;
+        const id = ((services.index(actor) << 4) + 8) | 0;
+        for (let c = 0; c < channelCount; c++) if (channels[c].id === id) continue scan;
+        kernel.ambient(soundRadius, read(actor, 'SoundVolume'), read(actor, 'SoundPitch'), 0);
+        // services.listener()'s viewport Actor is viewActor and listenerLocation() is `listener`: PlaySound, steps 3 to 5.
+        takeChannel(kernel, actor, id, ambient, location, listener, kernel.ambientVolume(), kernel.ambientRadius(), kernel.ambientPitch());
+      }
+    }
+    // Ambient refresh (slot 4).
+    for (let index = 0; index < channelCount; index++) {
+      const channel = channels[index];
+      if ((channel.id & 0xe) !== 8) continue;
+      const actor = channel.actor;
+      if (!actor) throw new Error('Galaxy Update: ambient channel without an actor (original appFailAssert)');
+      const soundRadius = read(actor, 'SoundRadius');
+      if (!ambientInRange(read(actor, 'Location'), listener, soundRadius, kernel) || read(actor, 'AmbientSound') !== channel.sound
+        || !ambientActive) {
+        stopSound(index); continue;
+      }
+      const lit = read(actor, 'LightType') & 0xff;
+      kernel.ambient(soundRadius, read(actor, 'SoundVolume'), read(actor, 'SoundPitch'), lit ? read(actor, 'LightBrightness') : 0);
+      let volume = kernel.ambientDouble();
+      if (lit) volume = services.globalLighting(Boolean((read(viewActor, 'ShowFlags') >>> 11) & 1), actor, kernel.ambientLight());
+      channel.volume = volume;
+      channel.radius = kernel.ambientRadius();
+      channel.pitch = kernel.ambientPitch();
+    }
+    // Every channel with a sound.
+    let eye = null;
+    for (let index = 0; index < channelCount; index++) {
+      const channel = channels[index];
+      const actor = channel.actor;
+      if (actor && !services.isValid(actor))
+        throw new Error('Galaxy Update: channel actor is not valid (original appFailAssert)');
+      if (!channel.id) continue;
+      if (channel.voice && !services.voicePlaying(channel.voice)) { stopSound(index); continue; }
+      const there = actor ? read(actor, 'Location') : null;
+      if (there) { const stored = channel.location; stored[0] = Math.fround(there[0]); stored[1] = Math.fround(there[1]); stored[2] = Math.fround(there[2]); }
+      kernel.channel(channel);
+      // The play time, the Priority (as in PlaySound) and the listener-space Location, then FPATAN.
+      kernel.pre();
+      channel.time = kernel.time();
+      channel.priority = kernel.priority();
+      kernel.angle(services.atan2);
+      const slot = channel.id & 0xf, speech = slot === 0xa || slot === 0xb;
+      // Occlusion: a line from the source to the listener's eye.
+      let occluded = false;
+      if (actor && !speech) {
+        if (!eye) {
+          const from = read(viewActor, 'Location');
+          eye = services.isA(viewActor, 'engine.pawn') ? [from[0], from[1], kernel.eye(read(viewActor, 'EyeHeight'), from[2])] : from;
+        }
+        occluded = !services.fastLineCheck(eye, there);
+      }
+      // Doppler on an ambient channel.
+      const velocity = actor && (channel.id & 0xe) === 8 ? read(actor, 'Velocity') : null;
+      const sample = services.sample(channel.sound);
+      kernel.post(occluded, speech, velocity, sample.rate);
+      channel.occlusion = kernel.occlusion();
+      const volume = kernel.volume(), pan = kernel.pan();
+      // Step 12, the lip-sync sampling (see updateLockedReference).
+      if (services.lipSync && channel.voice && actor && speech && services.isA(actor, 'engine.pawn')
+        && Math.fround(channel.time) >= Math.fround(channel.lipSync) && read(actor, 'bIsSpeaking')
+        && services.lipSync(channel, index)) channel.lipSync = kernel.addTenth(channel.lipSync);
+      const frequency = kernel.frequency();
+      if (channel.voice) services.controlVoice(channel.voice, frequency, volume, pan);
+      else {
+        channel.is3D = 0;
+        channel.voice = services.startVoice(index + 1, sample, frequency, volume, pan);
+        if (!channel.voice) throw new Error('Galaxy Update: voice start failed (original appFailAssert)');
+      }
+    }
+    // The music section on the prologue's clamped dt, then the reverb tail.
+    music?.update(x87double(dtValue), viewActor);
+    reverbTail(source);
+  }
+
+  function updateLockedReference(viewActor, viewTarget, deltaTime, coords) {
     let dt = x87double(deltaTime);
     if (lt(x87cmp(dt, ZERO))) dt = ZERO;
     else if (!lt(x87cmp(dt, ONE))) dt = ONE;
@@ -348,5 +482,7 @@ export function createGalaxyAudio(config, services) {
       else channel.actor = null;
     }
   }
-  return { state, playSound, stopSound, stopSoundId, noteDestroy, update };
+  /** Whether PlaySound and Update run in the Rust core now (diagnostics and validation). */
+  const usesKernel = () => kernelOf() !== null;
+  return { state, playSound, stopSound, stopSoundId, noteDestroy, update, usesKernel };
 }

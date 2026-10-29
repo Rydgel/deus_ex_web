@@ -128,6 +128,7 @@ const voiceTable = () => new Uint8Array(processor.kernel.memory(), processor.ker
 const settle = async () => { for (let i = 0; i < 20 && library.status().acknowledged !== library.status().issued; i++) await turn(); };
 
 const galaxy = audio.galaxy;
+assert.equal(galaxy.usesKernel(), true, "PlaySound and Update's arithmetic runs in the Rust core (galaxy.rs)");
 let checks = 0, starts = 0, maxActive = 0, heldChecks = 0;
 const startsSeen = new Set();
 /** One frame's checks; false when a batch is not acknowledged yet. */
