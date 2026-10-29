@@ -106,6 +106,15 @@ function refView(ref) {
 
 function copyBytes(bytes) { return bytes.slice(); }
 
+// The UField reference words of a struct prefix, read for their position and checked against the tables, not kept as objects: the
+// metadata keeps the indices (baseRef, nextRef, scriptTextRef, childrenRef), and nothing read the {index, entry} objects or the
+// marker and name objects (docs/live-heap.md "Steps 2 and 3's results").
+function readRefIndex(pkg, r) {
+  const index = r.compact();
+  objectAt(pkg, index);
+  return index;
+}
+
 /**
  * Parse the UField + UStruct prefix used by Function and State exports.  A
  * Class export has the same prefix but omits the leading serialized `None`
@@ -114,41 +123,37 @@ function copyBytes(bytes) { return bytes.slice(); }
 function readStructPrefix(c, { leadingNone = true } = {}) {
   const { pkg, data, entry } = c;
   const r = new Reader(data);
-  let marker = null;
   if (leadingNone) {
-    marker = readName(pkg, r);
+    const marker = readName(pkg, r);
     if (marker.name !== 'None') {
       throw new PackageError(`Expected UField None marker, got ${marker.name}`, marker.index);
     }
   }
-  const base = readNullableRef(pkg, r);
-  const next = readNullableRef(pkg, r);
-  const scriptText = readNullableRef(pkg, r);
-  const children = readNullableRef(pkg, r);
-  const nameRef = readName(pkg, r);
+  const baseRef = readRefIndex(pkg, r);
+  const nextRef = readRefIndex(pkg, r);
+  const scriptTextRef = readRefIndex(pkg, r);
+  const childrenRef = readRefIndex(pkg, r);
+  const name = readName(pkg, r).name;
   const line = r.u32();
   const textPosition = r.u32();
   const scriptSize = r.u32();
   const scriptStart = r.offset;
   skipBytecode(pkg, r, scriptSize);
   const scriptEnd = r.offset;
+  // A view of the package bytes, not a copy: the package keeps them for the life of the process, and nothing writes the script's bytes.
   const scriptBytes = data.subarray(scriptStart, scriptEnd);
-  const copiedScriptBytes = copyBytes(scriptBytes);
   return {
     reader: r,
-    marker,
-    base, next, scriptText, children,
-    baseRef: refIndex(base), nextRef: refIndex(next),
-    scriptTextRef: refIndex(scriptText), childrenRef: refIndex(children),
-    nameRef, name: nameRef.name,
+    baseRef, nextRef, scriptTextRef, childrenRef,
+    name,
     line, textPosition,
     scriptSize,
     size: scriptSize,
     scriptStart,
     scriptEnd,
     serializedScriptSize: scriptEnd - scriptStart,
-    scriptBytes: copiedScriptBytes,
-    bytes: copiedScriptBytes,
+    scriptBytes,
+    bytes: scriptBytes,
     entry,
   };
 }
@@ -227,8 +232,15 @@ export function readFieldLinks(asset, index) {
   return { baseRef: refIndex(base), nextRef: refIndex(next) };
 }
 
+// One frozen flag-bit table per distinct property flag word (a few dozen), shared by every property that has it.
+const flagBitTables = new Map();
 function propertyFlags(flags) {
-  return Object.fromEntries(Object.entries(PROPERTY_FLAGS).map(([name, bit]) => [name, Boolean(flags & bit)]));
+  let bits = flagBitTables.get(flags);
+  if (bits === undefined) {
+    bits = Object.freeze(Object.fromEntries(Object.entries(PROPERTY_FLAGS).map(([name, bit]) => [name, Boolean(flags & bit)])));
+    flagBitTables.set(flags, bits);
+  }
+  return bits;
 }
 
 function propertyType(className) {
@@ -271,9 +283,7 @@ export function readPropertyMetadata(asset, index) {
     path: entry.path,
     name: entry.name,
     superFieldRef: refIndex(superField),
-    superField: refView(superField),
     nextRef: refIndex(next),
-    next: refView(next),
     arrayDim,
     arrayDimension: arrayDim,
     propertyFlags: flags,
@@ -290,8 +300,6 @@ export function readPropertyMetadata(asset, index) {
     defaultValue: null,
     defaultValueSupported: false,
     unsupported: classType ? null : `No original type serializer recorded for ${entry.className}`,
-    // Kept for diagnostics and for type branches not yet established.
-    serialized: copyBytes(data),
   };
 
   if (flags & PROPERTY_FLAGS.Parm) metadata.parameter = true;
@@ -343,9 +351,10 @@ export function readPropertyMetadata(asset, index) {
       // serializer has not been recovered. Preserve the unconsumed bytes.
       break;
   }
-  metadata.extra = copyBytes(data.subarray(r.offset));
-  if (metadata.extra.length && !metadata.unsupported) {
-    metadata.unsupported = `Unconsumed ${metadata.extra.length}-byte ${entry.className} serializer tail`;
+  // (the export's bytes and this tail were kept as two copies on every property, and nothing read them)
+  const extraLength = data.length - r.offset;
+  if (extraLength && !metadata.unsupported) {
+    metadata.unsupported = `Unconsumed ${extraLength}-byte ${entry.className} serializer tail`;
   }
   return metadata;
 }

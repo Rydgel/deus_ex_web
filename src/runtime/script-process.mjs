@@ -26,6 +26,7 @@ export class ScriptProcess {
     // Readiness: ScriptObjects' linked bytecode (script -> bindings, script -> operand table by expression offset).
     this.linkedScripts = new WeakMap();
     this.linkedOperands = new WeakMap();
+    // (written by prepareFunction and read by nothing: it holds nothing now, and a function is reached through its identity's `function`)
     this.functions = new Map();
     this.states = new Map();
     this.structs = new Map();

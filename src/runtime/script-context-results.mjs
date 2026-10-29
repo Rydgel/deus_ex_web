@@ -83,8 +83,13 @@ function makePropertyDescriptor(record, metadata, node = null) {
     structKey: shape.structKey ?? null,
     width: shape.width,
     offset: node?.offset ?? null,
-    zero: () => zeroValue({ key: shape.key, metadata }),
+    zero: zeroOfDescriptor,
   };
+}
+
+// The typed zero of a descriptor (shared by all of them, and by their copies: a closure per descriptor was two more objects each).
+function zeroOfDescriptor() {
+  return zeroValue({ key: this.key, metadata: this.metadata });
 }
 
 async function objectReference(runtime, script, index) {

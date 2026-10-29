@@ -830,7 +830,6 @@ export class ScriptRuntime {
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
     record.function={record,script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
       result:fields.find(field=>field.metadata.return)??null};
-    this.functions.set(record.key,record);
     // Most linked bodies never run: the tree goes until the first run decodes it again (docs/live-heap.md step 8).
     compiled.release();
     return record;
