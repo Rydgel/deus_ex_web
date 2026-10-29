@@ -163,7 +163,31 @@ if (siteCount) {
 }
 measuring = true;
 const hashes = [];
-for (let i = 0; i < frames; i++) hashes.push(hashSnapshot(step()));
+// --profile-frame N: the sampling profiler runs for that measured frame alone (a frame that allocates megabytes once), and its
+// largest leaf functions and 5-frame sites print (as KB, not KB a frame).
+const profileFrame = Number(flag('profile-frame', -1));
+if (profileFrame >= 0) {
+  const session2 = new Session(); session2.connect();
+  const post2 = (method, params) => new Promise((resolve, reject) => session2.post(method, params, (error, result) => error ? reject(error) : resolve(result)));
+  await post2('HeapProfiler.enable');
+  for (let i = 0; i < frames; i++) {
+    if (i === profileFrame) await post2('HeapProfiler.startSampling', { samplingInterval: 512, includeObjectsCollectedByMinorGC: true, includeObjectsCollectedByMajorGC: true });
+    hashes.push(hashSnapshot(step()));
+    if (i === profileFrame) {
+      const { profile } = await post2('HeapProfiler.stopSampling');
+      const leaves = new Map(), sites = new Map();
+      const fn = f => `${f.functionName || '(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}:${f.lineNumber + 1}`;
+      let total = 0;
+      (function visit(node, stack) {
+        const here = [...stack, fn(node.callFrame)];
+        if (node.selfSize) { total += node.selfSize; leaves.set(here.at(-1), (leaves.get(here.at(-1)) ?? 0) + node.selfSize); const key = here.slice(-6).reverse().join(' < '); sites.set(key, (sites.get(key) ?? 0) + node.selfSize); }
+        for (const child of node.children) visit(child, here);
+      })(profile.head, []);
+      console.log(`frame ${i}: ${(total / 1024).toFixed(0)} KB sampled`);
+      for (const [name, bytes] of [...sites].sort((a, b) => b[1] - a[1]).slice(0, 12)) console.log(`${(bytes / 1024).toFixed(0).padStart(7)} KB  ${name}`);
+    }
+  }
+} else for (let i = 0; i < frames; i++) hashes.push(hashSnapshot(step()));
 measuring = false;
 
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];

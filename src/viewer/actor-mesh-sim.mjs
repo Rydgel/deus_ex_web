@@ -1177,14 +1177,19 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const epoch=actorsEpoch();
     if(epoch!==liveEpoch||!live){
       live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
-      levelIndex=new Map();level.actors.forEach((actor,i)=>{if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);});
-      const next=new Map();
-      meshReaders=liveList.map(actor=>{
-        if(!actor)return null;
-        const reader=meshAccessors.get(actor)??fieldAccessor(runtime,actor,'Mesh');
-        next.set(actor,reader);return reader;
-      });
-      meshAccessors.clear();for(const [actor,reader] of next)meshAccessors.set(actor,reader);
+      levelIndex=new Map();
+      for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
+      // (the accessors of the actors still in the level are kept in place, and those of the others dropped: a second Map of all of
+      // them, and the first one filled again, was about 600 KB each time the level's actors change)
+      meshReaders=new Array(liveList.length);
+      for(let i=0;i<liveList.length;i++){
+        const actor=liveList[i];
+        if(!actor){meshReaders[i]=null;continue;}
+        let reader=meshAccessors.get(actor);
+        if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+        meshReaders[i]=reader;
+      }
+      for(const actor of meshAccessors.keys())if(!live.has(actor))meshAccessors.delete(actor);
     }
     // (`actors` holds the bindings in the order `bindings` does, both appended together and removed together by retire; a retired
     // binding leaves the list, so the index stays where it is)

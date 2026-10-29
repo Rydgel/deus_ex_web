@@ -864,6 +864,156 @@ instead of 230. Every cycle still has two frames over 100 ms, as the synthetic p
 long frame"). The cycles did not become rarer in these runs (one or two in each 150 s on both sides). Three base cycles and six
 new ones: the averages are indicative, not a measured effect size.
 
+### Cut: tick and actors (2026-10-29)
+
+The tick (`begin`, 886 to 910 KB a worker frame) and the actor mesh layer (`actors`, 357 to 379) were the two largest steps left. The
+profile named a few big sites (`tickStandaloneLevel`, the actor tick kernel's `run`, the collision hash, `update`, `admit`), and
+behind them most of the allocation was one mechanism, not a dozen subsystems. Host representation only: nothing the simulation
+computes changes.
+
+**The mechanism: a function's context is allocated when it is entered.** V8 makes a function's context object at its first
+instruction when an inner function refers to one of its parameters, its locals or `this`, whichever path the call then takes, 40 to
+100 bytes a call. TurboFan removes it when the function is inlined and the closure never escapes; Maglev and the interpreter do not
+(`%GetOptimizationStatus` after a 900-frame warm-up: `ActorTickHost.run`, `refresh` and `tickStandaloneLevel` are in Maglev; a
+function with an early return in front of a `.forEach(... => ...)` allocated 64 bytes a call in a microbenchmark under
+`--no-turbofan` and none under TurboFan). So `table()` (the registry check that runs for every actor of every tick, and
+`LocomotionHost.table()` behind `events.allowed`), `describe()`, the per-binding `update()` (about 300 lines whose closures
+capture its locals, entered for every binding though most return at its first checks), `admit()` (entered for every mesh actor each
+frame and turning nearly all of them back), the collision hash's `addActor` and `removeActor`, `soundField` and the weapon layer's
+loop body each paid it on the early-return path. `scripts/closure-context-scan.mjs` finds them: it parses `src/`, lists the
+functions whose own scope (or a block's) is captured, and with `--profile FILE` (the leaf lists of `frame-alloc-meter.mjs
+--sites`) only those a heap profile names, with their KB a frame. A related cost seen on the way: reading a double or a u32 above
+the small-integer range from an object field is a heap number for each read in the tiers below TurboFan (a 3-store
+`setUint32` of masks allocated 32 bytes in the micro test; 0.6 under TurboFan).
+
+**What changed**, in the order made (the commits' messages have the detail):
+1. The slow paths with the closures became functions of their own (`fillTable`, `describeNew`, `LocomotionHost.fillTable`,
+   `reflectedField`, `linkActor`/`unlinkActor`, `updateDrawn`, `admitNew`, `weaponLodFrames`); the hot function keeps the checks.
+2. ULevel.Tick's per-actor closure (`run=()=>processActorTick(actor,delta,options)`, with the lifecycle wrapper and `aroundActorTick`
+   taking it) is gone: they take the tick's arguments, and script-doors.mjs makes the tick body once. This alone was 90 KB a frame
+   (`tickStandaloneLevel`'s own allocation).
+3. tick_actor's eleven arguments go through memory (tick.rs `tick_record`, `TickArgs`); the descriptor's masks are a Uint32Array.
+4. The encroachment query copies the seven fields the bounds read, not a spread of the values facade (six getters, two read only to
+   be replaced); the collision hash builds a registration's cells and compares a removal's location and cells without arrays
+   (`cellTriple`, `sameVector`, `sameCells`), `addActor` returns the registration (a copy of each array was made per call and no
+   caller changed it), `primitiveCollisionBounds` builds min and max without the extent and location arrays.
+5. BindEvents' GObjObjects list is the last call's array while the level's actors are unchanged (a `filter` copy of 2,400 actors
+   for every candidate it binds, 27 KB a frame in the sampled headless profile).
+6. The layer's update gives every binding one view with the reads (a spread copy of about 30 properties each), `reconcile` walks
+   `actors` by index (a Map iteration made two objects per binding), `meshReads`' `views()` returns one object, `packDynamics` reads
+   a mesh's record fields only for a key it has not seen and keeps the record addresses in a scratch, and `lodMeshFrameMatrix`
+   builds GetFrame's matrix in 12 doubles with the same f32 operations in the same order (about 50 arrays a rotate before). The
+   rebuild when the level's actors change (`reconcile`) keeps the mesh accessors in place instead of filling a second Map and
+   copying it back: the actors step's 99th-percentile frame in the headless roam went from 1,368 to 953 KB.
+7. `fastLineCheck`'s traversal (Galaxy's Update in the HUD step, and the noise, trace and perception callers) reads planes and
+   children from the node objects or the tracker's block through typed views, holds the points as scalars and keeps the pending
+   sides in a reused Float64Array stack; `readLaserState` makes its beam keys once; the stamps step builds its binding map from one
+   `all()` list.
+8. `copyScalar` copies a vector or rotator without a map and its closure.
+
+**Tools.** `scripts/frame-alloc-meter.mjs`: the worker's frame headless (`createSimHost` with the page's GPU mesh capacities, no
+page world, a fixed roam as hud-stream-digest.mjs's), V8's new-space size around each step of `session.frame()` (exact and
+repeatable, a frame a scavenge ran in left out), the sampling heap profile by step (`--sites N --steps begin,actors`) and a hash of
+every snapshot with its numbers' exact bits (`--out FILE`, `--compare FILE`). Its absolute numbers differ from the browser's (the
+roam is not the page's and the stamps step does not run), its comparisons between two trees are exact. `hitch-run.mjs` takes
+`--heap-leaves N` (the leaves kept for each step in `<out>.heap.json`).
+
+**Measured, browser** (`hitch-run.mjs --heap-sampling all --heap-leaves 120 --seconds 60 --mode roam`, Chromium, worker mode, the
+Island, each tree on its own dev server and CDP port; the roam is not pinned, so two runs a side; KB a worker frame, the profile's
+`frames` count 4,533 to 4,780). The "before" is an export of master `314d6501`, the "after" the branch head (`8b74be62`):
+
+| Step | before 1 | before 2 | after 2 | after 3 |
+| --- | ---: | ---: | ---: | ---: |
+| tick (`begin`) | 885.6 | 909.6 | 444.8 | 456.4 |
+| actors | 356.7 | 378.6 | 194.7 | 194.6 |
+| hud (Galaxy's Update inside it) | 122.2 | 127.5 | 104.4 (17.1) | 107.3 (17.2) |
+| coronas | 84.7 | 95.7 | 120.8 | 120.5 |
+| stamps | 41.4 | 46.6 | 34.8 | 34.2 |
+| **whole worker** | **1,559.0** | **1,632.6** | **965.8** | **979.7** |
+| whole worker, a drawn frame | 2,107.6 | 1,974.8 | 1,149.0 | 1,165.4 |
+
+The whole worker fell from 1,596 to 973 KB a worker frame (-39%; 2,041 to 1,157 KB a drawn frame, -43%): the tick by half
+(898 to 451), the actors by 47% (368 to 195). A run between (after 1: 957.6, tick 404.6, actors 195.2) was made before the
+FastLineCheck, laser and stamps changes and is not in the table. A run's tick varies by 10% between runs (405 to 456 on the same
+code, the later ones with the later changes), since the roam differs; the leaves are the steadier comparison. Top leaves of the two
+steps (KB a worker frame):
+
+| Tick leaf | before 1, 2 | after 2, 3 |
+| --- | ---: | ---: |
+| `ActorTickHost.run` (actor-tick-kernel.mjs) | 50.5, 54.9 | 2.3, 2.6 |
+| `readComposite` (the other branch's) | 56.5, 56.0 | 41.1, 40.8 |
+| builtin `map` | 54.1, 54.5 | 17.5, 18.2 |
+| `tickStandaloneLevel` | 31.0, 35.0 | 1.0, 0.9 |
+| `table` (script-vm-locomotion.mjs) | 19.7, 22.0 | 0, 0 |
+| collision-hash.mjs: anonymous, `vector`, `addActor`, `removeActor` | 32.1, 20.6, 15.8, 8.4 and 32.8, 20.7, 17.4, 8.5 | 0, 1.2, 0, 0 and 0, 1.4, 0, 0 |
+| `actorEncroachmentCheck` | 17.2, 20.1 | 0, 0.7 |
+| `soundField`; `fieldReference` | 16.9, 14.9; 14.7, 13.6 | 0, 0; 12.5, 12.6 |
+| `copyScalar` (it now holds the arrays that `map` made) | 9.0, 10.1 | 20.6, 21.2 |
+
+| Actors leaf | before 1, 2 | after 2, 3 |
+| --- | ---: | ---: |
+| `update` (actor-mesh-sim.mjs) | 53.1, 59.1 | 10.4, 10.3 |
+| `admit`; `reconcile` | 14.8, 16.2; 8.7, 15.9 | 0, 0; 7.5, 8.3 |
+| `packDynamics` | 17.5, 18.8 | 10.6, 10.4 |
+| `rotate` (lodmesh-frame.mjs) | 29.2, 28.2 | 0.2, 0.3 |
+| `update` (actor-weapon-sim.mjs) | 5.7, 6.2 | 0, 0 |
+| `laserIteratorItems` | 9.0, 10.9 | 3.2, 3.3 |
+| builtin `map` | 14.9, 15.0 | 5.5, 5.2 |
+| `drawnOf`; `decode`; `readComposite` | 11.4, 11.2; 9.7, 10.4; 15.0, 16.7 | 11.2, 11.8; 10.9, 11.8; 16.4, 16.1 |
+
+Headless (`frame-alloc-meter.mjs`, Island, 600 frames after 900 of warm-up, KB a frame, mean without the 1% largest frames): tick
+1,040 to 703, actors 507 to 277, hud 191 to 104, whole call 2,098 to 1,453 (median 1,982 to 1,315). Coronas went the other way,
+263 to 286 (and 85-96 to 115-121 in the browser): the corona line checks reach `primitiveLineHit`, whose `Math.fround` calls
+allocate when it is below TurboFan; it is not in this cut's files, and which tier a function sits in moved with changes
+elsewhere.
+
+**Checks.**
+* bench-sim state digests (300 ticks, plain `bench-sim.mjs --map M --ticks 300`): Island `15e3720088490242`, Training
+  `148077479825af78`, 747 `ad8e591a01434df5`, the same as master's.
+* The HUD stream: `hud-stream-digest.mjs --frames 1500 --stream` against master's export, identical (`16bfe2bd08ed1653`).
+* The frame snapshots (`frame-alloc-meter.mjs --compare`: every key of `session.frame()`'s result but its timings, numbers by exact
+  bits, hashed per frame) against master's: identical on the Island (600 frames), Training and the 747 (400 each).
+* Differentials of the rewritten bodies against master's, bit for bit: `lodMeshFrameMatrix` on 255,000 random and edge inputs (NaN,
+  infinities, -0, subnormals; the same throws) and `fastLineCheck` on 360,000 lines over random BSPs (node objects and a memory
+  block, cyclic trees, non-finite endpoints).
+* Validators (all exit 0): actor-tick-kernel, actor-physics-kernel, locomotion-kernel, perception-kernel, collision-kernel,
+  lodmesh-frame, umesh-frame, sprite-setup, spawn-mesh-binding, infolink-shell, occlusion-flat-draw, child-frames, bsp-occlusion,
+  brush-bounds-kernel, native-bounds, native-hash, native-hash-radius, native-encroachment, native-level, native-level-points,
+  native-mover-push, world-destroy, datalink-transfer-object, script-vm-interp, play-hud, galaxy-effects-play, coronas,
+  tracked-collision, leaf-lights, decal-attach, iterator-frames-play, mirrors-play, sky-in-mirror-play, terminals-camera-browser,
+  instructor-conversation, level-tick, actor-tick, player-tick-order, decoration-settle-roll, training-cadet,
+  training-datalink-live, mesh-lighting-play, stage3-training-conformance, gameplay, fast-line-check-tracked, native-fast-trace,
+  native-make-noise, native-visible-actors, pawn-{flying,direction,jump,swimming}-reach, pawn-tick-visibility, pawn-nav,
+  lasers-play, native-laser, native-galaxy-audio. Not run or not green: `validate-native-points` stops on a missing earlier
+  report (`native-extents`) in this tree, and `validate-master-frame-play`, one of the page reds on a clean master on this host,
+  hung for 17 minutes and was stopped. `native-level-points` ran on copies of the `native-level`, `-points`, `-bounds` and
+  `-world-fitting` reports from the main checkout.
+* Unit tests: 850, 846 pass, 4 skipped. `cargo build` (build:wasm) has no warnings.
+* Play: the four 60 s Island runs above are worker-mode Play and ended with no errors.
+
+**What is left, and why.**
+* The tick's largest leaves are the other branch's (`readComposite` 41 KB, the script VM's frames and `Run`s, `bindingSet`,
+  about 60 KB together).
+* Value copies, 38 KB (`copyScalar` and the `map` behind it): a vector written through `writeNamed` is copied twice (once for
+  the cell, once for the returned logical copy) and a call's arguments are copied by `processEvent`. Returning the stored copy
+  would halve the first, but `writeCell` is not shown to keep nothing of the array for every field kind.
+* The JS VM's entry glue in script-runtime.mjs, about 26 KB (`fieldReference`, `invokeNative`, `callFunction`, `localReference`):
+  `invokeNative` is a 1,000-line function whose per-native closures give it a context on every call; splitting it by native is a
+  larger change.
+* Per-pawn move glue, 25 to 30 KB (`rider`, `moveActorRiders`, `begin` in pawn-physics-kernel.mjs, `tracked`, `js_move_hits`,
+  `surfaceScanInputs`, `followDecalTracker`, `allocateDeferredActor`): small objects and maps, each 3 to 8 KB. Moving the
+  walking surface prelude and the rider pass to Rust would remove them; none is large enough by itself.
+* The frames the level's actors change in (six in 600 frames of the headless roam) allocate 5 MB in the tick, and one frame of 38 MB
+  (a conversation starts; 54 MB before the BindEvents change) remains. At the epoch frames, `bindingSet`'s sort and join in
+  script-vm-rust.mjs (the receiver set of the moving-light scan and of `compactScriptActors`: 3.7 of the 5 MB) is the other branch's;
+  `surfacePan`'s Map in game.mjs and mesh-lighting-view.mjs's `levelMembership` (about 0.2 MB each) are not in this cut's files.
+* The actors step: `readComposite` 16, `drawnOf` 11 (a Uint32Array of the drawn nodes each frame), `decode` 10, `packDynamics` 10
+  (an entry object per binding), `movingLightLeafList` 8, `reconcile` 7 (the epoch rebuilds).
+* The other steps are not in this cut: coronas 120 (line-check arrays, the tracked-model Proxy's `get`), hud 105, stamps 34.
+* Which tier a function runs in decides what it allocates (Maglev against TurboFan), and it moved with edits elsewhere (the
+  coronas step). Chromium's thresholds differ from Node's, so the headless meter orders the changes; the browser profile is the
+  number. The two-core trace is the coordinator's.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
