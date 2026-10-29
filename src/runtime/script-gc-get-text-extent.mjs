@@ -281,6 +281,7 @@ export function nextChar(L, gcBase, cur, end, state, units) {
 // shared too and holds until the next scanLine. A fresh set per call was five allocations a DrawText.
 const SCAN_WORK = new Uint8Array(STATE_SIZE), SCAN_SNAP_A = new Uint8Array(STATE_SIZE), SCAN_SNAP_B = new Uint8Array(STATE_SIZE);
 const SCAN_CURSOR = {pos: 0};
+const SCAN_GLYPH = {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};
 const SCAN_RESULT = {start: 0, len: 0, width: 0, progress: 0};
 
 export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
@@ -341,7 +342,7 @@ export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
       font = work[STATE_BOLD] ? L.read(gcBase + GC.boldFont, 'u32')
                               : L.read(gcBase + GC.normalFont, 'u32');
     if (font === 0) { firstChar = 0; continue; }
-    const sum = runW + uFontGlyph(L, font, ch).uSize;
+    const sum = runW + uFontGlyph(L, font, ch, 0, SCAN_GLYPH).uSize;
     if (!(sum > destW)) { runW = Math.fround(sum); firstChar = 0; continue; }
     if (firstChar !== 0) { runW = Math.fround(sum); firstChar = 0; continue; }
     if (wordEnd === 0) {

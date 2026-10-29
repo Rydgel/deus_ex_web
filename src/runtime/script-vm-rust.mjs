@@ -225,6 +225,10 @@ function propertyLinkIsChain(cls) {
  * CALL gets one on first use (its locals are the pushed block). */
 class Run {
   constructor(vm, compiled, lowered, self, services, frame, layout = null, base = 0, resultField = null) {
+    this.init(vm, compiled, lowered, self, services, frame, layout, base, resultField);
+  }
+  /** The fields of a Run for a body about to start; also how a pooled Run (RustScriptVm.acquire) is made ready again. */
+  init(vm, compiled, lowered, self, services, frame, layout = null, base = 0, resultField = null) {
     this.vm = vm; this.compiled = compiled; this.lowered = lowered;
     this.nodes = lowered.nodes; this.indexOf = lowered.indexOf; this.entries = lowered.entries;
     this.fieldNodes = lowered.fieldNodes;
@@ -233,6 +237,12 @@ class Run {
     // RUNS[id]'s serial when Rust began this body (dispatch.rs), 0 for a
     // body JavaScript began.
     this.serial = 0;
+    return this;
+  }
+  /** The body has returned: the pooled Run lets go of what it held (a later use of it fails at once). */
+  release() {
+    this.vm = this.compiled = this.lowered = this.nodes = this.indexOf = this.entries = this.fieldNodes = null;
+    this.self = this.services = this.frameObject = this.layout = this.resultField = null;
   }
   get frame() {
     return this.frameObject ??= this.compiled.createFrame(this.self,
@@ -257,6 +267,9 @@ export class RustScriptVm {
     // the frame stack after a call, so a callee whose arguments are still
     // being evaluated keeps its id through nested calls.
     this.frames = [];
+    // The Run of the last body JavaScript began at each depth: a Run is dropped when its body returns (frames is cut back), and the
+    // HUD alone begins some 200 bodies a frame, so the next body at that depth takes the same object (acquire).
+    this.runPool = [];
     // Code of replaced lowerings, released when no run can be executing it.
     this.retired = [];
     // compiled function -> its lowering for this runtime.
@@ -867,7 +880,8 @@ export class RustScriptVm {
     // unwinds past that, so the stack is put back here.
     const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top;
     let budget = HANG_BUDGET;
-    this.own(id, new Run(this, compiled, lowered, frame.instance, frame.services, frame));
+    const run = this.acquire(id, compiled, lowered, frame.instance, frame.services, frame);
+    this.own(id, run);
     this.depth = id + 1;
     try {
       while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned) {
@@ -902,6 +916,7 @@ export class RustScriptVm {
       }
       return frame.result;
     } finally {
+      run.release();
       this.frames.length = id;
       this.depth = id;
       this.arena.view.setUint32(this.budgetAt, outerBudget, true);
@@ -926,7 +941,8 @@ export class RustScriptVm {
     const outerBudget = this.arena.view.getUint32(this.budgetAt, true);
     const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top;
     let budget = HANG_BUDGET;
-    this.own(id, new Run(this, compiled, lowered, frame.instance, frame.services, frame));
+    const run = this.acquire(id, compiled, lowered, frame.instance, frame.services, frame);
+    this.own(id, run);
     this.depth = id + 1;
     try {
       // (ProcessState tests bDeleteMe before each opcode, 0x103e5c16: a Destroy() ends the run)
@@ -956,6 +972,7 @@ export class RustScriptVm {
       }
       return frame.result;
     } finally {
+      run.release();
       this.frames.length = id;
       this.depth = id;
       this.arena.view.setUint32(this.budgetAt, outerBudget, true);
@@ -994,6 +1011,13 @@ export class RustScriptVm {
     this.frames[id] = built;
     return built;
   }
+  /** A Run for the body JavaScript begins at depth `id`: the pooled one made ready again, which nothing else holds (the previous body
+   * at this depth has returned: the run ids are the stack's depth). */
+  acquire(id, compiled, lowered, self, services, frame, layout = null, base = 0, resultField = null) {
+    const pooled = this.runPool[id];
+    if (pooled === undefined) return this.runPool[id] = new Run(this, compiled, lowered, self, services, frame, layout, base, resultField);
+    return pooled.init(this, compiled, lowered, self, services, frame, layout, base, resultField);
+  }
   /** Run `id` is JavaScript's: RUNS[id] no longer names a Rust body. */
   own(id, run) {
     this.frames[id] = run;
@@ -1023,7 +1047,7 @@ export class RustScriptVm {
     view.setUint32(this.callAt + 8, handleOf(receiver), true);
     view.setUint32(this.callAt + 12, probeIndex(record), true);
     const id = this.depth;
-    this.own(id, new Run(this, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null));
+    this.own(id, this.acquire(id, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null));
     this.depth = id + 1;
     if (STATS) count('call in rust');
     return id;
