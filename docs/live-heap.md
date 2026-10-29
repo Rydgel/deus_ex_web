@@ -596,7 +596,68 @@ fall (7 against 10), and the worker's median frame is the same (12.5 to 14.7 ms 
 fast the marking completes, not the allocation: in those 0.35 s the helper threads run about 0.9 s of background marking on the
 same two cores. An inference, not measured: at best the worker's share splits evenly over the two frames, so the longest frame
 stays above half of it (about 150 ms here). Under 100 ms then needs the worker's share of a cycle under about 200 ms, which is
-the plan's heap reduction, or a longer cycle, which V8 decides.
+the plan's heap reduction, or a longer cycle, which V8 decides. (2026-10-29: true only near today's allocation; V8's own log and
+a synthetic sweep show that the frame's allocation sets its length, next section.)
+
+## Allocation sets the long frame (2026-10-29)
+
+V8's own log of the marking (`hitch-run.mjs --js-flags '--trace-gc --trace-incremental-marking'` under `DEBUG=pw:browser`,
+read by `scripts/gc-marking-cycles.mjs`) shows what fills the long frame, and a synthetic worker shows how it scales.
+
+**What V8 does.** On the two-core Island roam (master `0dbb253e`, 120 s), the worker's cycle starts from a task with the old
+generation at 1,109 MB against a 1,301 MB limit. Its schedule expects the whole estimated live heap, 1,137 MB, marked in 500 ms
+(each step's "expected marked" is that heap times the elapsed time over 500 ms). The helper threads fall behind at once, so each
+main-thread step tries to make up the difference and runs to its 5 ms cap. The steps come from two places:
+* the allocation observer (`origin: V8`), about one step per 64 KB the worker allocates;
+* the marking job's tasks (1 ms each), which run between the worker's frames.
+
+That cycle took 48 allocation steps (255 ms) and 4 task steps (6 ms). 25 steps (134 ms) fell in a 157 ms frame, and 22 (116 ms)
+in the next, 177 ms with the 29 ms atomic pause; a frame without marking takes about 13 ms. The long part of a frame is its own
+allocation, turned into 5 ms steps.
+
+**Synthetic.** `scripts/gc-allocation-synth.mjs`: a dedicated worker holding 12 M four-reference objects, its old generation
+about 1 GB at a cycle's start as the worker's, with 10 ms of work a frame at 60 Hz and 200 KB kept a frame (the worker promotes
+120 to 320). Two cores, 120 s at each level:
+
+| Allocated a frame | Allocation steps in a cycle's frames | Longest frame | Frames over 100 ms | Frames over 50 ms | Cycles |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2.7 MB | 31 to 39 | 229 ms | 2 | 2 | 1 |
+| 1.4 MB | 19 to 20 | 128 ms | 4 | 4 | 2 |
+| 0.8 MB | 10 to 11 | 78 ms | 0 | 6 | 1 |
+| 0.5 MB | 5 to 6 | 49 ms | 0 | 0 | 4 |
+
+A cycle lasts 320 to 440 ms at every level, and the main thread's steps per cycle (210 to 380 ms) barely fall. Less
+allocation spreads the same marking over more, shorter frames, at about one step per 70 KB.
+
+**What it changes.** The heap's size sets how long a cycle runs and how much marking it needs; it does not set the length of a
+frame inside the cycle. The longest frame is that frame's allocation in 5 ms steps until the marking completes. That is why steps
+7 and 8 shortened the marking per cycle without shortening the longest frame, and why 20% less allocation ("Allocation and the
+long frame") moved work between the two frames: 34 steps a frame instead of 41 is still far above the threshold. An inference
+from the synthetic, not measured on the worker: on two cores, no frame over 100 ms needs the worker under about 0.8 MB a frame,
+and none over 50 ms under about 0.5 MB. The synthetic's page draws nothing, while the real page and GPU process share the two
+cores, so a real cycle may span more frames.
+
+**Where the worker allocates.** `hitch-run.mjs --heap-sampling all`, a 60 s Island roam (not pinned): 8,391 MB sampled over the
+3,799 worker frames the page drew, about 2.2 MB a frame.
+* By the frame's steps (sim-session.mjs): the tick (`begin`) 893 KB, the HUD 698, actors 378, coronas 147, the rest under 60
+  each.
+* By subsystem (the 150 largest leaf functions, 1,955 of 2,262 KB):
+
+| Subsystem | KB a frame |
+| --- | ---: |
+| The x87 model's BigInt intermediates (`x87mul`, `x87add`, `x87storeWord`, ...) | 298 |
+| HUD and window drawing (`script-gc-*`, the window host) | 254 |
+| The script VM's other paths (frames, locals, the Rust VM's resume, locomotion tables) | 213 |
+| Builtins (Map and Set, arrays, iterators) | 205 |
+| Actor mesh frames (`actor-mesh-sim.mjs`, `lodmesh-frame.mjs`) | 157 |
+| Occlusion, coronas, sprites, lights, lasers | 134 |
+| Collision and line checks | 122 |
+| Actor and level ticks | 115 |
+| Object image reads (`readComposite`) | 91 |
+| Others among the 150 | 367 |
+
+Reaching 0.8 MB a frame is a cut of about 2.8×, and 0.5 MB about 4.5×, spread over a dozen subsystems, none more than 13% of
+the total. The heap plan's remaining steps would shorten the cycle, not the frames inside it.
 
 ## Open
 
@@ -611,6 +672,9 @@ the plan's heap reduction, or a longer cycle, which V8 decides.
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.
+* **The allocation thresholds on the worker.** The 0.8 and 0.5 MB a frame come from the synthetic. The worker itself has not
+  run below today's 2.2 MB; a cut of a large source, then a two-core trace, would place it. Firefox inline is not measured
+  against allocation.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the

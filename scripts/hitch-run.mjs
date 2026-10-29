@@ -13,6 +13,8 @@
 //     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
 //     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
 //     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
+//     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
+//     DEBUG=pw:browser forwards to this process's stderr)
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
 // The browser's process tree RSS is sampled on Linux only (/proc). Moved from .work/hitch/run.mjs and run-ff.mjs (2026-10-28).
 import {chromium,firefox} from '@playwright/test';
@@ -46,7 +48,7 @@ if(!url){
 const profOut=option('profile',null);
 const browser=isChromium
   ?await chromium.launch({args:[`--use-angle=${option('angle',process.platform==='darwin'?'metal':'gl')}`,'--enable-precise-memory-info',
-    `--remote-debugging-port=${cdpPort}`],headless:!flag('headed'),executablePath:option('exe',undefined)})
+    `--remote-debugging-port=${cdpPort}`,...(option('js-flags',null)?[`--js-flags=${option('js-flags',null)}`]:[])],headless:!flag('headed'),executablePath:option('exe',undefined)})
   :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:flag('gclog')?{'javascript.options.mem.log':true}:{},
     env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:'js,threads,markers',
       MOZ_PROFILER_STARTUP_FILTERS:'GeckoMain,DOM Worker',MOZ_PROFILER_STARTUP_ENTRIES:'40000000',MOZ_PROFILER_SHUTDOWN:profOut}:process.env});
