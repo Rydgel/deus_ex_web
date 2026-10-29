@@ -367,11 +367,17 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
   const stackBase = store.kernel.stackBase;
   // A lineCheck result's fields textureForHit and WalkTexture read, from a
   // scan record (actor -2: no hit accepted).
-  function scanHit(answer, at, world) {
-    const id = answer[at + 9], kind = answer[at + 10];
-    const actor = id === -2 ? null : id === -1 ? world : store.actors[id];
-    return {actor, item: id !== -2 && (kind === WORLD_RAY || kind === BRUSH_RAY) ? answer[at + 7] : undefined,
-      location: [answer[at + 1], answer[at + 2], answer[at + 3]], normal: [answer[at + 4], answer[at + 5], answer[at + 6]]};
+  // The scan's answer is written into these (a result, a selected hit and a floor hit with their vectors, for each scan of each walking
+  // pawn): valid until the next surfaceScan; walkingSurfacePrelude reads them at once, and WalkTexture's script event copies its arguments.
+  const scanResult = {index: 0, selected: null, floor: null};
+  const scanSlots = [{actor: null, item: undefined, location: [0, 0, 0], normal: [0, 0, 0]}, {actor: null, item: undefined, location: [0, 0, 0], normal: [0, 0, 0]}];
+  function scanHit(answer, at, world, slot) {
+    const id = answer[at + 9], kind = answer[at + 10], hit = scanSlots[slot], location = hit.location, normal = hit.normal;
+    hit.actor = id === -2 ? null : id === -1 ? world : store.actors[id];
+    hit.item = id !== -2 && (kind === WORLD_RAY || kind === BRUSH_RAY) ? answer[at + 7] : undefined;
+    location[0] = answer[at + 1]; location[1] = answer[at + 2]; location[2] = answer[at + 3];
+    normal[0] = answer[at + 4]; normal[1] = answer[at + 5]; normal[2] = answer[at + 6];
+    return hit;
   }
   // The hit objects of answer records [from, count), linked, as
   // multiLineCheck builds them (world: the query's world actor; model: the
@@ -471,7 +477,10 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
           ends[2][0], ends[2][1], ends[3][0], ends[3][1], position[0], position[1], position[2], floorEnd[2]);
         if (status !== ANSWERED) return undefined;
         const answer = store.answer.length ? store.answer : (store.views(), store.answer);
-        return {index: answer[0], selected: scanHit(answer, 2, levelInfo), floor: answer[1] ? scanHit(answer, 2 + RECORD, levelInfo) : null};
+        scanResult.index = answer[0];
+        scanResult.selected = scanHit(answer, 2, levelInfo, 0);
+        scanResult.floor = answer[1] ? scanHit(answer, 2 + RECORD, levelInfo, 1) : null;
+        return scanResult;
       } finally {
         finish(status);
       }
