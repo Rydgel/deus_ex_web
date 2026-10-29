@@ -219,6 +219,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured or modeled global index`); } catch {}
     return null;
   };
+  const ambientList = [];
   const galaxy = createGalaxyAudio(galaxyConfig, {
     library, music,
     listener: () => ({actor: player(), viewTarget: player() ? read(player(), 'ViewTarget') : null}),
@@ -228,10 +229,12 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     actors: () => level.actors.map(measured),
     // The render scan (script-vm-render.mjs) leaves the actors with a live
     // AmbientSound and those it hands back, in array order.
+    // (one array for the host: Galaxy's Update reads it in its two scans and keeps none of it)
     ambientActors: () => {
       const entries = runtime.scriptVm?.render?.scan(level.actors, {kinds: RENDER_AMBIENT});
       if (!entries) return null;
-      const actors = new Array(entries.length);
+      const actors = ambientList;
+      actors.length = entries.length;
       for (let i = 0; i < entries.length; i++) actors[i] = measured(level.actors[entries[i] >>> RENDER_SHIFT]);
       return actors;
     },

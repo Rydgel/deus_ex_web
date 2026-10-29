@@ -18,8 +18,8 @@
  * not linked has no offsets; its frame keeps every value in a Map, the
  * storage before R2a.
  */
-import {functionImageCells, readCell, writeCell, readFixedElement, isFixedCell} from './script-object-image.mjs';
-import {NO_ELEMENT, zeroValue} from './script-values.mjs';
+import {functionImageCells, readCell, writeCell, readFixedElement, isFixedCell, isVector3Cell, writeVector3} from './script-object-image.mjs';
+import {NO_ELEMENT, zeroValue, copyValue} from './script-values.mjs';
 
 const CHUNK = 1 << 18;
 
@@ -163,6 +163,7 @@ export class LocalCellStorage {
     const locals = this.locals;
     return readCell(this.cell, locals.arena.view, locals.refs, locals.base);
   }
+  pure() { return true; }
   readElement(index) {
     if (!isFixedCell(this.cell)) return NO_ELEMENT;
     const locals = this.locals;
@@ -190,4 +191,23 @@ export function createFrameLocals(fn, loader, stack) {
     for (const field of layout.slotFields) slots.set(field.key, zeroValue(field));
   }
   return new FrameLocals(layout, stack.arena, base, slots);
+}
+
+/** locals.set(field.key, copyValue(field, value)): a vector or rotator parameter in a frame block is written from the argument's
+ * components, not from a copy of it. */
+export function setLocalCopy(locals, field, value) {
+  if (locals instanceof FrameLocals) {
+    const cell = locals.layout.cells.get(field.key);
+    if (cell !== undefined && writeVector3(cell, locals.arena.view, value, locals.base)) return;
+  }
+  locals.set(field.key, copyValue(field, value));
+}
+/** copyValue(field, locals.get(field.key)): a vector or rotator in a frame block is read into one array (the cell's read is a
+ * fresh array of the same float32 or int32 components the copy would make). */
+export function getLocalCopy(locals, field) {
+  if (locals instanceof FrameLocals) {
+    const cell = locals.layout.cells.get(field.key);
+    if (cell !== undefined && isVector3Cell(cell)) return locals.readCell(cell);
+  }
+  return copyValue(field, locals.get(field.key));
 }

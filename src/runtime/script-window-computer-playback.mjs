@@ -12,6 +12,8 @@ import {gcDrawIcon} from './script-gc-draw-icon.mjs';
 import {gcDrawPattern} from './script-gc-draw-pattern.mjs';
 import {f32Bits} from './script-gc-draw-model.mjs';
 import {windowPlaySound} from './script-window-sound.mjs';
+import {x87PrecisionControl} from './x87-precision.mjs';
+import {scriptVmKernel} from './script-vm-kernel.mjs';
 
 const sub=(a,b)=>A(a,N(b)), gt=(a,b)=>x87cmp(a,b)==='gt';
 const lt=(a,b)=>['lt','un'].includes(x87cmp(a,b));
@@ -83,7 +85,8 @@ function sound(W,win,value){
 export function computerProcessQueue(W,win){
   for(let i=W.i32(win,O.queuedBufferStart);i<W.i32(win,O.queuedBuffer+4);i++){
     const p=rec(W,win,O.queuedBuffer,i);
-    if(!gt(X(W.f32(win,O.timeCurrent)),X(read(W,p,4,'f32'))))break;
+    // (two f32 values compared: gt(X(a),X(b)) is a>b, false for a NaN)
+    if(!(W.f32(win,O.timeCurrent)>read(W,p,4,'f32')))break;
     switch(read(W,p,0)){
       case 0:{
         W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)|1);
@@ -134,28 +137,59 @@ export function computerTick(W,win,delta){
   }
   const inputFlags=W.u32(win,O.inputFlags);
   if(inputFlags&16)return;
-  if(gt(X(W.f32(win,O.cursorBlinkSpeed)),X(0))){
-    const cursor=sub(X(W.f32(win,O.cursorNextEvent)),X(delta));W.setF32(win,O.cursorNextEvent,S(cursor));
-    if(lt(cursor,X(0))){
-      W.setF32(win,O.cursorNextEvent,S(A(cursor,X(W.f32(win,O.cursorBlinkSpeed)))));
-      W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)^1);
+  // (an f32 against zero: gt(X(a),X(0)) is a>0, NaN included. The blink and time steps run on the Rust x87 model once it is loaded
+  // (computer.rs); the BigInt bodies below are the reference, and stand while the kernel is not loaded or the precision control is 24.)
+  const kernel=scriptVmKernel?.computer&&x87PrecisionControl()===64?scriptVmKernel.computer:null;
+  if(W.f32(win,O.cursorBlinkSpeed)>0){
+    if(kernel!==null){
+      const step=kernel.cursorStep(W.f32(win,O.cursorNextEvent),delta,W.f32(win,O.cursorBlinkSpeed));
+      W.setF32(win,O.cursorNextEvent,step.stored);
+      if(step.flag){
+        W.setF32(win,O.cursorNextEvent,step.other);
+        W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)^1);
+      }
+    } else {
+      const cursor=sub(X(W.f32(win,O.cursorNextEvent)),X(delta));W.setF32(win,O.cursorNextEvent,S(cursor));
+      if(lt(cursor,X(0))){
+        W.setF32(win,O.cursorNextEvent,S(A(cursor,X(W.f32(win,O.cursorBlinkSpeed)))));
+        W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)^1);
+      }
     }
   }
   if(!(inputFlags&4)){
-    const current=A(M(X(delta),X(W.f32(win,O.throttle))),X(W.f32(win,O.timeCurrent)));
-    W.setF32(win,O.timeCurrent,S(current));
-    if(gt(sub(current,X(W.f32(win,O.timeLastEvent))),X(W.f32(win,O.eventTimeInterval))))
-      W.setF32(win,O.timeNextEvent,S(A(current,X(W.f32(win,O.eventTimeInterval)))));
+    if(kernel!==null){
+      const step=kernel.timeStep(delta,W.f32(win,O.throttle),W.f32(win,O.timeCurrent),W.f32(win,O.timeLastEvent),W.f32(win,O.eventTimeInterval));
+      W.setF32(win,O.timeCurrent,step.stored);
+      if(step.flag)W.setF32(win,O.timeNextEvent,step.other);
+    } else {
+      const current=A(M(X(delta),X(W.f32(win,O.throttle))),X(W.f32(win,O.timeCurrent)));
+      W.setF32(win,O.timeCurrent,S(current));
+      if(gt(sub(current,X(W.f32(win,O.timeLastEvent))),X(W.f32(win,O.eventTimeInterval))))
+        W.setF32(win,O.timeNextEvent,S(A(current,X(W.f32(win,O.eventTimeInterval)))));
+    }
     computerProcessQueue(W,win);
-    if(gt(X(W.f32(win,O.fadeOutTimer)),X(0))){
-      let fade=sub(X(W.f32(win,O.fadeOutTimer)),X(delta));
-      if(!lt(X(0),fade))fade=X(0);W.setF32(win,O.fadeOutTimer,S(fade));
-      if(eq(fade,X(0)))bubble(W,win,'ComputerFadeOutCompleted',false);
+    if(W.f32(win,O.fadeOutTimer)>0){
+      if(kernel!==null){
+        const step=kernel.fadeOutStep(W.f32(win,O.fadeOutTimer),delta);
+        W.setF32(win,O.fadeOutTimer,step.stored);
+        if(step.flag)bubble(W,win,'ComputerFadeOutCompleted',false);
+      } else {
+        let fade=sub(X(W.f32(win,O.fadeOutTimer)),X(delta));
+        if(!lt(X(0),fade))fade=X(0);W.setF32(win,O.fadeOutTimer,S(fade));
+        if(eq(fade,X(0)))bubble(W,win,'ComputerFadeOutCompleted',false);
+      }
     }
   }
-  if(gt(X(W.f32(win,O.fadeSpeed)),X(0))){
+  if(W.f32(win,O.fadeSpeed)>0){
     for(let i=0;i<W.i32(win,O.displayBuffer+4);i++){
-      const p=rec(W,win,O.displayBuffer,i);write(W,p,4,'f32',S(sub(X(read(W,p,4,'f32')),X(delta))));
+      const p=rec(W,win,O.displayBuffer,i);
+      if(kernel!==null){
+        const step=kernel.fadeStep(read(W,p,4,'f32'),delta);
+        write(W,p,4,'f32',step.stored);
+        if(step.flag)write(W,p,4,'u32',0);
+        continue;
+      }
+      write(W,p,4,'f32',S(sub(X(read(W,p,4,'f32')),X(delta))));
       if(lt(X(read(W,p,4,'f32')),X(0)))write(W,p,4,'u32',0);
     }
   }

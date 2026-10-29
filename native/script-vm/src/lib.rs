@@ -17,6 +17,7 @@ mod move_actor;
 mod move_pawn;
 mod decal;
 mod detail;
+mod computer;
 mod dispatch;
 mod interp;
 mod level;

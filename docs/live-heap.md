@@ -1158,6 +1158,151 @@ allocation (about 1 MB a worker frame against 1.6) makes possible: a step is one
 frame. Frames over 100 ms are halved (34 to 17 in two runs each), the longest frame falls from 356 and 358 ms to 237 and 267, and
 frames over 50 ms barely change (64 to 56): what is left is the marking itself, about 250 ms of it per cycle on the frame thread.
 
+### Cut: script VM values (2026-10-29)
+
+The script VM and the value plumbing under it (the object image's reads, property references, parameter copies, the window host's
+natives and tick, the HUD's glue) held about 200 KB of the tick (`begin`) and 80 of the HUD step a worker frame. Host representation
+only: nothing the simulation computes changes. Most of it was again a few mechanisms, not one subsystem; the commits' messages have
+the detail.
+
+**What allocated, and what changed.**
+1. **A binding set was built again at every receiver-epoch advance** (`bindingSet`: a key array, a sort and a join for each of the
+   2,400 receivers the moving-light scan and `compactScriptActors` ask about, 13 KB a frame, and 3.7 MB in each frame the level's
+   actors change in). The set is kept on the object until a binding is added or replaced (`bindingsVersion`, three sites), and
+   the level-actors scan writes its pairs without arrays.
+2. **DestroyActor read an actor's whole `Touching` array four times for every actor of the level** (`destroyScriptActor`, 0.77 MB a
+   destroy, the biggest part of the 2 MB frames of the headless roam). `touchingSlot` compares the four slots in the image.
+3. **A property reference was 13 fields and two closures with a context** (about 330 bytes) for each variable operand passed to a
+   native or a call. It holds five fields now; key, metadata, the array shape and `get`/`set` are read from the descriptor or made
+   when asked (callers that pass `ref.get` on as a detached accessor still get one), and the VM's own reads and writes call
+   `getValue`/`setValue`. A whole-property store skips reading the old value unless a bit mask needs it (`pure` storage).
+4. **Parameter copies** (`processEvent`, `callFunction`): a vector or rotator was copied into an array to be written into the frame
+   block, and read back into one array and copied into another. `setLocalCopy`/`getLocalCopy` write from the argument's
+   components and read the cell once. `writeStorage` writes a vector from the value's components, and the pawn physics services call
+   `storeNamed`, which skips the copy `writeNamed` returns.
+5. **Closure contexts on hot entries**, the mechanism of the previous cut: `dispatchWindowHostNative` (every native not its own, about
+   30 a frame, built four closures), `handleNative` of the window host, `rootTickVirtual` (it merged the two window module
+   namespaces into one object for each tick), `resolveNativeGetPlayerPawn` (native 720, 47 a frame), the primitive-native closure
+   of the VM (it also made the values array twice), `callFunction`'s `entries()` iterator and `out` array, `native()`'s array
+   destructuring, `destroyFunctionLocals`' default options object, `destroyProperties`' services object.
+6. **Service tables made for every pawn tick**: `pawnPhysicsServices` (a dozen closures plus the zone view with six getters) is kept
+   per pawn while its level, hash and world actor are the same; `spawnedMoveServices` (about 25 closures, and the spread of them
+   for the rider entry) per level; the call object the VM builds for a native is handed to the host in place (`hostNative`) instead
+   of a copy of it.
+7. **Smaller sites**: the HUD tile's eight numbers are written into the stream where they are made (`beginTile`; they were eight
+   boxed doubles passed to a call), `frames.length = id` after every body the HUD begins gave the run table a new backing store
+   (`cutFrames` clears it where it stands: `resume` in the HUD 5.8 to 2.8 KB), a Rust body's JavaScript callbacks reuse the pooled `Run`,
+   a frame has no iterators array until a foreach runs, the zone number of `Region` is read in place instead of building the
+   struct (`readStructMember`, `level.zoneLastRenderTime`), `scriptCaps` uppercases an ASCII text without a regex callback,
+   `encodeMusicBatch` reads its ops by index, the ambient actor list is one array, the conversation events' `isA` makes its key once.
+8. **The computer window's tick** ran BigInt x87 values every frame for a blink step, a time step and the fades. They are
+   `computer.rs` on the Rust x87 model (`computer-tick-kernel.mjs`; the BigInt bodies stay as the reference when the kernel is not
+   loaded or the precision control is 24), and `gt(X(a), X(0))` of two float32 values is `a > 0`. `test/script-window-computer-tick.test.mjs`
+   runs the kernel against the model over 200,000 random and edge float32 inputs for each step.
+
+**Measured, browser** (`hitch-run.mjs --heap-sampling all --heap-leaves 120 --heap-depth 8 --seconds 60 --mode roam`, Chromium,
+worker mode, the Island; a roam is not pinned, so three runs before (the two profiles of the brief, `alloc-1`/`alloc-2` at
+`76495d62`, and my own `base1` on the same tree) and two after, the branch's head). KB a worker frame:
+
+| | before 1 | before 2 | before 3 | after 1 | after 2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| tick (`begin`) | 648 | 442 | 433 | 339 | 342 |
+| actors | 246 | 189 | 188 | 185 | 195 |
+| coronas | 95 | 119 | 122 | 121 | 121 |
+| hud | 98 | 103 | 104 | 92 | 89 |
+| **whole worker** | **1,176** | **942** | **938** | **825** | **835** |
+
+Leaves of the two steps, my files' (`base1` against the two after runs):
+
+| Tick leaf | before | after |
+| --- | ---: | ---: |
+| `readComposite` (script-object-image.mjs) | 38.4 | 29.0, 30.2 |
+| `copyScalar` | 21.9 | 9.4, 9.2 |
+| `(anon)` script-vm.mjs | 19.1 | 8.7, 9.4 |
+| `fieldReference` | 13.3 | 4.0, 3.8 |
+| `bindingSet` | 13.2 | 0, 0 |
+| `invokeNative` | 9.5 | 3.2, 3.1 |
+| `callFunction` | 6.0 | 1.8, 2.0 |
+| `x87loadWord` | 5.3 | 1.4, 1.3 |
+| `createFrame` | 5.1 | 3.9, 4.2 |
+| `rootTickVirtual` | 4.4 | 0, 0 |
+| `resume`; `run` (script-vm.mjs) | 4.3; 4.1 | 3.2, 3.8; 3.2, 3.4 |
+| `run` (script-vm-rust.mjs) | 3.7 | 0, 0 |
+| `dispatchWindowHostNative` | 2.9 | 0, 0 |
+| builtin `replace` | 4.3 | 1.2, 1.3 |
+| **my files' leaves, summed** | **196** | **109, 112** |
+
+| Hud leaf | before | after |
+| --- | ---: | ---: |
+| `gcServices.callVirtual` | 10.6 | 11.1 |
+| `read` (script-gc-state-model.mjs) | 7.8 | 8.1 |
+| `resume` | 5.8 | 2.8 |
+| `readComposite` | 5.6 | 5.9 |
+| `run` (script-vm.mjs) | 3.4 | 2.5 |
+| `processEvent`; `invokeNative`; `fieldReference` | 2.3; 1.7; 1.6 | 0.8; 0.6; 0.4 |
+| `encodeMusicBatch` | 1.8 | 0.2 |
+| **my files' leaves, summed** | **81** | **69, 66** |
+
+(The sums count every leaf whose file is in my list, `readComposite` and `copyScalar` whole; the two other runs before were 238 and 154
+in the tick and 62 and 67 in the HUD by the same count.) The brief's target was the tick's about 200 under 80 and the HUD under
+50: the tick is at about 110, and `readComposite` is 30 of those, whose callers are in other files; the HUD is at about 66.
+Headless, the exact meter (`frame-alloc-meter.mjs`, the Island, 600 frames after 900 of warm-up, KB a frame):
+
+| | before mean / median | after mean / median |
+| --- | ---: | ---: |
+| tick | 788.7 / 697.7 (p99 1,903.5) | 652.7 / 547.1 (p99 1,130.6) |
+| actors | 303.3 / 272.4 | 304.4 / 274.1 |
+| coronas | 295.5 / 268.1 | 295.5 / 268.1 |
+| hud | 122.1 / 71.4 | 106.4 / 67.9 |
+| sprites | 57.0 / 55.7 | 54.5 / 53.5 |
+| whole call | 1,580.6 / 1,390.9 (p99 4,028.3) | 1,429.9 / 1,233.3 (p99 2,922.3) |
+
+and the sampling picture of the tick there (`--sites 300 --depth 6`): `readComposite` 70.7 to 47.2, `copyScalar` 40.0 to 14.4,
+`(anon)` of script-vm.mjs 28.1 to 18.7, `PropertyReference` 18.4 to 0 (`storageReference` 12.5 to 5.7), `bindingSet` with its sort 27.5 to 0,
+`rootTickVirtual` 11.0 to 0, `next` of `callFunction` 9.5 to 0.5.
+
+**The frames the level's actors change in.** The sort and join are gone (the keys are built once for an object and kept). What
+remains of those frames in the headless roam: frame 179 (1.8 MB), 190 (2.2 MB) and the conversation start at 189, which is 31 MB
+before this cut's last commit and 29 after: 8 MB in `findExportIndex`'s hash walk of `staticLoadObject` (an export record, a
+`requireInt` and an iterator for each entry of a chain: script-static-load-object.mjs, not changed), 1.3 MB in `bindEventsNative`, 1 MB
+of `isA` (fixed), and the script decode and lowering of the bodies that run for the first time (several MB, once for each).
+
+**Checks.**
+* bench-sim digests, 300 ticks: Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`.
+* `frame-alloc-meter --compare`, every frame of `session.frame()` against the untouched tree's: identical on the Island (600 frames,
+  `c8cf5fff928609c1`), the 747 (400, `f6337bff0cf741fc`) and Training (400, `e4b017e7b1bc0439`). `hud-stream-digest --frames 1500
+  --stream`: `16bfe2bd08ed1653`.
+* Unit tests: 856, 852 pass, 4 skipped (the new test is six of them). `npm run build:wasm`: no warnings.
+* Validators, one at a time (all exit 0): script-vm-interp (539,583 checks), script-vm-x87, script-process, play-hud,
+  galaxy-effects-play, inline-restore-play (Firefox inline), triggers, pawn-nav, window-native-diff (1,056 cases over 76
+  natives, the rewritten dispatcher), world-destroy, window-computer, window-computer-playback, gc-draw-{text,icon,pattern,
+  texture,borders,box,stretched-texture,actor,actor-host}, gc-copy-gc, window-scroll-{area,children,configuration,layout,
+  movement,removal,cleanup,exec}, edit-insert-text, mesh-lighting-play, lasers-play, training-cadet, training-datalink-live,
+  instructor-conversation, island-conversation, gameplay, crowbar-crate, actor-tick, level-tick, player-tick-order,
+  decoration-settle-roll, decal-attach, datalink-transfer-object and the conversation bind validators (action, base,
+  check-object, move-camera, binding, item-lifecycle). validate-gc-draw-texture is a mutation test that looks for a source
+  string: the first version of the tile colour read removed it, and it failed until the read kept its text.
+* Six 60 s worker-mode Island runs on the branch (the head's two among them), none with an error.
+
+**What is left, and why.**
+* `readComposite` (29 to 30 KB in the tick, 6 in the HUD, 17 in the actors step) is a fresh array for every vector read, and the callers
+  are not in this cut's files: the pose getters (`actor-pose-fields.mjs` through `decoration-physics.mjs` `get Location`, read by
+  `lc_candidate` and the collision hash), the pawn view's `bind` getters (script-pawn-physics.mjs:98, `surfaceScanInputs`,
+  `moveActorRiders`), the laser state arrays (`laserIteratorItems`: nested fixed arrays of structs, 13 KB between the actors
+  and sprites steps, where `readNamedElements` and `readStructMember` now exist), `reconcile`, Galaxy's Update. The whole logical
+  copy is what each of these asks for; each needs a scalar or in-place read.
+* The VM's per-call objects: the call object, `evaluateArgument` closures and context of `compileCall`/`compileNative` (the
+  `(anon)` rows, 9 KB), `invokeNative`'s context (66 closures in a 1,000-line function: 3 KB), a frame, its `FrameLocals` and
+  the `zeroRefs` copy for each script call (`createFrame` 4, `createFrameLocals`/`frameLayout` 3), and the reference's own
+  `CellStorage`. Each is about 1% of the tick.
+* The HUD: `callVirtual` (11) and `GcMemory.read` (8) allocate boxed doubles in the tiers below TurboFan, and the headless meter
+  does not show them (1.8 and about 1); a change of their shape could not be judged without more browser runs than the roam's
+  variation allows. The raw background's clip list, the window scene frame and the computer window's drawing still use the BigInt
+  x87 values (`ld` 2.4, `x87mul` 2.5, `x87storeWord` 2.0 in the HUD).
+* The computer window's `computeTimeStep` in doubles was written first and dropped: the sum of the product of two 24-bit values and
+  the time is exact in 64 bits but not in 53, and the window's throttle is such a value.
+* Not measured: Firefox's and Safari's allocation, the Mac, and the two-core GC traces (the coordinator's).
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do

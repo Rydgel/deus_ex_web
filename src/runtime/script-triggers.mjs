@@ -36,22 +36,24 @@ function nativeBool(value, label = 'bool') {
  * null. `read` must expose those named graph slots; it may return either a JS
  * array or `{ data, count }` for the native TArray.
  */
-export function resolveNativeGetPlayerPawn(receiver, { read } = {}) {
+// (a function of its own: a closure inside resolveNativeGetPlayerPawn gave every call, about fifty a frame, a context object and a function)
+function graphField(read, object, name) {
+  const value = read(object, name);
+  if (value === undefined) throw new Error(`GetPlayerPawn graph field is not linked: ${name}`);
+  return value;
+}
+export function resolveNativeGetPlayerPawn(receiver, services) {
+  const read = services?.read;
   if (typeof read !== 'function') throw new TypeError('GetPlayerPawn requires an explicit native graph read service');
   if (receiver === null || receiver === undefined) return null;
-  const readField = (object, name) => {
-    const value = read(object, name);
-    if (value === undefined) throw new Error(`GetPlayerPawn graph field is not linked: ${name}`);
-    return value;
-  };
 
-  const xLevel = readField(receiver, 'XLevel');
+  const xLevel = graphField(read, receiver, 'XLevel');
   if (xLevel == null) return null;
-  const engine = readField(xLevel, 'Engine');
+  const engine = graphField(read, xLevel, 'Engine');
   if (engine == null) return null;
-  const client = readField(engine, 'Client');
+  const client = graphField(read, engine, 'Client');
   if (client == null) return null;
-  const viewportArray = readField(client, 'Viewports');
+  const viewportArray = graphField(read, client, 'Viewports');
   let data, count;
   if (Array.isArray(viewportArray)) {
     data = viewportArray;
@@ -66,7 +68,7 @@ export function resolveNativeGetPlayerPawn(receiver, { read } = {}) {
   if (count <= 0) return null;
   if (data.length === 0) throw new TypeError('GetPlayerPawn Viewports count is positive but data is empty');
   if (data[0] == null) return null;
-  return readField(data[0], 'Actor') ?? null;
+  return graphField(read, data[0], 'Actor') ?? null;
 }
 
 /** Native declarations reached by the original trigger bytecode. */

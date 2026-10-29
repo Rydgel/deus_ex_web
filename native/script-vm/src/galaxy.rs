@@ -116,7 +116,7 @@ fn dt() -> Ext {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmp {
+pub(crate) enum Cmp {
     Lt,
     Eq,
     Gt,
@@ -127,7 +127,7 @@ enum Cmp {
 /// NaN, an infinity ordered by its sign, else the sign of the exact
 /// difference. (`Ext::compare` is the locomotion model's, which never calls
 /// an infinity pair below.)
-fn cmp(a: Ext, b: Ext) -> Cmp {
+pub(crate) fn cmp(a: Ext, b: Ext) -> Cmp {
     if a.nan() || b.nan() {
         return Cmp::Un;
     }
@@ -150,7 +150,7 @@ fn cmp(a: Ext, b: Ext) -> Cmp {
     }
 }
 /// `test ah, 1` after FCOM (C0): below or unordered.
-fn below(c: Cmp) -> bool {
+pub(crate) fn below(c: Cmp) -> bool {
     matches!(c, Cmp::Lt | Cmp::Un)
 }
 fn sub(a: Ext, b: Ext) -> Ext {

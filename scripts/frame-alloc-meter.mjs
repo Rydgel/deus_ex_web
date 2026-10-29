@@ -7,7 +7,7 @@
  * fixed roam as hud-stream-digest.mjs (a forward hold, a turn every 90 ticks, a jump every 150) through the installed input bindings.
  *
  *   node scripts/frame-alloc-meter.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--steps begin,actors] [--children]
+ *     [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
  *
  * Without --sites: the heap-space size of V8's new space around each step (begin, lightFrame, sprites, actors, stamps, coronas, weapon,
  * hud) and around the whole call, as KB a frame (mean, median, p90). A frame a scavenge ran in is left out of that step's numbers;
@@ -39,6 +39,7 @@ const map = flag('map', '01_NYC_UNATCOIsland'), frames = Number(flag('frames', 6
 const [width, height] = flag('size', '1440x960').split('x').map(Number);
 const seriesPath = flag('series', null), outPath = flag('out', null), comparePath = flag('compare', null), siteCount = Number(flag('sites', 0));
 const wantSteps = flag('steps', 'begin,actors').split(',');
+const siteDepth = Number(flag('depth', 5));
 
 const realNow = performance.now.bind(performance);
 globalThis.__realNow = realNow;
@@ -219,7 +220,7 @@ if (inspector) {
       const entry = perStep.get(key) ?? perStep.set(key, { leaf: new Map(), sites: new Map() }).get(key);
       // a builtin (Array.prototype.map, Map.set, an iterator's next) has no file: it is attributed to its caller
       const leafName = node.callFrame.url ? fn(node.callFrame) : `${fn(node.callFrame).trim()} < ${parentFn ?? '?'}`;
-      bump(entry.leaf, leafName, node.selfSize); bump(entry.sites, here.slice(-5).reverse().join(' < '), node.selfSize);
+      bump(entry.leaf, leafName, node.selfSize); bump(entry.sites, here.slice(-siteDepth).reverse().join(' < '), node.selfSize);
     }
     // the wrapper level keeps the step unset until its callee
     for (const child of node.children) visit(child, here, /^meterStep /.test(fn(node.callFrame)) ? null : st, fn(node.callFrame));
@@ -251,4 +252,5 @@ if (comparePath) {
   else if (first >= 0) { console.log(`compare: DIFFERENT at frame ${first} (${before.hashes[first]} against ${hashes[first]})`); status = 1; }
   else console.log(`compare: identical ${frames} frames (${digestText})`);
 }
+if (globalThis.__hn) console.log('hostnative', JSON.stringify([...globalThis.__hn].sort((a,b)=>b[1]-a[1]).slice(0,20)));
 process.exit(status);

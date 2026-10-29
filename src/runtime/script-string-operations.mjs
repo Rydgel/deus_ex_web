@@ -111,6 +111,15 @@ export function scriptRight(value,count) {
 export function scriptCaps(value) {
   scriptStringText(value); // Require an already converted FString value.
   if(value.includes('\0'))throw new Error('Original Caps with embedded-zero storage is unsupported');
+  // Only a-z change. An all-ASCII text is toUpperCase's exact case (one string made, no match and no callback per letter); a text
+  // with no lowercase letter is its own result.
+  let lower=false,ascii=true;
+  for(let i=0;i<value.length;i++){
+    const unit=value.charCodeAt(i);
+    if(unit>=0x61&&unit<=0x7a)lower=true;
+    if(unit>=0x80){ascii=false;break;}
+  }
+  if(ascii)return lower?value.toUpperCase():value;
   return value.replace(/[a-z]/g,unit=>String.fromCharCode(unit.charCodeAt(0)-0x20));
 }
 
