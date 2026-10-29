@@ -51,6 +51,7 @@ import { createLevelSaver } from './travel-save.mjs';
 import { PLAIN_SAVED_OBJECTS, NATIVE_SAVED_OBJECTS, isSavedFlag, isSavedFlagBase, adoptNativeObject, adoptFlagBase, fillRestoredFlagStore } from './script-restore-objects.mjs';
 import { createGameSaver } from './game-save.mjs';
 import { handleOf } from './script-object-handles.mjs';
+import { RecordLevelBinding, RecordNetModeBinding } from './script-bindings.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -166,14 +167,11 @@ function makeBinding(runtime, record, field) {
   // collisionradius, collisionheight, the oldlocation entry below) serve only
   // a host whose class has no image cell for them (isolated fixtures) and the
   // controlled player's Physics.
+  // record.levelInfo and level.netMode change only through these setters, so
+  // the runtime keeps a copy in the image (mirror) for the Rust VM.
+  if (key === 'level') return new RecordLevelBinding(record);
+  if (key === 'netmode') return new RecordNetModeBinding(record);
   const dynamic = {
-    // record.levelInfo and level.netMode change only through these setters,
-    // so the runtime keeps a copy in the image (mirror) for the Rust VM.
-    level: {
-      get: () => record.levelInfo,
-      set: value => { record.levelInfo = value; },
-      mirror: true,
-    },
     pawnlist: {
       get: () => record.level?.pawnList ?? null,
       set: value => { if (record.level) record.level.pawnList = value; },
@@ -341,11 +339,6 @@ function makeBinding(runtime, record, field) {
     realrotation: {
       get: () => host.realRotation ?? values.RealRotation ?? ZERO_VECTOR,
       set: value => { host.realRotation = vector(value, true); },
-    },
-    netmode: {
-      get: () => record.level?.netMode ?? 0,
-      set: value => { if (record.level) record.level.netMode = Number(value) | 0; },
-      mirror: true,
     },
   };
   // The Mover native fields above are a mover's interpolation state. PhysAlpha,
