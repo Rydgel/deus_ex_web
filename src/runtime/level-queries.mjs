@@ -109,6 +109,7 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   const fast = store && extentCheck === traceExtent
     ? createKernelLineChecks({ store, model, worldModel, levelInfo, valuesOf, isA, brushToWorld: brushToWorldCached }) : null;
   const checked = HASH_DIFFERENTIAL || TRACE_DIFFERENTIAL;
+  const PROBE_DIFFERENTIAL = checked || (typeof process !== 'undefined' && process.env?.LINE_PROBE_DIFFERENTIAL === '1');
   const javascriptMulti = ({ end, start, extent, checkActors, worldActor, extra = 0 }) =>
     multiLineCheck(join, end, start, extent, checkActors, worldActor, extra);
   const javascriptLine = (start, end, extent, flags, extra, source) => {
@@ -164,6 +165,26 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
         }
       }
       return javascriptLine(start, end, extent, flags, extra, source);
+    },
+    /** lineCheck for a caller that reads only `outside` and `actor` (corona-scan's helper), written into `into` with no result
+     * object. `lineModel()` is the moving brush tracker's view of Level->Model (bsp-occlusion.mjs lineModel), null without a live
+     * tracker. While the tracker lives and its collision model is the level's world model (worldModel), the kernel answers the
+     * line over it as it answers every other line check; the view is built only where the JavaScript path needs it: the
+     * tracker's nodes are one block of memory read by both, and the kernel's import follows its generation. */
+    lineProbe(into, start, end, extent, flags, extra, source, lineModel = null) {
+      if (fast && (model.trackedCollision?.() != null || lineModel === null || lineModel() === null)) {
+        if (fast.probe(into, start, end, extent, flags, extra, source)) {
+          if (PROBE_DIFFERENTIAL) {
+            const expected = this.lineCheck(start, end, extent, flags, extra, source, lineModel && lineModel());
+            if (expected.outside !== into.outside || expected.actor !== into.actor)
+              throw new Error(`lineProbe differential mismatch: outside ${into.outside} ${expected.outside}, actor ${into.actor?.name} ${expected.actor?.name}; ${JSON.stringify({ start, end, extent, flags, extra })}`);
+          }
+          return;
+        }
+      }
+      const result = this.lineCheck(start, end, extent, flags, extra, source, lineModel && lineModel());
+      into.outside = result.outside;
+      into.actor = result.actor;
     },
     /** walking-surface.mjs's scan in one kernel call (collision-kernel.mjs
      * surfaceScan), or undefined for the JavaScript scan. */

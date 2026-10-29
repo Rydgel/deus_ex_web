@@ -1,5 +1,5 @@
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
-import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, coronaLineVisible, leafPermeatingLights } from '../runtime/coronas.mjs';
+import { createCoronaCache, coronaDecay, coronaSeenAt, coronaIcon, coronaFrame, coronaFrameFromCamera, coronaLineVisible, leafPermeatingLights } from '../runtime/coronas.mjs';
 import { movingLightInView, movingLightLeafList, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
@@ -68,6 +68,31 @@ export function createCoronaScan(runtime, { model, exportName, player, lineModel
     return list ? list.map(k => candidates[k].actor) : [];
   }
 
+  // The scan's frame state in one object and the line check's answer in another, so that `update` and `visit` hold no closure: a
+  // function with an inner function that reads its variables makes a context object at every call below TurboFan
+  // (docs/live-heap.md "Cut: tick and actors"). `probed` is what the helper reads of a line check (level-queries.mjs lineProbe),
+  // `place` the light's float32 Location, read into one array.
+  const state = { level: null, viewer: null, eye: null, slot: { next: 0 }, delta: 0, stats: null, visited: null, seen: null };
+  const probed = { outside: true, actor: null }, place = [0, 0, 0];
+  // Helper 0x10b1bc00's two line checks: level-queries.mjs lineCheck's `outside` and `actor`.
+  const lineCheck = (start, end, extent, flags, extra, source) => {
+    state.level.hash.lineProbe(probed, start, end, extent, flags, extra, source, lineModel);
+    return probed;
+  };
+  // Helper 0x10b1bc00 for one light: the two line checks, then the entry.
+  function visit(light) {
+    const stats = state.stats, level = state.level;
+    stats.leafLights++;
+    state.visited.push(light.name);
+    const location = read(light, 'Location');
+    place[0] = Math.fround(location[0]); place[1] = Math.fround(location[1]); place[2] = Math.fround(location[2]);
+    const visible = coronaLineVisible(lineCheck, place, state.eye, state.viewer);
+    if (visible) { stats.visible++; state.seen.push(light.name); }
+    // qualifies is bCorona && Skin && !bDeleteMe, which coronaSeen reads only for a light that passed the line checks.
+    if (visible && Boolean(read(light, 'bCorona')) && Boolean(read(light, 'Skin')) && !read(light, 'bDeleteMe'))
+      coronaSeenAt(cache, state.slot, light, state.delta, level.actors);
+  }
+
   /** One main frame: `view` {location, rotation, fov}, the render
    * rectangle {width, height} in drawing-buffer pixels, the master frame
    * (visibility().master, or null), the frame's moving-light candidates and
@@ -83,29 +108,25 @@ export function createCoronaScan(runtime, { model, exportName, player, lineModel
     // one, else Engine's own frame producers on the render rectangle. The line
     // checks end at its Coords.Origin (the helper's `frame + 0x34`).
     const { coords, frame } = master ? coronaFrame(master.words) : coronaFrameFromCamera(view, rect);
-    const eye = coords.origin, slot = { next: 0 };
-    // Level->Model as the tracker left it for this frame (one view of its memory).
-    const tracked = lineModel();
-    const lineCheck = (start, end, extent, flags, extra, source) => level.hash.lineCheck(start, end, extent, flags, extra, source, tracked);
-    // Helper 0x10b1bc00 for one light: the two line checks, then the entry.
-    const visit = light => {
-      stats.leafLights++;
-      visited.push(light.name);
-      const location = read(light, 'Location').map(Math.fround);
-      const visible = coronaLineVisible(lineCheck, location, eye, viewer);
-      if (visible) { stats.visible++; seen.push(light.name); }
-      coronaSeen(cache, slot, light, { visible, delta,
-        qualifies: Boolean(read(light, 'bCorona')) && Boolean(read(light, 'Skin')) && !read(light, 'bDeleteMe'),
-        actorIndex: () => level.actors.indexOf(light) });
-    };
-    // DrawFrame 0x10b1b6b1-0x10b1b743: the leaf's permeating static lights,
-    // then the leaf's LeafLights.
-    for (const ref of leafPermeatingLights(model, region.leaf)) {
-      const light = actorFor(ref, level);
-      if (light) visit(light);
+    const eye = coords.origin;
+    // Level->Model as the tracker left it for this frame is one view of its memory (lineModel), built where a line check needs it.
+    state.level = level; state.viewer = viewer; state.eye = eye; state.slot.next = 0; state.delta = delta;
+    state.stats = stats; state.visited = visited; state.seen = seen;
+    try {
+      // DrawFrame 0x10b1b6b1-0x10b1b743: the leaf's permeating static lights,
+      // then the leaf's LeafLights.
+      const permeating = leafPermeatingLights(model, region.leaf);
+      for (let i = 0; i < permeating.length; i++) {
+        const light = actorFor(permeating[i], level);
+        if (light) visit(light);
+      }
+      const moving = dynamicLights(region.leaf, lights, master);
+      for (let i = 0; i < moving.length; i++) visit(moving[i]);
+    } finally {
+      state.level = state.viewer = state.eye = state.stats = state.visited = state.seen = null;
     }
-    for (const light of dynamicLights(region.leaf, lights, master)) visit(light);
-    for (const entry of cache.entries) {
+    for (let slot = 0; slot < cache.entries.length; slot++) {
+      const entry = cache.entries[slot];
       if (entry.actor == null || level.actors[entry.index] !== entry.actor) continue;
       const light = entry.actor;
       const icon = coronaIcon(entry, coordsTransform(read(light, 'Location').map(Math.fround), coords), frame,

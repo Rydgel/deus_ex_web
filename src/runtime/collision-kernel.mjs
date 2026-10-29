@@ -423,6 +423,31 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
         finish(status);
       }
     },
+    /** lineCheck for a caller that reads only `outside` and `actor` (corona-scan's visibility helper): the same lc_line call and
+     * the accepted hit's actor from its record, with no hit object (a lineCheck result is an object, two vectors and a chain of
+     * hit objects). Sets `into.outside` and `into.actor` and returns true, or returns false where lineCheck answers
+     * `undefined` and the JavaScript line check runs instead. */
+    probe(into, start_, end, extent, flags, extra, source) {
+      if (!three(start_) || !three(end) || !three(extent) || typeof flags !== 'number' || typeof extra !== 'number') return false;
+      const worldActor = flags & 4 ? levelInfo : null, model = worldModel();
+      const world = worldActor ? store.world(model) : 0;
+      if (worldActor && world === 0 || !free()) return false;
+      start(source, flags, worldActor);
+      let status = -1;
+      try {
+        status = x.lc_line(store.h, world, start_[0], start_[1], start_[2], end[0], end[1], end[2],
+          extent[0], extent[1], extent[2], extra, flags & 0x17 ? 1 : 0, 1);
+        if (status !== ANSWERED) return false;
+        const answer = store.answer.length ? store.answer : (store.views(), store.answer);
+        if (answer[0] === 0) { into.outside = true; into.actor = null; return true; }
+        const id = answer[11];
+        into.outside = false;
+        into.actor = id === -1 ? worldActor : store.actors[id];
+        return true;
+      } finally {
+        finish(status);
+      }
+    },
     /** walking-surface.mjs's scan and floor queries (see lc_scan), for a
      * pawn whose lineCheck is `lineCheck(a, b, [0, 0, 0], 6, 0, source)` here
      * and whose textureForHit reads `textures[textureModel.nodes[hit.item]

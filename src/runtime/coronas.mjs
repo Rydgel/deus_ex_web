@@ -45,6 +45,9 @@ export function coronaFade(cache, delta) {
   }
 }
 
+// The zero extent of both checks: shared, and never written by a line check.
+const NO_EXTENT = [0, 0, 0];
+
 /** Helper 0x10b1bc00's two line checks, from the frame's Coords.Origin to the
  * light's Location: ULevel::SingleLineCheck takes (Hit, Source, End, Start,
  * TraceFlags, Extent, NodeFlags), and the helper pushes Start = `frame + 0x34`
@@ -56,8 +59,8 @@ export function coronaFade(cache, delta) {
  * `lineCheck`, which takes Start first. validate-coronas.mjs compares these
  * arguments with the ones the original helper passes. */
 export function coronaLineVisible(lineCheck, location, origin, viewer) {
-  if (!lineCheck(origin, location, [0, 0, 0], 6, 0, null).outside) return false;
-  const hit = lineCheck(origin, location, [0, 0, 0], 0x11, 0, null);
+  if (!lineCheck(origin, location, NO_EXTENT, 6, 0, null).outside) return false;
+  const hit = lineCheck(origin, location, NO_EXTENT, 0x11, 0, null);
   return Boolean(hit.outside) || hit.actor === viewer;
 }
 
@@ -69,8 +72,19 @@ export function coronaLineVisible(lineCheck, location, origin, viewer) {
  * a new one takes the next free slot from `slot.next` at min(1, 2Δ). */
 export function coronaSeen(cache, slot, light, { visible, qualifies, actorIndex, delta }) {
   if (!visible || !qualifies) return;
+  seenEntry(cache, slot, light, delta, null, actorIndex);
+}
+
+/** coronaSeen for a light that passed the line checks and qualifies, with no arguments object and no closure
+ * (corona-scan.mjs): a new entry's index is the light's position in `actors` (Level.Actors). */
+export function coronaSeenAt(cache, slot, light, delta, actors) {
+  seenEntry(cache, slot, light, delta, actors, null);
+}
+
+function seenEntry(cache, slot, light, delta, actors, actorIndex) {
   const twice = x87add(ld(delta), ld(delta)), entries = cache.entries;
-  const found = entries.findIndex(entry => entry.actor === light);
+  let found = -1;
+  for (let i = 0; i < entries.length; i++) if (entries[i].actor === light) { found = i; break; }
   if (found >= 0) {
     const sum = x87add(twice, ld(entries[found].brightness));
     entries[found].brightness = x87cmp(ONE, sum) === 'gt' ? st(sum) : 1;
@@ -78,7 +92,7 @@ export function coronaSeen(cache, slot, light, { visible, qualifies, actorIndex,
   }
   while (slot.next < CORONA_SLOTS && entries[slot.next].actor != null) slot.next++;
   if (slot.next >= CORONA_SLOTS) return;
-  entries[slot.next] = { actor: light, index: actorIndex(), brightness: x87cmp(ONE, twice) === 'gt' ? st(twice) : 1 };
+  entries[slot.next] = { actor: light, index: actors !== null ? actors.indexOf(light) : actorIndex(), brightness: x87cmp(ONE, twice) === 'gt' ? st(twice) : 1 };
 }
 
 /** The corona colour from LightHue and LightSaturation (0x10b1b84f-

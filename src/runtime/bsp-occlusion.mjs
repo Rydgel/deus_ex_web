@@ -221,7 +221,12 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
     dynamics = block(12 * caps.nodes), detail = detailTable?.length ? block(4 * detailTable.length) : 0;
   let sprites = block(36 * 256), spriteCapacity = 256;
-  const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
+  // One view of each kind over the kernel's memory, made again when the memory grew (a new view is an object, and these are read
+  // for every tracker header word and node a line check asks).
+  let u32View = null, u8View = null, f32View = null;
+  const words = () => { const buffer = memory.buffer; return u32View !== null && u32View.buffer === buffer ? u32View : (u32View = new Uint32Array(buffer)); };
+  const bytes = () => { const buffer = memory.buffer; return u8View !== null && u8View.buffer === buffer ? u8View : (u8View = new Uint8Array(buffer)); };
+  const floats = () => { const buffer = memory.buffer; return f32View !== null && f32View.buffer === buffer ? f32View : (f32View = new Float32Array(buffer)); };
   {
     const u = words(), b = bytes();
     model.nodes.forEach((n, i) => {
@@ -252,7 +257,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     if (detail) u.set(detailTable, detail >>> 2);
   }
   const trackerHost = tracker ? createTrackerHost(kernel, model, tracker.movers,
-    { at: { nodes, verts, points, surfs }, caps, block, words: () => new Uint32Array(memory.buffer) }) : null;
+    { at: { nodes, verts, points, surfs }, caps, block, words }) : null;
   // collisionModel()'s one object.
   let collision = null;
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
@@ -457,7 +462,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     /** Node `i`'s polygon as the model holds it now (a tracker fragment where
      * the last Update left it): its points, flat [x, y, z, ...] floats. */
     nodePolygon(i) {
-      const u = words(), f = new Float32Array(u.buffer), count = bytes()[nodes + 64 * i + 54];
+      const u = words(), f = floats(), count = bytes()[nodes + 64 * i + 54];
       const pool = u[(nodes >>> 2) + 16 * i + 6] | 0, out = new Array(3 * count);
       for (let k = 0; k < count; k++) {
         const at = (points >>> 2) + 3 * u[(verts >>> 2) + 2 * (pool + k)];
@@ -481,7 +486,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * updated. */
     lineModel() {
       const count = trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, made = new Map();
-      const u = words(), b = bytes(), fl = new Float32Array(memory.buffer);
+      const u = words(), b = bytes(), fl = floats();
       const node = i => {
         let n = made.get(i);
         if (!n) {
@@ -530,7 +535,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
         if (g !== madeGeneration) { made = new Map(); madeGeneration = g; }
         let n = made.get(i);
         if (!n) {
-          const u = words(), b = bytes(), fl = new Float32Array(memory.buffer), o = (nodes >>> 2) + 16 * i;
+          const u = words(), b = bytes(), fl = floats(), o = (nodes >>> 2) + 16 * i;
           n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
             vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
             zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
