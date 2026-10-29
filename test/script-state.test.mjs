@@ -64,3 +64,27 @@ test('a destroyed actor\'s ProcessState neither polls its latent action nor runs
   destroyed=false;state.process(1/60);
   assert.deepEqual(polled,[0x181]);assert.equal(state.execution.cursor,null);
 });
+
+// Live-heap step 5 (docs/live-heap.md "Step 5's results"): a state makes its locals when a frame needs them, and the probe mask arrays are shared by value.
+test('the locals of a state are made on first use: a Map for the runtime\'s objects, an object otherwise',()=>{
+  const plain=new ScriptState({}, {}),mapped=new ScriptState({}, {},true);
+  assert.equal(plain.localValues,null);assert.equal(mapped.localValues,null);
+  assert.deepEqual(plain.locals,{});
+  assert.ok(mapped.locals instanceof Map);
+  assert.equal(mapped.locals,mapped.locals,'the same Map every time');
+  const given=new Map();mapped.locals=given;assert.equal(mapped.locals,given);
+});
+test('probe masks of equal words are one frozen array',()=>{
+  const state=new ScriptState({}, {});
+  assert.deepEqual(state.probeMask,[0,0]);
+  const first=state.probeMask;
+  state.probeMask=[0,0];assert.equal(state.probeMask,first,'equal words share the array');
+  assert.ok(Object.isFrozen(first));
+  const other=new ScriptState({}, {});other.probeMask=[0xffffffff,0xffffffff];
+  const third=new ScriptState({}, {});third.probeMask=[0xffffffff,0xffffffff];
+  assert.equal(other.probeMask,third.probeMask);
+  assert.deepEqual(other.probeMask,[0xffffffff,0xffffffff]);
+  assert.notEqual(other.probeMask,first);
+  const mask=[1,2];state.probeMask=mask;mask[0]=9;
+  assert.deepEqual(state.probeMask,[1,2],'the stored words are not the caller\'s array');
+});
