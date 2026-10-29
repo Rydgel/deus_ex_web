@@ -11,6 +11,8 @@ import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
+import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
+import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference } from './script-bindings.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
@@ -284,20 +286,23 @@ class ScriptInstance {
     // The slot fallback's defaults as of attachment. An object whose every
     // property has an image cell never reads a slot, so it keeps no copy.
     this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
-    this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
-    this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;
+    this.defaultsSnapshot=storage.complete?undefined:defaultsSnapshot(cls);
+    // The logical storage of the properties without an image cell: made when first asked for (`slots`), since an object with a cell
+    // for every property never has one.
+    this.slotMap=slots.size?slots:null;this.bindings=new Map();this.state=state;this.singular=false;
     // The Rust VM's binding set of this object (script-vm-rust.mjs bindingSet) is kept while no binding was added or replaced.
     this.bindingsVersion=0;this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
     // The image is [base, base+size) of the runtime's object arena (R0).
     this.cells=storage.cells;this.arena=storage.arena;this.base=storage.base;this.size=storage.size;this.refs=storage.refs;
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
-    this.nativeObject=undefined;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
+    this.nativeObject=undefined;this.loadedReference=null;this.loadedResource=null;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
     this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
     // The Rust actor tick's field mask and class flags (actor-tick-kernel.mjs).
     this.tickDesc=undefined;
     // The image range's release token (arena, base, size); see releaseObjectImage.
     this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
   }
+  get slots(){return this.slotMap??=new Map();}
   /** The image addressed from zero, for callers outside the access paths. */
   get image(){return this.base?this.arena.window(this.base,this.size):null;}
   // An actor's pendingKill is its bDeleteMe and cannot be assigned; another
@@ -308,6 +313,21 @@ class ScriptInstance {
   set pendingKill(value){
     if(this.deleteMe!==null)throw new TypeError('Cannot set property pendingKill of an actor, which has only a getter');
     this.pendingKillValue=value;
+  }
+}
+/** One (receiver, name) pair of boundField: the instance, field, codec and cell resolved once. An object of its own with get and set on
+ * the prototype, not a closure pair and a context for each field of each spawned actor. */
+class BoundField {
+  constructor(runtime,instance,field,codec,cell){this.runtime=runtime;this.instance=instance;this.field=field;this.codec=codec;this.cell=cell;}
+  get(){
+    const instance=this.instance;
+    if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+    return this.runtime.readInstanceField(instance,this.field,this.codec,this.cell);
+  }
+  set(value){
+    const instance=this.instance;
+    if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+    return this.runtime.writeInstanceField(instance,this.field,value,this.codec,this.cell);
   }
 }
 /** An image cell as a reference's storage (storageReference): the VM builds
@@ -403,6 +423,7 @@ const scriptVmSetting=()=>{
   return value;
 };
 const scriptVmRust=()=>scriptVmSetting()==='rust';
+const NATIVE_HEADER_BINDING_ORDER=['ObjectFlags','Outer','Name','Class','ObjectInternal'];
 const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK==='1';
 // Mesh payloads the script-side mesh consumers (anim sequences, textures)
 // accept: ULodMesh and a classic UMesh (docs/umesh.md).
@@ -864,7 +885,7 @@ export class ScriptRuntime {
    * its startup/lifetime sequence. Overrides retain original field identity. */
   attach(instance,cls,overrides=new Map()) {
     if(this.instances.has(instance))throw new Error('Script instance is already attached');
-    const state=new ScriptState(instance,this.services);state.locals=new Map();
+    const state=new ScriptState(instance,this.services,true);
     const storage=this.objectStorage(cls),slots=new Map();
     for(const [key,value] of overrides){
       const cell=storage.cells?.get(key);
@@ -1124,7 +1145,7 @@ export class ScriptRuntime {
     const instance=this.instance(receiver);
     const flags=this.fieldReference(receiver,this.lookupMember(instance.cls,'fields','ObjectFlags'));
     instance.state?.setStateNode(null);
-    const state=new ScriptState(receiver,this.services);state.locals=new Map();
+    const state=new ScriptState(receiver,this.services,true);
     state.probeMask=[0xffffffff,0xffffffff];
     // Original allocation/constructor leaves +0x24 untouched. Until a state
     // operation writes it, polling would depend on unrecovered allocator data.
@@ -1153,12 +1174,8 @@ export class ScriptRuntime {
     // spawned actors expose the original `ClassName1` name to world arrays and
     // callers, just as their reflected Name field does.
     receiver.name=object.name;
-    const bind=(name,get,set)=>this.bindProperty(receiver,this.lookupMember(instance.cls,'fields',name),{get,set});
-    bind('ObjectFlags',()=>object.flags,value=>{object.flags=value>>>0;});
-    bind('Outer',()=>object.outer?.identity??null,()=>{throw new Error('Changing native Outer requires object rename support');});
-    bind('Name',()=>object.name,()=>{throw new Error('Changing native Name requires object rename support');});
-    bind('Class',()=>instance.cls.record,()=>{throw new Error('Changing native Class is unsupported');});
-    bind('ObjectInternal',()=>{throw new Error('Raw native ObjectInternal pointers are not represented by the script host');},()=>{throw new Error('Writing native ObjectInternal is unsupported');});
+    // The bindings carry no state: they read the instance's nativeObject (script-bindings.mjs).
+    for(const name of NATIVE_HEADER_BINDING_ORDER)this.bindProperty(receiver,this.lookupMember(instance.cls,'fields',name),NATIVE_HEADER_BINDINGS[name]);
     for(let cls=instance.cls;cls;cls=cls.base)if(cls===this.actorClass){
       instance.receiver=receiver;instance.deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
       break;
@@ -1363,7 +1380,7 @@ export class ScriptRuntime {
       return propertyReference(field,()=>receiver.name,()=>{throw new Error('Class Name is immutable');});
     const instance=this.instance(receiver);
     const binding=instance.bindings.get(field.key);
-    if(binding)return propertyReference(field,binding.get,binding.set);
+    if(binding)return bindingReference(field,binding,instance);
     const cell=instance.cells?.get(field.key);
     if(cell){
       const poisoned=instance.poison?.get(field.key);
@@ -1383,7 +1400,7 @@ export class ScriptRuntime {
       return this.fieldReference(receiver,field).get();
     const instance=this.instance(receiver);
     const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
-    if(binding){const codec=propertyCodec(field);return codec.read(binding.get());}
+    if(binding){const codec=propertyCodec(field);return codec.read(binding.get(instance));}
     const cell=instance.cells?.get(field.key);
     if(cell){
       const poisoned=instance.poison?.get(field.key);
@@ -1454,7 +1471,7 @@ export class ScriptRuntime {
   }
   readInstanceField(instance,field,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
     const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
-    if(binding)return codec.read(binding.get());
+    if(binding)return codec.read(binding.get(instance));
     return this.readStorage(instance,field,codec,cell);
   }
   /** The object's own storage for a property: its image cell, or the logical
@@ -1478,7 +1495,7 @@ export class ScriptRuntime {
   }
   writeInstanceField(instance,field,value,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
     const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
-    if(binding)binding.set(codec.store(value,binding.get()));
+    if(binding)binding.set(codec.store(value,binding.get(instance)),instance);
     else this.writeStorage(instance,field,value,codec,cell);
     return codec.copy(value);
   }
@@ -1513,7 +1530,7 @@ export class ScriptRuntime {
   storeNamed(receiver,name,value) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name),field=handle.field,codec=handle.codec??=propertyCodec(field);
     const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
-    if(binding)binding.set(codec.store(value,binding.get()));
+    if(binding)binding.set(codec.store(value,binding.get(instance)),instance);
     else this.writeStorage(instance,field,value,codec,handle.cell);
   }
   /** Actor.LatentFloat (AActor+0xe0) as {get, set}: Sleep's remaining time
@@ -1540,17 +1557,7 @@ export class ScriptRuntime {
    * released-allocation check has to run per access. */
   boundField(receiver,name) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
-    const field=handle.field,codec=handle.codec??=propertyCodec(field),cell=handle.cell;
-    return {
-      get:()=>{
-        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
-        return this.readInstanceField(instance,field,codec,cell);
-      },
-      set:value=>{
-        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
-        return this.writeInstanceField(instance,field,value,codec,cell);
-      },
-    };
+    return new BoundField(this,instance,handle.field,handle.codec??=propertyCodec(handle.field),handle.cell);
   }
   /** A bound property's storage beneath its host binding. A binding whose
    * host state is absent (an actor without live Touching slots, a player
@@ -1870,15 +1877,11 @@ export class ScriptRuntime {
       const resource=await this.prepareResource(reference);
       this.attach(reference,cls,slots);
       if(randomLabels!==null)this.instance(reference).randomLabels=randomLabels;
-      const immutable=(name,get)=>this.bindProperty(reference,this.lookupMember(cls,'fields',name),{
-        get,set:()=>{throw new Error(`Loaded ${name} mutation requires its native lifecycle service`);},
-      });
-      immutable('Name',()=>reference.name);
-      immutable('Class',()=>cls.record);
-      immutable('Outer',()=>resource.outer?.object??resource.outer??null);
-      for(const name of ['ObjectFlags','ObjectInternal'])immutable(name,()=>{
-        throw new Error(`Loaded ${name} requires the live native object lifecycle`);
-      });
+      // The bindings read these two (script-bindings.mjs LOADED_HEADER_BINDINGS).
+      const loaded=this.instance(reference);
+      loaded.loadedReference=reference;loaded.loadedResource=resource;
+      for(const name of ['Name','Class','Outer','ObjectFlags','ObjectInternal'])
+        this.bindProperty(reference,this.lookupMember(cls,'fields',name),LOADED_HEADER_BINDINGS[name]);
       return reference;
     })();
     this.preparedObjects.set(reference.key,pending);
@@ -3267,10 +3270,9 @@ export class ScriptRuntime {
     const cell=instance.cells?.get(field.key);
     if(!cell||!scalarCell(cell)||instance.poison?.has(field.key))return null;
     const codec=propertyCodec(field);
-    const write=()=>writeCell(cell,instance.arena.view,instance.refs,codec.copy(binding.get()),instance.base);
-    write();
     // `mirrored`: the Rust receiver's binding set leaves this key out.
-    const mirrored={get:binding.get,set:value=>{binding.set(value);write();},mirrored:true};
+    const mirrored=new MirroredBinding(binding,instance,cell,codec);
+    mirrored.write();
     if(SCRIPT_VM_CHECK)(this.mirrors??=[]).push({instance,field,cell,codec,binding:mirrored});
     return mirrored;
   }
@@ -3278,7 +3280,7 @@ export class ScriptRuntime {
   checkMirrors() {
     for(const {instance,field,cell,codec,binding} of this.mirrors??[]){
       if(instance.imageToken?.released)continue;
-      const stored=readCell(cell,instance.arena.view,instance.refs,instance.base),value=codec.copy(binding.get());
+      const stored=readCell(cell,instance.arena.view,instance.refs,instance.base),value=codec.copy(binding.get(instance));
       if(!Object.is(stored,value))throw new Error(`Mirrored binding ${field.key} diverged: image ${String(stored)}, binding ${String(value)}`);
     }
   }

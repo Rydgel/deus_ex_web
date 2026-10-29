@@ -516,10 +516,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (entry.struct !== 'core.object.color') boundary(`Script write to native struct ${entry.struct} is not bound`);
     colorKeys.forEach((key, i) => W.setU8(object, base + i, value[key] ?? 0));
   }
-  function bindingFor(object, entry) {
-    const override = FIELD_OVERRIDES.get(entry.field.key);
-    const e = override ? {...entry, ...override} : entry;
-    const read = () => {
+  /** A native member of a window object as a binding (script-bindings.mjs): the object and its layout entry
+   * are fields, with get and set on the prototype, not a closure pair and a context for each member. */
+  class FieldBinding {
+    constructor(object, e) { this.object = object; this.e = e; }
+    get() {
+      const object = this.object, e = this.e;
       if (e.kind === 'bool') return Boolean(W.u32(object, e.offset) & e.mask);
       if (e.arrayDim > 1) {
         const values = [];
@@ -527,8 +529,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         return values;
       }
       return readElement(object, e, e.offset);
-    };
-    const write = value => {
+    }
+    set(value) {
+      const object = this.object, e = this.e;
       value = refValue(value);
       if (e.kind === 'bool') {
         const word = W.u32(object, e.offset);
@@ -540,8 +543,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         return;
       }
       writeElement(object, e, e.offset, value);
-    };
-    return {get: read, set: write};
+    }
+  }
+  function bindingFor(object, entry) {
+    const override = FIELD_OVERRIDES.get(entry.field.key);
+    return new FieldBinding(object, override ? {...entry, ...override} : entry);
   }
   function readElement(object, e, at) {
     switch (e.kind) {
