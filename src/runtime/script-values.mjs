@@ -422,6 +422,10 @@ function copyFromDescriptor(descriptor, value, operation = 'copyValue') {
   return copyScalar(value, descriptor.element, operation);
 }
 
+// Whether copyToStorage uses the stored raw value: a bool property with a bit mask, and an array of those.
+const needsRaw = descriptor => descriptor.array
+  ? descriptor.element.type === 'bool' && bitMask(descriptor.element.metadata) !== null
+  : descriptor.type === 'bool' && bitMask(descriptor.metadata) !== null;
 function copyToStorage(value, descriptor, rawValue, operation = 'propertyReference') {
   const logical = copyFromDescriptor(descriptor, value, operation);
   const mask = descriptor.type === 'bool' && !descriptor.array ? bitMask(descriptor.metadata) : null;
@@ -525,7 +529,9 @@ class PropertyReference {
   setValue(value) {
     const state = this.#state, index = this.arrayIndex, descriptor = this.descriptor;
     if (index === null) {
-      state.set(copyToStorage(value, descriptor, state.get()));
+      // The old raw value only matters to a bool in a shared dword and an array of those; a storage whose read has no effect
+      // (`pure`: an image cell without a poison entry) is not read for the others.
+      state.set(copyToStorage(value, descriptor, needsRaw(descriptor) || state.pure?.() !== true ? state.get() : undefined));
       return copyFromDescriptor(descriptor, value, 'arrayReference.set');
     }
     const element = descriptor.element, whole = readWhole(state);

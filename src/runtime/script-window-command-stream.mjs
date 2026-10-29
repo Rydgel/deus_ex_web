@@ -46,6 +46,18 @@ export class HudCommandStream {
     words[at + 4] = x; words[at + 5] = y; words[at + 6] = width; words[at + 7] = height;
     words[at + 8] = u; words[at + 9] = v; words[at + 10] = ul; words[at + 11] = vl;
   }
+  /** A tile command whose eight numbers the caller writes into `words` (the offsets +4 to +11 of the returned one): the texture, the
+   * colour and the style are entered, the numbers are not passed (eight doubles passed to a call are boxed in the tiers below TurboFan). */
+  beginTile(texture, color, style) {
+    if ((this.count + 1) * STREAM_STRIDE > this.words.length) this.grow();
+    let textureIndex = this.textureAt.get(texture);
+    if (textureIndex === undefined) { textureIndex = this.textures.length; this.textures.push(texture); this.textureAt.set(texture, textureIndex); }
+    let colorIndex = this.colorAt.get(color);
+    if (colorIndex === undefined) { colorIndex = this.colors.length; this.colors.push(color); this.colorAt.set(color, colorIndex); }
+    const words = this.words, at = this.count++ * STREAM_STRIDE;
+    words[at] = 0; words[at + 1] = textureIndex; words[at + 2] = colorIndex; words[at + 3] = style;
+    return at;
+  }
   /** A command of another kind, in its place among the tiles. */
   other(command) {
     if ((this.count + 1) * STREAM_STRIDE > this.words.length) this.grow();

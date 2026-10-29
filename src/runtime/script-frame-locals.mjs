@@ -163,6 +163,7 @@ export class LocalCellStorage {
     const locals = this.locals;
     return readCell(this.cell, locals.arena.view, locals.refs, locals.base);
   }
+  pure() { return true; }
   readElement(index) {
     if (!isFixedCell(this.cell)) return NO_ELEMENT;
     const locals = this.locals;

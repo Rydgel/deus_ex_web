@@ -218,27 +218,29 @@ export const VOICE_BASE = 0x1068dca0, VOICE_SIZE = 0xa0;
  * loadSample's the bytes and the expected handle; attachSample's the 16-bit
  * PCM and the handle; setSampleReverb's 27 words. */
 export function encodeMusicBatch(id, ops, { owned = false } = {}) {
+  // (an op is [name, ...args]: read by index, since destructuring each into a name and a rest array made two arrays and an iterator per op)
+  const list = Array.isArray(ops) ? ops : [...ops];
   let length = 0;
-  for (const [name] of ops) {
-    const code = MUSIC_OP[name];
+  for (let k = 0; k < list.length; k++) {
+    const name = list[k][0], code = MUSIC_OP[name];
     if (!code) throw new Error(`Unknown Galaxy library op ${name}`);
     length += 1 + OP_ARITY[code];
   }
   const words = new Int32Array(length), modules = [];
   let at = 0;
-  for (const [name, ...args] of ops) {
-    const code = MUSIC_OP[name];
+  for (let k = 0; k < list.length; k++) {
+    const op = Array.isArray(list[k]) ? list[k] : [...list[k]], code = MUSIC_OP[op[0]];
     words[at++] = code;
     if (BLOB_OPS.has(code)) {
-      const bytes = args[0] instanceof Uint8Array ? args[0] : new Uint8Array(args[0]);
+      const bytes = op[1] instanceof Uint8Array ? op[1] : new Uint8Array(op[1]);
       const copy = owned && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
       words[at++] = modules.length; words[at++] = copy.length;
-      if (code !== MUSIC_OP.loadMusic) words[at++] = args[1] | 0;
+      if (code !== MUSIC_OP.loadMusic) words[at++] = op[2] | 0;
       modules.push(copy.buffer);
     } else if (code === MUSIC_OP.setSampleReverb) {
-      const block = args[0];
+      const block = op[1];
       for (let i = 0; i < 27; i++) words[at++] = block[i] | 0;
-    } else for (let i = 0; i < OP_ARITY[code]; i++) words[at++] = (args[i] ?? 0) | 0;
+    } else for (let i = 0; i < OP_ARITY[code]; i++) words[at++] = (op[1 + i] ?? 0) | 0;
   }
   return { message: { type: 'batch', id, ops: words, modules }, transfer: [words.buffer, ...modules] };
 }

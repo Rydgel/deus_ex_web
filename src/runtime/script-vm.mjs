@@ -611,12 +611,13 @@ class CompiledFunction {
 function buildEngine(compiled) {
   const fn = compiled.script, held = () => compiled.held();
 
-  function native(index, args, receiver, services, frame) {
+  function native(index, args, receiver, services, frame, plain = false) {
     if(moverPrimitiveIndices.has(index))return executeMoverPrimitive(index,args);
     if(decorationPrimitiveIndices.has(index))return executeDecorationPrimitive(index,args);
     // (an element loop and two reads: the array destructuring made an iterator and its result objects for every native)
-    const values = new Array(args.length);
-    for (let i = 0; i < values.length; i++) values[i] = refValue(args[i]);
+    // (`plain`: the caller's values hold no reference, so they are the array)
+    let values = args;
+    if (!plain) { values = new Array(args.length); for (let i = 0; i < values.length; i++) values[i] = refValue(args[i]); }
     const a = values[0], b = values[1];
     // The recovered natives 193/226/229/248/300 are bound only for calls
     // whose operand count and shapes match the declared Core signature; a
@@ -1124,17 +1125,25 @@ function buildEngine(compiled) {
     const primitive = primitiveNatives.has(index), discarded = held().discarded.has(n.offset);
     const outs = primitiveOutNatives.get(index), codes = args.map(sub);
     const byReference = Array.from({ length: count }, (_, i) => !primitive || Boolean(outs?.has(i)));
-    return (fr, r) => {
-      const s = fr.services;
-      if (!primitive && s.invokeNative) return s.invokeNative({ index, receiver: r, script: fn, frame: fr,
-        resultDiscarded: discarded, argumentCount: count,
-        evaluateArgument: i => i >= 0 && i < count ? codes[i].ev(fr, fr.instance) : evNode(args[i], fr, fr.instance) });
+    // A primitive native never goes through invokeNative: its closure has no inner closure, so a call allocates no context object
+    // (a function that holds one allocates its context at entry in the tiers below TurboFan), and the values it evaluates are the
+    // array native() reads where none of them is an out reference.
+    const plain = !byReference.includes(true);
+    const byValues = (fr, r, s) => {
       const values = new Array(count);
       for (let i = 0; i < count; i++) {
         if (byReference[i]) values[i] = codes[i].ev(fr, fr.instance);
         else { const value = codes[i].rv(fr, fr.instance); values[i] = Array.isArray(value) ? value.slice() : value; }
       }
-      return native(index, values, r, s, fr);
+      return native(index, values, r, s, fr, plain);
+    };
+    if (primitive) return (fr, r) => byValues(fr, r, fr.services);
+    return (fr, r) => {
+      const s = fr.services;
+      if (s.invokeNative) return s.invokeNative({ index, receiver: r, script: fn, frame: fr, runtime: null,
+        resultDiscarded: discarded, argumentCount: count,
+        evaluateArgument: i => i >= 0 && i < count ? codes[i].ev(fr, fr.instance) : evNode(args[i], fr, fr.instance) });
+      return byValues(fr, r, s);
     };
   }
   function compileEv(n, op) {

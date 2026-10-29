@@ -1803,9 +1803,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const resource=resourceImages.get(pointer);if(!resource)boundary(`Unknown HUD texture pointer ${pointer}`);
     if(plainTiles){
       if(streaming){
-        commandStream.tile(plainTexture(resource.ref),bitsToF32(command.x),bitsToF32(command.y),bitsToF32(command.xl),bitsToF32(command.yl),
-          bitsToF32(command.u),bitsToF32(command.v),bitsToF32(command.ul),bitsToF32(command.vl),colorOf(command.color),
-          command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1);
+        const at=commandStream.beginTile(plainTexture(resource.ref),colorOf(command.color),
+          command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1),words=commandStream.words;
+        words[at+4]=bitsToF32(command.x);words[at+5]=bitsToF32(command.y);words[at+6]=bitsToF32(command.xl);words[at+7]=bitsToF32(command.yl);
+        words[at+8]=bitsToF32(command.u);words[at+9]=bitsToF32(command.v);words[at+10]=bitsToF32(command.ul);words[at+11]=bitsToF32(command.vl);
         return;
       }
       drawCommands.push({texture:plainTexture(resource.ref),x:bitsToF32(command.x),y:bitsToF32(command.y),

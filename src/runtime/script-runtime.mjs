@@ -242,6 +242,17 @@ const fieldTable=cls=>{
   return table;
 };
 const animationTickViews=new WeakMap();
+/** The ZoneInfo fields pawn physics reads, each read live from the zone's image (or from the hash level's serialized values). */
+class ZoneFieldView {
+  constructor(runtime,zone){this.runtime=runtime;this.zone=zone;}
+  read(name){const zone=this.zone;try{return this.runtime.readNamed(zone,name);}catch{return zone?.values?.[name];}}
+  get ZoneGravity(){return this.read('ZoneGravity');}
+  get ZoneVelocity(){return this.read('ZoneVelocity');}
+  get ZoneTerminalVelocity(){return this.read('ZoneTerminalVelocity');}
+  get ZoneGroundFriction(){return this.read('ZoneGroundFriction');}
+  get ZoneFluidFriction(){return this.read('ZoneFluidFriction');}
+  get bWaterZone(){return this.read('bWaterZone');}
+}
 // destroyProperties' size services: they read only their arguments, so one object serves every destruction.
 const DESTROY_SERVICES={
   readSlot:(property,offset)=>{
@@ -306,6 +317,8 @@ class CellStorage {
     const instance=this.instance,entry=instance.poison?.get(this.field.key);
     return entry?entry.read():readCell(this.cell,instance.arena.view,instance.refs,instance.base);
   }
+  /** Whether get() has no effect to keep: no poison entry to read. */
+  pure(){return !this.instance.poison?.get(this.field.key);}
   /** One element of a fixed-array cell (PropertyReference element reads);
    * a poisoned value keeps the whole-value path and its error timing. */
   readElement(index){
@@ -2809,6 +2822,19 @@ export class ScriptRuntime {
    * sentinel is the hit identity; the script-visible Level actor it maps to
    * for event dispatch is actors[0] (same mapping as SpawnActor's). */
   spawnedMoveServices(view,level) {
+    // The table does not depend on the view: it is the level's while its hash and world actor are the ones it was made for.
+    const cache=this.moveServicesCache??=new WeakMap(),hash=level.hash,world=hash.levelInfo,cached=cache.get(level);
+    if(cached!==undefined&&cached.hash===hash&&cached.world===world)return cached.services;
+    const services=this.makeSpawnedMoveServices(level);
+    cache.set(level,{hash,world,services,rider:null});
+    return services;
+  }
+  /** spawnedMoveServices with ignoreBases (the based-rider entry's), kept with it. */
+  spawnedRiderServices(view,level) {
+    const services=this.spawnedMoveServices(view,level),cached=this.moveServicesCache.get(level);
+    return cached.rider??={...services,ignoreBases:true};
+  }
+  makeSpawnedMoveServices(level) {
     const levelActor=target=>target===level?.hash?.levelInfo?level.actors[0]:target;
     const dispatch=(a,name,args)=>this.dispatchSpawnedEvent(levelActor(a),name,args);
     return {
@@ -2860,7 +2886,7 @@ export class ScriptRuntime {
     // The only caller is the recovered based-rider MoveActor (vtable +0x88)
     // which passes bIgnoreBases=1 — a riding item must not be blocked by the
     // base carrying it.
-    return playerMove(view,delta,{...this.spawnedMoveServices(view,level),ignoreBases:true},rotation);
+    return playerMove(view,delta,this.spawnedRiderServices(view,level),rotation);
   }
   /** Admit a serialized map actor to the recovered ULevel move entries. The
    * level-load host is the native actor (map-actor-native.mjs): its +0x1dc
@@ -2887,7 +2913,7 @@ export class ScriptRuntime {
    * == 0. docs/script-map-actor-move.md. */
   moveMapRider(actor,delta,rotation) {
     const level=this.mapMoveLevel(actor,'Rider MoveActor');
-    return playerMove(actor,delta,{...this.spawnedMoveServices(actor,level),ignoreBases:true},rotation);
+    return playerMove(actor,delta,this.spawnedRiderServices(actor,level),rotation);
   }
   /** SetRotation's zero-Delta, zero-flag MoveActor on a map decoration.
    * Unlike the recursive rider entry above, the top-level call must retain
@@ -3434,7 +3460,7 @@ export class ScriptRuntime {
     // those are delegated to the `native` callback before any built-in body runs.
     if(this.boundaryNatives.has(call.index)){
       if(!this.native)throw new Error(`Original native ${call.index} is declared a host boundary but no native handler is set`);
-      return this.native({...call,runtime:this});
+      return this.hostNative(call);
     }
     if(call.index===529||call.index===530){
       if(call.argumentCount!==0)throw new Error('AddPawn/RemovePawn accept no arguments');
@@ -4404,6 +4430,13 @@ export class ScriptRuntime {
     const windowNative=this.windowLifecycle?.handleNative?.(call);
     if(windowNative?.handled)return windowNative.value;
     if(!this.native)throw new Error(`Unimplemented original native ${call.index}`);
+    return this.hostNative(call);
+  }
+  /** The host's native handler with a call that names this runtime: the VM's call object itself (built for this one call, with a
+   * `runtime` slot) takes it in place, where a copy of the whole call was made for every native that reached the host. */
+  hostNative(call) {
+    if(call.runtime===this)return this.native(call);
+    if((call.runtime===null||call.runtime===undefined)&&Object.isExtensible(call)){call.runtime=this;return this.native(call);}
     return this.native({...call,runtime:this});
   }
   timerState(receiver) {
@@ -4574,8 +4607,18 @@ export class ScriptRuntime {
    * reads route through namedReference bindings; world queries come from the
    * level collision hash; zone events dispatch through processEvent. */
   pawnPhysicsServices(receiver) {
-    const level=this.levelFor(receiver),that=this;
+    const level=this.levelFor(receiver);
     if(!level?.hash)throw new Error('Pawn physics requires the level collision hash');
+    // The table (about a dozen closures) is the pawn's own while its level, hash and world actor are the ones it was made for: it
+    // was made again for every physics tick of every pawn.
+    const cache=this.pawnServicesCache??=new WeakMap(),cached=cache.get(receiver);
+    if(cached!==undefined&&cached.level===level&&cached.hash===level.hash&&cached.world===level.hash.levelInfo)return cached.services;
+    const services=this.makePawnPhysicsServices(receiver,level);
+    cache.set(receiver,{level,hash:level.hash,world:level.hash.levelInfo,services});
+    return services;
+  }
+  makePawnPhysicsServices(receiver,level) {
+    const that=this;
     return {
       field:(actor,name)=>this.namedReference(actor,name),
       read:(actor,name)=>this.readNamed(actor,name),
@@ -4593,12 +4636,7 @@ export class ScriptRuntime {
       level,worldActor:level.hash.levelInfo,
       // ZoneInfo fields on an attached zone read through namedReference (live
       // store); the hash levelInfo's values carry the same serialized slots.
-      zoneFields:zone=>{
-        const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
-        return {get ZoneGravity(){return read('ZoneGravity');},get ZoneVelocity(){return read('ZoneVelocity');},
-          get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');},
-          get ZoneFluidFriction(){return read('ZoneFluidFriction');},get bWaterZone(){return read('bWaterZone');}};
-      },
+      zoneFields:zone=>new ZoneFieldView(this,zone),
       dispatch:(target,name,args=[])=>{
         const record=this.lookup(target,name);
         if(!record)return undefined;

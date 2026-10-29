@@ -57,7 +57,7 @@ const R = 'src/runtime/', V = 'src/viewer/';
  *   partial                     [[index, scope]]: handled for the receivers or arguments named, refused otherwise
  *   pseudo                      indices the site routes that no package declares (the poll natives of latent actions) */
 export const NATIVE_SITES = [
-  {id: 'vm-primitives', layer: 'vm', file: R + 'script-vm.mjs', anchor: /function native\(index, args, receiver, services, frame\) \{/,
+  {id: 'vm-primitives', layer: 'vm', file: R + 'script-vm.mjs', anchor: /function native\(index, args, receiver, services, frame(?:, plain = false)?\) \{/,
     // native()'s switch, plus the mover (166 186 225) and decoration (152 153 159 161 162 178 246 275) primitives, which the
     // switch hands to their own modules, and the short-circuit pair 130/132 compiled apart (all in primitiveNativeIndices).
     indices: primitiveNativeIndices,
