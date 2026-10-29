@@ -30,7 +30,7 @@ import {readCell, writeCell, readFixedElement, writeFixedElement, isFixedCell, s
   from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
-import {defineEntryAccessor, internEntries} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries, slotArrayClass} from './host-accessors.mjs';
 
 export const BASE_KEY = 'engine.actor.base';
 export const TOUCHING_KEY = 'engine.actor.touching';
@@ -75,7 +75,8 @@ const released = instance => Boolean(instance.imageToken?.released);
 function check(instance) {
   if (released(instance)) throw new Error('Script object allocation has been released');
 }
-// The Touching array finds its host's LinkSet through TOUCH_LINK, so its four element accessors are shared by every host's array.
+// The Touching array finds its host's LinkSet through TOUCH_LINK, so its four element accessors, on the prototype of its class
+// (host-accessors.mjs slotArrayClass), are shared by every host's array.
 const TOUCH_LINK = Symbol('actorTouchingLink');
 const SLOT_ACCESSORS = [0, 1, 2, 3].map(index => Object.freeze({
   get() {
@@ -89,6 +90,7 @@ const SLOT_ACCESSORS = [0, 1, 2, 3].map(index => Object.freeze({
     writeFixedElement(link.fields[1].cell, instance.arena.view, instance.refs, index, pointer(value), instance.base);
   },
 }));
+const TouchingSlots = slotArrayClass(SLOT_ACCESSORS);
 /** The `base` member of a class: the pointer cell as a handle. Shared by every host of the class that has the cell; the
  * instance is the host's LinkSet's. */
 class BaseField {
@@ -168,14 +170,13 @@ export function installLinkFields(host, instance, fields) {
       entry = baseFieldOf(item, cell, codec);
     } else {
       if (!Array.isArray(existing?.value) || existing.value.length !== 4) continue;
-      const array = new Array(4);
+      const array = new TouchingSlots(4);
       entry = touchingFieldOf(item, cell);
       if (!set) set = new LinkSet(instance);
       set.array = array;
       set.fields = installed;
       installed[item.index] = entry;
       Object.defineProperty(array, TOUCH_LINK, {value: set});
-      for (let index = 0; index < 4; index++) Object.defineProperty(array, index, {enumerable: true, ...SLOT_ACCESSORS[index]});
       for (let index = 0; index < 4; index++) array[index] = existing.value[index];
     }
     defineEntryAccessor(host, item.prop, LINKS, item.index);

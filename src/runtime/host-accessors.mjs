@@ -53,3 +53,17 @@ export function internEntries(list) {
   if (shared === undefined) interned.set(key, shared = Object.freeze(list.slice()));
   return shared;
 }
+
+/** A class of four-slot arrays whose elements are the accessors `slots` (four {get, set} pairs, shared functions that find their
+ * owner through `this`) on the prototype. An array of the class is a holey Array of length 4 with no element of its own: the
+ * four AccessorPairs and the dictionary of elements of an array that defined them on itself (about seven objects and fifty
+ * edges a host) are gone. Array.isArray, length, index reads and stores, indexOf, fill, the iterator, JSON and a spread see
+ * what they saw; the array's own keys are none (a key list of the old array was '0'..'3'), and the species is Array, so
+ * map, filter and slice give plain arrays. */
+export function slotArrayClass(slots) {
+  class SlotArray extends Array {
+    static get [Symbol.species]() { return Array; }
+  }
+  for (let index = 0; index < 4; index++) Object.defineProperty(SlotArray.prototype, index, {enumerable: true, ...slots[index]});
+  return SlotArray;
+}

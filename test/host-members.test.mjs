@@ -253,13 +253,14 @@ test('link members: install, Base, the Touching array, resets, release and error
   const {runtime, load, attach} = await fixture();
   const actor = await load('actor');
   const floor = attach('Floor0', actor), other = attach('Crate0', actor), third = attach('Crate1', actor);
-  const make = members => () => {
+  const slotKeys = {};
+  const make = members => variant => {
     const host = attach('Barrel0', actor, members());
-    return {host, instance: runtime.instance(host)};
+    return {host, instance: runtime.instance(host), ctx: {variant}};
   };
   const riders = () => [floor, other, third].map(riderEpochOf);
   const before = riders();
-  await differential(make(() => ({base: floor, touching: [other, null, third, null]})), ({link}, host, instance, t) => {
+  await differential(make(() => ({base: floor, touching: [other, null, third, null]})), ({link}, host, instance, t, ctx) => {
     const start = riders();
     t.push(['installed', link.installLinkFields(host, instance, actor.fields).sort()]);
     t.push(['has', link.hasLinkField(host, 'base'), link.hasLinkField(host, 'touching'), link.hasLinkField(host, 'location'), link.hasLinkField(null, 'base')]);
@@ -285,7 +286,8 @@ test('link members: install, Base, the Touching array, resets, release and error
     link.resetLinkField(host, 'base'); link.resetLinkField(host, 'touching');
     t.push(['reset', describe(host.base), describe([...host.touching])]);
     link.resetLinkField(host, 'unknown');
-    t.push(['slot keys', Object.keys(slots), Object.getOwnPropertyNames(slots), Object.getOwnPropertySymbols(slots).length]);
+    t.push(['slot symbols', Object.getOwnPropertySymbols(slots).length]);
+    slotKeys[ctx.variant] = {keys: Object.keys(slots), names: Object.getOwnPropertyNames(slots), instanceOfArray: slots instanceof Array, constructor: slots.constructor === Array};
     t.push(['json', JSON.stringify(slots.map(item => item?.name ?? null)), String([...slots].map(item => item?.name ?? null))]);
     instance.imageToken.released = true;
     attempt(t, 'released base', () => host.base);
@@ -295,6 +297,10 @@ test('link members: install, Base, the Touching array, resets, release and error
     instance.imageToken.released = false;
   }, {calls: 10});
   assert.notDeepEqual(riders(), before);
+  // The one difference, by design (docs/live-heap.md "Actor hosts and mesh bindings"): the new array's four accessors are on its class's
+  // prototype, so it has no key of its own, and its prototype is that class's (an Array subclass whose species is Array).
+  assert.deepEqual(slotKeys.old, {keys: ['0', '1', '2', '3'], names: ['0', '1', '2', '3', 'length'], instanceOfArray: true, constructor: true});
+  assert.deepEqual(slotKeys.new, {keys: [], names: ['length'], instanceOfArray: true, constructor: false});
   // an absent Base, no live slots
   await differential(make(() => ({touching: undefined})), ({link}, host, instance, t) => {
     t.push(['installed', link.installLinkFields(host, instance, actor.fields).sort()]);
