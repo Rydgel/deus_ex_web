@@ -534,7 +534,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // Its projection (Proj.Z, RProj.Z, FX15, FY15, Coords) for the page's vertex stage
         // (docs/frame-projection.md); the rectangle is the root's.
         projection: projectionOfFields(frame.fields, width, height),
-        sprites: frame.sprites.map(sprite => sprite.key), spriteScreens: frame.spriteScreens,
+        sprites: spriteKeys(frame.sprites), spriteScreens: frame.spriteScreens,
         lod: { coords: floatWords(frame.fields, 0, 12), fx: wordFloat(frame.fields[12]) },
         // Its PrjXM..PrjYP (+0xec..+0xf8): the planes DrawLodMesh's outcodes of a pawn's special vertices read in this frame
         // (docs/weapon-attachment.md "Mirror frames"); a child's are those of its own clipped window, not the main frame's.
@@ -550,7 +550,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master, detail,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
-      sprites: result.sprites.map(sprite => sprite.key), spriteScreens: result.spriteScreens,
+      sprites: spriteKeys(result.sprites), spriteScreens: result.spriteScreens,
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
       ms: { movers: moversMs, occlusion: occluded - started, decals: performance.now() - occluded } };
@@ -646,7 +646,19 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // (bsp-occlusion.mjs `spriteScreens`): record.screens[frame] = [Z, ScreenX,
   // ScreenY, Persp] as float32 (the sprite draw's inputs, docs/frame-projection.md "Sprites").
   const screenBits = new Uint32Array(4), screenFloats = new Float32Array(screenBits.buffer);
+  // A decode's sprites as their keys: Play's decode (bsp-occlusion.mjs compactSprites) already gives a Uint32Array of them.
+  const spriteKeys = list => list instanceof Uint32Array ? list : list.map(sprite => sprite.key);
   function noteSpriteScreens(entries, frameIndex, screens) {
+    if (screens instanceof Uint32Array) {
+      // Five words a sprite: key, Z, ScreenX, ScreenY, Persp (all as float32 bits).
+      for (let at = 0; at < screens.length; at += 5) {
+        const record = entries[screens[at]]?.sprite;
+        if (!record) continue;
+        screenBits[0] = screens[at + 1]; screenBits[1] = screens[at + 2]; screenBits[2] = screens[at + 3]; screenBits[3] = screens[at + 4];
+        (record.screens ??= {})[frameIndex] = [screenFloats[0], screenFloats[1], screenFloats[2], screenFloats[3]];
+      }
+      return;
+    }
     for (const { key, zBits, screenBits: bits } of screens ?? []) {
       const record = entries[key]?.sprite;
       if (!record) continue;

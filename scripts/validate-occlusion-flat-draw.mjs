@@ -45,7 +45,10 @@ const flatten = draw => ({ entries: draw.map(list => list.flatMap(entry => [entr
   nodes: draw.map(list => list.flatMap(entry => entry.polys.map(poly => poly.iNode))) });
 // What both decodes carry besides the draw lists (child requests without their lines).
 const rest = body => ({ children: body.children.map(({ span: { lines, ...span }, ...child }) => ({ ...child, span })),
-  sprites: body.sprites, spriteScreens: body.spriteScreens });
+  // (Play's decode gives the sprites as a Uint32Array of keys and the Setup words as five words a sprite; the object decode has spans too)
+  sprites: Array.from(body.sprites, sprite => typeof sprite === 'number' ? sprite : sprite.key),
+  spriteScreens: body.spriteScreens instanceof Uint32Array ? [...body.spriteScreens]
+    : body.spriteScreens.flatMap(s => [s.key, s.zBits, ...s.screenBits]) });
 const others = r => ({ ...rest(r), nodesDraw: r.nodesDraw, polysDraw: r.polysDraw, stream: r.stream,
   frames: r.frames.map(({ draw, drawn, children, sprites, spriteScreens, ...frame }) => ({ ...frame, ...rest({ children, sprites, spriteScreens }) })) });
 

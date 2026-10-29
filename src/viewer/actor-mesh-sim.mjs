@@ -215,7 +215,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   // and the call each frame (its index, null for the main frame) made.
   let callReturned=[fullCount],callOps=[[]],baseSelection=null;
   // (frame index -> the GetFrame call that served it, as two arrays kept between updates: a Map of one or two entries made each update)
-  const frameCallIndex=[],frameCallValue=[];
+  const frameCallIndex=[],frameCallValue=[];let frameCallCount=0;
   // The GPU path's last LOD state: the selection, its post-frame scalars
   // while the LOD flag holds, and the parameters the page last received.
   let lastSelection=null,gpuLodScalars=null,lastLodKey='full';
@@ -334,7 +334,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
    * frame's, the last). */
   const opsOfFrame=index=>{
     let call=callOps.length-1;
-    for(let k=frameCallIndex.length-1;k>=0;k--)if(frameCallIndex[k]===index){call=frameCallValue[k];break;}
+    for(let k=frameCallCount-1;k>=0;k--)if(frameCallIndex[k]===index){call=frameCallValue[k];break;}
     return callOps[Math.min(call,callOps.length-1)];
   };
   /** DrawLodMesh's buffer for one frame, which GetFrame fills in that
@@ -926,8 +926,8 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
           callOf.push(requests.length-1);
         }
         if(!requests.length)requests.push(fullCount);
-        frameCallIndex.length=0;frameCallValue.length=0;
-        for(let k=0;k<lodFrames.length;k++){frameCallIndex.push(lodFrames[k].index);frameCallValue.push(callOf[k]);}
+        frameCallCount=lodFrames.length;
+        for(let k=0;k<frameCallCount;k++){frameCallIndex[k]=lodFrames[k].index;frameCallValue[k]=callOf[k];}
         const callsKey=requests.join(',');
         // The detail matters only to a morph; the flags and the count to all.
         const detailKey=lodFrames.length?lodFrames.map(entry=>entry.selection?`${entry.selection.morph?bitsOf(entry.selection.detail):0}`:'off').join(','):'off';
@@ -1458,13 +1458,21 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   };
   // The records of a frame's update are gathered in these arrays (a push-grown array of a few hundred leaves its smaller stores
   // behind, and a filter made a second copy) and copied out once, exactly sized.
-  const updateRecords=[],frameRecords=[];
+  // (a RecordList is written by index and emptied by its count: an array emptied with `length = 0` drops its store, which the next
+  // frame's pushes grow again from nothing)
+  class RecordList{
+    constructor(){this.items=[];this.n=0;}
+    push(record){this.items[this.n++]=record;return this.n;}
+    get length(){return this.n;}
+  }
+  const updateRecords=new RecordList(),frameRecords=new RecordList();
   const compactRecords=gathered=>{
+    const items=gathered.items,total=gathered.n;
     let count=0;
-    for(let i=0;i<gathered.length;i++)if(gathered[i])count++;
+    for(let i=0;i<total;i++)if(items[i])count++;
     const out=new Array(count);
-    for(let i=0,k=0;i<gathered.length;i++)if(gathered[i])out[k++]=gathered[i];
-    gathered.length=0;
+    for(let i=0,k=0;i<total;i++){if(items[i])out[k++]=items[i];items[i]=undefined;}
+    gathered.n=0;
     return out;
   };
   return {actors,npcActors,propActors,summary,kernel,bindings,
@@ -1477,7 +1485,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * returns {main, children}, the binding ids in Frame->Sprite and whether
      * mirror child frames draw (sim-session.mjs). */
     update(view={}){
-      const records=updateRecords;records.length=0;
+      const records=updateRecords;records.n=0;
       frameViewer=null;frameViewer=viewer();
       try{
         const reads=meshReads();
@@ -1522,7 +1530,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * records and the lighting frame's camera for the page's GPU passes, or
      * null when no binding is updated. */
     updateFrame(view={},ids){
-      const records=frameRecords;records.length=0;
+      const records=frameRecords;records.n=0;
       frameViewer=null;frameViewer=viewer();
       try{
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),

@@ -644,11 +644,25 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
   // array grown by push leaves its old backing stores behind, and every list of every frame grew from empty).
   if (flatDraw) { flatEntryCounts[0] = flatEntryCounts[1] = flatEntryCounts[2] = 0; flatNodeCounts[0] = flatNodeCounts[1] = flatNodeCounts[2] = 0; }
   const drawn = flatDraw;
+  // flatDraw with skipSpritePixels (sim-session.mjs, the only caller that sets both) reads a sprite's key and its Setup words alone:
+  // `sprites` is then a Uint32Array of the keys and `spriteScreens` one of five words a sprite, key first.
+  const compactSprites = flatDraw && skipSpritePixels;
+  let spriteCount = 0;
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
       // key, the sprite's Z, Setup's ScreenX, ScreenY, Persp (bits; docs/frame-projection.md "Sprites"), span.
       const key = words[i + 1], startY = words[i + 6], endY = words[i + 7], valid = words[i + 8];
+      if (compactSprites) {
+        // Play's decode: a sprite is its five words (key, Z, ScreenX, ScreenY, Persp) in scratch, and its rows are stepped over.
+        if (5 * spriteCount + 5 > spriteScratch.length) spriteScratch = grown(spriteScratch, 5 * spriteCount + 5, Uint32Array);
+        const at = 5 * spriteCount++;
+        spriteScratch[at] = key; spriteScratch[at + 1] = words[i + 2]; spriteScratch[at + 2] = words[i + 3];
+        spriteScratch[at + 3] = words[i + 4]; spriteScratch[at + 4] = words[i + 5];
+        i += 9;
+        for (let y = startY | 0; y < (endY | 0); y++) i += 2 * words[i] + 1;
+        continue;
+      }
       spriteScreens.push({ key, zBits: words[i + 2], screenBits: [words[i + 3], words[i + 4], words[i + 5]] });
       i += 9;
       if (skipSpritePixels) {
@@ -680,9 +694,11 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
         span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines } });
       continue;
     }
-    const list = words[i], iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
-    i += 7;
+    const list = words[i];
     if (drawn) {
+      // (only the words this form keeps are read: a word above the small-integer range is a heap number for each read below TurboFan)
+      const iSurf = words[i + 2], iZone = words[i + 3], polyCount = words[i + 6];
+      i += 7;
       if (!(list < 3)) throw new Error(`Malformed draw list ${list} at ${i - 7}`);
       let nodes = flatNodes[list], at = flatNodeCounts[list], entries = flatEntries[list];
       const entryAt = flatEntryCounts[list];
@@ -694,6 +710,8 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
       flatNodeCounts[list] = at;
       continue;
     }
+    const iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
+    i += 7;
     const polys = [];
     for (let p = 0; p < polyCount; p++) {
       const node = words[i] | 0, count = words[i + 1];
@@ -705,8 +723,15 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
+  if (compactSprites) {
+    const keys = new Uint32Array(spriteCount), screens = new Uint32Array(5 * spriteCount);
+    for (let k = 0; k < spriteCount; k++) keys[k] = spriteScratch[5 * k];
+    for (let k = 0; k < 5 * spriteCount; k++) screens[k] = spriteScratch[k];
+    return { draw, drawn: flatLists(), children, sprites: keys, spriteScreens: screens, nodesDraw: status[2], polysDraw: status[3] };
+  }
   return { draw, drawn: drawn ? flatLists() : null, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
 }
+let spriteScratch = new Uint32Array(1024);
 const flatEntryCounts = new Int32Array(3), flatNodeCounts = new Int32Array(3);
 const flatEntries = [new Int32Array(1536), new Int32Array(1536), new Int32Array(1536)];
 const flatNodes = [new Uint32Array(2048), new Uint32Array(2048), new Uint32Array(2048)];
