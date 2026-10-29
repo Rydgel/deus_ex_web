@@ -3,8 +3,11 @@ import { readObject } from './objects.mjs';
 import { readLevel, readModel, triangulateModel } from './model.mjs';
 
 /** A map package decoded. `triangles: false` leaves out the BSP's triangle list (null), which only the page's world build reads: the
- * simulation worker keeps the decoded map as long as the level lives, and the list is about 110,000 objects on the Island. */
-export function decodeMap(bytes, { triangles: withTriangles = true } = {}) {
+ * simulation worker keeps the decoded map as long as the level lives, and the list is about 110,000 objects on the Island.
+ * `properties: false` leaves out the actors' property tags (null), which only the simulation's attach reads (script-map-properties.mjs
+ * prepareMapProperties, which reads them again from the package when they are null): the page of a level the worker simulates keeps the
+ * decoded map and has no use for 83,000 tag objects on the Island. */
+export function decodeMap(bytes, { triangles: withTriangles = true, properties: withProperties = true } = {}) {
   const pkg = parsePackage(bytes);
   const levelIndices = pkg.exports.flatMap((e, i) => e.className === 'Level' ? [i + 1] : []);
   if (levelIndices.length !== 1) throw new PackageError('Expected exactly one Level export', 0);
@@ -24,6 +27,8 @@ export function decodeMap(bytes, { triangles: withTriangles = true } = {}) {
     };
   });
   const triangles = withTriangles ? triangulateModel(model) : null;
+  const undecodedActorProperties = actors.reduce((n, a) => n + a.properties.filter(p => !p.decoded).length, 0);
+  if (!withProperties) for (const a of actors) a.properties = null;
   const summary = {
     version: pkg.version, worldModel: model.entry.name,
     points: model.points.length, nodes: model.nodes.length, surfaces: model.surfaces.length,
@@ -31,7 +36,7 @@ export function decodeMap(bytes, { triangles: withTriangles = true } = {}) {
     playerStarts: actors.filter(a => a.className === 'PlayerStart').map(a => ({ name: a.name, location: a.values.Location ?? null, rotation: a.values.Rotation ?? null })),
     lightMaps: model.lightMaps.length, lightBitBytes: model.lightBits.length,
     unknownLevelBytes: level.trailingData.length,
-    undecodedActorProperties: actors.reduce((n, a) => n + a.properties.filter(p => !p.decoded).length, 0),
+    undecodedActorProperties,
     ...model.diagnostics,
   };
   return { pkg, level, model, actors, triangles, summary };

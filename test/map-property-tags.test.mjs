@@ -31,6 +31,17 @@ test('a decoded actor\'s tags are one literal with byteLength, and the same as t
   }
 });
 
+test('decodeMap with properties: false keeps no tags and the same summary', async () => {
+  const files = [{path: 'Maps/00_Training.dx', read: () => readFile(`${ROOT}/Maps/00_Training.dx`)}];
+  const asset = await new AssetStore(files).get('00_Training');
+  const full = decodeMap(asset.bytes, {triangles: false}), bare = decodeMap(asset.bytes, {triangles: false, properties: false});
+  assert.ok(full.summary.undecodedActorProperties > 0);
+  assert.deepEqual(bare.summary, full.summary);
+  assert.equal(bare.actors.length, full.actors.length);
+  assert.ok(bare.actors.every(actor => actor.properties === null));
+  assert.deepEqual(bare.actors.map(({properties, ...rest}) => rest), full.actors.map(({properties, ...rest}) => rest));
+});
+
 test('releaseMapPropertyTags releases the host copies and leaves hosts without tags alone', () => {
   const tags = [{name: 'Tag'}];
   const map = {actors: [{properties: tags}, {properties: tags}]};

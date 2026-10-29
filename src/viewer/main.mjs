@@ -951,7 +951,8 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     const filed = filedBytes ? filedLevel(filedBytes, restore) : null;
     const asset = filed?.asset ?? await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
-    const nextMap = filed?.map ?? decodeMap(asset.bytes);
+    // With the worker the page keeps no property tags of the map's actors: only the simulation's attach reads them (decodeMap)
+    const nextMap = filed?.map ?? decodeMap(asset.bytes, { properties: !simClient });
     loadMark('decoded');
     // The simulation side's options that do not come from the page's world. With the worker the load starts now and runs while the page builds
     // its world (sim-client.mjs loadOverlapped): the level's startup in the worker reads none of the world's part, sent below once it is built.
