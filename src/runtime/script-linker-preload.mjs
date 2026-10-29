@@ -208,9 +208,14 @@ function write(object, offset, value, services, names = [], width = 4) {
   if (services.writeSlot) services.writeSlot(object, offset, value, width);
   if (present) slots.assign(offset, value);
   else if (slots) slots.set(offset, value, width);
-  for (const name of names) object[name] = value;
+  for (const name of names) if (slots === null || !SLOT_ONLY_NAMES.has(name)) object[name] = value;
   return value;
 }
+
+// Aliases only slot() reads, after the object's native slot: a record with native slots keeps these in the slot alone (three more
+// properties on every struct and function record, each a heap number in the browser, and nothing reads them: docs/live-heap.md,
+// steps 2 and 3). An object without native slots keeps them.
+const SLOT_ONLY_NAMES = new Set(['line', 'textPos', 'textPosition']);
 
 const NAMES = freeze({
   0x0c: ['frame', 'stateFrame'],

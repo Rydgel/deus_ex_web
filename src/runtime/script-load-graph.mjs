@@ -173,7 +173,17 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const objectHash = new Map(); // outerAddr:nameIndex:classAddr -> record
   // address -> record: an expanded script image holds its object operands as their records' addresses (expandScriptExpression's
   // resolveObject); the collector reads them back (recordAtAddress).
-  const recordsByAddress = new Map();
+  // The synthetic addresses (0x70000000 + 0x40 a record) are heap numbers in the browser, and as Map keys each one is a number of its
+  // own: they are keyed by their ordinal (a negative Smi, clear of the native addresses of the registered classes).
+  const SYNTHETIC_BASE = 0x70000000;
+  const addressKey = address => typeof address === 'number' && address >= SYNTHETIC_BASE && address <= 0xffffffff &&
+    ((address - SYNTHETIC_BASE) & 63) === 0 ? -1 - ((address - SYNTHETIC_BASE) >>> 6) : address;
+  const recordsOfAddress = new Map();
+  const recordsByAddress = {
+    get: address => recordsOfAddress.get(addressKey(address)),
+    set: (address, record) => recordsOfAddress.set(addressKey(address), record),
+    delete: address => recordsOfAddress.delete(addressKey(address)),
+  };
   let loadedObjects = [];       // the GObjLoaded array (0x1029e638); see suspendLoadQueue
   const events = captureEvents ? [] : {length: 0, push() {}};
   const warnings = [];
@@ -255,7 +265,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       objectFlags: null,
       base: null,
       kind,
-      instanceValues: new Map(),
+      instanceValues: null, // a resource's instance memory above +0x28 (a Map), made where one is constructed or first written
       hashBuckets: null,
       farrays: null,
       script: null,
@@ -744,7 +754,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     ...resourceServices,
     read(object, offset, type) {
       if (offset < 0x28) return slotOf(object, offset);
-      const value = object.instanceValues.get(offset) ?? (type === 'pointer' ? null : 0);
+      const value = object.instanceValues?.get(offset) ?? (type === 'pointer' ? null : 0);
       return type === 'u8' ? value & 255 : value;
     },
     write(object, offset, value, type) {
@@ -757,7 +767,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         value = Object.fromEntries([...structFieldChain(slotOf(property, 0x5c))]
           .map(field => [nameText(slotOf(field, 0x20)), (value >>> (8 * slotOf(field, 0x48))) & 255]));
       }
-      object.instanceValues.set(offset, value);
+      (object.instanceValues ??= new Map()).set(offset, value);
     },
     objectConstructor: object => writeSlot(object, 0, 0x10179dfc),
     objectSerialize: (object, archive) => serializeLoadedObject(object, archive, preloadServices, {events}),
@@ -817,10 +827,10 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     },
   };
   const meshServices = {
-    read: (object, offset) => offset < 0x28 ? slotOf(object, offset) : object.instanceValues.get(offset),
+    read: (object, offset) => offset < 0x28 ? slotOf(object, offset) : object.instanceValues?.get(offset),
     write(object, offset, value, type) {
       if (offset < 0x28) { writeSlot(object, offset, value); return; }
-      object.instanceValues.set(offset, type === 'u8'
+      (object.instanceValues ??= new Map()).set(offset, type === 'u8'
         ? ((object.instanceValues.get(offset) ?? 0) & 0xffffff00) | (value & 255) : value);
     },
     objectConstructor: object => writeSlot(object, 0, 0x10179dfc),
@@ -836,8 +846,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // UMusic: its Data is the same TLazyArray<BYTE> the texture mips hold.
   const musicServices = {
     ...textureServices,
-    read: (object, offset) => object.instanceValues.get(offset),
-    write: (object, offset, value) => { object.instanceValues.set(offset, value); },
+    read: (object, offset) => object.instanceValues?.get(offset),
+    write: (object, offset, value) => { (object.instanceValues ??= new Map()).set(offset, value); },
     writeVtable: (object, vtable) => writeSlot(object, 0, vtable),
     uobjectSerialize: (object, archive) => serializeLoadedObject(object, archive, preloadServices, {events}),
   };
