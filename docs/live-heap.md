@@ -659,6 +659,77 @@ cores, so a real cycle may span more frames.
 Reaching 0.8 MB a frame is a cut of about 2.8×, and 0.5 MB about 4.5×, spread over a dozen subsystems, none more than 13% of
 the total. The heap plan's remaining steps would shorten the cycle, not the frames inside it.
 
+### Cut: x87 math in Rust (2026-10-29)
+
+The first row of that table, the x87 model's BigInt intermediates, is gone from the worker's frame except the HUD's. Host
+representation only: what the simulation computes is bit-identical.
+* **Galaxy's Update** (`galaxy-audio.mjs`, 136 to 152 KB a frame of the 232 to 252) now computes PlaySound's priority and channel
+  choice, the ambient scan's and refresh's values, each channel's priority, listener-space location, pan, occlusion ramp, voice
+  volume, Doppler shift and frequency, and the reverb tail on `Ext` in `native/script-vm/src/galaxy.rs`, through
+  `galaxy-update-kernel.mjs` (one block of float32 words in the kernel instance's memory; nothing allocated per call). The world
+  reads, the channel records and the services stay JavaScript, and FPATAN stays the host's `atan2` between the two halves of a
+  channel's step (docs/galaxy-audio.md "Update in Rust"). The BigInt body is the reference: `createGalaxyAudio(..., {kernel: null})`.
+* **Four smaller callers** (`native/script-vm/src/callers.rs`): `interpolationVelocity` (actor-physics.mjs, every PHYS_MovingBrush
+  mover's tick), `fcoordsAxes` (script-pawn-locomotion.mjs, the `dot3` behind it; percep.rs already had its Rust form), `losWorker`'s
+  sums and products (`magsq3`, the squared scaled visibility, the FOV path's Stimulus and distance) and the rider pass of
+  `moveActorRiders` (move-riders.mjs `add32`, `dot3`). None was the fallback of an existing Rust lowering: percep.rs lowers
+  AICanSee and the alliance natives, not `losWorker`, and the rider pass reaches JavaScript through `js_move_riders`. Each
+  JavaScript function stays as the reference (`interpolationVelocityReference`, `fcoordsAxesReference`, `losReference`,
+  `riderRotMotionReference`).
+* **Left alone, the HUD step's**: `script-window-computer-playback.mjs` and `script-window-scene-frame.mjs` (about 27 KB a frame
+  now). Also still on the BigInt model, outside the list: `glideAcceleration` and `turnSetup980` in script-pawn-locomotion.mjs (the
+  TurnTo exec's JavaScript path, 3 KB in one of the runs) and the music section.
+
+**Measured**: the same `hitch-run.mjs --heap-sampling all` 60 s Island roam as above (Chromium, worker mode, `--mode roam`), two
+runs each side. The "before" runs were served from an export of `0d9c5fd6`, the "after" from this branch, each by its own dev
+server. KB a worker frame (the hitch log's frame count: 4,571 to 4,703), the x87 rows being the 150 largest leaf functions (0.0 is
+outside them):
+
+| | before | before 2 | after | after 2 |
+| --- | ---: | ---: | ---: | ---: |
+| `x87mul` | 60.3 | 56.4 | 7.6 | 9.1 |
+| `x87add` | 53.7 | 48.2 | 5.5 | 7.2 |
+| `x87storeWord` | 50.8 | 47.9 | 13.2 | 15.8 |
+| `x87loadWord` | 28.0 | 27.3 | 7.7 | 11.4 |
+| `x87div` | 19.4 | 18.0 | 0.0 | 0.0 |
+| `x87sqrt` | 16.8 | 15.0 | 0.0 | 0.0 |
+| `x87load` | 13.5 | 10.7 | 5.3 | 4.5 |
+| smaller ones (`x87storeDouble`, `x87cmp`, `x87ftol`) | 9.2 | 8.6 | 0.0 | 0.0 |
+| **x87 functions** | **251.8** | **232.0** | **39.2** | **48.0** |
+| **whole worker** | **1,855.5** | **1,746.7** | **1,535.1** | **1,690.9** |
+| whole worker, a drawn frame (3,370 to 3,810) | 2,281 | 2,220 | 1,928 | 2,294 |
+
+By the file of the first caller outside the x87 code (KB a worker frame, the 400 largest sites): `galaxy-audio.mjs` 152.1 and 136.2
+before, 0 after; `actor-physics.mjs` 10.6 and 10.9, 0; `script-pawn-perception.mjs` 9.1 and 17.5, 0; `script-pawn-locomotion.mjs` 6.6
+and 4.0, 0 and 3.4; `move-riders.mjs` 2.2 and 1.2, 0; the window files 26.3 and 22.7, 24.9 and 22.0. `galaxy-audio.mjs`'s own
+allocation (the `map` calls and closures around the x87 calls) went from 18.3 KB a frame to none.
+
+The x87 functions fell by 184 to 213 KB a worker frame (a 79 to 84% cut; per drawn frame, from 310 and 295 to 49 and 65), which
+is the whole worker's cut once the two runs on a side are averaged (1,801 before, 1,613 after: -188 KB, -10%). Each side's two
+runs differ by 6 to 9% from each other (the HUD step alone ranged 368 to 585 KB), so one pair of totals cannot show a 10%
+change, and the x87 rows are the measure. The worker still allocates about 1.6 MB a worker frame (2.1 to 2.3 MB a drawn frame,
+the unit of the table above): twice the 0.8 MB that the synthetic put under 100 ms for the longest frame, so this cut is about a
+quarter of the way and the next sources are the ones in the table above (the HUD step, the script VM's other paths, builtins,
+mesh frames). The two-core trace is the coordinator's.
+
+**Checks.** bench-sim's state digests (300 ticks) are unchanged on the Island (`15e3720088490242`), Training
+(`148077479825af78`) and the 747 (`ad8e591a01434df5`). The Rust bodies equal the BigInt ones as float32 words:
+`validate-galaxy-audio-kernel` (3,330 cases, 33,908 operations and 10,361 voice calls of the oracle cases, those with a speaking
+lip-sync pawn and a seeded sweep of extremes; 4,000 reverb zones; 20,008 range checks; 0 mismatches) and
+`validate-x87-callers-kernel` (600,000 comparisons). The original: `validate-native-galaxy-audio` (165 cases against Galaxy.dll in
+Unicorn, on the Rust path and on the reference), `validate-galaxy-music-update` (the reverb tail and the music section),
+`validate-galaxy-reverb`, `validate-galaxy-effects`, `validate-galaxy-effects-play` (three maps, asserting the kernel is in use),
+`validate-island-lipsync` and `validate-script-vm-x87` pass; so do the validators of the other files changed
+(`validate-actor-physics-kernel`, `-locomotion-kernel`, `-native-actor-physics`, `-perception-kernel`, `-pawn-tick-visibility`,
+`-native-set-rotation-riders`, `-native-mover-push`; `-pawn-perception` and `-pawn-locomotion` skip without CrossOver) and the
+move-riders and ambient-range unit tests. `cargo build` has no warnings. The two "after" runs and a first one that was served
+stale modules (the dev server was started with its file watcher off before the edits and had to be restarted; that run is not
+used) ended with no errors.
+
+**Pitfall for the measurements.** `hitch-run.mjs` listens for the browser's debugging port on `--cdp-port` (9336 by default),
+and a second run at the same time found the other run's browser at `127.0.0.1:9336`: it attached to that run's worker and never
+saw its own end. Give concurrent runs their own `--cdp-port`.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -673,7 +744,8 @@ the total. The heap plan's remaining steps would shorten the cycle, not the fram
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.
 * **The allocation thresholds on the worker.** The 0.8 and 0.5 MB a frame come from the synthetic. The worker itself has not
-  run below today's 2.2 MB; a cut of a large source, then a two-core trace, would place it. Firefox inline is not measured
+  run below today's 2.2 MB (after "Cut: x87 math in Rust" 1.6 MB a worker frame, 2.1 to 2.3 MB a drawn frame, whose count is lower and varies more from run to run; not traced on two cores yet); a cut of a
+  large source, then a two-core trace, would place it. Firefox inline is not measured
   against allocation.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
