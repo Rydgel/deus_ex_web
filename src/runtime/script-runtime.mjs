@@ -315,6 +315,21 @@ class ScriptInstance {
     this.pendingKillValue=value;
   }
 }
+/** One (receiver, name) pair of boundField: the instance, field, codec and cell resolved once. An object of its own with get and set on
+ * the prototype, not a closure pair and a context for each field of each spawned actor. */
+class BoundField {
+  constructor(runtime,instance,field,codec,cell){this.runtime=runtime;this.instance=instance;this.field=field;this.codec=codec;this.cell=cell;}
+  get(){
+    const instance=this.instance;
+    if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+    return this.runtime.readInstanceField(instance,this.field,this.codec,this.cell);
+  }
+  set(value){
+    const instance=this.instance;
+    if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+    return this.runtime.writeInstanceField(instance,this.field,value,this.codec,this.cell);
+  }
+}
 /** An image cell as a reference's storage (storageReference): the VM builds
  * one reference per variable operand, so its accessors are methods, not
  * closures. A value that could not be produced is rethrown as before. */
@@ -1542,17 +1557,7 @@ export class ScriptRuntime {
    * released-allocation check has to run per access. */
   boundField(receiver,name) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
-    const field=handle.field,codec=handle.codec??=propertyCodec(field),cell=handle.cell;
-    return {
-      get:()=>{
-        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
-        return this.readInstanceField(instance,field,codec,cell);
-      },
-      set:value=>{
-        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
-        return this.writeInstanceField(instance,field,value,codec,cell);
-      },
-    };
+    return new BoundField(this,instance,handle.field,handle.codec??=propertyCodec(handle.field),handle.cell);
   }
   /** A bound property's storage beneath its host binding. A binding whose
    * host state is absent (an actor without live Touching slots, a player
