@@ -169,14 +169,27 @@ export function computerTick(W,win,delta){
     }
     computerProcessQueue(W,win);
     if(W.f32(win,O.fadeOutTimer)>0){
-      let fade=sub(X(W.f32(win,O.fadeOutTimer)),X(delta));
-      if(!lt(X(0),fade))fade=X(0);W.setF32(win,O.fadeOutTimer,S(fade));
-      if(eq(fade,X(0)))bubble(W,win,'ComputerFadeOutCompleted',false);
+      if(kernel!==null){
+        const step=kernel.fadeOutStep(W.f32(win,O.fadeOutTimer),delta);
+        W.setF32(win,O.fadeOutTimer,step.stored);
+        if(step.flag)bubble(W,win,'ComputerFadeOutCompleted',false);
+      } else {
+        let fade=sub(X(W.f32(win,O.fadeOutTimer)),X(delta));
+        if(!lt(X(0),fade))fade=X(0);W.setF32(win,O.fadeOutTimer,S(fade));
+        if(eq(fade,X(0)))bubble(W,win,'ComputerFadeOutCompleted',false);
+      }
     }
   }
   if(W.f32(win,O.fadeSpeed)>0){
     for(let i=0;i<W.i32(win,O.displayBuffer+4);i++){
-      const p=rec(W,win,O.displayBuffer,i);write(W,p,4,'f32',S(sub(X(read(W,p,4,'f32')),X(delta))));
+      const p=rec(W,win,O.displayBuffer,i);
+      if(kernel!==null){
+        const step=kernel.fadeStep(read(W,p,4,'f32'),delta);
+        write(W,p,4,'f32',step.stored);
+        if(step.flag)write(W,p,4,'u32',0);
+        continue;
+      }
+      write(W,p,4,'f32',S(sub(X(read(W,p,4,'f32')),X(delta))));
       if(lt(X(read(W,p,4,'f32')),X(0)))write(W,p,4,'u32',0);
     }
   }

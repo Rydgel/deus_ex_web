@@ -8,6 +8,7 @@ import {x87load as X, x87add as A, x87neg as N, x87mul as M, x87store as S, x87c
 const sub = (a, b) => A(a, N(b));
 const lt = (a, b) => ['lt', 'un'].includes(x87cmp(a, b));
 const gt = (a, b) => x87cmp(a, b) === 'gt';
+const eq = (a, b) => ['eq', 'un'].includes(x87cmp(a, b));
 const f = Math.fround;
 const bits = new DataView(new ArrayBuffer(4));
 const same = (a, b) => Object.is(a, b) || (Number.isNaN(a) && Number.isNaN(b));
@@ -68,4 +69,30 @@ test('timeStep at the values a running window holds', () => {
       t = got.stored;
     }
   }
+});
+
+test('fadeStep: the model\'s stored value and the zeroing flag', () => {
+  let zeroed = 0;
+  for (let i = 0; i < 200000; i++) {
+    const v = value(), delta = value(), got = kernel.fadeStep(v, delta);
+    const stored = S(sub(X(v), X(delta)));
+    assert.ok(same(got.stored, stored), `${v} - ${delta}: ${got.stored} against ${stored}`);
+    const below = lt(X(stored), X(0));
+    assert.equal(got.flag, below, `${v} - ${delta}`);
+    if (below) zeroed++;
+  }
+  assert.ok(zeroed > 10000, `the zeroing ran only ${zeroed} times`);
+});
+
+test('fadeOutStep: the model\'s held timer and the completed flag', () => {
+  let completed = 0;
+  for (let i = 0; i < 200000; i++) {
+    const timer = value(), delta = value(), got = kernel.fadeOutStep(timer, delta);
+    let fade = sub(X(timer), X(delta));
+    if (!lt(X(0), fade)) fade = X(0);
+    assert.ok(same(got.stored, S(fade)), `${timer} - ${delta}: ${got.stored} against ${S(fade)}`);
+    assert.equal(got.flag, eq(fade, X(0)), `${timer} - ${delta}`);
+    if (got.flag) completed++;
+  }
+  assert.ok(completed > 5000, `the completed flag ran only ${completed} times`);
 });

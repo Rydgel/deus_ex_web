@@ -60,3 +60,24 @@ pub extern "C" fn computer_time_step() {
         put(9, 0);
     }
 }
+
+/// One character's fade (`fadeSpeed` > 0): `value - delta` stored to word 8; word 9 is 1 when what was stored is below zero or
+/// unordered, and the host then puts 0 over it. In: 0 the cell's fade value, 1 delta.
+#[no_mangle]
+pub extern "C" fn computer_fade_step() {
+    let stored = sub(ld(0), ld(1)).store();
+    put(8, stored);
+    put(9, below(cmp(Ext::load(stored), Ext::load(0))) as u32);
+}
+
+/// The fade-out timer (`fadeOutTimer` > 0): `timer - delta`, held at zero unless zero is below it, stored to word 8; word 9 is 1
+/// when that register value is equal to zero or unordered (the host then bubbles ComputerFadeOutCompleted). In: 0 timer, 1 delta.
+#[no_mangle]
+pub extern "C" fn computer_fade_out_step() {
+    let mut fade = sub(ld(0), ld(1));
+    if !below(cmp(Ext::load(0), fade)) {
+        fade = Ext::load(0);
+    }
+    put(8, fade.store());
+    put(9, matches!(cmp(fade, Ext::load(0)), Cmp::Eq | Cmp::Un) as u32);
+}

@@ -28,6 +28,23 @@ export function createComputerTickKernel(x, memory) {
       result.stored = f32[O_STORED]; result.flag = u32[O_FLAG] !== 0; result.other = f32[O_OTHER];
       return result;
     },
+    /** One character's fade: `stored` is value - delta stored; `flag` says what was stored is below zero (or unordered), which the
+     * caller then replaces by zero. */
+    fadeStep(value, delta) {
+      sync();
+      f32[I_A] = value; f32[I_B] = delta;
+      x.computer_fade_step();
+      result.stored = f32[O_STORED]; result.flag = u32[O_FLAG] !== 0;
+      return result;
+    },
+    /** The fade-out timer: `stored` is the timer less delta, held at zero, stored; `flag` says it is equal to zero (or unordered). */
+    fadeOutStep(timer, delta) {
+      sync();
+      f32[I_A] = timer; f32[I_B] = delta;
+      x.computer_fade_out_step();
+      result.stored = f32[O_STORED]; result.flag = u32[O_FLAG] !== 0;
+      return result;
+    },
     /** The time step: `stored` is delta * throttle + timeCurrent stored; `flag` says it passes timeLastEvent by more than the interval,
      * when `other` is its sum with the interval stored (timeNextEvent). */
     timeStep(delta, throttle, timeCurrent, timeLastEvent, interval) {
