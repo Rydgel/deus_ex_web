@@ -6,6 +6,8 @@
  * lighting and corona steps need the page's scene and are not run). After a warm-up it reads V8's old-space size after every frame and
  * sums the growth: what the scavenger promoted plus what allocation sites pretenured straight into old space, in KB a frame. A
  * frame whose size fell (a major GC swept) adds nothing, so a run with a major GC in it reads low; the frame count says how long.
+ * `allocatedKBPerFrame` is everything the isolate allocated in the measured frames (V8's total_allocated_bytes), the same fixed route
+ * on every run, so two trees compare on it (a browser roam differs from run to run by a fifth).
  *
  *   node scripts/promotion-probe.mjs [--map 01_NYC_UNATCOIsland] [--frames 1500] [--warm 300] [--json FILE]
  *   node --no-allocation-site-pretenuring scripts/promotion-probe.mjs   (the same run without pretenuring: what survives for real)
@@ -15,7 +17,7 @@
  * The clocks are pinned to the simulated tick as bench-sim pins them.
  */
 import {readFile, readdir, writeFile} from 'node:fs/promises';
-import {getHeapSpaceStatistics} from 'node:v8';
+import {getHeapSpaceStatistics, getHeapStatistics} from 'node:v8';
 import {Session} from 'node:inspector';
 
 const argv = process.argv.slice(2);
@@ -39,14 +41,15 @@ const {createGame} = await import('../src/viewer/game.mjs');
 const {createSimSession} = await import('../src/viewer/sim-session.mjs');
 const {gameDirectory} = await import('./game-directory.mjs');
 const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
-const {warmAllocationSites} = await import('../src/runtime/allocation-site-warmup.mjs');
+// a tree from before the warm-up has no such module (the base arm of a comparison)
+const warmAllocationSites = (await import('../src/runtime/allocation-site-warmup.mjs').catch(() => ({}))).warmAllocationSites;
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${root}/${dir}`))
     files.push({path: `${dir}/${name}`, read: () => readFile(`${root}/${dir}/${name}`)});
 // The worker warms before its first load (sim-host.mjs createSimHost); --no-warmup is the run without it.
-if (!argv.includes('--no-warmup')) warmAllocationSites();
+if (!argv.includes('--no-warmup')) warmAllocationSites?.();
 const assets = new AssetStore(files), asset = await assets.get(map);
 const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
 const session = createSimSession(game, {assets});
@@ -82,7 +85,7 @@ if (siteCount) {
   await post('HeapProfiler.enable');
   await post('HeapProfiler.startSampling', {samplingInterval: 16384, includeObjectsCollectedByMinorGC: false, includeObjectsCollectedByMajorGC: true});
 }
-const grown = {}, lastSizes = spaces();
+const grown = {}, lastSizes = spaces(), allocatedBefore = getHeapStatistics().total_allocated_bytes;
 let last = lastSizes, shrunk = 0;
 for (let i = 0; i < frames; i++) {
   step();
@@ -94,6 +97,7 @@ for (let i = 0; i < frames; i++) {
   }
   last = now;
 }
+const allocatedAfter = getHeapStatistics().total_allocated_bytes;
 const kb = bytes => +(bytes / 1024 / frames).toFixed(1);
 if (siteCount) {
   const {profile} = await post('HeapProfiler.stopSampling');
@@ -106,22 +110,12 @@ if (siteCount) {
     for (const child of node.children) visit(child, here);
   })(profile.head, []);
   const top = m => [...m].sort((a, b) => b[1] - a[1]).slice(0, siteCount);
-  // --sizes FUNCTION: the sizes of the sampled objects whose allocating function is FUNCTION (what kind of object is in old space)
-  const sizesOf = flag('sizes', null);
-  if (sizesOf) {
-    const byNode = new Map();
-    (function visit(node) { byNode.set(node.id, node); for (const child of node.children) visit(child); })(profile.head);
-    const sizes = new Map();
-    for (const sample of profile.samples ?? []) if (byNode.get(sample.nodeId)?.callFrame.functionName === sizesOf) sizes.set(sample.size, (sizes.get(sample.size) ?? 0) + 1);
-    console.log(`--- sampled object sizes allocated in ${sizesOf} (bytes: samples)`);
-    console.log([...sizes].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([size, n]) => `${size}: ${n}`).join('   '));
-  }
   console.log(`sampled ${kb(total)} KB a frame left the young generation`);
   for (const [k, v] of top(leaf)) console.log(`${String(kb(v)).padStart(7)}  ${k}`);
   console.log('--- sites');
   for (const [k, v] of top(sites)) console.log(`${String(kb(v)).padStart(7)}  ${k}`);
 }
-const result = {map, frames, warm, oldSpaceKBPerFrame: kb(grown.old_space ?? 0), largeObjectKBPerFrame: kb(grown.large_object_space ?? 0),
+const result = {map, frames, warm, allocatedKBPerFrame: kb(allocatedAfter - allocatedBefore), oldSpaceKBPerFrame: kb(grown.old_space ?? 0), largeObjectKBPerFrame: kb(grown.large_object_space ?? 0),
   codeKBPerFrame: kb(grown.code_space ?? 0), framesWhereOldSpaceShrank: shrunk,
   flags: process.execArgv.join(' ')};
 console.log(JSON.stringify(result));
