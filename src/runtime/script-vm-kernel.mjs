@@ -129,6 +129,16 @@ export function createScriptVmKernel(instance, memory) {
     freed.push(at);
   };
   const vector = () => { const w = words(); return [num(w[resultAt]), num(w[resultAt + 1]), num(w[resultAt + 2])]; };
+  // Views of RESULT and FCOORDS that persist while the memory does (made again when it grows): the x87 tails of
+  // callers.rs run every frame, and `vector()` makes a view per call.
+  let viewBuffer = null, resultFloats = null, fcoordFloats = null;
+  const views = () => {
+    if (viewBuffer === memory.buffer) return;
+    viewBuffer = memory.buffer;
+    resultFloats = new Float32Array(viewBuffer, resultAt * 4, 3);
+    fcoordFloats = x.fcoords_ptr ? new Float32Array(viewBuffer, x.fcoords_ptr(), 12) : null;
+  };
+  const result3 = () => { views(); return [resultFloats[0], resultFloats[1], resultFloats[2]]; };
   const ints = () => { const w = new Int32Array(memory.buffer); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; };
   return Object.freeze({
     /** The x87 precision control of this instance (render-precision.mjs). */
@@ -157,6 +167,34 @@ export function createScriptVmKernel(instance, memory) {
     // AvgPhysicsTime and falling.mjs refundTime.
     avgPhysicsTime: (avg, dt) => num(x.phys_avg_time(bits(avg), bits(dt))),
     refundTime: (remaining, time, step) => num(x.phys_refund_time(bits(remaining), bits(time), bits(step))),
+    // The x87 tails of five JavaScript callers (callers.rs, docs/live-heap.md "Cut: x87 math in Rust"); each JavaScript function
+    // stays as the reference and runs where this is absent. null when the loaded core predates them.
+    // actor-physics.mjs interpolationVelocity.
+    interpolationVelocity: typeof x.phys_interpolation_velocity !== 'function' ? null : (location, old, seconds) => (
+      x.phys_interpolation_velocity(bits(location[0]), bits(location[1]), bits(location[2]), bits(old[0]), bits(old[1]), bits(old[2]),
+        bits(seconds)), result3()),
+    // script-pawn-locomotion.mjs fcoordsAxes: [Origin, XAxis, YAxis, ZAxis] of FCoords(FRotator(pitch, yaw, roll)).
+    fcoordsAxes: typeof x.fcoords_axes_out !== 'function' ? null : rotation => {
+      x.fcoords_axes_out(rotation[0] | 0, rotation[1] | 0, rotation[2] | 0);
+      views();
+      const f = fcoordFloats;
+      return [[f[0], f[1], f[2]], [f[3], f[4], f[5]], [f[6], f[7], f[8]], [f[9], f[10], f[11]]];
+    },
+    // script-pawn-perception.mjs losWorker: st(magsq3(v)), the squared scaled visibility, the FOV path's Stimulus and distance.
+    los: typeof x.los_magsq3 !== 'function' ? null : Object.freeze({
+      magsq3: v => num(x.los_magsq3(bits(v[0]), bits(v[1]), bits(v[2]))),
+      squareProduct: (a, b) => num(x.los_square_product(bits(a), bits(b))),
+      stimulus: (delta, forward, peripheral) => num(x.los_stimulus(bits(delta[0]), bits(delta[1]), bits(delta[2]),
+        bits(forward[0]), bits(forward[1]), bits(forward[2]), bits(peripheral))),
+      scaled: (distSq, dzAbs, divisor, stimulus) => num(x.los_scaled(bits(distSq), bits(dzAbs), bits(divisor), bits(stimulus))),
+    }),
+    // move-riders.mjs moveActorRiders: a rider's RotMotion and delta.
+    riders: typeof x.rider_rot_motion !== 'function' ? null : Object.freeze({
+      rotMotion: (actor, other, reducedYaw) => (x.rider_rot_motion(bits(actor[0]), bits(actor[1]), bits(actor[2]),
+        bits(other[0]), bits(other[1]), bits(other[2]), reducedYaw | 0), result3()),
+      delta: (final, motion) => (x.rider_delta(bits(final[0]), bits(final[1]), bits(final[2]), bits(motion[0]), bits(motion[1]),
+        bits(motion[2])), result3()),
+    }),
     // Galaxy.dll's lip-sync analysis (lipsync.rs, docs/lip-sync.md): 1024
     // little-endian int16 samples at the mixer position, `available` of them
     // before the ring end, at `rate` Hz; returns the phoneme letter.

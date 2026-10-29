@@ -1,4 +1,5 @@
 import {x87add, x87div, x87load, x87mul, x87neg, x87store} from './script-vm.mjs';
+import {scriptVmKernel} from './script-vm-kernel.mjs';
 
 /** Original non-Pawn AActor::performPhysics (Engine.dll 0x103c9770, vtable
  * slot +0x8c through thunk 0x10303242; APawn overrides it with 0x103c9a70).
@@ -28,8 +29,14 @@ import {x87add, x87div, x87load, x87mul, x87neg, x87store} from './script-vm.mjs
  * OldLocation) / DeltaTime, AActor 0x103c9881..0x103c98ce (the same bracket
  * for physPathing at 0x103c9801) and APawn 0x103c9b49..0x103c9b9a. X/Y
  * differences and the reciprocal are fst'd float32; Z keeps both extended
- * intermediates. */
+ * intermediates. The Rust core's callers.rs computes it once the script VM
+ * kernel is loaded (docs/live-heap.md "Cut: x87 math in Rust");
+ * `interpolationVelocityReference` is the BigInt body it is compared with. */
 export function interpolationVelocity(location, old, seconds) {
+  const kernel = scriptVmKernel?.interpolationVelocity;
+  return kernel ? kernel(location, old, seconds) : interpolationVelocityReference(location, old, seconds);
+}
+export function interpolationVelocityReference(location, old, seconds) {
   const differences = location.map((value, axis) => x87add(x87load(value), x87neg(x87load(old[axis]))));
   const reciprocal = x87div(x87load(1), x87load(seconds));
   const storedReciprocal = x87load(x87store(reciprocal));
