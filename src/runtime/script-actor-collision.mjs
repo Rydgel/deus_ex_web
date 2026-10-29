@@ -91,6 +91,64 @@ export function findActorBase(actor,{lineCheck,dispatch}){
 const MOTION_BOOLS=Object.freeze([['bSpecialLit',0x1],['bActorShadows',0x2],['bCorona',0x4],['bLensFlare',0x8],
  ['bBounce',0x10],['bFixedRotationDir',0x20],['bRotateToDesired',0x40],['bInterpolating',0x80],['bJustTeleported',0x100]]);
 
+// The spawned actor's accessors are functions shared by every spawned actor: they find the actor's CollisionView through `this`
+// (docs/live-heap.md, "Step 5's results"). A closure pair and its context for each of the twenty-odd members was most of what a
+// spawned actor held.
+const VIEW=Symbol('collisionView');
+
+/** One spawned actor's access to its field storage: `get(name)` and `put(name, value)` read and write the field `name`.
+ * `bind(actor, name)` (ScriptRuntime.boundField) resolves the same storage read/write reach once, on first access, so lookup
+ * errors keep their timing. */
+class CollisionView {
+ constructor(actor,read,write,bind,motionWord){
+  this.actor=actor;this.read=read;this.write=write;this.bind=bind;this.motionWord=motionWord;
+  this.bound=bind===null?null:new Map();
+ }
+ access(name){
+  let entry=this.bound.get(name);
+  if(!entry)this.bound.set(name,entry=this.bind(this.actor,name));
+  return entry;
+ }
+ get(name){return this.bound===null?this.read(this.actor,name):this.access(name).get();}
+ put(name,value){
+  if(this.bound===null)this.write(this.actor,name,value);else this.access(name).set(value);
+ }
+}
+
+// accessor functions, made once for a field name or a touching slot
+const fieldMembers=new Map();
+const fieldMember=name=>{
+ let member=fieldMembers.get(name);
+ if(!member)fieldMembers.set(name,member=Object.freeze({
+  get(){return this[VIEW].get(name);},
+  set(value){this[VIEW].put(name,value);},
+ }));
+ return member;
+};
+const fieldGetter=name=>fieldMember(name).get;
+const SLOTS=[0,1,2,3].map(index=>Object.freeze({
+ get(){return this[VIEW].get('Touching')[index];},
+ set(value){const view=this[VIEW],slots=view.get('Touching');slots[index]=value;view.put('Touching',slots);},
+}));
+const SHARED=Object.freeze({
+ actorFlags:{get(){const view=this[VIEW];return (view.get('bStatic')?1:0)|(view.get('bDeleteMe')?0x80:0)|
+  (view.get('bCollideWhenPlacing')?0x20000:0)|(view.get('bMovable')?0x80000:0);}},
+ collisionBits:{get(){const view=this[VIEW];return (view.get('bCollideActors')?1:0)|(view.get('bBlockActors')?4:0)|
+  (view.get('bBlockPlayers')?8:0)|(view.get('bProjTarget')?0x10:0);}},
+ flags:{get(){return this.collisionBits|(this[VIEW].get('bCollideWorld')?2:0);},
+  set(v){const view=this[VIEW];view.put('bCollideActors',Boolean(v&1));
+   view.put('bBlockActors',Boolean(v&4));view.put('bBlockPlayers',Boolean(v&8));}},
+ blocking:{get(){return this.blockPlayers;}},
+ static:{get(){return Boolean(this.actorFlags&1);}},
+ movable:{get(){return Boolean(this.actorFlags&0x80000);}},
+ // The +0x1ec word of bSpecialLit..bJustTeleported that FarMoveActor sets bJustTeleported in and a spawned pawn's physics reads and
+ // writes (script-pawn-physics.mjs): the image dword (actor-flag-words.mjs MOTION_WORD), or, for a class without linked offsets
+ // (isolated harnesses), the same nine bools composed from their fields.
+ imagedMotion:{get(){return this[VIEW].motionWord.get();},set(v){this[VIEW].motionWord.set(v>>>0);}},
+ composedMotion:{get(){const view=this[VIEW];return MOTION_BOOLS.reduce((word,[name,mask])=>view.get(name)?word|mask:word,0);},
+  set(v){const view=this[VIEW];for(const [name,mask] of MOTION_BOOLS)view.put(name,Boolean(v&mask));}},
+});
+
 /** Install the spawned actor's collision/native view on the constructed
  * script identity. Field-backed properties read and write the object's real
  * script storage through `read`/`write` (namedReference); host-only members
@@ -100,30 +158,20 @@ const MOTION_BOOLS=Object.freeze([['bSpecialLit',0x1],['bActorShadows',0x2],['bC
  * the original collision queries read. */
 export function installActorCollisionView(actor,{read,write,bind=null,worldActor,lineage,motionWord=null}){
  const isPawn=lineage.includes('engine.pawn');
- // `bind(actor,name)` (ScriptRuntime.boundField) resolves the same storage
- // read/write reach once, on first access, so lookup errors keep their timing.
- const bound=new Map(),access=name=>{
-  let entry=bound.get(name);
-  if(!entry)bound.set(name,entry=bind(actor,name));
-  return entry;
- };
- const field=bind?name=>{let entry=null;return ()=>(entry??=access(name)).get();}:name=>()=>read(actor,name);
- const fieldWrite=bind?name=>{let entry=null;return value=>(entry??=access(name)).set(value);}:name=>value=>write(actor,name,value);
- const get=bind?name=>access(name).get():name=>read(actor,name);
- const put=bind?(name,value)=>access(name).set(value):(name,value)=>write(actor,name,value);
+ const view=new CollisionView(actor,read,write,bind,motionWord);
  // Native AddTouch/EndTouch and script Touching address the same four
  // pointers (+0xe8..+0xf4), including during synchronous event dispatch.
  // Keep the array surface the collision bodies mutate, but put its entries
  // in the real field storage instead of a host-only list. Resolve storage
  // on every access so an arena growth or a script write stays visible.
  const touching=new Array(4);
- for(let index=0;index<4;index++)Object.defineProperty(touching,index,{enumerable:true,
-  get:()=>get('Touching')[index],
-  set:value=>{const slots=get('Touching');slots[index]=value;put('Touching',slots);}});
- const bit=(mask,name)=>()=>Boolean(get(name)?mask:0);
+ Object.defineProperty(touching,VIEW,{value:view});
+ for(let index=0;index<4;index++)Object.defineProperty(touching,index,{enumerable:true,...SLOTS[index]});
  const values={};
+ Object.defineProperty(values,VIEW,{value:view});
  for(const name of ['Tag','Location','Rotation','CollisionRadius','CollisionHeight','Physics'])
-  Object.defineProperty(values,name,{enumerable:true,get:field(name)});
+  Object.defineProperty(values,name,{enumerable:true,get:fieldGetter(name)});
+ Object.defineProperty(actor,VIEW,{value:view});
  Object.defineProperties(actor,{
   lineage:{value:Object.freeze([...lineage])},
   worldActor:{value:worldActor},
@@ -134,45 +182,34 @@ export function installActorCollisionView(actor,{read,write,bind=null,worldActor
   // view admitted to the recovered MoveActor translation. Pawn ancestry
   // selects its original MoveActor tail (skipping non-pawn encroachment).
   scriptView:{value:true},pawn:{value:isPawn},decoration:{value:false},
-  standingCount:{get:field('StandingCount'),set:fieldWrite('StandingCount')},
+  standingCount:fieldMember('StandingCount'),
   touching:{value:touching},
-  actorFlags:{get:()=>(get('bStatic')?1:0)|(get('bDeleteMe')?0x80:0)|
-   (get('bCollideWhenPlacing')?0x20000:0)|(get('bMovable')?0x80000:0)},
-  collisionBits:{get:()=>(get('bCollideActors')?1:0)|(get('bBlockActors')?4:0)|
-   (get('bBlockPlayers')?8:0)|(get('bProjTarget')?0x10:0)},
-  flags:{get(){return this.collisionBits|(get('bCollideWorld')?2:0);},
-   set(v){put('bCollideActors',Boolean(v&1));
-    put('bBlockActors',Boolean(v&4));put('bBlockPlayers',Boolean(v&8));}},
-  collideActors:bit(1,'bCollideActors'),collideWorld:bit(1,'bCollideWorld'),
-  blockActors:bit(1,'bBlockActors'),blockPlayers:bit(1,'bBlockPlayers'),
-  blocking:{get(){return this.blockPlayers;}},
-  position:{get:field('Location'),set:fieldWrite('Location')},
-  oldLocation:{get:field('OldLocation'),set:fieldWrite('OldLocation')},
-  rotation:{get:field('Rotation'),set:fieldWrite('Rotation')},
-  // The +0x1ec word of bSpecialLit..bJustTeleported that FarMoveActor sets
-  // bJustTeleported in and a spawned pawn's physics reads and writes
-  // (script-pawn-physics.mjs): the image dword (actor-flag-words.mjs
-  // MOTION_WORD), or, for a class without linked offsets (isolated
-  // harnesses), the same nine bools composed from their fields.
-  motionFlags:motionWord?{get:()=>motionWord.get(),set:v=>motionWord.set(v>>>0)}
-   :{get:()=>MOTION_BOOLS.reduce((word,[name,mask])=>get(name)?word|mask:word,0),
-    set:v=>{for(const [name,mask] of MOTION_BOOLS)put(name,Boolean(v&mask));}},
-  radius:{get:field('CollisionRadius'),set:fieldWrite('CollisionRadius')},
-  height:{get:field('CollisionHeight'),set:fieldWrite('CollisionHeight')},
-  base:{get:field('Base'),set:fieldWrite('Base')},
-  physics:{get:field('Physics'),set:fieldWrite('Physics')},
-  velocity:{get:field('Velocity'),set:fieldWrite('Velocity')},
-  acceleration:{get:field('Acceleration'),set:fieldWrite('Acceleration')},
-  owner:{get:field('Owner')},
-  static:{get(){return Boolean(this.actorFlags&1);}},
-  movable:{get(){return Boolean(this.actorFlags&0x80000);}},
+  actorFlags:SHARED.actorFlags,
+  collisionBits:SHARED.collisionBits,
+  flags:SHARED.flags,
+  // These four were given a function (the closure `bit(mask, name)` returned) where a descriptor belongs, which defines each as a
+  // non-writable data member with the value undefined: as they are, so `blocking` (blockPlayers) reads undefined too.
+  collideActors:{value:undefined},collideWorld:{value:undefined},
+  blockActors:{value:undefined},blockPlayers:{value:undefined},
+  blocking:SHARED.blocking,
+  position:fieldMember('Location'),
+  oldLocation:fieldMember('OldLocation'),
+  rotation:fieldMember('Rotation'),
+  motionFlags:motionWord?SHARED.imagedMotion:SHARED.composedMotion,
+  radius:fieldMember('CollisionRadius'),
+  height:fieldMember('CollisionHeight'),
+  base:fieldMember('Base'),
+  physics:fieldMember('Physics'),
+  velocity:fieldMember('Velocity'),
+  acceleration:fieldMember('Acceleration'),
+  owner:{get:fieldGetter('Owner')},
+  static:SHARED.static,
+  movable:SHARED.movable,
  });
  // APawn::execAddPawn/RemovePawn and native list consumers use this same
  // +0x498 field. Map pawns already bind NextPawn onto their host property;
  // fresh pawns expose the reverse view over their newly allocated storage.
- if(isPawn)Object.defineProperty(actor,'nextPawn',{
-  get:field('NextPawn'),set:fieldWrite('NextPawn'),enumerable:true,
- });
+ if(isPawn)Object.defineProperty(actor,'nextPawn',{...fieldMember('NextPawn'),enumerable:true});
  return actor;
 }
 
