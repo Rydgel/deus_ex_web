@@ -32,6 +32,21 @@ for (const [fov, size] of [[75, [1004, 600]], [90, [1024, 640]], [75, [1920, 108
   samples.push({name: `pass-${fov}-${size.join('x')}`, location: [0, 0, 0], rotation: [0, 0, 0], width: size[0] + 20, height: size[1] + 40,
     fov, pass: size});
 
+// The last rotation's rows and the last size's values are kept (script-window-scene-frame.mjs `viewRotationRows`, `sizeKept`): a call
+// with other inputs in between, and one straight after, give each result unchanged, at the game thread's precision control and the
+// render pass's.
+for (const precision of [64, 24]) {
+  const previous = setX87Precision(precision);
+  try {
+    for (const sample of samples.filter(sample => !sample.externalTan)) {
+      const first = buildWindowSceneFrame(sample);
+      buildWindowSceneFrame({location: [1, 2, 3], rotation: [5, 6, 7], width: 33, height: 44, fov: 90});
+      assert.deepStrictEqual(buildWindowSceneFrame(sample), first, `${sample.name} after other inputs at precision ${precision}`);
+      assert.deepStrictEqual(buildWindowSceneFrame(sample), first, `${sample.name} straight after at precision ${precision}`);
+    }
+  } finally { setX87Precision(previous); }
+}
+
 const io = new DataView(new ArrayBuffer(8));
 const bits32 = value => (io.setFloat32(0, value, true), io.getUint32(0, true));
 const bits64 = value => (io.setFloat64(0, value, true), io.getBigUint64(0, true).toString(16).padStart(16, '0'));

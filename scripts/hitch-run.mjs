@@ -201,32 +201,35 @@ if(traced){
 }
 if(heapSampling&&workerSession){
   const {result}=await send('HeapProfiler.stopSampling',{},workerSession);
-  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map(),stepLeaf=new Map(),stepSites=new Map();let total=0;
+  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map(),stepLeaf=new Map(),stepSites=new Map(),stepAudio=new Map();let total=0;
   const label=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}:${f.lineNumber+1}`;
   const fn=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}`;
   const bump=(m,k,v)=>m.set(k,(m.get(k)??0)+v);
   // The step is the callee of sim-session's frame(): the first function below `frame viewer/sim-session.mjs` on the stack.
-  (function visit(node,stack,stepName){const here=[...stack,label(node.callFrame)];total+=node.selfSize;
+  (function visit(node,stack,stepName,inAudio){const here=[...stack,label(node.callFrame)];total+=node.selfSize;
     let st=stepName;
+    // Galaxy's Update runs inside the HUD step (game.mjs wraps hud.commands): its share is kept apart (script-audio-live.mjs `update`)
+    const audio=inAudio||/^update runtime\/script-audio-live\.mjs/.test(fn(node.callFrame));
     if(stack.length&&/^frame viewer\/sim-session\.mjs/.test(stack[stack.length-1]))st=fn(node.callFrame);
     if(node.selfSize){bump(sites,here.slice(-5).reverse().join(' < '),node.selfSize);bump(leaf,fn(node.callFrame),node.selfSize);
       bump(step,st??'(outside frame)',node.selfSize);bump(file,node.callFrame.url.split('/').slice(-2).join('/').split('?')[0]||'(native)',node.selfSize);
       // the step x leaf and step x 5-frame-site cells (the leaf's own file and function, so a step's allocation shows what builds it)
+      if(audio)bump(stepAudio,st??'(outside frame)',node.selfSize);
       bump(stepLeaf,`${st??'(outside frame)'}\t${fn(node.callFrame)}`,node.selfSize);bump(stepSites,`${st??'(outside frame)'}\t${here.slice(-5).reverse().join(' < ')}`,node.selfSize);}
-    for(const c of node.children)visit(c,here,st);})(result.profile.head,[],null);
+    for(const c of node.children)visit(c,here,st,audio);})(result.profile.head,[],null,false);
   const top=(m,n)=>[...m].sort((a,b)=>b[1]-a[1]).slice(0,n);
   // --heap-steps N (default 8): the N largest steps each get their top leaves and top 5-frame sites (byStep), and a KB-per-frame summary is printed.
   const frames=dump?.summary?.frames??null,stepCount=Number(option('heap-steps',8));
   const byStep={};
   for(const [name,bytes] of top(step,stepCount)){
     const cell=m=>top(new Map([...m].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),25);
-    byStep[name]={bytes,leaf:cell(stepLeaf),sites:top(new Map([...stepSites].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),15)};
+    byStep[name]={bytes,audioBytes:stepAudio.get(name)??0,leaf:cell(stepLeaf),sites:top(new Map([...stepSites].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),15)};
   }
   await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,frames,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60),byStep}));
   const kb=bytes=>frames?(bytes/1024/frames).toFixed(1):'-';
   console.log(`heap sampling ${heapSampling}: ${(total/1048576).toFixed(0)} MB over ${frames} frames = ${kb(total)} KB a frame`);
   for(const [name,entry] of Object.entries(byStep)){
-    console.log(`  ${kb(entry.bytes).padStart(7)} KB/frame  ${name}`);
+    console.log(`  ${kb(entry.bytes).padStart(7)} KB/frame  ${name}${entry.audioBytes?` (Galaxy's Update inside it: ${kb(entry.audioBytes)})`:''}`);
     for(const [leafName,bytes] of entry.leaf.slice(0,6))console.log(`      ${kb(bytes).padStart(7)}  ${leafName}`);
   }
 }
