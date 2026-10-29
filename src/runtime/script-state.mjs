@@ -24,12 +24,25 @@ function frameChanged(identity) {
   for(const listener of frameListeners)listener(identity);
 }
 
+// A probe mask is two words, and the objects of a class share a few values: one frozen array a value.
+const probeWordSets=new Map();
+function probeWordsOf(words){
+  const key=words.join(',');
+  let set=probeWordSets.get(key);
+  if(set===undefined)probeWordSets.set(key,set=Object.freeze([...words]));
+  return set;
+}
+
 export class ScriptState {
-  constructor(instance, services = {}) {
+  /** `mapLocals`: the frame's locals are a Map (the script runtime's objects), else an object. */
+  constructor(instance, services = {}, mapLocals = false) {
     this.instance=instance;this.services=services;this.stateNode=null;
-    this.execution=null;this.codeNode=null;this.latentAction=0;this.locals={};
+    this.execution=null;this.codeNode=null;this.latentAction=0;this.localValues=null;this.localsAreMap=mapLocals;
     this.probeMask=[0,0];this.endingState=false;this.changedState=false;
   }
+  /** The frame's locals, made when first asked for: most objects never run a state. */
+  get locals() { return this.localValues??=this.localsAreMap?new Map():{}; }
+  set locals(value) { this.localValues=value; }
   /** A linked node has {compiled, labels:Map<lowercase name,offset>, base}. */
   setStateNode(node) {
     if(this.execution)this.execution.cursor=null;
@@ -47,7 +60,7 @@ export class ScriptState {
   /** ProbeMask is replaced, never written in place (the words are frozen),
    * so every change reports the state change. */
   set probeMask(words) {
-    this.probeWords=Object.freeze([...words]);
+    this.probeWords=probeWordsOf(words);
     stateChanged(this.instance);
   }
   isProbing(ename) {

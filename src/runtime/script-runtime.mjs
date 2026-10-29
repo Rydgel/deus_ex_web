@@ -11,6 +11,7 @@ import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
+import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
 import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference } from './script-bindings.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
@@ -285,8 +286,10 @@ class ScriptInstance {
     // The slot fallback's defaults as of attachment. An object whose every
     // property has an image cell never reads a slot, so it keeps no copy.
     this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
-    this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
-    this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;
+    this.defaultsSnapshot=storage.complete?undefined:defaultsSnapshot(cls);
+    // The logical storage of the properties without an image cell: made when first asked for (`slots`), since an object with a cell
+    // for every property never has one.
+    this.slotMap=slots.size?slots:null;this.bindings=new Map();this.state=state;this.singular=false;
     // The Rust VM's binding set of this object (script-vm-rust.mjs bindingSet) is kept while no binding was added or replaced.
     this.bindingsVersion=0;this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
     // The image is [base, base+size) of the runtime's object arena (R0).
@@ -299,6 +302,7 @@ class ScriptInstance {
     // The image range's release token (arena, base, size); see releaseObjectImage.
     this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
   }
+  get slots(){return this.slotMap??=new Map();}
   /** The image addressed from zero, for callers outside the access paths. */
   get image(){return this.base?this.arena.window(this.base,this.size):null;}
   // An actor's pendingKill is its bDeleteMe and cannot be assigned; another
@@ -866,7 +870,7 @@ export class ScriptRuntime {
    * its startup/lifetime sequence. Overrides retain original field identity. */
   attach(instance,cls,overrides=new Map()) {
     if(this.instances.has(instance))throw new Error('Script instance is already attached');
-    const state=new ScriptState(instance,this.services);state.locals=new Map();
+    const state=new ScriptState(instance,this.services,true);
     const storage=this.objectStorage(cls),slots=new Map();
     for(const [key,value] of overrides){
       const cell=storage.cells?.get(key);
@@ -1126,7 +1130,7 @@ export class ScriptRuntime {
     const instance=this.instance(receiver);
     const flags=this.fieldReference(receiver,this.lookupMember(instance.cls,'fields','ObjectFlags'));
     instance.state?.setStateNode(null);
-    const state=new ScriptState(receiver,this.services);state.locals=new Map();
+    const state=new ScriptState(receiver,this.services,true);
     state.probeMask=[0xffffffff,0xffffffff];
     // Original allocation/constructor leaves +0x24 untouched. Until a state
     // operation writes it, polling would depend on unrecovered allocator data.
