@@ -27,6 +27,7 @@ import {createMeshLod,lodFrame} from './actor-mesh-lod.mjs';
 import {createWeaponAttachments} from './actor-weapon-sim.mjs';
 import {classicMeshBindingSteps} from './actor-umesh-sim.mjs';
 import {lodMorphScalars,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
+import {registerAllocationSiteWarmer} from '../runtime/allocation-site-warmup.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
@@ -44,6 +45,12 @@ const plainRef=reference=>({key:reference.key,package:reference.asset?.name,inde
  * same Math.min/max expansion, empty-box centre, (min + max) * 0.5 centre and
  * largest dx*dx + dy*dy + dz*dz, so frustum culling sees identical bounds.
  * `target` holds boundingBox and boundingSphere, as a geometry does. */
+/** The record one binding's update returns for the page. The frame keeps every binding's record until its snapshot is posted, so
+ * a scavenge inside the actors step finds them all alive, and V8 decides this literal "tenure" (and the records are then born in
+ * old space, about 6 KB a worker frame on the Island) unless it is decided first: allocation-site-warmup.mjs. */
+function newUpdateRecord(id){return {id,visible:false,childOnly:false};}
+let warmRecord=null;
+registerAllocationSiteWarmer(count=>{for(let i=0;i<count;i++)warmRecord=newUpdateRecord(i);warmRecord=null;});
 export function setMeshBounds(target,array){
   let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
   for(let i=0;i<array.length;i+=3){
@@ -795,7 +802,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
        * record's plan and lighting are offsets into the frame's words. */
       update(view={}){
         if(disposed)return null;
-        const record={id,visible:false,childOnly:false};drawnMain=false;
+        const record=newUpdateRecord(id);drawnMain=false;
         if(lastLod){lastLod.updated=false;lastLod.frames=[];}
         // This frame's mesh_reads words (MB), or -1.
         const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;

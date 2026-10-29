@@ -11,8 +11,12 @@ import { lightGlobals } from '../runtime/light-globals.mjs';
 import { renderScanMode } from '../runtime/script-vm-render.mjs';
 
 const f = Math.fround;
+// The slot of a light field no one has read yet.
+const UNREAD = Symbol('unread');
 const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius',
   'LightPeriod', 'LightPhase', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bMovable', 'bSpecialLit', 'bDeleteMe', 'VolumeRadius'];
+// The slot of each field in a LightValues (s0 ... s14, in LIGHT_FIELDS' order).
+const SLOTS = LIGHT_FIELDS.map((name, index) => `s${index}`);
 
 /** Play's per-frame mesh lighting (docs/mesh-lighting.md): one light manager
  * for the viewport, live light fields read from the shared script runtime,
@@ -37,29 +41,63 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   };
   let frame = null, frameCount = 0, lastTime = null, meshLightContext = null;
   // Level.Actors' name map and membership set change only when actorsEpoch
-  // advances (base-epoch.mjs); they are rebuilt only then.
+  // advances (base-epoch.mjs). Most advances do not change the slots (a Base
+  // binding, an appended spawn): `members` is the last slots seen, and when
+  // they are all still the same the tail is added to the map and the set,
+  // which are kept (a rebuild made 300 KB of Map and Set for each advance,
+  // about one in 140 frames on the Island, all of it promoted). A slot that
+  // changed (a destroyed actor) rebuilds them, as before.
   let membership = null;
   const levelMembership = level => {
-    const epoch = actorsEpoch();
-    if (membership?.level === level && membership.actors === level.actors && membership.epoch === epoch) return membership;
+    const epoch = actorsEpoch(), actors = level.actors;
+    if (membership?.level === level && membership.actors === actors) {
+      if (membership.epoch === epoch) return membership;
+      const members = membership.members, length = members.length;
+      let same = length <= actors.length;
+      for (let i = 0; same && i < length; i++) if (members[i] !== actors[i]) same = false;
+      if (same) {
+        const { byName, live } = membership;
+        for (let i = length; i < actors.length; i++) {
+          const actor = actors[i];
+          members.push(actor); live.add(actor);
+          if (actor) byName.set(actor.name, actor);
+        }
+        membership.epoch = epoch;
+        return membership;
+      }
+    }
     const byName = new Map();
-    for (const actor of level.actors) if (actor) byName.set(actor.name, actor);
-    return membership = { level, actors: level.actors, epoch, byName, live: new Set(level.actors) };
+    for (const actor of actors) if (actor) byName.set(actor.name, actor);
+    return membership = { level, actors, epoch, byName, live: new Set(actors), members: actors.slice() };
   };
   // A light's fields are read at most once per frame, when first used: no
   // script runs during the render phase, so a later read in the same frame
   // returns the same value (the record is rebuilt every frame, so a live edit
   // is still seen next frame). Candidates the radius test rejects need only
-  // the fields that test reads.
+  // the fields that test reads. The values sit in fixed slots of the record,
+  // not in a Map made for each: a setup keeps the lights it chose after the
+  // frame (actor-mesh-sim.mjs lastSetup), so a record outlives its frame
+  // by as long as its actor stays out of view, and the Map and its tables
+  // were most of what it kept (docs/live-heap.md "Cut: promoted garbage").
   class LightValues {
-    constructor(actor) { this.actor = actor; this.read = new Map(); }
-    field(name) {
-      let value = this.read.get(name);
-      if (value === undefined && !this.read.has(name)) this.read.set(name, value = read(this.actor, name));
-      return value;
+    constructor(actor) {
+      this.actor = actor;
+      this.s0 = this.s1 = this.s2 = this.s3 = this.s4 = this.s5 = this.s6 = this.s7 = this.s8 = this.s9 = this.s10 = this.s11 = this.s12 = this.s13 = this.s14 = UNREAD;
     }
   }
-  for (const name of LIGHT_FIELDS) Object.defineProperty(LightValues.prototype, name, { get() { return this.field(name); } });
+  LIGHT_FIELDS.forEach((name, index) => {
+    const slot = SLOTS[index];
+    Object.defineProperty(LightValues.prototype, name, { get() {
+      const value = this[slot];
+      return value === UNREAD ? this[slot] = read(this.actor, name) : value;
+    } });
+  });
+  // A light record of the frame: its actor, the fields read so far, its location (float32) and its re-trace phase.
+  // Flicker's key (light-globals.mjs flickerKeyOf) is looked up when read.
+  class LightRecord {
+    constructor(actor, values, location, index) { this.actor = actor; this.values = values; this.location = location; this.index = index; }
+    get flickerKey() { return globals.flickerKeyOf(this.actor); }
+  }
   // SetupForActor staggers visibility re-traces by (light.Index ^
   // FrameCount) & 15. Play uses the measured GObjObjects index or a
   // spawn's modeled slot; a pre-placed light without a capture falls back
@@ -78,11 +116,11 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     const values = new LightValues(actor);
     // A light from game.movingLights() brings the fields it already read in
     // this frame (the same reads, with no script run in between).
-    if (scanned) for (const name of LIGHT_FIELDS) if (Object.hasOwn(scanned.values, name)) values.read.set(name, scanned.values[name]);
-    record = { actor, values, location: (scanned ? scanned.location : read(actor, 'Location') ?? [0, 0, 0]).map(f),
-      index: lightIndex(actor) };
-    // Flicker's key (light-globals.mjs flickerKeyOf), looked up when read.
-    Object.defineProperty(record, 'flickerKey', { get() { return globals.flickerKeyOf(actor); } });
+    if (scanned) {
+      const known = scanned.values;
+      for (let i = 0; i < LIGHT_FIELDS.length; i++) if (Object.hasOwn(known, LIGHT_FIELDS[i])) values[SLOTS[i]] = known[LIGHT_FIELDS[i]];
+    }
+    record = new LightRecord(actor, values, (scanned ? scanned.location : read(actor, 'Location') ?? [0, 0, 0]).map(f), lightIndex(actor));
     frame.lights.set(actor, record);
     return record;
   };
@@ -100,6 +138,15 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     frame.runs.set(iLeaf, run = { refs, handles });
     return run;
   };
+  // A leaf's moving-light list as handles: the list is the frame's (leafListsFor memoizes it), so its handles are made once, not for each
+  // actor drawn in the leaf; the selection only reads them.
+  const NO_HANDLES = [], leafHandleLists = new WeakMap();
+  const leafHandlesOf = list => {
+    if (list.length === 0) return NO_HANDLES;
+    let handles = leafHandleLists.get(list);
+    if (handles === undefined) leafHandleLists.set(list, handles = list.map(record => handleOf(record.actor)));
+    return handles;
+  };
   /** setupMesh's reads of `actor`, with its defaults. */
   const setupFields = actor => {
     const region = read(actor, 'Region') ?? {};
@@ -115,7 +162,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     if (!lightsActor(sink, scene)) return result;
     const elapsed = (scene.viewport.currentTime - scene.viewport.lastUpdateTime) * 768;
     const step = Math.min(255, Math.max(0, Math.trunc(elapsed)));
-    const run = permeatingRun(sink.iLeaf), leafHandles = scene.leafLights.map(record => handleOf(record.actor));
+    const run = permeatingRun(sink.iLeaf), leafHandles = leafHandlesOf(scene.leafLights);
     const choice = rust.select(meshLightContext, handleOf(sink.self), sink.location, sink.bSpecialLit, step, scene.viewport.frameCount,
       run.handles, leafHandles);
     if (choice.missing !== undefined) scene.lightOf(run.refs[choice.missing]);

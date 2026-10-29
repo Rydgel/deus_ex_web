@@ -42,33 +42,36 @@ function writeSim(reference,value) {
   reference.set(plane);
 }
 
-/** Animation field view for execPlayAnim over the linked Actor fields. */
-export function animationView(runtime, actor) {
+/** Animation field view for execPlayAnim over the linked Actor fields. A class, so a view is two fields and its accessors are
+ * shared: it is made for every IsAnimating poll and PlayAnim, and the object of closures it was cost about 1 KB a call, kept in
+ * old space (docs/live-heap.md "Cut: promoted garbage"). */
+class AnimationView {
+  constructor(runtime, actor) { this.runtime = runtime; this.actor = actor; }
   // Value reads/writes need no lvalue; SimAnim keeps its struct reference.
-  const field = key => runtime.namedReference(actor, key);
-  const get = key => runtime.readNamed(actor, key), set = (key, value) => runtime.writeNamed(actor, key, value);
-  return {
-    get AnimSequence() { return get('AnimSequence') ?? 'None'; },
-    set AnimSequence(value) { set('AnimSequence', value); },
-    get AnimFrame() { return get('AnimFrame') ?? 0; },
-    set AnimFrame(value) { set('AnimFrame', value); },
-    get AnimRate() { return get('AnimRate') ?? 0; },
-    set AnimRate(value) { set('AnimRate', value); },
-    get TweenRate() { return get('TweenRate') ?? 0; },
-    set TweenRate(value) { set('TweenRate', value); },
-    get AnimLast() { return get('AnimLast') ?? 0; },
-    set AnimLast(value) { set('AnimLast', value); },
-    get AnimMinRate() { return get('AnimMinRate') ?? 0; },
-    set AnimMinRate(value) { set('AnimMinRate', value); },
-    get OldAnimRate() { return get('OldAnimRate') ?? 0; },
-    set OldAnimRate(value) { set('OldAnimRate', value); },
-    get Velocity() { return get('Velocity') ?? [0, 0, 0]; },
-    get animFlags() { return animationFlags.reduce((bits,[key,mask])=>bits|(get(key)?mask:0),0); },
-    set animFlags(value) { for(const [key,mask] of animationFlags)set(key,Boolean(value&mask)); },
-    get simAnim() { return readSim(field('SimAnim')); },
-    set simAnim(value) { writeSim(field('SimAnim'),value); },
-  };
+  get AnimSequence() { return this.runtime.readNamed(this.actor, 'AnimSequence') ?? 'None'; }
+  set AnimSequence(value) { this.runtime.writeNamed(this.actor, 'AnimSequence', value); }
+  get AnimFrame() { return this.runtime.readNamed(this.actor, 'AnimFrame') ?? 0; }
+  set AnimFrame(value) { this.runtime.writeNamed(this.actor, 'AnimFrame', value); }
+  get AnimRate() { return this.runtime.readNamed(this.actor, 'AnimRate') ?? 0; }
+  set AnimRate(value) { this.runtime.writeNamed(this.actor, 'AnimRate', value); }
+  get TweenRate() { return this.runtime.readNamed(this.actor, 'TweenRate') ?? 0; }
+  set TweenRate(value) { this.runtime.writeNamed(this.actor, 'TweenRate', value); }
+  get AnimLast() { return this.runtime.readNamed(this.actor, 'AnimLast') ?? 0; }
+  set AnimLast(value) { this.runtime.writeNamed(this.actor, 'AnimLast', value); }
+  get AnimMinRate() { return this.runtime.readNamed(this.actor, 'AnimMinRate') ?? 0; }
+  set AnimMinRate(value) { this.runtime.writeNamed(this.actor, 'AnimMinRate', value); }
+  get OldAnimRate() { return this.runtime.readNamed(this.actor, 'OldAnimRate') ?? 0; }
+  set OldAnimRate(value) { this.runtime.writeNamed(this.actor, 'OldAnimRate', value); }
+  get Velocity() { return this.runtime.readNamed(this.actor, 'Velocity') ?? [0, 0, 0]; }
+  get animFlags() {
+    const runtime = this.runtime, actor = this.actor;
+    return animationFlags.reduce((bits,[key,mask])=>bits|(runtime.readNamed(actor, key)?mask:0),0);
+  }
+  set animFlags(value) { for(const [key,mask] of animationFlags)this.runtime.writeNamed(this.actor, key, Boolean(value&mask)); }
+  get simAnim() { return readSim(this.runtime.namedReference(this.actor, 'SimAnim')); }
+  set simAnim(value) { writeSim(this.runtime.namedReference(this.actor, 'SimAnim'), value); }
 }
+export const animationView = (runtime, actor) => new AnimationView(runtime, actor);
 
 /** Same original fields plus the Tick phase's class/state and blend slots. */
 export function animationTickView(runtime,actor) {
