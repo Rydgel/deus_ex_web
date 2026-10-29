@@ -2033,6 +2033,40 @@ GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
   references for 13% and 10% shorter marking) 18% fewer pointer references would be expected to shorten it, which is a prediction.
   The Mac and Firefox are not measured.
 
+### Steps 2 to 5 and 9 on two cores
+
+Master ca8ab34e (steps 2, 3, 4, 5 and 9 merged) against 89bd1edd, the method of "Steps 2, 3 and 4 on two cores", this time with
+V8's marking log (`DEBUG=pw:browser`, read with `scripts/gc-marking-cycles.mjs`; `scripts/gc-trace-cycles.mjs` gives the same cycles
+from the trace): four interleaved 300 s Island roams on two cores, 19,188 to 19,331 worker frames a run.
+
+The heap (Island, 240 s roam, forced GCs; `.cache/perf/heap-island-r8-roam240`): the worker holds 3.52 M objects, 26.8 M snapshot
+edges and 210 MB of JS heap (218 MB used), from 8.21 M, 45.3 M and 336 MB at 07de3088 and 5.33 M, 35.8 M and 268 MB after steps 2,
+3 and 4; the page's used heap is 94 MB (115 MB at 07de3088).
+
+| run | worker major GCs | main-thread marking a cycle, mean (max) | atomic pause, mean | frames over 100 ms (V8 log) | longest frame | GC frames over 100 ms (trace) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 89bd1edd, 1 | 5 | 278 ms (305) | 41 ms | 14 | 288 ms | 11 |
+| 89bd1edd, 2 | 5 | 259 ms (292) | 47 ms | 11 | 228 ms | 10 |
+| ca8ab34e, 1 | 7 | 65 ms (154) | 33 ms | 5 | 120 ms | 4 |
+| ca8ab34e, 2 | 7 | 36 ms (171) | 34 ms | 1 | 127 ms | 1 |
+
+(The V8-log columns count the frames from the hitch log's steady part; the trace column is `gc-trace-cycles.mjs`'s GC frames over
+100 ms after the first 20 s.)
+
+**The freezes are mostly gone on two cores.** The worker thread marks 36 and 65 ms a cycle on average against 259 and 278 on the
+base, every base cycle marking 210 to 293 ms on allocation and most of the merged tree's 0 to 36 ms, with the marking left to the
+concurrent markers. Each run still has one or two cycles of the old kind (130 to 171 ms of main-thread marking in 33 to 61 steps:
+the first cycle, the memory reducer's or the first task cycle, and one later), but their longest frame is 120 and 127 ms against 215 to
+288 ms for the base's cycles. Frames over 100 ms fall from 14 and 11 to 5 and 1; the longest is 120 and 127 ms against 288 and 228.
+The merged tree runs seven cycles a run against five (a smaller old generation reaches the 32 MB slack sooner), each cheaper. Frames
+over 50 ms are about as many (68 and 47 against 53 and 42), most of them tick frames without GC where the roam meets something,
+as in "Steps 2, 3 and 4 on two cores". The first frames after the load (352 to 572 ms, no GC) are unchanged on both trees.
+
+The merged tree's checks (each merge in turn: 243f2b2b, 3502f642, 3c906c6d, ca8ab34e): the bench-sim digests, the HUD stream and
+`frame-alloc-meter --compare` on the Island, the 747 and Training are identical to 07de3088's at every merge; 907 unit tests pass at
+ca8ab34e; the families' validators listed in "Steps 2, 3 and 4 on two cores" and in each step's results exit 0, with load-saves (41
+desktop saves) and travel-endings on the step 5 merge.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -2061,7 +2095,9 @@ GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
   main-thread marking a cycle (267 and 224 to 91 and 113 ms) and the GC frames over 100 ms (20 to 11 in two runs), but a third of
   the cycles still mark 170 to 250 ms within a few frames. Step 9 ("Step 9's results") then took 770 k objects and 2.7 M pointer
   references (the BSP model and its hulls, as typed tables) out of the worker; and step 5 ("Step 5's results") a further 18% of the pointer references (29.63 M to 24.30 M on its own branch) and 19% of the
-  objects; their marking on two cores is not measured yet. The Mac (twelve cores, where the concurrent markers take more of it)
+  objects. "Steps 2 to 5 and 9 on two cores": with the worker at 3.52 M objects and 26.8 M edges, its main-thread marking a cycle is
+  36 and 65 ms against 259 and 278 on 89bd1edd, the frames over 100 ms 1 and 5 against 11 and 14, the longest 120 and 127 ms
+  against 228 and 288; one or two cycles a run still mark 130 to 171 ms on the worker's thread. The Mac (twelve cores, where the concurrent markers take more of it)
   and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
