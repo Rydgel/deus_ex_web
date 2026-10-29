@@ -1118,6 +1118,46 @@ elsewhere.
   coronas step). Chromium's thresholds differ from Node's, so the headless meter orders the changes; the browser profile is the
   number. The two-core trace is the coordinator's.
 
+### Both 2026-10-29 cuts on two cores
+
+Master dd3187ee (the promoted-garbage and the tick-and-actors cuts merged on 314d6501) against 314d6501, the same two-core runs as
+"Both cuts on two cores" but 300 s long and interleaved (new, base, new, base): `taskset -c 0,1 node scripts/hitch-run.mjs --map
+01_NYC_UNATCOIsland --seconds 300 --mode roam --trace --js-flags '--trace-gc --trace-incremental-marking'`, each tree on its own
+dev server, read with `scripts/gc-marking-cycles.mjs`. Frames are the worker's, from 5 s after the map's load (17,592 to 17,868 a
+run); a cycle is one complete major GC of the worker in that window.
+
+| run | cycles | frames over 50 ms | over 100 ms | longest frame | a cycle's longest frame, mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 314d6501, 1 | 10 | 38 | 19 | 356 ms | 224 ms |
+| 314d6501, 2 | 6 | 26 | 15 | 358 ms | 237 ms |
+| dd3187ee, 1 | 6 | 31 | 8 | 237 ms | 149 ms |
+| dd3187ee, 2 | 5 | 25 | 9 | 267 ms | 161 ms |
+
+The merged tree's checks: the bench-sim digests (Island 15e3720088490242, Training 148077479825af78, the 747
+ad8e591a01434df5), `hud-stream-digest --frames 1500 --stream` and `frame-alloc-meter --compare` (every frame of `session.frame()`:
+600 on the Island, 400 on the 747 and Training) are identical to 314d6501's, with 850 unit tests and the validators of the changed
+families (script-vm-interp, script-vm-x87, script-process, play-hud, galaxy-effects-play, mesh-lighting-play, anim-dilation-play,
+weapon-order, lasers-play, pawn-nav, triggers, inline-restore-play, the encroachment and hash natives, npc-door-encroach,
+collision-kernel, tracked-collision, fast-line-check-tracked, lodmesh-frame).
+
+**What starts the cycles.** The promotion cut made the major GCs rarer, but not by the factor of five the old generation's growth
+suggested, because two of V8's triggers do not follow the growth:
+
+* After a load-time cycle, the next one is the memory reducer's, about 100 s after the last mark-compact when none came sooner
+  (111.2 s in both new runs; 143.6, 250.1, 184.1 and 290.5 s in the base runs, each about 103 s after a cycle). On the base the
+  worker's V8 heap has grown to 1.6 to 1.7 GB by then and the cycle's atomic pause is 143 to 178 ms (its frame 314 to 358 ms, the
+  runs' longest); on the new tree the heap is 0.72 to 0.76 GB, the atomic pause 51 to 56 ms and the frame 237 and 267 ms.
+* After a memory-reducer cycle the limit sits about 32 MB above where the next cycle starts ("Start (task)" with 32 to 33 MB of
+  slack, the old generation at 0.5 to 0.6 GB), so the steady cycles come as often as the old generation grows 32 MB: every 12 to
+  13 s on the base (five in a row from 253.8 s in base 1, about 2.5 MB/s), every 33 to 82 s on the new tree (0.4 to 1.0 MB/s).
+
+**What each cycle costs.** A cycle still marks about 250 ms on the worker's thread. Where it lands in two or three frames (the
+memory reducer's, and the steady ones on the base), its longest frame is 150 to 270 ms, as before. The new tree's steady cycles
+spread more often: 100 to 180 steps on allocation over five to eight frames, with the longest frame 79 to 180 ms, which the lower
+allocation (about 1 MB a worker frame against 1.6) makes possible: a step is one per 64 KB allocated, so fewer of them fall in each
+frame. Frames over 100 ms are halved (34 to 17 in two runs each), the longest frame falls from 356 and 358 ms to 237 and 267, and
+frames over 50 ms barely change (64 to 56): what is left is the marking itself, about 250 ms of it per cycle on the frame thread.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -1135,10 +1175,12 @@ elsewhere.
   worker frame (1.7 MB a drawn frame), and on two cores its cycles still give two frames over 100 ms ("Both cuts on two cores"),
   as the synthetic says at that level; the thresholds themselves are placed only once a cut takes it under 0.8 MB. Firefox
   inline is not measured against allocation.
-* **Whether the major GCs are rarer and the cycles shorter.** "Cut: promoted garbage" takes the old generation's growth from 8.6 to
-  13.4 MB/s down to 1.6 to 3.5 MB/s and the scavenger's promotion from 133 to 28 KB a worker frame, which should lengthen the
-  interval between major GCs by the same ratio (no major GC in a 93 s run, one at 79.9 s on master). The two-core cycle trace
-  was not rerun, and a cycle's length and its longest frame are not changed by this cut.
+* **What remains of the two-core freezes.** "Both 2026-10-29 cuts on two cores": the major GCs are rarer (8 to 5.5 per
+  five minutes, the steady ones 33 to 82 s apart against 12 to 13) and their frames shorter (frames over 100 ms halved, the
+  longest 357 to 252 ms), but every cycle still marks about 250 ms on the worker's thread, and the memory reducer's cycle (about
+  100 s after the last one) still lands in two frames. Only a smaller live heap (the simulation's data in Wasm memory) shortens the
+  marking itself; allocation under the 0.5 MB threshold would spread it over more frames. The Mac (twelve cores, where the
+  concurrent markers take more of it) and Firefox inline are not measured against these cuts.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the
