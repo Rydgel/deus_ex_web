@@ -465,7 +465,7 @@ export function readStructMetadata(asset, index, { includeChildren = true } = {}
 const NO_REPLICATION = Object.freeze({ enabled: false, offset: null });
 
 /** Read UFunction's v68/v69 native/operator/replication tail and parameters. */
-export function readFunctionMetadata(asset, index, { includeChildren = true } = {}) {
+function readFunctionMetadataFull(asset, index, { includeChildren = true } = {}) {
   const c = context(asset, index);
   if (c.entry.className !== 'Function') throw new Error(`Expected Function export, got ${c.entry.className}`);
   const metadata = fieldHeader(c);
@@ -505,6 +505,67 @@ export function readFunctionMetadata(asset, index, { includeChildren = true } = 
     parameters,
     supported: true,
   };
+}
+
+/** What the simulation keeps of a function's metadata once the function is prepared (`compact`): the fields it reads, as fields.
+ *
+ * Host representation only (docs/live-heap.md "Load records and functions"). The full object had 37 keys (an out-of-line property array
+ * on top of the object), a view object of the script's bytes and a typed-array view of them, for each of the Island's 7,000 functions.
+ * A trace over the three maps' benchmarks and the class-graph validators read nine keys: `functionFlags` and `nativeIndex` (on every
+ * script event), `size`, `entry`, `name`, `asset`, `pkg`, `bytes` and `children`/`parameters` (written once). The others read the export
+ * again on their first use, `bytes` and `pkg` come from the asset, and a reader sees the value the full object held. Until `compact`
+ * the object still holds the decoded full metadata, so a caller that reads the result at once (the context results, the validators)
+ * decodes the export once, as before. */
+const FUNCTION_SOURCE_KEYS = ['className', 'path', 'baseRef', 'nextRef', 'scriptTextRef', 'childrenRef', 'line', 'textPosition',
+  'scriptSize', 'scriptStart', 'scriptEnd', 'serializedScriptSize', 'script', 'kind', 'replicationOffset', 'repOffset', 'replication',
+  'operatorPrecedence', 'flags', 'nativeIndexRaw', 'nativeIndexIfNative', 'hasNativeIndex', 'native', 'hasReplication', 'supported'];
+
+export class FunctionMetadata {
+  constructor(full) {
+    this.asset = full.asset;
+    this.index = full.index;
+    this.entry = full.entry;
+    this.name = full.name;
+    this.size = full.size;
+    this.functionFlags = full.functionFlags;
+    this.nativeIndex = full.nativeIndex;
+    this.children = full.children;
+    this.parameters = full.parameters;
+    // the script's bytes in the package: the asset's own array and the range (the full object's `bytes` is a view of it)
+    this.base = full.asset.bytes;
+    this.start = full.entry.serialOffset + full.scriptStart;
+    this.end = full.entry.serialOffset + full.scriptEnd;
+    this.sourceDecoded = full;
+  }
+  /** The full metadata `readFunctionMetadata` used to return, decoded again unless it is still held. */
+  source() { return this.sourceDecoded ??= readFunctionMetadataFull(this.asset, this.index, { includeChildren: false }); }
+  /** Let go of the decoded full metadata (a prepared function keeps the fields above only). */
+  compact() { this.sourceDecoded = null; }
+  get pkg() { return this.asset.pkg; }
+  get bytes() { return this.sourceDecoded !== null ? this.sourceDecoded.bytes : this.base.subarray(this.start, this.end); }
+  get scriptBytes() { return this.sourceDecoded !== null ? this.sourceDecoded.scriptBytes : this.bytes; }
+}
+
+for (const key of FUNCTION_SOURCE_KEYS) {
+  Object.defineProperty(FunctionMetadata.prototype, key, {
+    get() { return this.source()[key]; },
+    // a write makes the key an own property, as an assignment to the old plain object did
+    set(value) { Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true }); },
+    enumerable: false, configurable: true,
+  });
+}
+for (const key of ['pkg', 'bytes', 'scriptBytes']) {
+  const { get } = Object.getOwnPropertyDescriptor(FunctionMetadata.prototype, key);
+  Object.defineProperty(FunctionMetadata.prototype, key, {
+    get,
+    set(value) { Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true }); },
+    enumerable: false, configurable: true,
+  });
+}
+
+/** Read one UFunction export (see FunctionMetadata for what the result keeps). */
+export function readFunctionMetadata(asset, index, options) {
+  return new FunctionMetadata(readFunctionMetadataFull(asset, index, options));
 }
 
 /** Read UState's probe/ignore masks, label table offset, and state flags. */
