@@ -567,7 +567,8 @@ for (const name of only('levels') ? ['00_Training', '01_NYC_UNATCOIsland'] : [])
           if (!node) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
           return textures[node.surface] ?? null;
         },
-        walkTexture: (texture, location, normal) => log.push({texture: texture?.key ?? null, location, normal}),
+        // (the kernel's scan hits are valid until the next scan: the log keeps copies)
+        walkTexture: (texture, location, normal) => log.push({texture: texture?.key ?? null, location: [...location], normal: [...normal]}),
         flying: () => log.push('flying'),
       };
       if (kernelScan) pawn.surfaceScan = (start, ends, p, floorEnd) => q.surfaceScan(start, ends, p, floorEnd, pawn, model, textures, q.levelInfo);

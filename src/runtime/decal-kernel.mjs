@@ -89,6 +89,7 @@ function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => f
 
 /** The uploaded model's handle: it holds only the kernel, the block's address, the point capacity and the surface records' word. */
 function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
+  let rotationWords = null;
   return { base, surfaceCount,
     /** Follow the moving brush tracker's arrays (a model uploaded from
      * brush-tracker.mjs trackedModel); false when a count no longer fits. */
@@ -96,7 +97,11 @@ function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
     /** Surface `s`'s Actor Rotation (a Mover surface's; ClipDecal and the
      * Mover branch read Surf.Actor->Rotation at their call). */
     setRotation(s, rotation) {
-      const u = new Uint32Array(kernel.memory.buffer), o = surfWords + SURF_WORDS * s + 6;
+      // One view of the memory while it is the same buffer (a view per surface per mover per AttachDecal was this function's cost).
+      const buffer = kernel.memory.buffer;
+      let u = rotationWords;
+      if (u === null || u.buffer !== buffer) rotationWords = u = new Uint32Array(buffer);
+      const o = surfWords + SURF_WORDS * s + 6;
       u[o] = rotation[0] >>> 0; u[o + 1] = rotation[1] >>> 0; u[o + 2] = rotation[2] >>> 0;
     },
     dispose: () => kernel.free(base) };

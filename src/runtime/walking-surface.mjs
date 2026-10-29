@@ -49,15 +49,25 @@ function climbLadder(pawn,dt,iterations){
 
 /** The scanner's segments: the pawn's stored position, the scan start, the
  * four scan ends' X/Y and the floor end. */
-export function surfaceScanInputs(pawn){
- const position=pawn.position.map(f),radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
- const start=[position[0],position[1],f(position[2]-f(height*f(.95)))];
- const ends=[0,-16384,16384,32768].map(offset=>{
-  const angle=(yaw+offset)|0;
-  return [f(start[0]+f(2*radius*rotatorSin((angle+16384)|0))),f(start[1]+f(2*radius*rotatorSin(angle)))];
- });
- return {position,start,ends,floorEnd:[position[0],position[1],f(position[2]-f(height+2*radius))]};
+const SCAN_OFFSETS=[0,-16384,16384,32768];
+const newScanInputs=()=>({position:[0,0,0],start:[0,0,0],ends:[[0,0],[0,0],[0,0],[0,0]],floorEnd:[0,0,0]});
+// The scan's inputs written into `into` (indexed, without the map and its callback: this runs for every walking pawn at every tick).
+function fillScanInputs(pawn,into){
+ const source=pawn.position,position=into.position,start=into.start,ends=into.ends,floorEnd=into.floorEnd;
+ position[0]=f(source[0]);position[1]=f(source[1]);position[2]=f(source[2]);
+ const radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
+ start[0]=position[0];start[1]=position[1];start[2]=f(position[2]-f(height*f(.95)));
+ for(let k=0;k<4;k++){
+  const angle=(yaw+SCAN_OFFSETS[k])|0,end=ends[k];
+  end[0]=f(start[0]+f(2*radius*rotatorSin((angle+16384)|0)));end[1]=f(start[1]+f(2*radius*rotatorSin(angle)));
+ }
+ floorEnd[0]=position[0];floorEnd[1]=position[1];floorEnd[2]=f(position[2]-f(height+2*radius));
+ return into;
 }
+export function surfaceScanInputs(pawn){return fillScanInputs(pawn,newScanInputs());}
+// The prelude of a pawn whose scan runs in the kernel keeps its inputs here: the kernel reads the numbers and nothing keeps the arrays
+// (a prelude that runs the JavaScript scan, whose hits can be made of them, takes arrays of its own).
+const scanScratch=newScanInputs();
 
 /** The scanner's queries in JavaScript: the last scan hit and its texture,
  * the index of the last scan query run, and the floor hit (null where the
@@ -88,7 +98,7 @@ export function scanSurface(pawn,start,ends,position,floorEnd){
  * it with the JavaScript scan.
  */
 export function walkingSurfacePrelude(pawn,dt,iterations=0){
- const {position,start,ends,floorEnd}=surfaceScanInputs(pawn);
+ const {position,start,ends,floorEnd}=!o3.on&&typeof pawn.surfaceScan==='function'?fillScanInputs(pawn,scanScratch):surfaceScanInputs(pawn);
  const query=(a,b)=>pawn.lineCheck(a,b,[0,0,0],6,0);
  let selected=null,selectedHit=null,floor=null;
  // O3 recording (o3-record.mjs) takes the JavaScript scan, whose queries are the service calls the recording replays.

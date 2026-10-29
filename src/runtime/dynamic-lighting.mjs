@@ -158,9 +158,12 @@ export function viewPlanesOf(words) {
 export function movingLightInView(location, values, planes) {
   const volume = f(((values.VolumeRadius & 255) + 1) * 25), light = f(worldLightRadius(values));
   const radius = light < volume ? volume : light;
-  const [lx, ly, lz] = location.map(f);
-  for (const [px, py, pz, pw] of planes)
-    if (-radius > filterDistance(px, py, pz, pw, lx, ly, lz)) return false;
+  // Indexed reads: a destructuring or a for-of makes an iterator below TurboFan, and `map(f)` an array.
+  const lx = f(location[0]), ly = f(location[1]), lz = f(location[2]);
+  for (let k = 0; k < planes.length; k++) {
+    const plane = planes[k];
+    if (-radius > filterDistance(plane[0], plane[1], plane[2], plane[3], lx, ly, lz)) return false;
+  }
   return true;
 }
 
@@ -252,42 +255,63 @@ export function movingLightLeafList(model, lights, leaf, locations = lights.map(
   const topology = bspTopology(model), owner = topology.owner.get(leaf);
   if (owner === undefined) return undefined;
   if (!topology.regular || owner < 0) return movingLightLeafLists(model, lights).get(leaf);
-  const path = [];
-  for (let n = owner >> 1; n !== -1; n = topology.parent[n]) path.push(n);
-  if (path[path.length - 1] !== 0) return undefined;
-  path.reverse();
+  // The path from the leaf's node up to the root, in scratch arrays that are kept (the lists of a walk are as long as the
+  // candidates, a few at most; a typed array per level was most of what this function allocated).
+  let depth = 0;
+  for (let n = owner >> 1; n !== -1; n = topology.parent[n]) {
+    if (depth === walkPath.length) { const grown = new Int32Array(2 * depth); grown.set(walkPath); walkPath = grown; }
+    walkPath[depth++] = n;
+  }
+  if (walkPath[depth - 1] !== 0) return undefined;
+  let count = lights.length;
+  if (walkIds.length < count) {
+    const size = Math.max(count, 2 * walkIds.length);
+    walkIds = new Int32Array(size); walkNextIds = new Int32Array(size); walkTaken = new Int32Array(size);
+    walkHits = new Uint8Array(size); walkNextHits = new Uint8Array(size);
+  }
+  let ids = walkIds, hits = walkHits, nextIds = walkNextIds, nextHits = walkNextHits;
   // Node 0's list holds the candidates prepended one by one: last first.
-  let count = lights.length, ids = new Int32Array(count), hits = new Uint8Array(count);
-  for (let j = 0; j < count; j++) ids[j] = count - 1 - j;
-  for (let k = 0; k < path.length; k++) {
-    const node = model.nodes[path[k]], [px, py, pz, pw] = node.plane;
-    if (k === path.length - 1) {
+  for (let j = 0; j < count; j++) { ids[j] = count - 1 - j; hits[j] = 0; }
+  for (let k = depth - 1; k >= 0; k--) {
+    const node = model.nodes[walkPath[k]], plane = node.plane, px = plane[0], py = plane[1], pz = plane[2], pw = plane[3];
+    if (k === 0) {
       // The leaf's node: an item that has not hit a leaf yet and reaches the
       // leaf's side is prepended to the leaf's list.
-      const s = owner & 1, taken = [];
+      const s = owner & 1, taken = walkTaken;
+      let found = 0;
       for (let j = 0; j < count; j++) {
         if (hits[j]) continue;
-        const i = ids[j], [lx, ly, lz] = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, lx, ly, lz);
-        if (s ? -radius < distance : distance < radius) taken.push(i);
+        const i = ids[j], at = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, at[0], at[1], at[2]);
+        if (s ? -radius < distance : distance < radius) taken[found++] = i;
       }
-      return taken.length ? taken.reverse() : undefined;
+      if (found === 0) return undefined;
+      const list = new Array(found);
+      for (let t = 0; t < found; t++) list[t] = taken[found - 1 - t];
+      return list;
     }
     // An ancestor: the items reaching the side the path takes go to that
     // child, prepended (the order flips), carrying HitLeaf once this side has
     // a leaf of its own.
-    const s = topology.side[path[k + 1]], leafHere = node.leaves[s] >= 0;
-    const nextIds = new Int32Array(count), nextHits = new Uint8Array(count);
+    const s = topology.side[walkPath[k - 1]], leafHere = node.leaves[s] >= 0;
     let n = 0;
     for (let j = 0; j < count; j++) {
-      const i = ids[j], [lx, ly, lz] = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+      const i = ids[j], at = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, at[0], at[1], at[2]);
       if (!(s ? -radius < distance : distance < radius)) continue;
       nextIds[n] = i; nextHits[n] = hits[j] || leafHere ? 1 : 0; n++;
     }
     if (!n) return undefined;
-    ids = nextIds.subarray(0, n).reverse(); hits = nextHits.subarray(0, n).reverse(); count = n;
+    for (let lo = 0, hi = n - 1; lo < hi; lo++, hi--) {
+      const id = nextIds[lo]; nextIds[lo] = nextIds[hi]; nextIds[hi] = id;
+      const hit = nextHits[lo]; nextHits[lo] = nextHits[hi]; nextHits[hi] = hit;
+    }
+    const swapIds = ids, swapHits = hits;
+    ids = nextIds; hits = nextHits; nextIds = swapIds; nextHits = swapHits; count = n;
   }
   return undefined;
 }
+// movingLightLeafList's scratch: the path, the item lists of two levels, the leaf's taken list.
+let walkPath = new Int32Array(64), walkIds = new Int32Array(0), walkNextIds = walkIds, walkTaken = walkIds;
+let walkHits = new Uint8Array(0), walkNextHits = walkHits;
 
 /** `get(leaf)` of movingLightLeafLists(model, lights), computed per leaf on
  * demand (movingLightLeafList) and kept for the frame; iteration, `size` and

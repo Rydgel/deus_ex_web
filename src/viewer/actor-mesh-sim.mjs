@@ -49,6 +49,11 @@ const plainRef=reference=>({key:reference.key,package:reference.asset?.name,inde
  * a scavenge inside the actors step finds them all alive, and V8 decides this literal "tenure" (and the records are then born in
  * old space, about 6 KB a worker frame on the Island) unless it is decided first: allocation-site-warmup.mjs. */
 function newUpdateRecord(id){return {id,visible:false,childOnly:false};}
+// The decision for a binding a pass does not draw: one frozen object for all of them (the page reads `root` and nothing else of it;
+// a weapon's decision, which the sim marks flipSide, is a copy: framePassOf).
+const NOT_IN_FRAME=Object.freeze({root:false});
+// frameVariants of a binding with no child frame that differs from the base (nothing writes to it)
+const NO_VARIANTS=new Map();
 let warmRecord=null;
 registerAllocationSiteWarmer(count=>{for(let i=0;i<count;i++)warmRecord=newUpdateRecord(i);warmRecord=null;});
 export function setMeshBounds(target,array){
@@ -208,7 +213,9 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   // GetFrame's returned count of each call this frame (in call order), the
   // operations each call ran (the CPU path's, or the merged plan's channels)
   // and the call each frame (its index, null for the main frame) made.
-  let callReturned=[fullCount],callOps=[[]],frameCalls=new Map(),baseSelection=null;
+  let callReturned=[fullCount],callOps=[[]],baseSelection=null;
+  // (frame index -> the GetFrame call that served it, as two arrays kept between updates: a Map of one or two entries made each update)
+  const frameCallIndex=[],frameCallValue=[];let frameCallCount=0;
   // The GPU path's last LOD state: the selection, its post-frame scalars
   // while the LOD flag holds, and the parameters the page last received.
   let lastSelection=null,gpuLodScalars=null,lastLodKey='full';
@@ -325,7 +332,11 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   const frameLights=new Map(),frameSetups=new Map(),frameCtxs=new Map();
   /** The GetFrame operations of the call frame `index` made (null: the main
    * frame's, the last). */
-  const opsOfFrame=index=>callOps[Math.min(frameCalls.get(index)??callOps.length-1,callOps.length-1)];
+  const opsOfFrame=index=>{
+    let call=callOps.length-1;
+    for(let k=frameCallCount-1;k>=0;k--)if(frameCallIndex[k]===index){call=frameCallValue[k];break;}
+    return callOps[Math.min(call,callOps.length-1)];
+  };
   /** DrawLodMesh's buffer for one frame, which GetFrame fills in that
    * frame's camera space (called with its Coords): the cache poses published
    * through the frame's matrix, then the LOD's morph of the frame's state
@@ -570,7 +581,17 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       }catch(error){toCpu(error.message);}
     }
     lastPose=pose();
-    const sphereWords=()=>Float64Array.from([...groups.values()].flatMap(group=>[...group.sphere.center.toArray(),group.sphere.radius]));
+    // Each group's bounding sphere as centre and radius (a flatMap over a spread of the groups, with an array for each, made
+    // several arrays for each call)
+    const sphereWords=()=>{
+      const out=new Float64Array(4*groups.size);
+      let at=0;
+      for(const group of groups.values()){
+        const center=group.sphere.center;
+        out[at++]=center.x;out[at++]=center.y;out[at++]=center.z;out[at++]=group.sphere.radius;
+      }
+      return out;
+    };
     /** What the page needs to build this binding: the mesh to decode, its
      * face groups with their skins, the path and the first pose. */
     const creation={id,handle:handleOf(actor),actorName,attached:Boolean(attach),mesh:{...plainRef(meshReference),key},
@@ -607,7 +628,12 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
       if(u32[at+MB.ANIMACTOR]!==handleOf(animationActor))fail('animation actor');
     }
-    const groupBits=()=>[...groups.values()].map(group=>group.mainVisible?1:0);
+    const groupBits=()=>{
+      const bits=new Array(groups.size);
+      let at=0;
+      for(const group of groups.values())bits[at++]=group.mainVisible?1:0;
+      return bits;
+    };
     let mainCamera=null,drawnMain=false;
     /** This frame's block offset (mesh_reads words), or -1. */
     const blockAt=reads=>{
@@ -652,6 +678,8 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
       u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
     }
+    // (made once per binding: inside meshChanged it made a context object at every call, for every binding of every frame)
+    const readChanged=()=>{try{return own.Mesh()!==meshReference;}catch{return true;}};
     const binding={id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},
       get viewDependent(){return hasEnvironment&&mode==='cpu';},
       get path(){return mode;},
@@ -679,7 +707,6 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
        * RENDER_SCAN=verify), else readMesh. */
       meshChanged(reads){
         const u32=reads&&block?reads.views().u32:null,at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
-        const readChanged=()=>{try{return own.Mesh()!==meshReference;}catch{return true;}};
         if(at<0)return readChanged();
         const changed=u32[at+MB.MESH]!==meshHandle;
         if(reads.verify&&changed!==readChanged())throw new Error(`RENDER_SCAN=verify: ${actorName} Mesh change differs in mesh_reads`);
@@ -691,7 +718,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
        * draw shows in child passes alone. */
       passVisibility(frustum){
         if(disposed)return null;
-        if(childOnly){if(frustum===null)return {root:false};}
+        if(childOnly){if(frustum===null)return NOT_IN_FRAME;}
         else if(!drawnMain)return null;
         if(mode!=='gpu')return childOnly?{root:true}:null;
         if(frustum===null)return {root:true,groups:groupBits()};
@@ -708,7 +735,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         // The frame's own again (`frustum` null): drawn when this frame drew it and, for a
         // root frame other than the main one, when its Frame->Sprite holds it (`inFrame`).
         const root=frustum===null?drawnMain&&inFrame:inFrame;
-        if(!root)return {root:false};
+        if(!root)return NOT_IN_FRAME;
         // The frame's own lighting rides with the decision (frameIndex): the
         // page applies it before the pass and restores the main frame's after.
         // So does its own DrawLodMesh state when it differs from the base's:
@@ -899,7 +926,8 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
           callOf.push(requests.length-1);
         }
         if(!requests.length)requests.push(fullCount);
-        frameCalls=new Map(lodFrames.map((entry,k)=>[entry.index,callOf[k]]));
+        frameCallCount=lodFrames.length;
+        for(let k=0;k<frameCallCount;k++){frameCallIndex[k]=lodFrames[k].index;frameCallValue[k]=callOf[k];}
         const callsKey=requests.join(',');
         // The detail matters only to a morph; the flags and the count to all.
         const detailKey=lodFrames.length?lodFrames.map(entry=>entry.selection?`${entry.selection.morph?bitsOf(entry.selection.detail):0}`:'off').join(','):'off';
@@ -942,8 +970,9 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
           state:gpuLodScalars?{active:true,morph:gpuLodScalars.morph,start:gpuLodScalars.start,count:gpuLodScalars.count}:null,
           admitted:gpuLodScalars?countLevel(meshLod.topology.faceLevel,gpuLodScalars.count):faces.length,vertices:null,updated:true});
         // The child frames whose state differs from the base's.
-        frameVariants=new Map();
+        frameVariants=NO_VARIANTS;
         if(meshLod&&lodFrames.length>1&&!planDegraded){
+          frameVariants=new Map();
           const baseKey=stateKey(selection,callReturned[callOf.at(-1)]);
           lodFrames.forEach((entry,k)=>{
             if(entry===base)return;
@@ -1179,11 +1208,35 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // order.
   let live=null,liveEpoch=-1,liveList=[],meshReaders=[],levelIndex=new Map();
   const meshAccessors=new Map();
+  // The slots `live` was made from: when the level's array is the same and its slots are the same up to that count, the actors that
+  // joined came at its end (a spawn), and are added to what the rebuild would make (a rebuild of the set, the list, the index and
+  // the accessor array from 2,400 slots, at each of the spawns' epochs).
+  let liveMembers=[],liveActors=null;
+  const extendLive=epoch=>{
+    const actors=level.actors,length=liveMembers.length;
+    if(actors!==liveActors||actors.length<length)return false;
+    for(let i=0;i<length;i++)if(liveMembers[i]!==actors[i])return false;
+    for(let i=length;i<actors.length;i++){
+      const actor=actors[i];
+      liveMembers.push(actor);
+      if(live.has(actor))continue;
+      live.add(actor);liveList.push(actor);
+      if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);
+      if(!actor){meshReaders.push(null);continue;}
+      let reader=meshAccessors.get(actor);
+      if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+      meshReaders.push(reader);
+    }
+    liveEpoch=epoch;
+    return true;
+  };
   const reconcile=(reads=null)=>{
     if(disposed||!level)return;
     const epoch=actorsEpoch();
-    if(epoch!==liveEpoch||!live){
-      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
+    if(epoch!==liveEpoch&&live&&extendLive(epoch)){
+      // (Level.Actors only grew at its end: the set, the list, the index and the accessors were extended in place)
+    }else if(epoch!==liveEpoch||!live){
+      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];liveMembers=level.actors.slice();liveActors=level.actors;
       levelIndex=new Map();
       for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
       // (the accessors of the actors still in the level are kept in place, and those of the others dropped: a second Map of all of
@@ -1370,7 +1423,58 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   };
   reconcile();await Promise.all(pending.values());refreshSummary();started=true;
   if(!actors.length&&!npcActors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
-  const all=()=>[...actors,...itemBindings(),...weapons.bindings()];
+  // Every binding: the actors', the iterator items' and the weapons', as one array of exact size (the spreads and the flatMap of the
+  // item pools each made arrays of their own).
+  const all=()=>{
+    let count=actors.length;
+    for(const pool of itemPools.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)count++;
+    for(const pool of itemExtras.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)count++;
+    const weaponList=weapons.bindings(),out=new Array(count+weaponList.length);
+    let at=0;
+    for(let i=0;i<actors.length;i++)out[at++]=actors[i];
+    for(const pool of itemPools.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)out[at++]=pool[i].binding;
+    for(const pool of itemExtras.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)out[at++]=pool[i].binding;
+    for(let i=0;i<weaponList.length;i++)out[at++]=weaponList[i];
+    return out;
+  };
+  // visit(binding, a, b, c, d) for each of them in all()'s order, without the array.
+  const forBindings=(visit,a,b,c,d)=>{
+    for(let i=0;i<actors.length;i++)visit(actors[i],a,b,c,d);
+    for(const pool of itemPools.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)visit(pool[i].binding,a,b,c,d);
+    for(const pool of itemExtras.values())for(let i=0;i<pool.length;i++)if(pool[i].binding)visit(pool[i].binding,a,b,c,d);
+    const weaponList=weapons.bindings();
+    for(let i=0;i<weaponList.length;i++)visit(weaponList[i],a,b,c,d);
+  };
+  const passVisibilityOf=(binding,frustum,decisions)=>{const decision=binding.passVisibility(frustum);if(decision)decisions.set(binding.id,decision);};
+  const framePassOf=(binding,frustum,ids,frameIndex,decisions)=>{
+    // A weapon is in the frame when its pawn is and had a hand there.
+    const inFrame=!ids||(binding.attachedTo?weapons.inFrame(binding,ids,frameIndex):ids.has(binding.id));
+    let decision=binding.framePass(frustum,inFrame,frameIndex);
+    if(decision&&binding.attachedTo&&weapons.mirrored(binding,frameIndex)){
+      if(decision===NOT_IN_FRAME)decision={root:false};
+      decision.flipSide=true;
+    }
+    if(decision)decisions.set(binding.id,decision);
+  };
+  // The records of a frame's update are gathered in these arrays (a push-grown array of a few hundred leaves its smaller stores
+  // behind, and a filter made a second copy) and copied out once, exactly sized.
+  // (a RecordList is written by index and emptied by its count: an array emptied with `length = 0` drops its store, which the next
+  // frame's pushes grow again from nothing)
+  class RecordList{
+    constructor(){this.items=[];this.n=0;}
+    push(record){this.items[this.n++]=record;return this.n;}
+    get length(){return this.n;}
+  }
+  const updateRecords=new RecordList(),frameRecords=new RecordList();
+  const compactRecords=gathered=>{
+    const items=gathered.items,total=gathered.n;
+    let count=0;
+    for(let i=0;i<total;i++)if(items[i])count++;
+    const out=new Array(count);
+    for(let i=0,k=0;i<total;i++){if(items[i])out[k++]=items[i];items[i]=undefined;}
+    gathered.n=0;
+    return out;
+  };
   return {actors,npcActors,propActors,summary,kernel,bindings,
     /** One main frame: every binding's frame record in update order, then the
      * mesh lighting frame's coordinates for the GPU passes. `view.lit` marks
@@ -1381,7 +1485,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * returns {main, children}, the binding ids in Frame->Sprite and whether
      * mirror child frames draw (sim-session.mjs). */
     update(view={}){
-      const records=[];
+      const records=updateRecords;records.n=0;
       frameViewer=null;frameViewer=viewer();
       try{
         const reads=meshReads();
@@ -1410,7 +1514,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       const camera=frame?{origin:[...frame.origin],axes:frame.axes.map(axis=>[...axis])}:null;
       // The page's GPU passes run once per main frame (gpu-mesh.mjs run).
       layout?.endFrame();
-      return {records:records.filter(Boolean),camera};
+      return {records:compactRecords(records),camera};
     },
     /** Another root frame's update (a ViewportWindow's DrawWorld, in the HUD
      * paint after the main frame's: docs/script-window-viewport.md "Camera
@@ -1426,7 +1530,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * records and the lighting frame's camera for the page's GPU passes, or
      * null when no binding is updated. */
     updateFrame(view={},ids){
-      const records=[];
+      const records=frameRecords;records.n=0;
       frameViewer=null;frameViewer=viewer();
       try{
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
@@ -1447,7 +1551,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       const root=view.lightRoot??lighting?.frame;
       const camera=root?{origin:[...root.origin],axes:root.axes.map(axis=>[...axis])}:null;
       layout?.endFrame();
-      return {records:records.filter(Boolean),camera};
+      return {records:compactRecords(records),camera};
     },
     /** Whether a weapon binding (attachedTo a pawn) is drawn in the root frame whose Frame->Sprite holds `ids` (a ViewportWindow's): its pawn is
      * in it and had a hand there. */
@@ -1456,7 +1560,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * pass camera's). */
     passVisibility(frustum){
       const decisions=new Map();
-      for(const binding of all()){const decision=binding.passVisibility(frustum);if(decision)decisions.set(binding.id,decision);}
+      forBindings(passVisibilityOf,frustum,decisions);
       return decisions;
     },
     /** A child frame's pass decisions (OccludeFrame, sim-session.mjs
@@ -1464,13 +1568,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * holds it; `frustum` null and `ids` null: the main frame's again. */
     framePasses(frustum,ids,frameIndex){
       const decisions=new Map();
-      for(const binding of all()){
-        // A weapon is in the frame when its pawn is and had a hand there.
-        const inFrame=!ids||(binding.attachedTo?weapons.inFrame(binding,ids,frameIndex):ids.has(binding.id));
-        const decision=binding.framePass(frustum,inFrame,frameIndex);
-        if(decision&&binding.attachedTo&&weapons.mirrored(binding,frameIndex))decision.flipSide=true;
-        if(decision)decisions.set(binding.id,decision);
-      }
+      forBindings(framePassOf,frustum,ids,frameIndex,decisions);
       return decisions;
     },
     /** SetupDynamics' actor candidates for a frame of its own (a

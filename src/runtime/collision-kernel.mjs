@@ -367,11 +367,17 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
   const stackBase = store.kernel.stackBase;
   // A lineCheck result's fields textureForHit and WalkTexture read, from a
   // scan record (actor -2: no hit accepted).
-  function scanHit(answer, at, world) {
-    const id = answer[at + 9], kind = answer[at + 10];
-    const actor = id === -2 ? null : id === -1 ? world : store.actors[id];
-    return {actor, item: id !== -2 && (kind === WORLD_RAY || kind === BRUSH_RAY) ? answer[at + 7] : undefined,
-      location: [answer[at + 1], answer[at + 2], answer[at + 3]], normal: [answer[at + 4], answer[at + 5], answer[at + 6]]};
+  // The scan's answer is written into these (a result, a selected hit and a floor hit with their vectors, for each scan of each walking
+  // pawn): valid until the next surfaceScan; walkingSurfacePrelude reads them at once, and WalkTexture's script event copies its arguments.
+  const scanResult = {index: 0, selected: null, floor: null};
+  const scanSlots = [{actor: null, item: undefined, location: [0, 0, 0], normal: [0, 0, 0]}, {actor: null, item: undefined, location: [0, 0, 0], normal: [0, 0, 0]}];
+  function scanHit(answer, at, world, slot) {
+    const id = answer[at + 9], kind = answer[at + 10], hit = scanSlots[slot], location = hit.location, normal = hit.normal;
+    hit.actor = id === -2 ? null : id === -1 ? world : store.actors[id];
+    hit.item = id !== -2 && (kind === WORLD_RAY || kind === BRUSH_RAY) ? answer[at + 7] : undefined;
+    location[0] = answer[at + 1]; location[1] = answer[at + 2]; location[2] = answer[at + 3];
+    normal[0] = answer[at + 4]; normal[1] = answer[at + 5]; normal[2] = answer[at + 6];
+    return hit;
   }
   // The hit objects of answer records [from, count), linked, as
   // multiLineCheck builds them (world: the query's world actor; model: the
@@ -423,6 +429,31 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
         finish(status);
       }
     },
+    /** lineCheck for a caller that reads only `outside` and `actor` (corona-scan's visibility helper): the same lc_line call and
+     * the accepted hit's actor from its record, with no hit object (a lineCheck result is an object, two vectors and a chain of
+     * hit objects). Sets `into.outside` and `into.actor` and returns true, or returns false where lineCheck answers
+     * `undefined` and the JavaScript line check runs instead. */
+    probe(into, start_, end, extent, flags, extra, source) {
+      if (!three(start_) || !three(end) || !three(extent) || typeof flags !== 'number' || typeof extra !== 'number') return false;
+      const worldActor = flags & 4 ? levelInfo : null, model = worldModel();
+      const world = worldActor ? store.world(model) : 0;
+      if (worldActor && world === 0 || !free()) return false;
+      start(source, flags, worldActor);
+      let status = -1;
+      try {
+        status = x.lc_line(store.h, world, start_[0], start_[1], start_[2], end[0], end[1], end[2],
+          extent[0], extent[1], extent[2], extra, flags & 0x17 ? 1 : 0, 1);
+        if (status !== ANSWERED) return false;
+        const answer = store.answer.length ? store.answer : (store.views(), store.answer);
+        if (answer[0] === 0) { into.outside = true; into.actor = null; return true; }
+        const id = answer[11];
+        into.outside = false;
+        into.actor = id === -1 ? worldActor : store.actors[id];
+        return true;
+      } finally {
+        finish(status);
+      }
+    },
     /** walking-surface.mjs's scan and floor queries (see lc_scan), for a
      * pawn whose lineCheck is `lineCheck(a, b, [0, 0, 0], 6, 0, source)` here
      * and whose textureForHit reads `textures[textureModel.nodes[hit.item]
@@ -446,7 +477,10 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
           ends[2][0], ends[2][1], ends[3][0], ends[3][1], position[0], position[1], position[2], floorEnd[2]);
         if (status !== ANSWERED) return undefined;
         const answer = store.answer.length ? store.answer : (store.views(), store.answer);
-        return {index: answer[0], selected: scanHit(answer, 2, levelInfo), floor: answer[1] ? scanHit(answer, 2 + RECORD, levelInfo) : null};
+        scanResult.index = answer[0];
+        scanResult.selected = scanHit(answer, 2, levelInfo, 0);
+        scanResult.floor = answer[1] ? scanHit(answer, 2 + RECORD, levelInfo, 1) : null;
+        return scanResult;
       } finally {
         finish(status);
       }

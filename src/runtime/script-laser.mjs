@@ -145,26 +145,46 @@ function writeLaserState(runtime, iterator, state) {
  * every segment draws where CurrentItem put it. Returns those snapshots. */
 export function laserIteratorItems(runtime, iterator, owner, camera, { processEvent, frand }) {
   // SetupDynamics runs Init(Camera) inside the render pass (render-precision.mjs).
-  inRenderPass(runtime, () => processEvent(iterator, 'Init', [camera]));
+  initIterator(runtime, iterator, camera, processEvent);
   runtime.writeNamed(iterator, 'Observer', camera);
   const max = runtime.readNamed(iterator, 'MaxItems') | 0, proxy = runtime.readNamed(iterator, 'proxy');
-  const read = (actor, name) => runtime.readNamed(actor, name);
-  const snapshot = actor => ({ actor, location: read(actor, 'Location').map(Math.fround), rotation: read(actor, 'Rotation').map(v => v | 0),
-    drawScale: Math.fround(read(actor, 'DrawScale')), scaleGlow: Math.fround(read(actor, 'ScaleGlow')) });
+  // (no closure in this function: it would make a context object at every call; the helpers below take what they use)
   const items = [];
   const state = readLaserState(runtime, iterator, proxy);
   for (let index = 0; index < max; index++) {
     runtime.writeNamed(iterator, 'Index', index);
     state.index = index;
-    const moves = laserCurrentItem(state, read(owner, 'Location').map(Math.fround), frand);
-    if (!moves) { items.push(snapshot(owner)); continue; }
-    for (const move of moves) {
+    const moves = laserCurrentItem(state, floatLocation(runtime, owner), frand);
+    if (!moves) { items.push(snapshotOf(runtime, owner)); continue; }
+    for (let m = 0; m < moves.length; m++) {
+      const move = moves[m];
       if (move.location) runtime.farMoveActor(proxy, move.location, 0, 0);
-      else setScriptRotation(proxy, move.rotation, { levelFor: runtime.levelFor, read, write: (a, n, v) => runtime.writeNamed(a, n, v) });
+      else setScriptRotation(proxy, move.rotation, rotationServices(runtime));
     }
     writeLaserState(runtime, iterator, state);
-    items.push(snapshot(proxy));
+    items.push(snapshotOf(runtime, proxy));
   }
   runtime.writeNamed(iterator, 'Index', max);
   return items;
+}
+function initIterator(runtime, iterator, camera, processEvent) {
+  inRenderPass(runtime, () => processEvent(iterator, 'Init', [camera]));
+}
+function floatLocation(runtime, actor) {
+  const location = runtime.readNamed(actor, 'Location');
+  return [Math.fround(location[0]), Math.fround(location[1]), Math.fround(location[2])];
+}
+// An item's snapshot: SetupSprite's ScaleGlow, DrawScale, Location and Rotation (above).
+function snapshotOf(runtime, actor) {
+  const rotation = runtime.readNamed(actor, 'Rotation');
+  return { actor, location: floatLocation(runtime, actor), rotation: [rotation[0] | 0, rotation[1] | 0, rotation[2] | 0],
+    drawScale: Math.fround(runtime.readNamed(actor, 'DrawScale')), scaleGlow: Math.fround(runtime.readNamed(actor, 'ScaleGlow')) };
+}
+// setScriptRotation's services for a runtime, made once.
+const rotationServicesOf = new WeakMap();
+function rotationServices(runtime) {
+  let services = rotationServicesOf.get(runtime);
+  if (services === undefined || services.levelFor !== runtime.levelFor) rotationServicesOf.set(runtime, services = { levelFor: runtime.levelFor,
+    read: (actor, name) => runtime.readNamed(actor, name), write: (actor, name, value) => runtime.writeNamed(actor, name, value) });
+  return services;
 }

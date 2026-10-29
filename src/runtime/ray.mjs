@@ -31,6 +31,15 @@ export function traceRay(model, start, end, extraNodeFlags = 0, ownerCoords = nu
   }
   return result;
 }
+/** Whether the zero-extent ray from `start` to `end` over `model` misses (traceRay(model, start, end) === null), asked of the kernel
+ * without the hit object a hit builds; undefined where the kernel hands back (the caller's JavaScript answers). */
+export function traceRayClear(model, start, end) {
+  const clear = traceKernel === null ? undefined : traceKernel.rayClear(model, start, end);
+  if (clear === undefined) return undefined;
+  if (TRACE_DIFFERENTIAL && clear !== (traceRayFast(model, start, end, 0, null) === null))
+    throw new Error(`traceRayClear differential mismatch: ${JSON.stringify({ start, end, clear })}`);
+  return clear;
+}
 function sameRayResult(a, b) {
   if (a === null || b === null) return a === b;
   const same = (x, y) => x.length === y.length && x.every((v, i) => Object.is(v, y[i]));

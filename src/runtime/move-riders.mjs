@@ -123,43 +123,55 @@ function scanRiders(actor, actors, baseOf) {
   return riders;
 }
 
+const entryCurrent = (entry, actor) => entry.epoch === baseEpoch() && entry.riderEpoch === riderEpochOf(actor);
+const NO_MOTION = [0, 0, 0];
+
+/** The rider pass's visit of one rider (0x10399a27-0x10399b57), with the pass's inputs. */
+function visitRider(pass, other) {
+  const t0 = riderStats ? now() : 0;
+  const { services, finalDelta, actorPos, dyaw, rotationChanged, reducedYaw } = pass;
+  const { location, rotation, isPawn, addViewRotationYaw, moveActor } = services;
+  const kernel = scriptVmKernel?.riders;
+  // The Rust core's callers.rs does the arithmetic once the script VM kernel is loaded (docs/live-heap.md "Cut: x87 math in
+  // Rust"); the BigInt expressions are the reference it is compared with (scripts/validate-x87-callers-kernel.mjs).
+  let rotMotion = NO_MOTION;
+  if (rotationChanged) {
+    const otherPos = location(other);
+    rotMotion = kernel ? kernel.rotMotion(actorPos, otherPos, reducedYaw) : riderRotMotionReference(actorPos, otherPos, reducedYaw);
+    if (riderStats) riderStats.rotMs += now() - t0;
+  }
+  const otherRot = rotation(other);
+  // 0x10399ad1: delta = FinalDelta + RotMotion, three f32 adds.
+  const delta = kernel ? kernel.delta(finalDelta, rotMotion) : riderDeltaReference(finalDelta, rotMotion);
+  // 0x10399aa4: rot = FRotator(Other.Pitch, Other.Yaw + [ebp+0x2c], Other.Roll).
+  const newRot = [otherRot[0] | 0, ((otherRot[1] | 0) + dyaw) | 0, otherRot[2] | 0];
+  // 0x10399b51: MoveActor(Other, delta, rot, Hit, 0, 0, 1, 0).
+  moveActor(other, delta, newRot);
+  // 0x10399b57: pawn riders keep their ViewRotation aligned with the yaw.
+  if (isPawn(other)) addViewRotationYaw(other, dyaw);
+  if (riderStats) riderStats.visitMs += now() - t0;
+}
+
 export function moveActorRiders(actor, finalDelta, newRotation, services) {
-  const {actors, baseOf, location, rotation, isPawn, addViewRotationYaw,
-    moveActor, actorLocation, actorRotation} = services;
+  const {actors, baseOf, moveActor, actorLocation, actorRotation} = services;
   if (typeof moveActor !== 'function')
     throw new Error('MoveActor based passengers require the recovered rider MoveActor service');
   if (riderStats) { riderStats.calls++; const e = baseEpoch(); if (e !== riderStats.lastEpoch) { riderStats.epochBumpsSeen++; riderStats.lastEpoch = e; } }
   const actorPos = actorLocation();
-  const actorRot = actorRotation().map(v => v | 0);
-  const rot = newRotation.map(v => v | 0);
+  const actorRotValue = actorRotation();
+  const actorRot0 = actorRotValue[0] | 0, actorRot1 = actorRotValue[1] | 0, actorRot2 = actorRotValue[2] | 0;
+  const rot0 = newRotation[0] | 0, rot1 = newRotation[1] | 0, rot2 = newRotation[2] | 0;
   // [ebp+0x2c]: unmasked int32 yaw difference (overwrites bIgnorePawns).
-  const dyaw = (rot[1] - actorRot[1]) | 0;
+  const dyaw = (rot1 - actorRot1) | 0;
   // 0x10399904: all three ints equal skips the rotation-math block.
-  const rotationChanged = rot[0] !== actorRot[0] || rot[1] !== actorRot[1] || rot[2] !== actorRot[2];
+  const rotationChanged = rot0 !== actorRot0 || rot1 !== actorRot1 || rot2 !== actorRot2;
   // 0x10399930: the reduced rotation keeps only the &0xfffc-masked yaw.
-  const reducedYaw = ((rot[1] & 0xfffc) - (actorRot[1] & 0xfffc)) | 0;
+  const reducedYaw = ((rot1 & 0xfffc) - (actorRot1 & 0xfffc)) | 0;
   // The Rust core's callers.rs does the arithmetic once the script VM kernel is loaded (docs/live-heap.md "Cut: x87 math in
   // Rust"); the BigInt expressions are the reference it is compared with (scripts/validate-x87-callers-kernel.mjs).
-  const visit = other => {
-    const t0 = riderStats ? now() : 0;
-    const kernel = scriptVmKernel?.riders;
-    let rotMotion = [0, 0, 0];
-    if (rotationChanged) {
-      const otherPos = location(other);
-      rotMotion = kernel ? kernel.rotMotion(actorPos, otherPos, reducedYaw) : riderRotMotionReference(actorPos, otherPos, reducedYaw);
-      if (riderStats) riderStats.rotMs += now() - t0;
-    }
-    const otherRot = rotation(other).map(vv => vv | 0);
-    // 0x10399ad1: delta = FinalDelta + RotMotion, three f32 adds.
-    const delta = kernel ? kernel.delta(finalDelta, rotMotion) : riderDeltaReference(finalDelta, rotMotion);
-    // 0x10399aa4: rot = FRotator(Other.Pitch, Other.Yaw + [ebp+0x2c], Other.Roll).
-    const newRot = [otherRot[0], (otherRot[1] + dyaw) | 0, otherRot[2]];
-    // 0x10399b51: MoveActor(Other, delta, rot, Hit, 0, 0, 1, 0).
-    moveActor(other, delta, newRot);
-    // 0x10399b57: pawn riders keep their ViewRotation aligned with the yaw.
-    if (isPawn(other)) addViewRotationYaw(other, dyaw);
-    if (riderStats) riderStats.visitMs += now() - t0;
-  };
+  // (the pass's inputs in one object for visitRider, and the entry test a function of its own: closures here would make a context
+  // object at every call, whichever path the call takes)
+  const pass = {services, finalDelta, actorPos, dyaw, rotationChanged, reducedYaw};
   // The original loop (0x103998a0..): every Level.Actors index in order, each
   // Base read at that point. A cached list replaces the reads only while no
   // array change, and no Base change to or from this mover, can have
@@ -171,9 +183,8 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
     byMover = riderCaches.get(cacheKey);
     if (!byMover) riderCaches.set(cacheKey, byMover = new WeakMap());
     const entry = byMover.get(actor);
-    const current = () => entry.epoch === baseEpoch() && entry.riderEpoch === riderEpochOf(actor);
-    if (riderStats && entry && !current()) { if (entry.epoch !== baseEpoch()) riderStats.scansEpoch++; else riderStats.scansRider++; }
-    if (entry && current() && entry.actors === actors) {
+    if (riderStats && entry && !entryCurrent(entry, actor)) { if (entry.epoch !== baseEpoch()) riderStats.scansEpoch++; else riderStats.scansRider++; }
+    if (entry && entryCurrent(entry, actor) && entry.actors === actors) {
       if (verifyRiders) {
         const expected = scanRiders(actor, actors, baseOf);
         if (expected.join() !== entry.riders.join()) {
@@ -185,17 +196,18 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
       }
       let last = -1;
       if (riderStats) riderStats.hits++;
-      for (const index of entry.riders) {
-        if (!current()) break;
+      for (let k = 0; k < entry.riders.length; k++) {
+        const index = entry.riders[k];
+        if (!entryCurrent(entry, actor)) break;
         last = index;
         // A slot DestroyActor nulled since the scan: skipped, as the scan
         // skips it (its Base changes were counted when they happened).
         const other = actors[index];
         if (!other) continue;
         if (riderStats) riderStats.visited++;
-        visit(other);
+        visitRider(pass, other);
       }
-      if (current()) return;
+      if (entryCurrent(entry, actor)) return;
       if (riderStats) riderStats.resumed++;
       // A visited rider's move changed a Base or the array: resume the
       // original reads after the last visited index.
@@ -210,7 +222,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
     if (!other || baseOf(other) !== actor) continue;
     found.push(i);
     if (riderStats) { riderStats.visited++; riderStats.scanMs += now() - tScan; }
-    visit(other);
+    visitRider(pass, other);
     if (riderStats) riderStats.scanMs -= now() - tScan;
   }
   if (riderStats) riderStats.scanMs += now() - tScan;

@@ -39,6 +39,7 @@ export function texturePolyFlags(values) {
 }
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+const ZERO3 = [0, 0, 0];
 const bitsOf = value => (f32[0] = value, u32[0]);
 const fromBits = bits => (u32[0] = bits >>> 0, f32[0]);
 
@@ -221,7 +222,12 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
     dynamics = block(12 * caps.nodes), detail = detailTable?.length ? block(4 * detailTable.length) : 0;
   let sprites = block(36 * 256), spriteCapacity = 256;
-  const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
+  // One view of each kind over the kernel's memory, made again when the memory grew (a new view is an object, and these are read
+  // for every tracker header word and node a line check asks).
+  let u32View = null, u8View = null, f32View = null;
+  const words = () => { const buffer = memory.buffer; return u32View !== null && u32View.buffer === buffer ? u32View : (u32View = new Uint32Array(buffer)); };
+  const bytes = () => { const buffer = memory.buffer; return u8View !== null && u8View.buffer === buffer ? u8View : (u8View = new Uint8Array(buffer)); };
+  const floats = () => { const buffer = memory.buffer; return f32View !== null && f32View.buffer === buffer ? f32View : (f32View = new Float32Array(buffer)); };
   {
     const u = words(), b = bytes();
     model.nodes.forEach((n, i) => {
@@ -252,7 +258,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     if (detail) u.set(detailTable, detail >>> 2);
   }
   const trackerHost = tracker ? createTrackerHost(kernel, model, tracker.movers,
-    { at: { nodes, verts, points, surfs }, caps, block, words: () => new Uint32Array(memory.buffer) }) : null;
+    { at: { nodes, verts, points, surfs }, caps, block, words }) : null;
   // collisionModel()'s one object.
   let collision = null;
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
@@ -445,8 +451,10 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       for (let i = 0; i < model.zones.length; i++) {
         const sky = skies[i];
         if (!sky) { u[(zones >>> 2) + 4 * i + 2] = 0; continue; }
-        const at = (skyRecords >>> 2) + 7 * i;
-        u.set([...(sky.location ?? [0, 0, 0]).map(bitsOf), ...(sky.rotation ?? [0, 0, 0]).map(v => v >>> 0), (sky.zone ?? 0) >>> 0], at);
+        const at = (skyRecords >>> 2) + 7 * i, location = sky.location ?? ZERO3, rotation = sky.rotation ?? ZERO3;
+        u[at] = bitsOf(location[0]); u[at + 1] = bitsOf(location[1]); u[at + 2] = bitsOf(location[2]);
+        u[at + 3] = rotation[0] >>> 0; u[at + 4] = rotation[1] >>> 0; u[at + 5] = rotation[2] >>> 0;
+        u[at + 6] = (sky.zone ?? 0) >>> 0;
         u[(zones >>> 2) + 4 * i + 2] = skyRecords + 28 * i;
       }
     },
@@ -457,7 +465,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     /** Node `i`'s polygon as the model holds it now (a tracker fragment where
      * the last Update left it): its points, flat [x, y, z, ...] floats. */
     nodePolygon(i) {
-      const u = words(), f = new Float32Array(u.buffer), count = bytes()[nodes + 64 * i + 54];
+      const u = words(), f = floats(), count = bytes()[nodes + 64 * i + 54];
       const pool = u[(nodes >>> 2) + 16 * i + 6] | 0, out = new Array(3 * count);
       for (let k = 0; k < count; k++) {
         const at = (points >>> 2) + 3 * u[(verts >>> 2) + 2 * (pool + k)];
@@ -481,7 +489,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * updated. */
     lineModel() {
       const count = trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, made = new Map();
-      const u = words(), b = bytes(), fl = new Float32Array(memory.buffer);
+      const u = words(), b = bytes(), fl = floats();
       const node = i => {
         let n = made.get(i);
         if (!n) {
@@ -530,7 +538,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
         if (g !== madeGeneration) { made = new Map(); madeGeneration = g; }
         let n = made.get(i);
         if (!n) {
-          const u = words(), b = bytes(), fl = new Float32Array(memory.buffer), o = (nodes >>> 2) + 16 * i;
+          const u = words(), b = bytes(), fl = floats(), o = (nodes >>> 2) + 16 * i;
           n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
             vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
             zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
@@ -575,14 +583,19 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
  * a frame, 0x10b18b4a) and its OccludeBsp output (`stream`: its address in the
  * kernel memory and word count, for the detail pass). */
+/** `count` words from `at` as a plain array (a slice and its spread each made a copy). */
+function copyWords(words, at, count) {
+  const out = new Array(count);
+  for (let k = 0; k < count; k++) out[k] = words[at + k];
+  return out;
+}
 function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatDraw = false) {
   const frames = [];
   let i = at;
   while (i < words.length) {
     if (words[i] !== 0xfffffffd) throw new Error(`Malformed child frame record at ${i}`);
     const index = words[i + 1], parent = words[i + 2], kind = words[i + 3], iNode = words[i + 4], recursion = words[i + 5], zone = words[i + 6], mirror = words[i + 7];
-    const nearClip = [...words.slice(i + 8, i + 12)], fields = [...words.slice(i + 12, i + 69)];
-    const uncoords = [...words.slice(i + 69, i + 81)];
+    const nearClip = copyWords(words, i + 8, 4), fields = copyWords(words, i + 12, 57), uncoords = copyWords(words, i + 69, 12);
     i += 81;
     const startY = words[i], endY = words[i + 1], valid = words[i + 2];
     i += 3;
@@ -605,7 +618,8 @@ function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatD
       lines.push(line);
     }
     const bounds = boundsOnly ? (minX < maxX && minY < maxY ? [minX, minY, maxX, maxY] : null) : undefined;
-    const requestCount = words[i++], requests = Array.from(words.subarray(i, i + requestCount), node => node | 0);
+    const requestCount = words[i++], requests = new Array(requestCount);
+    for (let k = 0; k < requestCount; k++) requests[k] = words[i + k] | 0;
     i += requestCount;
     const length = words[i++];
     const body = decode(words.subarray(i, i + length), [], skipPoints, boundsOnly, flatDraw);
@@ -625,13 +639,30 @@ function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatD
  * `drawn.nodes[list]` its polygons' iNode in the same order; `draw` is null. The polygons' points are skipped, and the child
  * requests' spans have no lines (their kind and node are what that caller reads). */
 function decode(words, status, skipPoints = false, skipSpritePixels = false, flatDraw = false) {
-  const draw = [[], [], []], children = [], sprites = [], spriteScreens = [];
-  const drawn = flatDraw ? { entries: [[], [], []], nodes: [[], [], []] } : null;
+  const draw = flatDraw ? null : [[], [], []], children = [], sprites = [], spriteScreens = [];
+  // The flat lists are written into scratch arrays that live between decodes and copied out at the end, exact in size (a JavaScript
+  // array grown by push leaves its old backing stores behind, and every list of every frame grew from empty).
+  if (flatDraw) { flatEntryCounts[0] = flatEntryCounts[1] = flatEntryCounts[2] = 0; flatNodeCounts[0] = flatNodeCounts[1] = flatNodeCounts[2] = 0; }
+  const drawn = flatDraw;
+  // flatDraw with skipSpritePixels (sim-session.mjs, the only caller that sets both) reads a sprite's key and its Setup words alone:
+  // `sprites` is then a Uint32Array of the keys and `spriteScreens` one of five words a sprite, key first.
+  const compactSprites = flatDraw && skipSpritePixels;
+  let spriteCount = 0;
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
       // key, the sprite's Z, Setup's ScreenX, ScreenY, Persp (bits; docs/frame-projection.md "Sprites"), span.
       const key = words[i + 1], startY = words[i + 6], endY = words[i + 7], valid = words[i + 8];
+      if (compactSprites) {
+        // Play's decode: a sprite is its five words (key, Z, ScreenX, ScreenY, Persp) in scratch, and its rows are stepped over.
+        if (5 * spriteCount + 5 > spriteScratch.length) spriteScratch = grown(spriteScratch, 5 * spriteCount + 5, Uint32Array);
+        const at = 5 * spriteCount++;
+        spriteScratch[at] = key; spriteScratch[at + 1] = words[i + 2]; spriteScratch[at + 2] = words[i + 3];
+        spriteScratch[at + 3] = words[i + 4]; spriteScratch[at + 4] = words[i + 5];
+        i += 9;
+        for (let y = startY | 0; y < (endY | 0); y++) i += 2 * words[i] + 1;
+        continue;
+      }
       spriteScreens.push({ key, zBits: words[i + 2], screenBits: [words[i + 3], words[i + 4], words[i + 5]] });
       i += 9;
       if (skipSpritePixels) {
@@ -663,15 +694,24 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
         span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines } });
       continue;
     }
-    const list = words[i], iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
-    i += 7;
+    const list = words[i];
     if (drawn) {
+      // (only the words this form keeps are read: a word above the small-integer range is a heap number for each read below TurboFan)
+      const iSurf = words[i + 2], iZone = words[i + 3], polyCount = words[i + 6];
+      i += 7;
       if (!(list < 3)) throw new Error(`Malformed draw list ${list} at ${i - 7}`);
-      const nodes = drawn.nodes[list];
-      drawn.entries[list].push(iSurf | 0, iZone, polyCount);
-      for (let p = 0; p < polyCount; p++) { nodes.push(words[i] | 0); i += 2 + 7 * words[i + 1]; }
+      let nodes = flatNodes[list], at = flatNodeCounts[list], entries = flatEntries[list];
+      const entryAt = flatEntryCounts[list];
+      if (at + polyCount > nodes.length) flatNodes[list] = nodes = grown(nodes, at + polyCount, Uint32Array);
+      if (entryAt + 3 > entries.length) flatEntries[list] = entries = grown(entries, entryAt + 3, Int32Array);
+      entries[entryAt] = iSurf | 0; entries[entryAt + 1] = iZone; entries[entryAt + 2] = polyCount;
+      flatEntryCounts[list] = entryAt + 3;
+      for (let p = 0; p < polyCount; p++) { nodes[at++] = words[i]; i += 2 + 7 * words[i + 1]; }
+      flatNodeCounts[list] = at;
       continue;
     }
+    const iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
+    i += 7;
     const polys = [];
     for (let p = 0; p < polyCount; p++) {
       const node = words[i] | 0, count = words[i + 1];
@@ -683,5 +723,33 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
-  return { draw: drawn ? null : draw, drawn, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
+  if (compactSprites) {
+    const keys = new Uint32Array(spriteCount), screens = new Uint32Array(5 * spriteCount);
+    for (let k = 0; k < spriteCount; k++) keys[k] = spriteScratch[5 * k];
+    for (let k = 0; k < 5 * spriteCount; k++) screens[k] = spriteScratch[k];
+    return { draw, drawn: flatLists(), children, sprites: keys, spriteScreens: screens, nodesDraw: status[2], polysDraw: status[3] };
+  }
+  return { draw, drawn: drawn ? flatLists() : null, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
+}
+let spriteScratch = new Uint32Array(1024);
+const flatEntryCounts = new Int32Array(3), flatNodeCounts = new Int32Array(3);
+const flatEntries = [new Int32Array(1536), new Int32Array(1536), new Int32Array(1536)];
+const flatNodes = [new Uint32Array(2048), new Uint32Array(2048), new Uint32Array(2048)];
+function grown(array, need, Type) {
+  const made = new Type(Math.max(need, 2 * array.length));
+  made.set(array);
+  return made;
+}
+/** The decode's flat lists, copied out of the scratch: `entries[list]` and `nodes[list]` are views of one exact Int32Array and one
+ * exact Uint32Array (the lists' nodes in list order, which is how sim-session.mjs drawnOf takes the frame's whole node list
+ * without a copy). */
+function flatLists() {
+  const e0 = flatEntryCounts[0], e1 = flatEntryCounts[1], e2 = flatEntryCounts[2], n0 = flatNodeCounts[0], n1 = flatNodeCounts[1], n2 = flatNodeCounts[2];
+  const entries = new Int32Array(e0 + e1 + e2), nodes = new Uint32Array(n0 + n1 + n2);
+  let at = 0;
+  for (let list = 0; list < 3; list++) { const from = flatEntries[list]; for (let k = 0, n = flatEntryCounts[list]; k < n; k++) entries[at++] = from[k]; }
+  at = 0;
+  for (let list = 0; list < 3; list++) { const from = flatNodes[list]; for (let k = 0, n = flatNodeCounts[list]; k < n; k++) nodes[at++] = from[k]; }
+  return { entries: [entries.subarray(0, e0), entries.subarray(e0, e0 + e1), entries.subarray(e0 + e1)],
+    nodes: [nodes.subarray(0, n0), nodes.subarray(n0, n0 + n1), nodes.subarray(n0 + n1)] };
 }
