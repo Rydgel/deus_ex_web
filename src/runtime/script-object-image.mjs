@@ -35,7 +35,10 @@ const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, RO
 // parts of composite values.
 class Cell {
   constructor(tag, offset, refCount, {mask = 0, members = null, element = null, dim = 0, stride = 0} = {}) {
-    this.tag = tag; this.offset = offset; this.mask = mask; this.ref = 0; this.refCount = refCount;
+    // A bool's mask can have bit 30 or 31 set (-2147483648 for the top bit), which is a heap number. A field that has stored
+    // one holds a heap number for every cell, boxed in each (docs/live-heap.md, "Step 5's results"). Storing null first
+    // makes the field tagged: a small mask stays a Smi, and only the masks that are not Smis are boxed.
+    this.tag = tag; this.offset = offset; this.mask = null; this.mask = mask; this.ref = 0; this.refCount = refCount;
     this.key = null; this.members = members; this.element = element; this.dim = dim; this.stride = stride;
     // Actor.Base: writes advance the rider-scan epoch (base-epoch.mjs).
     this.actorBase = false;
