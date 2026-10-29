@@ -1,8 +1,9 @@
 import {Reader,PackageError} from '../unreal/package.mjs';
 import {nameAt,objectAt} from '../unreal/objects.mjs';
+import {cloneMetadata} from './clone-metadata.mjs';
 import {zeroValue,copyValue} from './script-values.mjs';
 
-const singleField=field=>({...field,metadata:{...field.metadata,arrayDim:1}});
+const singleField=field=>({...field,metadata:cloneMetadata(field.metadata,{arrayDim:1})});
 
 /** Decode one tagged StructProperty element through its linked SerializeBin
  * member order. Native layouts/padding are not serialized into this stream.

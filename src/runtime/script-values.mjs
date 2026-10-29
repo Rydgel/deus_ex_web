@@ -7,6 +7,7 @@
  * here: the getter and setter supplied to propertyReference are the storage
  * boundary.
  */
+import {cloneMetadata} from './clone-metadata.mjs';
 
 const TYPE_BY_CLASS = Object.freeze({
   ByteProperty: 'byte',
@@ -221,7 +222,7 @@ function describeUncached(field) {
   const dimensionValue = metadata.arrayDim ?? metadata.arrayDimension ?? 1;
   const dimension = integerDimension(dimensionValue, parts, 'array dimension');
   const elementMetadata = dimension > 1
-    ? { ...metadata, arrayDim: 1, arrayDimension: 1 }
+    ? cloneMetadata(metadata, { arrayDim: 1, arrayDimension: 1 })
     : metadata;
   const elementParts = { field: elementMetadata, metadata: elementMetadata, key: `${parts.key}[]` };
   const element = scalarDescriptor(elementParts, elementMetadata);

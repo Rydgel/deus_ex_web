@@ -257,7 +257,7 @@ function readTypeRef(pkg, r, key) {
  * is present exactly when CPF_Net (0x20) is set.  Type-specific object refs
  * follow the base serializer in the original v68/v69 package stream.
  */
-export function readPropertyMetadata(asset, index) {
+function readPropertyMetadataFull(asset, index) {
   const c = context(asset, index);
   const { entry, pkg, data } = c;
   if (!entry.className.endsWith('Property')) {
@@ -356,6 +356,73 @@ export function readPropertyMetadata(asset, index) {
     metadata.unsupported = `Unconsumed ${extraLength}-byte ${entry.className} serializer tail`;
   }
   return metadata;
+}
+
+/** A property's metadata (readPropertyMetadata): the fields that differ from property to property or change, as fields; the rest derived.
+ *
+ * Host representation only (docs/live-heap.md "Load records and functions"). The object had 31 to 36 keys on each of the Island's 20,000
+ * properties, most of them fixed by the export (`className`, `path`, `name`, `valueType`, the six parameter booleans from the flag word,
+ * `category`, `flagBits`, the unset `defaultValue`...). Those are prototype getters that return what the key held. The fields keep the
+ * values the object had; a key a reader assigns (`arrayDim`, `flags`, `elementSize`, the struct and inner links...) is an own field,
+ * and so is `unsupported` when the export has a reason. A copy with other values is `cloneMetadata`, since a spread does not take a
+ * prototype's getters. */
+const PROPERTY_OWN_KEYS = ['asset', 'index', 'entry', 'superFieldRef', 'nextRef', 'arrayDim', 'arrayDimension', 'propertyFlags', 'flags',
+  'categoryIndex', 'replication', 'repOffset', 'type', 'elementSize'];
+const PROPERTY_DERIVED = ['pkg', 'className', 'path', 'name', 'flagBits', 'category', 'valueType', 'supported', 'defaultValue',
+  'defaultValueSupported', 'unsupported', 'parameter', 'out', 'return', 'optional', 'coerce', 'skip'];
+
+export class PropertyMetadata {
+  constructor(full) {
+    this.asset = full.asset;
+    this.index = full.index;
+    this.entry = full.entry;
+    this.superFieldRef = full.superFieldRef;
+    this.nextRef = full.nextRef;
+    this.arrayDim = full.arrayDim;
+    this.arrayDimension = full.arrayDimension;
+    this.propertyFlags = full.propertyFlags;
+    this.flags = full.flags;
+    this.categoryIndex = full.categoryIndex;
+    this.replication = full.replication;
+    this.repOffset = full.repOffset;
+    this.type = full.type;
+    this.elementSize = full.elementSize;
+    // what only some properties have (the type's references, a bool's mask), in the order they were read
+    for (const key of Object.keys(full)) if (!PROPERTY_OWN_KEYS.includes(key) && !PROPERTY_DERIVED.includes(key)) this[key] = full[key];
+    if (full.unsupported !== null) this.unsupported = full.unsupported;
+  }
+  get pkg() { return this.asset.pkg; }
+  get className() { return this.entry.className; }
+  get path() { return this.entry.path; }
+  get name() { return this.entry.name; }
+  get flagBits() { return propertyFlags(this.propertyFlags); }
+  get category() { return nameAt(this.asset.pkg, this.categoryIndex); }
+  get valueType() { return this.type; }
+  get supported() { return Boolean(this.type); }
+  get defaultValue() { return null; }
+  get defaultValueSupported() { return false; }
+  get unsupported() { return null; }
+  get parameter() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.Parm); }
+  get out() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.OutParm); }
+  get return() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.ReturnParm); }
+  get optional() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.OptionalParm); }
+  get coerce() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.CoerceParm); }
+  get skip() { return Boolean(this.propertyFlags & PROPERTY_FLAGS.SkipParm); }
+}
+
+// A write to a derived key makes it an own property, as an assignment to the old plain object did.
+for (const key of PROPERTY_DERIVED) {
+  const { get } = Object.getOwnPropertyDescriptor(PropertyMetadata.prototype, key);
+  Object.defineProperty(PropertyMetadata.prototype, key, {
+    get,
+    set(value) { Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true }); },
+    enumerable: false, configurable: true,
+  });
+}
+
+/** Read one UProperty export (see PropertyMetadata). */
+export function readPropertyMetadata(asset, index) {
+  return new PropertyMetadata(readPropertyMetadataFull(asset, index));
 }
 
 function readLinkedChildren(asset, firstRef, { includeFunctionChildren = false } = {}) {

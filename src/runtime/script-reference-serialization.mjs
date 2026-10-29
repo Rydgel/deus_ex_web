@@ -6,6 +6,7 @@
  * `objectReference(reference, context)`.  This module only reproduces the
  * order and filtering performed by Core.dll's UObject/UStruct serializers.
  */
+import {cloneMetadata} from './clone-metadata.mjs';
 
 const TYPE_BY_CLASS = Object.freeze({
   ByteProperty: 'byte',
@@ -272,7 +273,7 @@ function visitValue(field, reference, archive, options, context, stack) {
 
   const dimension = arrayDimension(metadata, parts);
   const elementMetadata = dimension > 1
-    ? { ...metadata, arrayDim: 1, arrayDimension: 1 }
+    ? cloneMetadata(metadata, { arrayDim: 1, arrayDimension: 1 })
     : metadata;
   const elementField = dimension > 1 ? { ...field, metadata: elementMetadata } : field;
 
