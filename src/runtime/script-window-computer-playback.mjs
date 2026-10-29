@@ -12,6 +12,7 @@ import {gcDrawIcon} from './script-gc-draw-icon.mjs';
 import {gcDrawPattern} from './script-gc-draw-pattern.mjs';
 import {f32Bits} from './script-gc-draw-model.mjs';
 import {windowPlaySound} from './script-window-sound.mjs';
+import {x87PrecisionControl} from './x87-precision.mjs';
 
 const sub=(a,b)=>A(a,N(b)), gt=(a,b)=>x87cmp(a,b)==='gt';
 const lt=(a,b)=>['lt','un'].includes(x87cmp(a,b));
@@ -116,6 +117,45 @@ export function computerProcessQueue(W,win){
     W.farray.remove(win,O.queuedBuffer,0,4096,32);W.setI32(win,O.queuedBufferStart,0);
   }
 }
+/** The sum of two finite float-valued numbers when the double sum is the exact one, else null (TwoSum's error term is zero). An exact
+ * sum is what the x87's extended register holds for float32 operands and a float32 product of them (at most 54 bits, under its 64),
+ * so a decision or a float32 store made from it is the model's, with no BigInt significands built. */
+export function exactSum(a,b){
+  const s=a+b;
+  if(s-s!==0)return null;
+  const bb=s-a;
+  return (a-(s-bb))+(b-bb)===0?s:null;
+}
+/** The cursor blink step of 1000f7b0 for the common frame: `next` (cursorNextEvent) less `delta`, when that stays at or above zero.
+ * The value to store (the model's S(sub(X(next),X(delta)))), or undefined where the model must run (a wrap, a NaN, or a difference
+ * not exact in a double). */
+export function cursorStep(next,delta){
+  if(x87PrecisionControl()!==64)return undefined;
+  const cursor=exactSum(next,-delta);
+  return cursor!==null&&cursor>=0?Math.fround(cursor):undefined;
+}
+/** The time step of 1000f7b0 for the common frame: timeCurrent' = delta * throttle + timeCurrent and, when it passes timeLastEvent
+ * by more than the interval, timeNextEvent' = timeCurrent' + interval, as stored float32 values (S(...) of the model's A(M(X(delta),
+ * X(throttle)),X(timeCurrent))). Fills `timeStep` and returns true, or false where the model must run (an operation not exact in a
+ * double, or a NaN). */
+export const timeStep={current:0,next:0,hasNext:false};
+export function computeTimeStep(delta,throttle,timeCurrent,timeLastEvent,interval){
+  if(x87PrecisionControl()!==64)return false;
+  const product=delta*throttle;
+  if(product-product!==0)return false;
+  const current=exactSum(product,timeCurrent);
+  if(current===null)return false;
+  const passed=exactSum(current,-timeLastEvent);
+  if(passed===null)return false;
+  let next=0,hasNext=false;
+  if(passed>interval){
+    const sum=exactSum(current,interval);
+    if(sum===null)return false;
+    next=Math.fround(sum);hasNext=true;
+  }
+  timeStep.current=Math.fround(current);timeStep.next=next;timeStep.hasNext=hasNext;
+  return true;
+}
 /** 1000f7b0; every x87 fst/fstp is represented by S, retaining ST on fst. */
 export function computerTick(W,win,delta){
   delta=Math.fround(delta);
@@ -134,26 +174,37 @@ export function computerTick(W,win,delta){
   }
   const inputFlags=W.u32(win,O.inputFlags);
   if(inputFlags&16)return;
-  if(gt(X(W.f32(win,O.cursorBlinkSpeed)),X(0))){
-    const cursor=sub(X(W.f32(win,O.cursorNextEvent)),X(delta));W.setF32(win,O.cursorNextEvent,S(cursor));
-    if(lt(cursor,X(0))){
-      W.setF32(win,O.cursorNextEvent,S(A(cursor,X(W.f32(win,O.cursorBlinkSpeed)))));
-      W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)^1);
+  // (an f32 against zero: gt(X(a),X(0)) is a>0, NaN included. The blink and time steps below run in doubles where those are exact:
+  // cursorStep and computeTimeStep, differentially tested against the model in test/script-window-computer-tick.test.mjs.)
+  if(W.f32(win,O.cursorBlinkSpeed)>0){
+    const stepped=cursorStep(W.f32(win,O.cursorNextEvent),delta);
+    if(stepped!==undefined)W.setF32(win,O.cursorNextEvent,stepped);
+    else{
+      const cursor=sub(X(W.f32(win,O.cursorNextEvent)),X(delta));W.setF32(win,O.cursorNextEvent,S(cursor));
+      if(lt(cursor,X(0))){
+        W.setF32(win,O.cursorNextEvent,S(A(cursor,X(W.f32(win,O.cursorBlinkSpeed)))));
+        W.setU32(win,O.cursorFlags,W.u32(win,O.cursorFlags)^1);
+      }
     }
   }
   if(!(inputFlags&4)){
-    const current=A(M(X(delta),X(W.f32(win,O.throttle))),X(W.f32(win,O.timeCurrent)));
-    W.setF32(win,O.timeCurrent,S(current));
-    if(gt(sub(current,X(W.f32(win,O.timeLastEvent))),X(W.f32(win,O.eventTimeInterval))))
-      W.setF32(win,O.timeNextEvent,S(A(current,X(W.f32(win,O.eventTimeInterval)))));
+    if(computeTimeStep(delta,W.f32(win,O.throttle),W.f32(win,O.timeCurrent),W.f32(win,O.timeLastEvent),W.f32(win,O.eventTimeInterval))){
+      W.setF32(win,O.timeCurrent,timeStep.current);
+      if(timeStep.hasNext)W.setF32(win,O.timeNextEvent,timeStep.next);
+    } else {
+      const current=A(M(X(delta),X(W.f32(win,O.throttle))),X(W.f32(win,O.timeCurrent)));
+      W.setF32(win,O.timeCurrent,S(current));
+      if(gt(sub(current,X(W.f32(win,O.timeLastEvent))),X(W.f32(win,O.eventTimeInterval))))
+        W.setF32(win,O.timeNextEvent,S(A(current,X(W.f32(win,O.eventTimeInterval)))));
+    }
     computerProcessQueue(W,win);
-    if(gt(X(W.f32(win,O.fadeOutTimer)),X(0))){
+    if(W.f32(win,O.fadeOutTimer)>0){
       let fade=sub(X(W.f32(win,O.fadeOutTimer)),X(delta));
       if(!lt(X(0),fade))fade=X(0);W.setF32(win,O.fadeOutTimer,S(fade));
       if(eq(fade,X(0)))bubble(W,win,'ComputerFadeOutCompleted',false);
     }
   }
-  if(gt(X(W.f32(win,O.fadeSpeed)),X(0))){
+  if(W.f32(win,O.fadeSpeed)>0){
     for(let i=0;i<W.i32(win,O.displayBuffer+4);i++){
       const p=rec(W,win,O.displayBuffer,i);write(W,p,4,'f32',S(sub(X(read(W,p,4,'f32')),X(delta))));
       if(lt(X(read(W,p,4,'f32')),X(0)))write(W,p,4,'u32',0);
