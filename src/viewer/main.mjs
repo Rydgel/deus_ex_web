@@ -31,6 +31,7 @@ import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
+import { expandHudStream } from '../runtime/script-window-command-stream.mjs';
 import { createFlashPass } from './flash-pass.mjs';
 import { createActorMeshDraw } from './actor-mesh-draw.mjs';
 import { bindingView } from './npc-mesh-preview.mjs';
@@ -2316,6 +2317,8 @@ function drawFrame(snap, time) {
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
   framePhases.draws++; frameCount++;
+  // The HUD's tile commands arrive as numbers (script-window-command-stream.mjs); the list is made where it is drawn.
+  if (snap?.hud?.stream) { snap.hud.commands = expandHudStream(snap.hud.stream); snap.hud.stream = null; }
   if (graphics.lost) graphics.drawnLost++;
   let playerView = null, renderRect = null;
   // A snapshot draws as the frame it was simulated for, whatever the page's

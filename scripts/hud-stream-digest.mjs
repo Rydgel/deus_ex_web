@@ -7,11 +7,14 @@
  * numbers' exact bits (-0 and NaN kept), so a change to how the commands are built must leave every per-frame hash alone.
  *
  *   node scripts/hud-stream-digest.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--out FILE] [--compare FILE] [--alloc] [--sites N] [--dump FRAME]
+ *     [--out FILE] [--compare FILE] [--alloc] [--sites N] [--dump FRAME] [--stream]
  *
  * --out writes {map, frames, digest, hashes[], counts[]}; --compare reads such a file from another build and exits 1 at the first
  * frame whose hash differs. The roam is the same fixed schedule on every run (a forward hold, a turn every 90 ticks, a jump every
  * 150), so two builds see the same world.
+ *
+ * --stream hashes the frame's tiles as the worker posts them (hud({stream: true}): numbers, script-window-command-stream.mjs), as the
+ * list the page makes of them (expandHudStream), so the posted form is held to the same per-frame hashes as the objects.
  *
  * --alloc measures what each `session.hud()` call allocates in V8's new space (the heap-space size before and after the call; a
  * call a scavenge ran in is left out; run with --max-semi-space-size=64 --min-semi-space-size=64 so few are), as KB a frame: the
@@ -53,6 +56,8 @@ const {createGame} = await import('../src/viewer/game.mjs');
 const {createSimSession} = await import('../src/viewer/sim-session.mjs');
 const {gameDirectory} = await import('./game-directory.mjs');
 const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
+const {expandHudStream} = await import('../src/runtime/script-window-command-stream.mjs');
+const useStream = argv.includes('--stream');
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
@@ -110,8 +115,9 @@ const step = () => {
   const sprites = session.sprites();
   const view = game.view();
   const before = wantAlloc ? newSpaceUsed() : 0;
-  const hud = session.hud({width, height, view});
+  const hud = session.hud({width, height, view, stream: useStream});
   if (wantAlloc) { const after = newSpaceUsed(); lastHudAllocation = after < before ? -1 : after - before - overhead; }
+  if (useStream && hud.stream) hud.commands = expandHudStream(hud.stream);
   const errors = [...sprites.errors, ...hud.errors];
   if (errors.length) throw new Error(errors.map(e => e.message).join('; '));
   return hud;

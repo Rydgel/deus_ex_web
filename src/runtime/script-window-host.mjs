@@ -106,6 +106,7 @@ import {createWindowFArray} from './script-window-farray.mjs';
 import {potCeiling} from './script-root-snapshot.mjs';
 import {constructNativeObject} from './script-player-log.mjs';
 import {plainTexture} from './script-window-plain-texture.mjs';
+import {HudCommandStream} from './script-window-command-stream.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -1327,7 +1328,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
           hidden: origin && runtime.readNamed(origin, 'bHidden') ? [origin.name] : [],
           behindView: Boolean(runtime.readNamed(viewer, 'bBehindView')), pass: null};
         if (viewportPlanner) command.pass = viewportPlanner(command);
-        drawCommands.push(command);
+        emitOther(command);
       },
       finishMasterFrame() {
         for (const frame of viewportFrames.keys()) heap.free(frame);
@@ -1730,6 +1731,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     constructUObject: ()=>{},
   };
   const drawCommands=[];
+  // draw's mode 'stream': the tiles go into commandStream as numbers (script-window-command-stream.mjs), the other kinds beside them
+  const commandStream=new HudCommandStream();
+  let streaming=false;
+  const emitOther=command=>{if(streaming)commandStream.other(command);else drawCommands.push(command);};
   // GC.DrawActor / GC.ClearZ (script-gc-draw-actor.mjs, docs/gc-draw-actor.md). The XGC body runs on the HUD canvas' render graph
   // and the Actor's own fields; its three leaves are these services. ClearZ and DrawActor queue ordered 'clearZ' and 'actor'
   // commands among the tile commands. An actor command carries the planner's draw (sim-session.mjs planHudActor: the mesh
@@ -1751,11 +1756,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
   };
   gcServices.render={
-    clearZ:()=>{drawCommands.push({kind:'clearZ'});},
+    clearZ:()=>{emitOther({kind:'clearZ'});},
     drawActor:(_render,frame,actor)=>{
       const command={kind:'actor',actor:actor.name,draw:null};
       if(actorPlanner)command.draw=actorPlanner(actor,{x:W.i32(frame,0xb0),y:W.i32(frame,0xb4),width:W.i32(frame,0xa8),height:W.i32(frame,0xac)});
-      drawCommands.push(command);
+      emitOther(command);
     },
     computeRenderSize:()=>boundary('GC.DrawActor bConstrain resizes the HUD frame (FSceneNode::ComputeRenderSize) and draws in the clip box: not modelled (no shipped script passes bConstrain)'),
   };
@@ -1789,6 +1794,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const pointer=slot===3?heap.mem.read(command.record,'u32'):command.texture;
     const resource=resourceImages.get(pointer);if(!resource)boundary(`Unknown HUD texture pointer ${pointer}`);
     if(plainTiles){
+      if(streaming){
+        commandStream.tile(plainTexture(resource.ref),bitsToF32(command.x),bitsToF32(command.y),bitsToF32(command.xl),bitsToF32(command.yl),
+          bitsToF32(command.u),bitsToF32(command.v),bitsToF32(command.ul),bitsToF32(command.vl),colorOf(command.color),
+          command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1);
+        return;
+      }
       drawCommands.push({texture:plainTexture(resource.ref),x:bitsToF32(command.x),y:bitsToF32(command.y),
         width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
         ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),color:colorOf(command.color),
@@ -1940,14 +1951,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         value:writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5})};W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
-      drawCommands.length=0;
+      drawCommands.length=0;commandStream.reset();
       // The Rust core may run the GC natives while this paint runs
       // (script-vm-gc.mjs open: only when this host's dispatch would).
       const gcNatives=runtime.scriptVm?.gc;
       gcNatives?.open({heap,services:gcServices,handleNative:lifecycle.handleNative});
-      plainTiles=plain===true;
-      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;gcNatives?.close();}
-      return drawCommands.slice();
+      plainTiles=plain===true||plain==='stream';streaming=plain==='stream';
+      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;streaming=false;gcNatives?.close();}
+      return plain==='stream'?commandStream.finish():drawCommands.slice();
     },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};
