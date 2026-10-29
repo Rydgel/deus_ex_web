@@ -39,6 +39,7 @@ export function texturePolyFlags(values) {
 }
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+const ZERO3 = [0, 0, 0];
 const bitsOf = value => (f32[0] = value, u32[0]);
 const fromBits = bits => (u32[0] = bits >>> 0, f32[0]);
 
@@ -450,8 +451,10 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       for (let i = 0; i < model.zones.length; i++) {
         const sky = skies[i];
         if (!sky) { u[(zones >>> 2) + 4 * i + 2] = 0; continue; }
-        const at = (skyRecords >>> 2) + 7 * i;
-        u.set([...(sky.location ?? [0, 0, 0]).map(bitsOf), ...(sky.rotation ?? [0, 0, 0]).map(v => v >>> 0), (sky.zone ?? 0) >>> 0], at);
+        const at = (skyRecords >>> 2) + 7 * i, location = sky.location ?? ZERO3, rotation = sky.rotation ?? ZERO3;
+        u[at] = bitsOf(location[0]); u[at + 1] = bitsOf(location[1]); u[at + 2] = bitsOf(location[2]);
+        u[at + 3] = rotation[0] >>> 0; u[at + 4] = rotation[1] >>> 0; u[at + 5] = rotation[2] >>> 0;
+        u[at + 6] = (sky.zone ?? 0) >>> 0;
         u[(zones >>> 2) + 4 * i + 2] = skyRecords + 28 * i;
       }
     },
@@ -580,14 +583,19 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
  * a frame, 0x10b18b4a) and its OccludeBsp output (`stream`: its address in the
  * kernel memory and word count, for the detail pass). */
+/** `count` words from `at` as a plain array (a slice and its spread each made a copy). */
+function copyWords(words, at, count) {
+  const out = new Array(count);
+  for (let k = 0; k < count; k++) out[k] = words[at + k];
+  return out;
+}
 function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatDraw = false) {
   const frames = [];
   let i = at;
   while (i < words.length) {
     if (words[i] !== 0xfffffffd) throw new Error(`Malformed child frame record at ${i}`);
     const index = words[i + 1], parent = words[i + 2], kind = words[i + 3], iNode = words[i + 4], recursion = words[i + 5], zone = words[i + 6], mirror = words[i + 7];
-    const nearClip = [...words.slice(i + 8, i + 12)], fields = [...words.slice(i + 12, i + 69)];
-    const uncoords = [...words.slice(i + 69, i + 81)];
+    const nearClip = copyWords(words, i + 8, 4), fields = copyWords(words, i + 12, 57), uncoords = copyWords(words, i + 69, 12);
     i += 81;
     const startY = words[i], endY = words[i + 1], valid = words[i + 2];
     i += 3;
@@ -610,7 +618,8 @@ function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatD
       lines.push(line);
     }
     const bounds = boundsOnly ? (minX < maxX && minY < maxY ? [minX, minY, maxX, maxY] : null) : undefined;
-    const requestCount = words[i++], requests = Array.from(words.subarray(i, i + requestCount), node => node | 0);
+    const requestCount = words[i++], requests = new Array(requestCount);
+    for (let k = 0; k < requestCount; k++) requests[k] = words[i + k] | 0;
     i += requestCount;
     const length = words[i++];
     const body = decode(words.subarray(i, i + length), [], skipPoints, boundsOnly, flatDraw);
@@ -630,8 +639,11 @@ function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false, flatD
  * `drawn.nodes[list]` its polygons' iNode in the same order; `draw` is null. The polygons' points are skipped, and the child
  * requests' spans have no lines (their kind and node are what that caller reads). */
 function decode(words, status, skipPoints = false, skipSpritePixels = false, flatDraw = false) {
-  const draw = [[], [], []], children = [], sprites = [], spriteScreens = [];
-  const drawn = flatDraw ? { entries: [[], [], []], nodes: [[], [], []] } : null;
+  const draw = flatDraw ? null : [[], [], []], children = [], sprites = [], spriteScreens = [];
+  // The flat lists are written into scratch arrays that live between decodes and copied out at the end, exact in size (a JavaScript
+  // array grown by push leaves its old backing stores behind, and every list of every frame grew from empty).
+  if (flatDraw) { flatEntryCounts[0] = flatEntryCounts[1] = flatEntryCounts[2] = 0; flatNodeCounts[0] = flatNodeCounts[1] = flatNodeCounts[2] = 0; }
+  const drawn = flatDraw;
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
@@ -672,9 +684,14 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
     i += 7;
     if (drawn) {
       if (!(list < 3)) throw new Error(`Malformed draw list ${list} at ${i - 7}`);
-      const nodes = drawn.nodes[list];
-      drawn.entries[list].push(iSurf | 0, iZone, polyCount);
-      for (let p = 0; p < polyCount; p++) { nodes.push(words[i] | 0); i += 2 + 7 * words[i + 1]; }
+      let nodes = flatNodes[list], at = flatNodeCounts[list], entries = flatEntries[list];
+      const entryAt = flatEntryCounts[list];
+      if (at + polyCount > nodes.length) flatNodes[list] = nodes = grown(nodes, at + polyCount, Uint32Array);
+      if (entryAt + 3 > entries.length) flatEntries[list] = entries = grown(entries, entryAt + 3, Int32Array);
+      entries[entryAt] = iSurf | 0; entries[entryAt + 1] = iZone; entries[entryAt + 2] = polyCount;
+      flatEntryCounts[list] = entryAt + 3;
+      for (let p = 0; p < polyCount; p++) { nodes[at++] = words[i]; i += 2 + 7 * words[i + 1]; }
+      flatNodeCounts[list] = at;
       continue;
     }
     const polys = [];
@@ -688,5 +705,26 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false, fla
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
-  return { draw: drawn ? null : draw, drawn, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
+  return { draw, drawn: drawn ? flatLists() : null, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
+}
+const flatEntryCounts = new Int32Array(3), flatNodeCounts = new Int32Array(3);
+const flatEntries = [new Int32Array(1536), new Int32Array(1536), new Int32Array(1536)];
+const flatNodes = [new Uint32Array(2048), new Uint32Array(2048), new Uint32Array(2048)];
+function grown(array, need, Type) {
+  const made = new Type(Math.max(need, 2 * array.length));
+  made.set(array);
+  return made;
+}
+/** The decode's flat lists, copied out of the scratch: `entries[list]` and `nodes[list]` are views of one exact Int32Array and one
+ * exact Uint32Array (the lists' nodes in list order, which is how sim-session.mjs drawnOf takes the frame's whole node list
+ * without a copy). */
+function flatLists() {
+  const e0 = flatEntryCounts[0], e1 = flatEntryCounts[1], e2 = flatEntryCounts[2], n0 = flatNodeCounts[0], n1 = flatNodeCounts[1], n2 = flatNodeCounts[2];
+  const entries = new Int32Array(e0 + e1 + e2), nodes = new Uint32Array(n0 + n1 + n2);
+  let at = 0;
+  for (let list = 0; list < 3; list++) { const from = flatEntries[list]; for (let k = 0, n = flatEntryCounts[list]; k < n; k++) entries[at++] = from[k]; }
+  at = 0;
+  for (let list = 0; list < 3; list++) { const from = flatNodes[list]; for (let k = 0, n = flatNodeCounts[list]; k < n; k++) nodes[at++] = from[k]; }
+  return { entries: [entries.subarray(0, e0), entries.subarray(e0, e0 + e1), entries.subarray(e0 + e1)],
+    nodes: [nodes.subarray(0, n0), nodes.subarray(n0, n0 + n1), nodes.subarray(n0 + n1)] };
 }

@@ -1179,11 +1179,35 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // order.
   let live=null,liveEpoch=-1,liveList=[],meshReaders=[],levelIndex=new Map();
   const meshAccessors=new Map();
+  // The slots `live` was made from: when the level's array is the same and its slots are the same up to that count, the actors that
+  // joined came at its end (a spawn), and are added to what the rebuild would make (a rebuild of the set, the list, the index and
+  // the accessor array from 2,400 slots, at each of the spawns' epochs).
+  let liveMembers=[],liveActors=null;
+  const extendLive=epoch=>{
+    const actors=level.actors,length=liveMembers.length;
+    if(actors!==liveActors||actors.length<length)return false;
+    for(let i=0;i<length;i++)if(liveMembers[i]!==actors[i])return false;
+    for(let i=length;i<actors.length;i++){
+      const actor=actors[i];
+      liveMembers.push(actor);
+      if(live.has(actor))continue;
+      live.add(actor);liveList.push(actor);
+      if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);
+      if(!actor){meshReaders.push(null);continue;}
+      let reader=meshAccessors.get(actor);
+      if(reader===undefined)meshAccessors.set(actor,reader=fieldAccessor(runtime,actor,'Mesh'));
+      meshReaders.push(reader);
+    }
+    liveEpoch=epoch;
+    return true;
+  };
   const reconcile=(reads=null)=>{
     if(disposed||!level)return;
     const epoch=actorsEpoch();
-    if(epoch!==liveEpoch||!live){
-      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
+    if(epoch!==liveEpoch&&live&&extendLive(epoch)){
+      // (Level.Actors only grew at its end: the set, the list, the index and the accessors were extended in place)
+    }else if(epoch!==liveEpoch||!live){
+      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];liveMembers=level.actors.slice();liveActors=level.actors;
       levelIndex=new Map();
       for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
       // (the accessors of the actors still in the level are kept in place, and those of the others dropped: a second Map of all of
@@ -1371,6 +1395,17 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   reconcile();await Promise.all(pending.values());refreshSummary();started=true;
   if(!actors.length&&!npcActors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
   const all=()=>[...actors,...itemBindings(),...weapons.bindings()];
+  // The records of a frame's update are gathered in these arrays (a push-grown array of a few hundred leaves its smaller stores
+  // behind, and a filter made a second copy) and copied out once, exactly sized.
+  const updateRecords=[],frameRecords=[];
+  const compactRecords=gathered=>{
+    let count=0;
+    for(let i=0;i<gathered.length;i++)if(gathered[i])count++;
+    const out=new Array(count);
+    for(let i=0,k=0;i<gathered.length;i++)if(gathered[i])out[k++]=gathered[i];
+    gathered.length=0;
+    return out;
+  };
   return {actors,npcActors,propActors,summary,kernel,bindings,
     /** One main frame: every binding's frame record in update order, then the
      * mesh lighting frame's coordinates for the GPU passes. `view.lit` marks
@@ -1381,7 +1416,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * returns {main, children}, the binding ids in Frame->Sprite and whether
      * mirror child frames draw (sim-session.mjs). */
     update(view={}){
-      const records=[];
+      const records=updateRecords;records.length=0;
       frameViewer=null;frameViewer=viewer();
       try{
         const reads=meshReads();
@@ -1410,7 +1445,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       const camera=frame?{origin:[...frame.origin],axes:frame.axes.map(axis=>[...axis])}:null;
       // The page's GPU passes run once per main frame (gpu-mesh.mjs run).
       layout?.endFrame();
-      return {records:records.filter(Boolean),camera};
+      return {records:compactRecords(records),camera};
     },
     /** Another root frame's update (a ViewportWindow's DrawWorld, in the HUD
      * paint after the main frame's: docs/script-window-viewport.md "Camera
@@ -1426,7 +1461,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * records and the lighting frame's camera for the page's GPU passes, or
      * null when no binding is updated. */
     updateFrame(view={},ids){
-      const records=[];
+      const records=frameRecords;records.length=0;
       frameViewer=null;frameViewer=viewer();
       try{
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
@@ -1447,7 +1482,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       const root=view.lightRoot??lighting?.frame;
       const camera=root?{origin:[...root.origin],axes:root.axes.map(axis=>[...axis])}:null;
       layout?.endFrame();
-      return {records:records.filter(Boolean),camera};
+      return {records:compactRecords(records),camera};
     },
     /** Whether a weapon binding (attachedTo a pawn) is drawn in the root frame whose Frame->Sprite holds `ids` (a ViewportWindow's): its pawn is
      * in it and had a hand there. */

@@ -35,21 +35,29 @@ export const actorOcclusionMode = () => (typeof process !== 'undefined' && proce
 const byOrder = (a, b) => a.order - b.order;
 // The mesh record addresses of one packDynamics call (a scratch, grown as needed: the call's own array of them was a map's result).
 let recordAt = new Uint32Array(1024);
+/** `pool` (the main frame's call, whose entries nothing keeps past the frame): a `{ objects: [], list: [], sorted: [], used: 0 }`
+ * the entries are made in and reused from frame to frame (an entry object per candidate each frame was most of this function's
+ * allocation). The returned array is the pool's `list`; objects past the count are cleared so they keep no actor alive. */
 export function packDynamics(occlusion, { sprites = [], iterators = null, bindings = [], items = [], reads = null,
-  levelIndex = null, childFrames = false }) {
-  const entries = [];
+  levelIndex = null, childFrames = false, pool = null }) {
+  const entries = pool === null ? [] : pool.list;
+  let count = 0;
   for (let b = 0; b < bindings.length; b++) {
     const binding = bindings[b];
     if (iterators?.has(binding.actor)) continue;
     const index = levelIndex?.get(binding.actor);
     if (index === undefined) continue;
-    if (binding.admitted(reads)) entries.push({ order: index * 65536, binding, item: null, sprite: null, rootExcluded: false });
-    else if (childFrames && binding.childAdmitted?.(reads))
-      entries.push({ order: index * 65536, binding, item: null, sprite: null, rootExcluded: true });
+    if (binding.admitted(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, false);
+    else if (childFrames && binding.childAdmitted?.(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, true);
   }
-  for (const { item, binding } of items) entries.push({ order: item.order, binding, item, sprite: null });
-  for (const sprite of sprites) entries.push({ order: sprite.order, binding: null, item: null, sprite });
-  entries.sort(byOrder);
+  for (let k = 0; k < items.length; k++) count = addEntry(entries, pool, count, items[k].item.order, items[k].binding, items[k].item, null, undefined);
+  for (let k = 0; k < sprites.length; k++) count = addEntry(entries, pool, count, sprites[k].order, null, null, sprites[k], undefined);
+  if (pool !== null) {
+    for (let k = count; k < pool.used; k++) { const stale = pool.objects[k]; stale.binding = stale.item = stale.sprite = null; }
+    pool.used = count;
+    entries.length = count;
+    stableSortByOrder(entries, count, pool.sorted);
+  } else entries.sort(byOrder);
   // Mesh records before the views: a new record may grow the memory. A mesh's record is made once (meshRecord keeps it by key), so
   // its fields are read from the payload only for a key not seen.
   if (recordAt.length < entries.length) recordAt = new Uint32Array(2 * entries.length);
@@ -71,6 +79,36 @@ export function packDynamics(occlusion, { sprites = [], iterators = null, bindin
     packSprite(views, at, i, e.sprite);
   }
   return entries;
+}
+
+// One entry of packDynamics: a new object, or the pool's next one with its fields set.
+function addEntry(entries, pool, count, order, binding, item, sprite, rootExcluded) {
+  if (pool === null) { entries.push({ order, binding, item, sprite, rootExcluded }); return count; }
+  let entry = pool.objects[count];
+  if (entry === undefined) pool.objects[count] = entry = { order, binding, item, sprite, rootExcluded };
+  else { entry.order = order; entry.binding = binding; entry.item = item; entry.sprite = sprite; entry.rootExcluded = rootExcluded; }
+  entries[count] = entry;
+  return count + 1;
+}
+
+/** Array.prototype.sort(byOrder) of the first `count` entries (stable, so equal orders keep their places) by a bottom-up merge in a
+ * scratch array: the built-in sort makes working arrays of its own at each call. */
+function stableSortByOrder(entries, count, scratch) {
+  if (count < 2) return;
+  scratch.length = count;
+  let from = entries, to = scratch;
+  for (let width = 1; width < count; width *= 2) {
+    for (let low = 0; low < count; low += 2 * width) {
+      const middle = Math.min(low + width, count), high = Math.min(low + 2 * width, count);
+      let a = low, b = middle, out = low;
+      while (a < middle && b < high) to[out++] = from[b].order < from[a].order ? from[b++] : from[a++];
+      while (a < middle) to[out++] = from[a++];
+      while (b < high) to[out++] = from[b++];
+    }
+    const swap = from; from = to; to = swap;
+  }
+  if (from !== entries) for (let k = 0; k < count; k++) entries[k] = from[k];
+  scratch.fill(null, 0, count);
 }
 
 /** A DT_Sprite or DT_SpriteAnimOnce record as Setup's candidate: its sprite

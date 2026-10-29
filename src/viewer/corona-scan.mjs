@@ -37,11 +37,23 @@ export function createCoronaScan(runtime, { model, exportName, player, lineModel
 
   // Level.Actors membership changes only when actorsEpoch advances
   // (base-epoch.mjs), so its set is rebuilt only then.
+  // Most advances only append spawns: while the slots seen are still the level's first slots, the new ones are added to the set
+  // (a set of 2,400 actors made at each advance, the cost of mesh-lighting-view.mjs's levelMembership before it did the same).
   let membership = null;
   const live = level => {
-    const epoch = actorsEpoch();
-    if (membership?.actors !== level.actors || membership.epoch !== epoch)
-      membership = { actors: level.actors, epoch, set: new Set(level.actors) };
+    const epoch = actorsEpoch(), actors = level.actors;
+    if (membership !== null && membership.actors === actors) {
+      if (membership.epoch === epoch) return membership.set;
+      const members = membership.members, length = members.length;
+      let same = length <= actors.length;
+      for (let i = 0; same && i < length; i++) if (members[i] !== actors[i]) same = false;
+      if (same) {
+        for (let i = length; i < actors.length; i++) { members.push(actors[i]); membership.set.add(actors[i]); }
+        membership.epoch = epoch;
+        return membership.set;
+      }
+    }
+    membership = { actors, epoch, set: new Set(actors), members: actors.slice() };
     return membership.set;
   };
   function actorFor(ref, level) {

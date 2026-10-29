@@ -46,6 +46,22 @@ export const plainHudCommands = (commands, tilesPlain = false) => commands.map(c
   x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
   ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
 
+// Words of an array or a typed array as a plain array (Array.from over a typed array goes through its iterator, which makes a result
+// object per element below TurboFan), and the same words as float32 values.
+const wordsArray = (words, from, count) => {
+  const out = new Array(count);
+  for (let k = 0; k < count; k++) out[k] = words[from + k];
+  return out;
+};
+const bitWords = new Uint32Array(64), bitFloats = new Float32Array(bitWords.buffer);
+const floatWords = (words, from, count) => {
+  for (let k = 0; k < count; k++) bitWords[k] = words[from + k];
+  const out = new Array(count);
+  for (let k = 0; k < count; k++) out[k] = bitFloats[k];
+  return out;
+};
+const wordFloat = word => (bitWords[63] = word, bitFloats[63]);
+
 /** `assets` is the simulation side's asset store (sprite texture sizes).
  * `events` is the ordered queue of what the simulation hands the page
  * between frames (the actor mesh layer's and the view model's creation and
@@ -345,6 +361,22 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     return { location: [...runtime.readNamed(sky, 'Location')], rotation: [...runtime.readNamed(sky, 'Rotation')],
       zone: region?.['engine.actor.pointregion.zonenumber'] ?? 0 };
   }
+  // Every zone's SkyZone record, a sky actor's read once for the zones that share it (most zones name the same one; each read of
+  // its Region, Location and Rotation is a copy). The array and the records are used by setZoneSkies before the next call.
+  const skiesScratch = [], skySeen = [], skyMade = [];
+  function zoneSkies(zoneActors, info) {
+    let distinct = 0;
+    skiesScratch.length = zoneActors.length;
+    for (let i = 0; i < zoneActors.length; i++) {
+      const zone = zoneActors[i], sky = runtime.readNamed(zone ?? info, 'SkyZone');
+      let k = 0;
+      while (k < distinct && skySeen[k] !== sky) k++;
+      if (k === distinct) { skySeen[distinct] = sky; skyMade[distinct] = skyRecord(sky); distinct++; }
+      skiesScratch[i] = skyMade[k];
+    }
+    skySeen.fill(null, 0, distinct); skyMade.fill(null, 0, distinct);
+    return skiesScratch;
+  }
   // A frame's drawn nodes (Uint32Array) and the tracked movers' polygon
   // ordinals its draw lists hold, by mover name (null without the tracker),
   // and its mover draw items (`moverItems`, in draw-list order): each one's
@@ -355,9 +387,16 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // A frame's drawn polygons' nodes (draw lists 0 to 2, each in OccludeBsp's order) and the tracked movers' polygons among them,
   // from its flat draw lists (bsp-occlusion.mjs `flatDraw`: per list, each entry's iSurf, iZone and polygon count, and the
   // polygons' nodes).
-  function drawnOf({ entries, nodes: listNodes }) {
-    const nodes = new Uint32Array(listNodes[0].length + listNodes[1].length + listNodes[2].length);
+  function concatenated(listNodes, total) {
+    const nodes = new Uint32Array(total);
     nodes.set(listNodes[0]); nodes.set(listNodes[1], listNodes[0].length); nodes.set(listNodes[2], listNodes[0].length + listNodes[1].length);
+    return nodes;
+  }
+  function drawnOf({ entries, nodes: listNodes }) {
+    // The decode's three lists are consecutive views of one exact buffer (bsp-occlusion.mjs flatLists): the whole list is a view of it.
+    const first = listNodes[0], total = first.length + listNodes[1].length + listNodes[2].length;
+    const nodes = first.byteOffset === 0 && first.buffer.byteLength === 4 * total && listNodes[2].buffer === first.buffer
+      ? new Uint32Array(first.buffer) : concatenated(listNodes, total);
     let movers = null, moverItems = null;
     if (trackerMovers && occlusion.tracker?.live()) {
       movers = {}; moverItems = [];
@@ -406,7 +445,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (!master) {
       const built = occlusion.master({ location: frame.view.location, rotation: frame.view.rotation, width: size[0], height: size[1],
         fov: frame.view.fov, render: { width: rect.width, height: rect.height } });
-      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)), prj: Array.from(built.fields.slice(25, 29)) };
+      master = { words: wordsArray(built.frame, 0, built.frame.length), planes: wordsArray(built.fields, 41, 16), prj: wordsArray(built.fields, 25, 4) };
       frameMasters.set(frame, master);
     }
     return master;
@@ -421,7 +460,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const moversStarted = performance.now();
     if (moverUpdate) updateMovers();
     const moversMs = performance.now() - moversStarted;
-    occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => skyRecord(runtime.readNamed(zone ?? info, 'SkyZone'))));
+    occlusion.setZoneSkies(zoneSkies(level.zoneModel.zoneActors, info));
     // CreateMasterFrame at the viewport's size, then the render pass's
     // ComputeRenderSize at 24 bits on the render rectangle (XRootWindow::
     // PreRender for the main frame, ViewportWindow's Draw for a camera's;
@@ -470,7 +509,6 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const requests = frame.requests.map(node => ({ iNode: node, group: keyOf(ownerOf(node)) }));
       // Its DrawLodMesh inputs: the frame's Coords and FX (ComputeRenderSize
       // fields +0x34 and +0xb8; docs/script-lodmesh-lod.md "Play").
-      const fieldFloats = new Float32Array(Uint32Array.from(frame.fields.slice(0, 13)).buffer);
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: keyOf(owner), requests,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
@@ -478,25 +516,24 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // The frame's Coords (origin, X, Y, Z), as its fog maps read them,
         // its Mirror (+0x20, a float) and its four ViewPlanes' words (+0x12c;
         // SetupDynamics' moving-light test, mesh lighting's LeafLights).
-        coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
-        mirror: new Float32Array(Uint32Array.of(frame.mirror).buffer)[0], planes: Array.from(frame.fields.slice(41, 57)),
+        coords: floatWords(frame.fields, 0, 12),
+        mirror: wordFloat(frame.mirror), planes: wordsArray(frame.fields, 41, 16),
         // Its projection (Proj.Z, RProj.Z, FX15, FY15, Coords) for the page's vertex stage
         // (docs/frame-projection.md); the rectangle is the root's.
         projection: projectionOfFields(frame.fields, width, height),
         sprites: frame.sprites.map(sprite => sprite.key), spriteScreens: frame.spriteScreens,
-        lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] },
+        lod: { coords: floatWords(frame.fields, 0, 12), fx: wordFloat(frame.fields[12]) },
         // Its PrjXM..PrjYP (+0xec..+0xf8): the planes DrawLodMesh's outcodes of a pawn's special vertices read in this frame
         // (docs/weapon-attachment.md "Mirror frames"); a child's are those of its own clipped window, not the main frame's.
-        prj: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(25, 29)).buffer)) };
+        prj: floatWords(frame.fields, 25, 4) };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
     // (docs/script-lodmesh-lod.md "Play").
-    const frameFloats = new Float32Array(words.buffer, words.byteOffset, 19);
-    const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
+    const lod = { coords: floatWords(words, 0, 12), fx: wordFloat(words[18]) };
     // The master frame as OccludeBsp got it, with the inputs that made it
     // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
     // `planes`: the frame's four ViewPlanes (+0x12c), as words.
-    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), prj: Array.from(built.fields.slice(25, 29)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+    const master = { words: wordsArray(words, 0, words.length), planes: wordsArray(built.fields, 41, 16), prj: wordsArray(built.fields, 25, 4), location: wordsArray(view.location, 0, view.location.length), rotation: wordsArray(view.rotation, 0, view.rotation.length), fov: view.fov,
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master, detail,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
@@ -604,11 +641,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       (record.screens ??= {})[frameIndex] = [...screenFloats];
     }
   }
+  // The main frame's candidate entries: made in this pool and reused (packDynamics); nothing keeps them past the frame.
+  const mainDynamics = { objects: [], list: [], sorted: [], used: 0 };
   function occludeMain(args = {}) {
     const pending = pendingOcclusion;
     pendingOcclusion = null;
     if (!pending) return null;
-    const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args });
+    const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args, pool: mainDynamics });
     if (iteratorStats.lastFrames[0]) iteratorStats.lastFrames[0].candidates = args.items ?? [];
     // Each child frame's own SetupDynamics (OccludeFrame, 0x10b1a188): with
     // iterators in the level, their items are built again for every frame

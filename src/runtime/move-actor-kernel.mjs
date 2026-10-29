@@ -127,17 +127,18 @@ export class MoveActorHost {
     // Only the spawned collision-view entry calls this host. Immutable class
     // traits are checked again here; no getter-backed flags are read in JS.
     if (!receiver.scriptView || receiver.pawn || receiver.movingBrush || receiver.model) return undefined;
-    if (!Array.isArray(delta) || delta.length !== 3 || !delta.every(v => typeof v === 'number') ||
-      !Array.isArray(rotation) || rotation.length !== 3 || !rotation.every(int32)) return undefined;
+    // (indexed tests: an every() with its callback, and a spread call below, each made an object per call)
+    if (!Array.isArray(delta) || delta.length !== 3 || typeof delta[0] !== 'number' || typeof delta[1] !== 'number' || typeof delta[2] !== 'number' ||
+      !Array.isArray(rotation) || rotation.length !== 3 || !int32(rotation[0]) || !int32(rotation[1]) || !int32(rotation[2])) return undefined;
     this.table();
     if (!this.eligible(instance)) return undefined;
     const model = this.vm.zone.model(level);
     if (!model) return undefined;
     const before = DIFFERENTIAL ? this.snapshot(receiver) : null;
-    const code = this.x.move_rider(instance.base, model, delta[0], delta[1], delta[2], ...rotation);
+    const code = this.x.move_rider(instance.base, model, delta[0], delta[1], delta[2], rotation[0], rotation[1], rotation[2]);
     if (!code) return undefined;
     const view = this.vm.arena.view, at = instance.base + this.cells[9].offset;
-    const result = {success: true, delta: code === 1 ? [0, 0, 0] : delta.map(Math.fround),
+    const result = {success: true, delta: code === 1 ? [0, 0, 0] : [Math.fround(delta[0]), Math.fround(delta[1]), Math.fround(delta[2])],
       position: [view.getFloat32(at, true), view.getFloat32(at + 4, true), view.getFloat32(at + 8, true)],
       time: 1, hit: null};
     if (DIFFERENTIAL) this.verify(receiver, level, delta, rotation, before, result, code);
