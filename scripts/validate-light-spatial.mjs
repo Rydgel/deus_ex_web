@@ -101,7 +101,7 @@ for (const mapName of mapNames) {
   const levelBrightness = f(level.Brightness ?? 1);
   let lights = new Set(), surfaces = 0, steps = 0;
   for (let index = 0; index < model.surfaces.length; index++) {
-    const surface = model.surfaces[index], lm = model.lightMaps[surface.lightMap];
+    const surface = model.surfaces.at(index), lm = model.lightMaps.at(surface.lightMap);
     if (!lm || lm.lightActors == null || lm.lightActors < 0) continue;
     const refs = [];
     for (let at = lm.lightActors; model.lights[at]; at++) refs.push(model.lights[at]);
@@ -114,8 +114,8 @@ for (const mapName of mapNames) {
     let basis;
     try { basis = lightmapBasis(model, surface, lm); } catch { continue; }
     const [width, height] = lm.clamp, pitch = (width + 7) >> 3;
-    const facet = { origin: model.points[surface.base], axisU: model.vectors[surface.textureU], axisV: model.vectors[surface.textureV],
-      normal: model.vectors[surface.normal], pan: [lm.pan[0], lm.pan[1]], scale: lm.scale, clamp: lm.clamp };
+    const facet = { origin: model.points.at(surface.base), axisU: model.vectors.at(surface.textureU), axisV: model.vectors.at(surface.textureV),
+      normal: model.vectors.at(surface.normal), pan: [lm.pan[0], lm.pan[1]], scale: lm.scale, clamp: lm.clamp };
     const p00 = basis.point(0, 0);
     const grid = { start: p00.map(f), stepU: basis.point(1, 0).map((v, i) => f(v - p00[i])), stepV: basis.point(0, 1).map((v, i) => f(v - p00[i])) };
     for (const { light, ref, v } of listed) {
@@ -292,7 +292,7 @@ const shellReport = { lights: 0, records: 0, texels: 0, lit: 0, mismatches: 0 };
   await lighting.prepare(model);
   const seen = new Set();
   for (const t of map.triangles) {
-    const zone = model.nodes[t.node].zones[1], key = `${t.surface}:${zone}`, surface = model.surfaces[t.surface];
+    const zone = model.nodes.at(t.node).zones[1], key = `${t.surface}:${zone}`, surface = model.surfaces.at(t.surface);
     if (seen.has(key) || surface.flags & (POLY.Invisible | POLY.FakeBackdrop | POLY.Unlit)) continue;
     seen.add(key);
     try { lighting.surface(model, t.surface, zone); } catch { /* the world refuses these surfaces too */ }
@@ -304,7 +304,7 @@ const shellReport = { lights: 0, records: 0, texels: 0, lit: 0, mismatches: 0 };
   // Beside a few lit surfaces, off their planes.
   const lit = [...new Set(map.triangles.map(t => t.surface))].filter(i => lighting.recordsFor(model, i).length);
   for (let k = 0; k < 6; k++) {
-    const surface = model.surfaces[lit[(k * 997) % lit.length]], base = model.points[surface.base], normal = model.vectors[surface.normal];
+    const surface = model.surfaces.at(lit[(k * 997) % lit.length]), base = model.points.at(surface.base), normal = model.vectors.at(surface.normal);
     const location = base.map((v, i) => f(v + normal[i] * (24 + 16 * k)));
     const light = { name: 'ExplosionLight0', location, values: { ...values, LightRadius: 4 + k }, levelBrightness: lighting.levelBrightness };
     moving.update([light]);

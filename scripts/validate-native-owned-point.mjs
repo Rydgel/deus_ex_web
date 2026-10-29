@@ -17,6 +17,7 @@ import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {brushToWorld} from '../src/runtime/coords.mjs';
 import {modelPointCheck} from '../src/runtime/point-check.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {typedSceneModels} from './native-model.mjs';
 
 const argv = process.argv.slice(2), captureOnly = argv.includes('--capture-only'), reuse = argv.includes('--reuse');
 const option = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
@@ -36,9 +37,7 @@ const summaries = [];
 for (const name of maps) {
   const directory = path.resolve('reports/movement/native-owned-point', name); await mkdir(directory, {recursive: true});
   const sceneRaw = await readFile(`reports/movement/native-level/${name}/scene.json`), scene = JSON.parse(sceneRaw);
-  const wordBits = new DataView(new ArrayBuffer(4));
-  for (const model of [scene.model, ...scene.actors.map(a => a.model).filter(Boolean)])
-    for (const node of model.nodes) if (node.planeBits) node.plane = node.planeBits.map(word => { wordBits.setUint32(0, word, true); return wordBits.getFloat32(0, true); });
+  typedSceneModels(scene);
   let cases;
   if (reuse) cases = JSON.parse(await readFile(path.join(directory, 'cases.json')));
   else {

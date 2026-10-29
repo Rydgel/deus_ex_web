@@ -5,6 +5,7 @@ import { traceRay } from '../src/runtime/ray.mjs';
 import { pointCheck, modelPointCheck } from '../src/runtime/point-check.mjs';
 import { createCollisionHash, collisionHashLineBounds } from '../src/runtime/collision-hash.mjs';
 import { x87C0, x87C0C3, x87CompareFlags } from '../src/runtime/x87-nan.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // docs/fitting.md "NaN in FindSpot". The expectations of the BSP cases are Engine.dll's own answers under Unicorn
 // (scripts/native-collision-oracle.py on these two compiled models); the end-to-end evidence over the Island's tracked
@@ -57,7 +58,7 @@ test('finite Time behaviour is unchanged: Time 1 and above does not adjust, belo
   for (const t of [0.5, 0]) assert.equal(adjust(t), Math.fround(Math.fround(1.05 - t) * 6)); // X: factor stored, times Normal.X, times Size, stored
 });
 
-const oneWall = { rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] };
+const oneWall = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0], front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] });
 const NAN3 = [NaN, NaN, NaN];
 
 test('a NaN ray in a solid leaf: time 0, the NaN start, the root normal facing the other way (C0 on unordered)', () => {
@@ -73,8 +74,8 @@ function boxModel() {
   const planes = [[-1, 0, 0, 10], [1, 0, 0, 10], [0, -1, 0, 10], [0, 1, 0, 10], [0, 0, -1, 10], [0, 0, 1, 10]];
   const view = new DataView(new ArrayBuffer(4));
   const bits = v => { view.setFloat32(0, v, true); return view.getInt32(0, true); };
-  return { rootOutside: 1, leafHulls: [0, 1, 2, 3, 4, 5, -1, ...[-10, -10, -10, 10, 10, 10].map(bits)],
-    nodes: planes.map((plane, i) => ({ plane, back: i === 5 ? -1 : i + 1, front: -1, collisionBound: 0, vertexCount: 4, flags: 0 })) };
+  return modelFromObjects({ rootOutside: 1, leafHulls: [0, 1, 2, 3, 4, 5, -1, ...[-10, -10, -10, 10, 10, 10].map(bits)],
+    nodes: planes.map((plane, i) => ({ plane, back: i === 5 ? -1 : i + 1, front: -1, collisionBound: 0, vertexCount: 4, flags: 0 })) });
 }
 
 test('a point with a NaN component is blocked at zero and nonzero extents, as UModel::PointCheck (0x103f1570) answers', () => {

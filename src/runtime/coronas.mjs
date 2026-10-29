@@ -169,7 +169,7 @@ export function coronaFrameFromCamera(view, rect) {
  * LeafLights follow (0x10b1b711-0x10b1b743, dynamic-lighting.mjs
  * movingLightLeafLists), each through the same helper. */
 export function leafPermeatingLights(model, leaf) {
-  const start = model.leaves[leaf]?.permeating ?? -1, out = [];
+  const start = leaf >= 0 && leaf < model.leaves.length ? model.leaves.permeating(leaf) : -1, out = [];
   if (start < 0) return out;
   for (let i = start; i < model.lights.length && model.lights[i]; i++) out.push(model.lights[i]);
   return out;

@@ -17,6 +17,7 @@ import { traceRay } from '../src/runtime/ray.mjs';
 import { worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), files = [];
@@ -79,7 +80,7 @@ for (const [actorNumber, source] of meshActors.entries()) {
   const v = values.get(source.index), location = v.Location.map(f);
   const region = pointRegion(model, location, levelInfo.index, zoneRefs);
   if (region.leaf === -1) continue;
-  const leaf = model.leaves[region.leaf];
+  const leaf = model.leaves.at(region.leaf);
   const lights = new Map();
   if (leaf.permeating >= 0)
     for (let i = leaf.permeating; i < model.lights.length && model.lights[i]; i++)
@@ -280,7 +281,7 @@ for (const [s, entry] of scenes.entries()) {
       bSpecialLit: Boolean(entry.v.bSpecialLit),
     }, {
       levelInfo: { ambient: ambientOf(levelValues), brightness: f(levelValues.Brightness ?? 1), timeSeconds: 10 },
-      model: { leaves: [{ permeating: 0 }], lights: [...entry.run, 0] },
+      model: modelFromObjects({ leaves: [{ permeating: 0 }], lights: [...entry.run, 0] }),
       lightOf: ref => lightObjects.get(ref),
       leafLights: entry.scene.leafLights.map(id => lightObjects.get(id)),
       lineCheck: light => frame.lineChecks[light.actor],

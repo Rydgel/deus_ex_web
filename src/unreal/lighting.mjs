@@ -1,6 +1,7 @@
 import { ClassDefaults } from './classes.mjs';
 import { readObject } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
+import { arrayTable } from './bsp-model.mjs';
 import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static-lighting.mjs';
 import { fgetHsv, squareRootTable, normalLightTable } from '../runtime/dynamic-lighting.mjs';
 import { scriptVmKernel } from '../runtime/script-vm-kernel.mjs';
@@ -45,7 +46,7 @@ export function shadowMask(model, lm, lightIndex) {
 }
 
 export function lightmapBasis(model, surface, lm) {
-  const u = model.vectors[surface.textureU], v = model.vectors[surface.textureV], n = model.vectors[surface.normal];
+  const u = model.vectors.at(surface.textureU), v = model.vectors.at(surface.textureV), n = model.vectors.at(surface.normal);
   // Render.dll inverts the facet's FCoords (Core FCoords::Inverse, at
   // 0x10b06175) without a test: a zero determinant makes every texel
   // position non-finite, which the spatial bodies turn into FISTP's integer
@@ -54,7 +55,7 @@ export function lightmapBasis(model, surface, lm) {
   const determinant = dot(u, cross(v, n));
   const du = determinant ? cross(v, n).map(x => x / determinant) : [NaN, NaN, NaN];
   const dv = determinant ? cross(n, u).map(x => x / determinant) : [NaN, NaN, NaN];
-  const base = model.points[surface.base];
+  const base = model.points.at(surface.base);
   return {
     normal: normalize(n),
     point(x, y) { return base.map((p, i) => p + du[i] * (lm.pan[0] + x * lm.scale[0]) + dv[i] * (lm.pan[1] + y * lm.scale[1])); },
@@ -64,11 +65,12 @@ export function lightmapBasis(model, surface, lm) {
 
 export function pointZone(model, point) {
   let index = 0;
-  for (let visited = 0; visited <= model.nodes.length; visited++) {
-    const node = model.nodes[index]; if (!node) throw new Error('Invalid BSP zone traversal');
-    const side = dot(node.plane.slice(0, 3), point) - node.plane[3] >= 0 ? 1 : 0;
-    const next = side ? node.front : node.back;
-    if (next < 0) return node.zones[side];
+  const { nodes } = model;
+  for (let visited = 0; visited <= nodes.length; visited++) {
+    if (!nodes.has(index)) throw new Error('Invalid BSP zone traversal');
+    const side = dot(nodes.planeArray(index).slice(0, 3), point) - nodes.plane(index, 3) >= 0 ? 1 : 0;
+    const next = side ? nodes.front(index) : nodes.back(index);
+    if (next < 0) return nodes.zone(index, side);
     index = next;
   }
   throw new Error('Cyclic BSP zone traversal');
@@ -112,7 +114,7 @@ function lightReferences(model, lightMap) {
 /** Leaves[leaf].iPermeating's run of the level's Lights list, up to its zero
  * (as coronas.mjs leafPermeatingLights); none for leaf −1. */
 function leafLights(model, leaf) {
-  const start = leaf >= 0 ? model.leaves[leaf]?.permeating ?? -1 : -1, refs = [];
+  const start = leaf >= 0 && leaf < model.leaves.length ? model.leaves.permeating(leaf) : -1, refs = [];
   if (start < 0) return refs;
   for (let index = start; index < model.lights.length && model.lights[index]; index++) refs.push(model.lights[index]);
   return refs;
@@ -128,7 +130,7 @@ function inFrontOfFacet(location, origin, normal) {
   return f(f(f(y * zy) + f(z * zz)) + f(x * zx)) > 0;
 }
 
-// A tracker facet [pBase, vTextureU, vTextureV, vNormal] as a one-surface model for lightmapBasis.
+// A tracker facet [pBase, vTextureU, vTextureV, vNormal] as a one-surface model (arrayTable) for lightmapBasis.
 const FACET_SURFACE = Object.freeze({ base: 0, textureU: 0, textureV: 1, normal: 2 });
 
 /** Whether a mover light map's cache header (`last`: Region.iLeaf, Location, Rotation) differs from these values: SetupForSurf
@@ -195,9 +197,10 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
     }
     return pendingActors.get(ref);
   }
-  await Promise.all(map.model.zones.map(z => actor(z.actor)));
+  const zoneRefs = Array.from({ length: map.model.zones.length }, (_, i) => map.model.zones.actor(i));
+  await Promise.all(zoneRefs.map(ref => actor(ref)));
   const levelValues = await actor(levelInfo.index);
-  const zoneValues = map.model.zones.map(z => actors.get(z.actor) ?? levelValues);
+  const zoneValues = zoneRefs.map(ref => actors.get(ref) ?? levelValues);
   const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set(), bySurface = new WeakMap(), owned = [];
   const chosenKernel = kernel !== undefined ? kernel : lightKernelMode() === 'js' ? null : scriptVmKernel;
   const animationKernel = chosenKernel ? createLightAnimationKernel(chosenKernel) : null;
@@ -251,7 +254,7 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       // DrawFrame fills the facet from the tracker surface's pBase and vectors (0x10b1a977..0x10b1aa38), and
       // ComputeFromActor's grid comes from its inverse: lightmapBasis on the facet, as fog-pass.mjs moverGrid.
       const { lightMap } = result, facet = result.pose.facet, [origin, axisU, axisV, normal] = [0, 3, 6, 9].map(i => facet.slice(i, i + 3));
-      const placed = lightmapBasis({ points: [origin], vectors: [axisU, axisV, normal] }, FACET_SURFACE, lightMap);
+      const placed = lightmapBasis({ points: arrayTable([origin]), vectors: arrayTable([axisU, axisV, normal]) }, FACET_SURFACE, lightMap);
       const p00 = placed.point(0, 0), p10 = placed.point(1, 0), p01 = placed.point(0, 1);
       result.staticGeometry = {
         facet: { origin, axisU, axisV, normal, pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
@@ -261,13 +264,14 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
     }
     if (!result.staticGeometry) {
       const { model, surface, basis, lightMap, owner } = result, { transform, transformNormal } = result.pose ?? result;
-      const base = model.points[surface.base], vectors = model.vectors, origin = transform(base);
+      const base = model.points.at(surface.base), origin = transform(base);
+      const textureU = model.vectors.at(surface.textureU), textureV = model.vectors.at(surface.textureV), surfaceNormal = model.vectors.at(surface.normal);
       const along = vector => transform(base.map((v, i) => v + vector[i])).map((v, i) => v - origin[i]);
       const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
       result.staticGeometry = {
-        facet: { origin, axisU: owner ? along(vectors[surface.textureU]) : vectors[surface.textureU],
-          axisV: owner ? along(vectors[surface.textureV]) : vectors[surface.textureV],
-          normal: owner ? transformNormal(vectors[surface.normal]) : vectors[surface.normal],
+        facet: { origin, axisU: owner ? along(textureU) : textureU,
+          axisV: owner ? along(textureV) : textureV,
+          normal: owner ? transformNormal(surfaceNormal) : surfaceNormal,
           pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
         grid: { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),
           stepV: p01.map((v, i) => Math.fround(v - p00[i])) },
@@ -468,7 +472,7 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
         affected: affected.map(result => ({ surfaceIndex: result.surfaceIndex, lightMapIndex: result.index, zone: result.zone, lightmap: result })) };
     },
     surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n, owner = null) {
-      const surface = model.surfaces[surfaceIndex], lm = model.lightMaps[surface.lightMap];
+      const surface = model.surfaces.at(surfaceIndex), lm = model.lightMaps.at(surface.lightMap);
       if (!lm) { stats.missingLightmaps++; return null; }
       const [width, height] = lm.clamp;
       if (width < 1 || height < 1 || width > 1022 || height > 1022 || !lm.scale.every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid lightmap dimensions or scale');

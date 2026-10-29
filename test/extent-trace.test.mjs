@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { traceExtent } from '../src/runtime/extent-trace.mjs';
 import { brushToWorld } from '../src/runtime/coords.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // Controlled compiled hull, executed independently by native-extent-oracle.py.
 // No original map assets are embedded in this regression fixture.
@@ -9,8 +10,8 @@ function boxModel() {
   const planes = [[-1,0,0,10],[1,0,0,10],[0,-1,0,10],[0,1,0,10],[0,0,-1,10],[0,0,1,10]];
   const view = new DataView(new ArrayBuffer(4));
   const bits = v => { view.setFloat32(0,v,true); return view.getInt32(0,true); };
-  return {rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],
-    nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))};
+  return modelFromObjects({rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],
+    nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))});
 }
 
 test('original supplemental positive-X bound differs from owner path',()=>{
@@ -52,7 +53,7 @@ test('native oblique owner bevel gives axis normal including negative zero',()=>
 
 test('unsupported zero extents and malformed BSP fail explicitly',()=>{
   assert.throws(()=>traceExtent(boxModel(),[0,0,0],[1,0,0],[0,0,0]),/traceRay/);
-  const m=boxModel();m.nodes[0].back=0;
+  const m=boxModel();m.nodes.i32[8]=0;
   assert.throws(()=>traceExtent(m,[-100,0,0],[0,0,0],[20,20,43]),/cyclic/);
 });
 
@@ -60,8 +61,8 @@ test('native x87 support retains the component deciding a float32 midpoint',()=>
   const view=new DataView(new ArrayBuffer(4));
   const bits=v=>{view.setFloat32(0,v,true);return view.getInt32(0,true);};
   const plane=[Math.fround(-3/Math.sqrt(13)),Math.fround(1e-16),Math.fround(-2/Math.sqrt(13)),-6080];
-  const model={rootOutside:1,leafHulls:[0,-1,...[-10000,-10000,-10000,10000,10000,10000].map(bits)],
-    nodes:[{plane,back:-1,front:-1,collisionBound:0,vertexCount:4,flags:0}]};
+  const model=modelFromObjects({rootOutside:1,leafHulls:[0,-1,...[-10000,-10000,-10000,10000,10000,10000].map(bits)],
+    nodes:[{plane,back:-1,front:-1,collisionBound:0,vertexCount:4,flags:0}]});
   // Captured with original UModel.LineCheck by native-extent-oracle.py.
   const hit=traceExtent(model,[7120,-1160,160],[7120,-1160,284],[20,20,16]);
   assert.equal(hit.time,0.5038346648216248);

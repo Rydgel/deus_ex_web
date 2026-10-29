@@ -30,6 +30,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { isMovingLightCandidate, movingLightInView, movingLightLeafLists, movingLightLeafList, worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 import { occlusionModelRequest, surfaceTextureFlags, renderPassTangent, renderRectangle, trackedModelRequest } from './occlusion-request.mjs';
 import { collectTrackerMovers, trackerMoverSpec, trackerTextureFlags } from '../src/runtime/brush-tracker.mjs';
 import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
@@ -74,7 +75,7 @@ async function validate(mapName, count, seed, { tracker = null } = {}) {
     // The model the original's Filter walks: every node, fragments included.
     const request = trackedModelRequest(occlusion, occlusionModelRequest(model, textureFlags), kernel.memory);
     const planes = request.nodes.map(n => [...new Float32Array(Uint32Array.from(n.planeBits).buffer)]);
-    tracked = { nodes: request.nodes.map((n, k) => ({ plane: planes[k], front: n.front, back: n.back, leaves: n.leaves })),
+    tracked = { nodes: modelFromObjects({ nodes: request.nodes.map((n, k) => ({ plane: planes[k], front: n.front, back: n.back, leaves: n.leaves })) }).nodes,
       oracleNodes: request.nodes.map((n, k) => [...planes[k], n.surface, n.back, n.front, n.coplanar, ...n.leaves]),
       surfaces: request.surfs.map(surf => [surf.flags >>> 0, -1]) };
   }

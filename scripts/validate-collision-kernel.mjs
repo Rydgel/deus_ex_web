@@ -542,10 +542,10 @@ for (const name of only('levels') ? ['00_Training', '01_NYC_UNATCOIsland'] : [])
     const ladders = new Set(model.nodes.map((node, i) => textures[node.surface]?.outerName?.toLowerCase() === 'ladder' ? i : -1).filter(i => i >= 0));
     // Pawn stances facing ladder polygons: in front of the polygon's centre
     // by a radius, facing it, feet below its middle.
-    const ladderStances = [...ladders].filter(i => model.nodes[i].vertexCount > 0).slice(0, 300).map(i => {
-      const node = model.nodes[i], n = node.plane.slice(0, 3), centre = [0, 0, 0];
+    const ladderStances = [...ladders].filter(i => model.nodes.at(i).vertexCount > 0).slice(0, 300).map(i => {
+      const node = model.nodes.at(i), n = node.plane.slice(0, 3), centre = [0, 0, 0];
       for (let j = 0; j < node.vertexCount; j++) {
-        const p = model.points[model.vertices[node.vertexPool + j].point];
+        const p = model.points.at(model.vertices.at(node.vertexPool + j).point);
         for (let k = 0; k < 3; k++) centre[k] += p[k] / node.vertexCount;
       }
       return {centre, n, yaw: Math.round(Math.atan2(-n[1], -n[0]) * 32768 / Math.PI)};
@@ -563,7 +563,7 @@ for (const name of only('levels') ? ['00_Training', '01_NYC_UNATCOIsland'] : [])
         lineCheck: (a, b, e, flags, extra) => q.lineCheck(a, b, e, flags, extra, pawn),
         textureForHit: hit => {
           if (hit?.actor !== q.levelInfo) return null;
-          const node = model.nodes[hit.item];
+          const node = model.nodes.at(hit.item);
           if (!node) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
           return textures[node.surface] ?? null;
         },

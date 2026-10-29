@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { movingLightLeafList, movingLightLeafLists, movingLightInView, viewPlanesOf } from '../src/runtime/dynamic-lighting.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // A deterministic generator, so a failure replays.
 const rng = seed => () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
@@ -27,7 +28,7 @@ function randomModel(random, count) {
     if (nodes[i][side] === -1 && random() < .8) nodes[i].leaves[side === 'back' ? 0 : 1] = leaves++;
     else if (nodes[i][side] !== -1 && random() < .2) nodes[i].leaves[side === 'back' ? 0 : 1] = leaves++;
   }
-  return { model: { nodes }, leaves };
+  return { model: modelFromObjects({ nodes }), leaves };
 }
 
 test('movingLightLeafList equals the full Filter walk, leaf by leaf', () => {

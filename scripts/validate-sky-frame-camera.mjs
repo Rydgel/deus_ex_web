@@ -75,11 +75,11 @@ async function validate(mapName, seed) {
     zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
   const targets = [];
   model.nodes.forEach((n, i) => {
-    const flags = (model.surfaces[n.surface].flags | textureFlags[n.surface]) >>> 0;
+    const flags = (model.surfaces.at(n.surface).flags | textureFlags[n.surface]) >>> 0;
     if (n.vertexCount < 3 || !(flags & (MIRRORED | FAKE_BACKDROP))) return;
     const c = [0, 0, 0];
     for (let k = 0; k < n.vertexCount; k++) {
-      const p = model.points[model.vertices[n.vertexPool + k].point];
+      const p = model.points.at(model.vertices.at(n.vertexPool + k).point);
       for (let j = 0; j < 3; j++) c[j] += p[j] / n.vertexCount;
     }
     targets.push({ center: c, normal: n.plane.slice(0, 3), mirror: Boolean(flags & MIRRORED) });

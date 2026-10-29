@@ -18,6 +18,7 @@
 import { sceneFrameTangent } from './script-window-scene-frame.mjs';
 import { x87TanCandidates } from './x87-tan.mjs';
 import { createTrackerHost, trackerCapacities, TRACKER, DSURF } from './brush-tracker.mjs';
+import { MemoryNodes } from '../unreal/bsp-model.mjs';
 
 /** Engine.Texture's bools packed into the dword UTexture::PolyFlags (+0x80
  * in the retail layout, docs/object-memory.md "Texture"), bit i for the i-th
@@ -199,6 +200,27 @@ function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom
     frame: words.slice(kernel.framePtr() >>> 2, (kernel.framePtr() >>> 2) + 64) };
 }
 
+/** The surfaces of the collision model while the tracker lives: the static table, then each tracker FBspSurf (AddBrush: the polygon's
+ * `PolyFlags & 0x3cffffff`), read from the kernel's memory as the tracker holds them now. */
+class TrackedSurfaceView {
+  constructor(surfaces, host, words) { this.surfaces = surfaces; this.host = host; this.words = words; }
+  get length() { return this.host.header(TRACKER.SURFS_NUM); }
+  get top() { return this.host.header(TRACKER.SURFS_TOP); }
+  isDynamic(i) { return i >= this.top; }
+  flags(i) {
+    const top = this.top;
+    if (i < top) return this.surfaces.flags(i);
+    return this.words()[(this.host.blocks.dsurfs >>> 2) + DSURF.WORDS * (i - top) + DSURF.FLAGS];
+  }
+  at(i) {
+    const top = this.top;
+    if (i < top) return this.surfaces.at(i);
+    if (!(i < this.length) || !Number.isInteger(i)) return undefined;
+    const u = this.words(), o = (this.host.blocks.dsurfs >>> 2) + DSURF.WORDS * (i - top);
+    return { texture: null, flags: u[o + DSURF.FLAGS], dynamic: true, mover: u[o + DSURF.ACTOR] - 0x40000000, ordinal: u[o + DSURF.BRUSHPOLY] };
+  }
+}
+
 /** Upload `model` (src/unreal/model.mjs readModel) with each surface's
  * texture PolyFlags (`surfaceTextureFlags[i]`, 0 without a texture) and
  * each zone's actor key (`zoneActors[i]`, 0 for none: the LevelInfo); the
@@ -230,25 +252,16 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   const floats = () => { const buffer = memory.buffer; return f32View !== null && f32View.buffer === buffer ? f32View : (f32View = new Float32Array(buffer)); };
   {
     const u = words(), b = bytes();
-    model.nodes.forEach((n, i) => {
-      const o = (nodes >>> 2) + 16 * i;
-      for (let k = 0; k < 4; k++) u[o + k] = bitsOf(n.plane[k]);
-      u[o + 4] = n.zoneMask[0]; u[o + 5] = n.zoneMask[1];
-      u.set([n.vertexPool, n.surface, n.back, n.front, n.coplanar, n.collisionBound, n.renderBound].map(v => v >>> 0), o + 6);
-      b.set([n.zones[0], n.zones[1], n.vertexCount, n.flags], nodes + 64 * i + 52);
-      u[o + 14] = n.leaves[0] >>> 0; u[o + 15] = n.leaves[1] >>> 0;
-    });
-    model.vertices.forEach((v, i) => { u[(verts >>> 2) + 2 * i] = v.point; u[(verts >>> 2) + 2 * i + 1] = v.side >>> 0; });
-    model.points.forEach((p, i) => { for (let k = 0; k < 3; k++) u[(points >>> 2) + 3 * i + k] = bitsOf(p[k]); });
-    model.surfaces.forEach((s, i) => {
-      u[(surfs >>> 2) + 2 * i] = s.flags >>> 0;
+    // The model's tables are laid out as the kernel's blocks: the nodes are the 64-byte FBspNode records, the vertices two words
+    // (point, side), the points three float32 words, the render bounds seven (min, max, valid).
+    b.set(model.nodes.u8, nodes);
+    u.set(new Uint32Array(model.vertices.words.buffer, model.vertices.words.byteOffset, model.vertices.words.length), verts >>> 2);
+    u.set(new Uint32Array(model.points.data.buffer, model.points.data.byteOffset, model.points.data.length), points >>> 2);
+    for (let i = 0; i < model.surfaces.length; i++) {
+      u[(surfs >>> 2) + 2 * i] = model.surfaces.flags(i);
       u[(surfs >>> 2) + 2 * i + 1] = (surfaceTextureFlags?.[i] ?? 0) >>> 0;
-    });
-    model.renderBounds.forEach((box, i) => {
-      const o = (bounds >>> 2) + 7 * i;
-      for (let k = 0; k < 3; k++) { u[o + k] = bitsOf(box.min[k]); u[o + 3 + k] = bitsOf(box.max[k]); }
-      u[o + 6] = box.valid ? 1 : 0;
-    });
+    }
+    u.set(new Uint32Array(model.renderBounds.words.buffer, model.renderBounds.words.byteOffset, model.renderBounds.words.length), bounds >>> 2);
     u.fill(0, zones >>> 2, (zones >>> 2) + 256);
     for (let i = 0; i < model.zones.length; i++) {
       u[(zones >>> 2) + 4 * i] = (zoneActors[i] ?? 0) >>> 0;
@@ -488,24 +501,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * object is made at its first read; take a new view after the tracker
      * updated. */
     lineModel() {
-      const count = trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, made = new Map();
-      const u = words(), b = bytes(), fl = floats();
-      const node = i => {
-        let n = made.get(i);
-        if (!n) {
-          const o = (nodes >>> 2) + 16 * i;
-          n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
-            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
-            zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
-          made.set(i, n);
-        }
-        return n;
-      };
-      return { rootOutside: model.rootOutside, leafHulls: model.leafHulls, nodes: new Proxy([], { get(_, key) {
-        if (key === 'length') return count;
-        const i = typeof key === 'string' ? Number(key) : NaN;
-        return Number.isInteger(i) && i >= 0 && i < count ? node(i) : undefined;
-      } }) };
+      return { rootOutside: model.rootOutside, leafHulls: model.leafHulls,
+        nodes: new MemoryNodes(memory, nodes, trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount) };
     },
     /** The same Level->Model as a node block read in place (fast-line-check.mjs
      * reads each node's plane, children and NodeFlags from it): the kernel's
@@ -531,35 +528,9 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     collisionModel() {
       if (!trackerHost) return null;
       if (collision) return collision;
-      let made = new Map(), madeGeneration = -1;
       const generation = () => trackerHost.header(TRACKER.GENERATION), count = () => trackerHost.header(TRACKER.NODES_NUM);
-      const node = i => {
-        const g = generation();
-        if (g !== madeGeneration) { made = new Map(); madeGeneration = g; }
-        let n = made.get(i);
-        if (!n) {
-          const u = words(), b = bytes(), fl = floats(), o = (nodes >>> 2) + 16 * i;
-          n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
-            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
-            zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
-          made.set(i, n);
-        }
-        return n;
-      };
-      const top = () => trackerHost.header(TRACKER.SURFS_TOP), dsurfs = trackerHost.blocks.dsurfs;
-      const surface = i => {
-        if (i < top()) return model.surfaces[i];
-        if (i >= trackerHost.header(TRACKER.SURFS_NUM)) return undefined;
-        const u = words(), o = (dsurfs >>> 2) + DSURF.WORDS * (i - top());
-        return { texture: null, flags: u[o + DSURF.FLAGS], dynamic: true, mover: u[o + DSURF.ACTOR] - 0x40000000, ordinal: u[o + DSURF.BRUSHPOLY] };
-      };
-      const indexed = (length, read) => new Proxy([], { get(_, key) {
-        if (key === 'length') return length();
-        const i = typeof key === 'string' ? Number(key) : NaN;
-        return Number.isInteger(i) && i >= 0 && i < length() ? read(i) : undefined;
-      } });
       collision = { rootOutside: model.rootOutside, leafHulls: model.leafHulls, zones: model.zones,
-        nodes: indexed(count, node), surfaces: indexed(() => trackerHost.header(TRACKER.SURFS_NUM), surface),
+        nodes: new MemoryNodes(memory, nodes, count), surfaces: new TrackedSurfaceView(model.surfaces, trackerHost, words),
         trackedSource: { memory, at: nodes, capacity: caps.nodes, count, generation } };
       return collision;
     },

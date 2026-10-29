@@ -80,34 +80,35 @@ export const detailTexturesOn = () => !['0', 'off', 'false', 'no'].includes(Stri
  * and the page (the texture to draw) call it; a texture is read once per base texture. */
 export async function modelSurfaceDetails(assets, asset, model) {
   const cache = new Map(), details = [];
-  for (const surface of model.surfaces) {
-    if (!surface.texture) { details.push(null); continue; }
-    if (!cache.has(surface.texture)) {
-      const object = await assets.resolve(asset, surface.texture);
+  for (let i = 0; i < model.surfaces.length; i++) {
+    const texture = model.surfaces.texture(i);
+    if (!texture) { details.push(null); continue; }
+    if (!cache.has(texture)) {
+      const object = await assets.resolve(asset, texture);
       const values = readTexture(object.asset, object.index).values;
       let detail = null;
       if (values.DetailTexture) {
-        const target = await assets.resolve(object.asset, values.DetailTexture), texture = readTexture(target.asset, target.index);
-        const scale = floatWord(f32(texture.values.DrawScale ?? texture.values.Scale ?? 1));
-        detail = { uSize: texture.mips[0].width, vSize: texture.mips[0].height, scaleBits: [scale, scale], panBits: [0, 0],
+        const target = await assets.resolve(object.asset, values.DetailTexture), detailTexture = readTexture(target.asset, target.index);
+        const scale = floatWord(f32(detailTexture.values.DrawScale ?? detailTexture.values.Scale ?? 1));
+        detail = { uSize: detailTexture.mips[0].width, vSize: detailTexture.mips[0].height, scaleBits: [scale, scale], panBits: [0, 0],
           name: target.key, ref: { package: target.asset.name, index: target.index, key: target.key } };
       }
-      cache.set(surface.texture, detail);
+      cache.set(texture, detail);
     }
-    details.push(cache.get(surface.texture));
+    details.push(cache.get(texture));
   }
   return details;
 }
 export function detailTable(model, details) {
   const table = new Uint32Array(DETAIL_TABLE_WORDS * model.surfaces.length);
-  model.surfaces.forEach((surface, i) => {
+  for (let i = 0; i < model.surfaces.length; i++) {
     const d = details[i];
-    if (!d) return;
+    if (!d) continue;
     const stage = detailStage(d.uSize, d.vSize, wordFloat(d.scaleBits[0]));
-    table.set([1, ...model.points[surface.base].map(floatWord), ...model.vectors[surface.textureU].map(floatWord),
-      ...model.vectors[surface.textureV].map(floatWord), stage.uIndex, stage.vIndex, floatWord(stage.uScale), floatWord(stage.vScale),
+    table.set([1, ...model.points.at(model.surfaces.base(i)).map(floatWord), ...model.vectors.at(model.surfaces.textureU(i)).map(floatWord),
+      ...model.vectors.at(model.surfaces.textureV(i)).map(floatWord), stage.uIndex, stage.vIndex, floatWord(stage.uScale), floatWord(stage.vScale),
       d.panBits[0], d.panBits[1]], DETAIL_TABLE_WORDS * i);
-  });
+  }
   return table;
 }
 

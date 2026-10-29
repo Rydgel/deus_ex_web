@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createMeshLightingView} from '../src/viewer/mesh-lighting-view.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 // Native candidate gates: Render.dll 0x10b230e8..0x10b2311c. This tests
 // deferred host record construction and live edits; the real-data/native
@@ -13,7 +14,7 @@ test('mesh light records remain live when static collection is deferred',()=>{
     bMovable:false,bSpecialLit:false,Location:[0,0,32]};
   const mesh={name:'Mesh0',Location:[0,0,0],ScaleGlow:1,AmbientGlow:0,
     Region:{'engine.actor.pointregion.ileaf':0,'engine.actor.pointregion.zonenumber':1}};
-  const level={actors:[levelInfo,light,mesh],model:{nodes:[],leaves:[{permeating:0}],lights:[1,0],rootOutside:true}};
+  const level={actors:[levelInfo,light,mesh],model:modelFromObjects({nodes:[],leaves:[{permeating:0}],lights:[1,0],rootOutside:true})};
   const reads=[];
   const runtime={readNamed:(actor,name)=>{reads.push([actor,name]);return actor?.[name];},soundField:()=>1};
   const view=createMeshLightingView(runtime,()=>level,{exportName:()=>light.name});

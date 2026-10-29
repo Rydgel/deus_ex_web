@@ -36,11 +36,11 @@ for (const actor of map.actors.filter(actor => actor.className === 'SecurityCame
     hue: values.LightHue, saturation: values.LightSaturation, effect: 0 };
   const surfaces = filterMovingLight(map.model, light.location, worldLightRadius(values), values.bSpecialLit);
   for (const index of surfaces) {
-    const surface = map.model.surfaces[index], lm = map.model.lightMaps[surface.lightMap];
+    const surface = map.model.surfaces.at(index), lm = map.model.lightMaps.at(surface.lightMap);
     const basis = lightmapBasis(map.model, surface, lm), p00 = basis.point(0, 0);
     samples.push({ name: `${actor.name}/${index}`, light,
-      facet: { origin: map.model.points[surface.base], axisU: map.model.vectors[surface.textureU],
-        axisV: map.model.vectors[surface.textureV], normal: map.model.vectors[surface.normal],
+      facet: { origin: map.model.points.at(surface.base), axisU: map.model.vectors.at(surface.textureU),
+        axisV: map.model.vectors.at(surface.textureV), normal: map.model.vectors.at(surface.normal),
         pan: lm.pan.slice(0, 2), scale: lm.scale, clamp: lm.clamp },
       grid: { start: p00.map(f), stepU: basis.point(1, 0).map((v, i) => f(v - p00[i])),
         stepV: basis.point(0, 1).map((v, i) => f(v - p00[i])) } });

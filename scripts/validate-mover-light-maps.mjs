@@ -71,7 +71,7 @@ for (const { map: mapName, mover: name, pose } of CASES) {
     : (() => { const m = authoredMatrix.clone(); toView(target.location.map((v, i) => v - authored.location[i])).forEach((v, i) => { m.elements[12 + i] += v; }); return m; })();
   // As world.mjs: the zone of the authored brush centre, every lit polygon, the header of the authored place.
   const zone = pointZone(map.model, transforms(authoredMatrix).transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2)));
-  const surfaces = [...new Set(triangles.map(t => t.surface))].filter(s => !(model.surfaces[s].flags & (POLY.Invisible | POLY.Unlit)));
+  const surfaces = [...new Set(triangles.map(t => t.surface))].filter(s => !(model.surfaces.at(s).flags & (POLY.Invisible | POLY.Unlit)));
   const world = async (matrix, header) => {
     const lighting = await createLighting(map, asset, assets, { kernel });
     await lighting.prepare(model);

@@ -216,7 +216,7 @@ class KernelHashStore {
       const nodes = model.nodes, base = this.alloc(Math.max(1, nodes.length));
       const bytes = new Uint8Array(this.arena.memory.buffer, base, nodes.length);
       for (let i = 0; i < nodes.length; i++) {
-        const texture = textures[nodes[i].surface] ?? null;
+        const texture = textures[nodes.surface(i)] ?? null;
         let ladder;
         try { ladder = texture?.outerName?.toLowerCase() === 'ladder'; } catch { ladder = true; }
         bytes[i] = (texture && (texture.outerName === null || texture.outerName === 'Ladder') ? 1 : 0) | (ladder ? 2 : 0);
@@ -509,7 +509,7 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
 // Differential checks.
 
 const exact = (key, v) => typeof v === 'number' && (Object.is(v, -0) || !Number.isFinite(v)) ? (Object.is(v, -0) ? '-0' : String(v)) : v;
-const describe = v => v && typeof v === 'object' ? (v.name ?? v.id ?? v.key ?? (Array.isArray(v.nodes) ? '<model>' : '<object>')) : v;
+const describe = v => v && typeof v === 'object' ? (v.name ?? v.id ?? v.key ?? (v.nodes?.length !== undefined ? '<model>' : '<object>')) : v;
 
 /** Two line-check results (a hit, an array of hits, or a lineCheck result)
  * equal: the same keys in the same order, numbers by Object.is, vectors

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { BspCollider, CollisionWorld, sweepCylinder, readCollisionHulls } from '../src/runtime/collision.mjs';
 import { Player, FixedClock, FIXED_STEP } from '../src/runtime/player.mjs';
 import { Doors } from '../src/runtime/doors.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 function boxes(bounds) {
   const nodes = [], leafHulls = [], data = new DataView(new ArrayBuffer(4));
@@ -12,7 +13,7 @@ function boxes(bounds) {
     for (const [i, plane] of planes.entries()) { nodes.push({ plane, collisionBound: i === 0 ? start : -1 }); leafHulls.push(offset + i); }
     leafHulls.push(-1, ...[...min, ...max].map(f => { data.setFloat32(0, f, true); return data.getInt32(0, true); }));
   }
-  return { nodes, leafHulls };
+  return modelFromObjects({ nodes, leafHulls });
 }
 const defaults = { CollisionRadius: 20, CollisionHeight: 47.5, BaseEyeHeight: 40, GroundSpeed: 320, AccelRate: 1000, JumpZ: 300, MaxStepHeight: 25, AirControl: .05, Bob: .016 };
 const floor = [[-2000, -2000, -100], [2000, 2000, 0]];
@@ -27,7 +28,7 @@ test('compiled collision hulls block long sweeps, allow face sliding and validat
   assert.equal(b.sweep([8, 0, 0], [-20, 0, 0], [2, 2, 2]), null);
   assert.equal(b.overlaps([9, 0, 0], [2, 2, 2]), true);
   assert.throws(() => readCollisionHulls({ ...model, leafHulls: model.leafHulls.slice(0, -1) }), /Truncated/);
-  assert.throws(() => readCollisionHulls({ ...model, leafHulls: [9999, ...model.leafHulls.slice(1)] }), /plane/);
+  assert.throws(() => readCollisionHulls({ ...model, leafHulls: Int32Array.of(9999, ...model.leafHulls.slice(1)) }), /plane/);
 });
 
 test('original extent clipping permits floor-overlap escape and applies native floor clearance', () => {

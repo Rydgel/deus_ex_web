@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { traceRay } from '../src/runtime/ray.mjs';
 import { BspCollider } from '../src/runtime/collision.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
-const model = { rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0],
-  front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] };
+const model = modelFromObjects({ rootOutside: 1, leafHulls: [], nodes: [{ plane: [1, 0, 0, 0],
+  front: -1, back: -1, vertexCount: 4, flags: 0, collisionBound: -1 }] });
 // Numeric expectations captured from original Engine.dll 0x103f3c20, using
 // the one-plane corpus in scripts/validate-native-rays.mjs. No game data needed.
 test('compiled world rays use original traversal and half-unit backoff', () => {

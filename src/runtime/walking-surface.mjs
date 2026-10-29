@@ -13,16 +13,17 @@ const CHECK_SCAN=HASH_DIFFERENTIAL||TRACE_DIFFERENTIAL;
  * Result is indexed by BSP surface; actor/mesh hit selection belongs to caller. */
 export async function walkingSurfaceTextures(assets,asset,model){
  const defaults=new ClassDefaults(assets),cache=new Map();
- return Promise.all(model.surfaces.map(async surface=>{
-  if(!surface.texture)return null;
-  if(!cache.has(surface.texture))cache.set(surface.texture,(async()=>{
-   const object=await assets.resolve(asset,surface.texture),stored=readObject(object.asset.pkg,object.asset.bytes,object.index);
+ return Promise.all(Array.from({length:model.surfaces.length},async(_,i)=>{
+  const texture=model.surfaces.texture(i);
+  if(!texture)return null;
+  if(!cache.has(texture))cache.set(texture,(async()=>{
+   const object=await assets.resolve(asset,texture),stored=readObject(object.asset.pkg,object.asset.bytes,object.index);
    const inherited=await defaults.get(object.asset,object.entry.classIndex);
    const friction=stored.values.Friction??inherited.Friction;
    if(!Number.isFinite(friction))throw Error(`Unresolved original Texture.Friction: ${object.key}`);
    return {key:object.key,name:object.entry.name,outerName:objectAt(object.asset.pkg,object.entry.outer)?.name??object.asset.name,friction:f(friction)};
   })());
-  return cache.get(surface.texture);
+  return cache.get(texture);
  }));
 }
 

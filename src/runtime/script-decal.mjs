@@ -46,7 +46,7 @@ export function levelDecals(level) {
   if (source) {
     const tracked = source.model();
     model = uploadDecalModel(kernel, tracked, { pointCapacity: source.pointCapacity,
-      isMover: s => (tracked.surfaces[s]?.dynamic ? true : null) });
+      isMover: s => (s >= 0 && s < tracked.surfaces.length && tracked.surfaces.isDynamic(s) ? true : null) });
   } else model = uploadDecalModel(kernel, level.model);
   if (level.decals) {
     const decals = level.decals, old = decals.model;

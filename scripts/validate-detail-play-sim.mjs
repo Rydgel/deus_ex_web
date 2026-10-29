@@ -63,8 +63,8 @@ function reference(draw, fields, origin, model, details) {
     const polys = entry.polys.filter(p => p.points).map(p => p.points.map(t => ({ x: wordFloat(t[0]), y: wordFloat(t[1]), z: wordFloat(t[2]),
       screenX: wordFloat(t[3]), screenY: wordFloat(t[4]), rz: wordFloat(t[6]) })));
     if (!polys.length) continue;
-    const surface = model.surfaces[entry.iSurf];
-    const facet = facetOf(frame, model.points[surface.base], model.vectors[surface.textureU], model.vectors[surface.textureV]);
+    const surface = model.surfaces.at(entry.iSurf);
+    const facet = facetOf(frame, model.points.at(surface.base), model.vectors.at(surface.textureU), model.vectors.at(surface.textureV));
     const fans = detailFans(frame, depth, facet, detailStage(info.uSize, info.vSize, wordFloat(info.scaleBits[0])), [0, 0], polys);
     if (fans.length) out.set(`${list}:${entry.iNode}`, { iSurf: entry.iSurf, fans });
   }

@@ -38,8 +38,8 @@ const assets = new AssetStore(files), decoded = decodeMap((await assets.get(map)
 // Each mirror polygon and the Light actors in front of it, nearest first.
 const units = r => Math.round(r * 32768 / Math.PI);
 const mirrors = mirrorNodes.map(index => {
-  const node = decoded.model.nodes[index], center = [0, 0, 0];
-  for (let k = 0; k < node.vertexCount; k++) { const p = decoded.model.points[decoded.model.vertices[node.vertexPool + k].point]; for (let j = 0; j < 3; j++) center[j] += p[j] / node.vertexCount; }
+  const node = decoded.model.nodes.at(index), center = [0, 0, 0];
+  for (let k = 0; k < node.vertexCount; k++) { const p = decoded.model.points.at(decoded.model.vertices.at(node.vertexPool + k).point); for (let j = 0; j < 3; j++) center[j] += p[j] / node.vertexCount; }
   const normal = node.plane.slice(0, 3), w = node.plane[3];
   const lights = decoded.actors.filter(a => a.className === 'Light' && a.values.Location).map(a => {
     const L = a.values.Location, side = normal[0] * L[0] + normal[1] * L[1] + normal[2] * L[2] - w;

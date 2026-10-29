@@ -204,7 +204,7 @@ const ZERO_NOISE = { A: new Float32Array(256) };
  * A light is {values, location, index} with `values` its reflected fields. */
 export function setupForActor(manager, actor, scene) {
   const result = setupAmbient(actor, scene);
-  const leaf = scene.model.leaves[actor.iLeaf];
+  const leaves = scene.model.leaves, permeating = actor.iLeaf >= 0 && actor.iLeaf < leaves.length ? leaves.permeating(actor.iLeaf) : -1;
   if (!lightsActor(actor, scene)) return result;
   const stamp = ++manager.stamp;
   const elapsed = (scene.viewport.currentTime - scene.viewport.lastUpdateTime) * 768;
@@ -233,8 +233,8 @@ export function setupForActor(manager, actor, scene) {
     list.push({ light, key, tag });
   };
   for (const entry of cache) consider(scene.current?.(entry.light) ?? entry.light, entry.fade);
-  if (leaf && leaf.permeating >= 0 && list.length < 120)
-    for (let i = leaf.permeating; i < scene.model.lights.length && scene.model.lights[i] && list.length < 120; i++)
+  if (permeating >= 0 && list.length < 120)
+    for (let i = permeating; i < scene.model.lights.length && scene.model.lights[i] && list.length < 120; i++)
       consider(scene.lightOf(scene.model.lights[i]), 0);
   for (const light of scene.leafLights ?? []) { if (list.length >= 120) break; consider(light, 255); }
   sortLightCandidates(list);

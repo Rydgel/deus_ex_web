@@ -62,9 +62,9 @@ async function mirrorCameras() {
   const assets = new AssetStore(files), asset = await assets.get(map), model = decodeMap(asset.bytes).model;
   const flags = await surfaceTextureFlags(assets, asset, model), seen = new Set(), cameras = [];
   model.nodes.forEach(n => {
-    if (n.vertexCount < 3 || !(((model.surfaces[n.surface].flags | flags[n.surface]) >>> 0) & 0x08000000)) return;
+    if (n.vertexCount < 3 || !(((model.surfaces.at(n.surface).flags | flags[n.surface]) >>> 0) & 0x08000000)) return;
     const c = [0, 0, 0];
-    for (let k = 0; k < n.vertexCount; k++) { const p = model.points[model.vertices[n.vertexPool + k].point]; for (let j = 0; j < 3; j++) c[j] += p[j] / n.vertexCount; }
+    for (let k = 0; k < n.vertexCount; k++) { const p = model.points.at(model.vertices.at(n.vertexPool + k).point); for (let j = 0; j < 3; j++) c[j] += p[j] / n.vertexCount; }
     const key = c.map(v => Math.round(v / 64)).join(',');
     if (seen.has(key)) return; seen.add(key);
     for (const d of [160, 420]) {

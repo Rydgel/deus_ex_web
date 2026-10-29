@@ -33,7 +33,7 @@ for (const [m, name] of maps.entries()) for (const transform of m === 0 ? [undef
   await lighting.prepare(model);
   const seen = new Set();
   for (const t of map.triangles) {
-    const zone = model.nodes[t.node].zones[1], key = `${t.surface}:${zone}`, surface = model.surfaces[t.surface];
+    const zone = model.nodes.at(t.node).zones[1], key = `${t.surface}:${zone}`, surface = model.surfaces.at(t.surface);
     if (seen.has(key) || surface.flags & (POLY.Invisible | POLY.FakeBackdrop | POLY.Unlit)) continue;
     seen.add(key);
     let record; try { record = lighting.surface(model, t.surface, zone, transform ?? undefined); } catch { continue; }

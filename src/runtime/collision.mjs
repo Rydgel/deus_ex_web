@@ -5,6 +5,9 @@ import { createLevelQueries } from './level-queries.mjs';
 import { pointCheck, modelPointCheck } from './point-check.mjs';
 import { findSpot } from './fitting.mjs';
 import { primitivePointCheck } from './primitive-collision.mjs';
+import { readCollisionHulls, HullTree } from './collision-hulls.mjs';
+
+export { readCollisionHulls };
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
@@ -14,99 +17,34 @@ const scale = (a, s) => a.map(v => v * s);
 const length = a => Math.hypot(...a);
 const support = (n, e) => Math.abs(n[0]) * e[0] + Math.abs(n[1]) * e[1] + Math.abs(n[2]) * e[2];
 const distance = (p, v) => dot(p, v) - p[3];
-const floatBuffer = new DataView(new ArrayBuffer(4));
-const asFloat = n => { floatBuffer.setInt32(0, n, true); return floatBuffer.getFloat32(0, true); };
-const boxPlanes = (min, max) => [
-  [1, 0, 0, max[0]], [-1, 0, 0, -min[0]], [0, 1, 0, max[1]],
-  [0, -1, 0, -min[1]], [0, 0, 1, max[2]], [0, 0, -1, -min[2]],
-];
-const overlapBounds = (a, b) => a.min.every((v, i) => v <= b.max[i] && a.max[i] >= b.min[i]);
-const boundsOf = hulls => ({ min: [0, 1, 2].map(i => Math.min(...hulls.map(h => h.min[i]))), max: [0, 1, 2].map(i => Math.max(...hulls.map(h => h.max[i]))) });
-
-function tree(hulls) {
-  if (!hulls.length) return null;
-  const bounds = boundsOf(hulls);
-  if (hulls.length <= 8) return { ...bounds, hulls };
-  const spans = sub(bounds.max, bounds.min), axis = spans.indexOf(Math.max(...spans));
-  hulls.sort((a, b) => a.min[axis] + a.max[axis] - b.min[axis] - b.max[axis]);
-  const middle = hulls.length >> 1;
-  return { ...bounds, left: tree(hulls.slice(0, middle)), right: tree(hulls.slice(middle)) };
-}
-
-/** Decode the original compiled solid-leaf hulls. Their terminal six int32 words
- * contain float bounding coordinates; bit 30 reverses a referenced BSP plane. */
-export function readCollisionHulls(model, transformPoint, transformNormal) {
-  const brush = Boolean(transformPoint);
-  transformPoint ??= p => p;
-  transformNormal ??= n => n;
-  const hulls = [], seen = new Set();
-  for (const [nodeIndex, node] of model.nodes.entries()) {
-    let cursor = node.collisionBound;
-    if (cursor === -1 || seen.has(cursor)) continue;
-    if (!Number.isInteger(cursor) || cursor < 0 || cursor >= model.leafHulls.length) throw new Error('Invalid collision hull offset');
-    seen.add(cursor);
-    const planes = [];
-    while (cursor < model.leafHulls.length && model.leafHulls[cursor] >= 0) {
-      const ref = model.leafHulls[cursor++], source = model.nodes[ref & ~0x40000000]?.plane;
-      if (!source) throw new Error('Invalid collision hull plane');
-      const sign = ref & 0x40000000 ? -1 : 1, n = source.slice(0, 3).map(v => v * sign);
-      const n2 = dot(n, n);
-      if (n2 < .5 || !source.every(Number.isFinite)) throw new Error('Invalid collision plane normal');
-      const point = transformPoint(scale(n, source[3] * sign / n2));
-      const transformed = transformNormal(n), normal = scale(transformed, 1 / length(transformed));
-      planes.push([...normal, dot(normal, point)]);
-    }
-    if (!planes.length || model.leafHulls[cursor++] !== -1 || cursor + 6 > model.leafHulls.length) throw new Error('Truncated collision hull');
-    const original = model.leafHulls.slice(cursor, cursor + 6).map(asFloat);
-    if (!original.every(Number.isFinite) || original.slice(0, 3).some((v, i) => v > original[i + 3])) throw new Error('Invalid collision hull bounds');
-    const corners = Array.from({ length: 8 }, (_, mask) => transformPoint([0, 1, 2].map(i => original[i + ((mask >> i & 1) ? 3 : 0)])));
-    const min = [0, 1, 2].map(i => Math.min(...corners.map(p => p[i]))), max = [0, 1, 2].map(i => Math.max(...corners.map(p => p[i])));
-    // Additional support planes around edges make box sweeps work at bevelled
-    // corners as well as faces. Positive combinations remain supporting planes.
-    const bevels = [];
-    for (let a = 0; a < planes.length; a++) for (let b = 0; b < a; b++) {
-      for (let axis = 0; axis < 3; axis++) if (planes[a][axis] * planes[b][axis] < -1e-8) {
-        const p = planes[a].map((v, i) => v * Math.abs(planes[b][axis]) + planes[b][i] * Math.abs(planes[a][axis]));
-        const size = length(p.slice(0, 3));
-        if (size > 1e-5) bevels.push(p.map(v => v / size));
-      }
-    }
-    // FBoxLineCheck's six supplemental bounds are asymmetric in this binary:
-    // Z expands both ways; the positive X/Y boundaries move inward by 0.1.
-    // Keep point-overlap geometry separate from these line-check tolerances.
-    // Engine.dll 0x103f4968 / 0x103f4ad6 / 0x103f4c35 / 0x103f4d94 /
-    // 0x103f4ef3 / 0x103f5052; verified by executing the original LineCheck.
-    const f = Math.fround;
-    const clipBounds = [[0, 0, -1, f(.1 - min[2])], [0, 0, 1, f(max[2] + .1)],
-      [-1, 0, 0, f(.1 - min[0])], [1, 0, 0, f(max[0] - .1)],
-      [0, -1, 0, f(.1 - min[1])], [0, 1, 0, f(max[1] - .1)]];
-    hulls.push({ min, max, planes: [...planes, ...boxPlanes(min, max), ...bevels],
-      // The native owner/brush path skips these supplemental world bounds.
-      sweepPlanes: [...planes, ...(brush ? [] : clipBounds), ...bevels], node: nodeIndex });
-  }
-  return hulls;
-}
-
 /** Sweep an axis-aligned extent through a convex solid using a parametric clip.
- * Contact parallel to, or departing from, a face does not obstruct sliding. */
-export function sweepHull(hull, start, delta, extent, maxTime = 2) {
+ * Contact parallel to, or departing from, a face does not obstruct sliding. `planes` is a flat run of [x, y, z, w] planes from
+ * `from` to `to` (a hull's `sweep` or `planes` range, collision-hulls.mjs); `sweepHull` takes the object form of a hull. */
+function sweepPlanes(planes, from, to, start, delta, extent, maxTime = 2) {
   // Original FBoxLineCheck: entry starts at -1, and shallow initial overlap
   // blocks inward movement while permitting escape or tangential movement.
-  let enter = -1, leave = maxTime, normal = null, depth = -Infinity;
-  for (const plane of hull.sweepPlanes ?? hull.planes) {
-    const pushout = support(plane, extent), from = distance(plane, start), speed = dot(plane, delta);
-    let d = from - pushout;
+  let enter = -1, leave = maxTime, nx = 0, ny = 0, nz = 0, found = false, depth = -Infinity;
+  for (let k = from; k < to; k++) {
+    const at = 4 * k, a = planes[at], b = planes[at + 1], c = planes[at + 2], w = planes[at + 3];
+    const pushout = Math.abs(a) * extent[0] + Math.abs(b) * extent[1] + Math.abs(c) * extent[2];
+    const distanceFrom = a * start[0] + b * start[1] + c * start[2] - w, speed = a * delta[0] + b * delta[1] + c * delta[2];
+    let d = distanceFrom - pushout;
     depth = Math.max(depth, d);
-    if (speed < 0 && from >= 0 && d < 0) d = 0;
+    if (speed < 0 && distanceFrom >= 0 && d < 0) d = 0;
     if (speed < -1e-5) {
       const t = -d / speed;
-      if (t > enter) { enter = t; normal = plane.slice(0, 3); }
+      if (t > enter) { enter = t; nx = a; ny = b; nz = c; found = true; }
     } else if (speed > 1e-5) leave = Math.min(leave, -d / speed);
-    else if (from > pushout && from + speed > pushout) return null;
+    else if (distanceFrom > pushout && distanceFrom + speed > pushout) return null;
     if (enter >= leave) return null;
   }
-  if (enter <= -1 || leave <= 0 || enter >= 2 || !normal) return null;
-  return { time: enter, normal, penetrating: depth < 0 };
+  if (enter <= -1 || leave <= 0 || enter >= 2 || !found) return null;
+  return { time: enter, normal: [nx, ny, nz], penetrating: depth < 0 };
+}
+export function sweepHull(hull, start, delta, extent, maxTime = 2) {
+  const planes = hull.sweepPlanes ?? hull.planes, flat = new Float64Array(4 * planes.length);
+  planes.forEach((p, i) => flat.set(p, 4 * i));
+  return sweepPlanes(flat, 0, planes.length, start, delta, extent, maxTime);
 }
 
 /** The host collider's hulls use the mover's load-time transform plus a
@@ -122,28 +60,41 @@ export class BspCollider {
   constructor(model, transformPoint, transformNormal, ownerValues = null) {
     this.ownedBrush = Boolean(transformPoint || ownerValues);
     this.ownerValues = ownerValues;
-    this.hulls = readCollisionHulls(model, transformPoint, transformNormal);
-    this.tree = tree([...this.hulls]);
     this.offset = [0, 0, 0];
     this.model = model;
-    this.hullByBound = new Map(this.hulls.map(h => [model.nodes[h.node].collisionBound, h]));
-    this.partitionPlanes = model.nodes.map(({ plane }) => {
-      if (!transformPoint) return plane;
+    this.transformPoint = transformPoint; this.transformNormal = transformNormal;
+    this.prepared = null;
+  }
+  /** The compiled hulls, their box tree and the transformed partition planes: built at the first query that needs them. With a
+   * compiled root (every map) the sweeps and overlaps below are answered by the original model queries and never need them. */
+  prepare() {
+    if (this.prepared) return this.prepared;
+    const { model, transformPoint, transformNormal } = this;
+    const hulls = readCollisionHulls(model, transformPoint, transformNormal), nodes = model.nodes;
+    // One Float64Array of [x, y, z, w] a node: the node's plane, or the plane carried by the brush's transform.
+    const partition = new Float64Array(4 * nodes.length);
+    for (let i = 0; i < nodes.length; i++) {
+      const plane = nodes.planeArray(i);
+      if (!transformPoint) { partition.set(plane, 4 * i); continue; }
       const n = plane.slice(0, 3), point = transformPoint(scale(n, plane[3] / dot(n, n)));
       const transformed = transformNormal(n), normal = scale(transformed, 1 / length(transformed));
-      return [...normal, dot(normal, point)];
-    });
-  }
-  candidates(start, delta, extent) {
-    const end = add(start, delta), bounds = { min: start.map((v, i) => Math.min(v, end[i]) - extent[i] - .001), max: start.map((v, i) => Math.max(v, end[i]) + extent[i] + .001) };
-    const result = [], stack = this.tree ? [this.tree] : [];
-    while (stack.length) {
-      const node = stack.pop();
-      if (!overlapBounds(node, bounds)) continue;
-      if (node.hulls) result.push(...node.hulls.filter(h => overlapBounds(h, bounds)));
-      else stack.push(node.left, node.right);
+      partition.set([...normal, dot(normal, point)], 4 * i);
     }
-    return result;
+    return this.prepared = { hulls, tree: new HullTree(hulls), partition };
+  }
+  get hulls() { return this.prepare().hulls; }
+  /** How many collision hulls the model compiles: the distinct valid collision bounds of its nodes (what readCollisionHulls makes), without building them. */
+  get hullCount() {
+    if (this.prepared) return this.prepared.hulls.length;
+    const bounds = new Set(), nodes = this.model.nodes;
+    for (let i = 0; i < nodes.length; i++) if (nodes.collisionBound(i) !== -1) bounds.add(nodes.collisionBound(i));
+    return bounds.size;
+  }
+  /** Hull indices whose boxes the swept extent overlaps. */
+  candidates(start, delta, extent) {
+    const end = add(start, delta);
+    const lo = start.map((v, i) => Math.min(v, end[i]) - extent[i] - .001), hi = start.map((v, i) => Math.max(v, end[i]) + extent[i] + .001);
+    return this.prepare().tree.overlapping(lo, hi);
   }
   *lineCandidates(start, delta, extent) {
     // FBoxLineCheck visits the original BSP in movement order. In an initial
@@ -152,22 +103,23 @@ export class BspCollider {
     const { nodes, rootOutside } = this.model;
     if (rootOutside === undefined) { yield* this.candidates(start, delta, scale(extent, 1.1)); return; }
     if (!nodes.length) return;
+    const { hulls, partition } = this.prepare();
     const stack = [{ index: 0, parent: -1, outside: Boolean(rootOutside) }];
     let visits = 0;
     while (stack.length) {
       if (++visits > nodes.length * 4 + 4) throw new Error('Invalid cyclic collision BSP');
       const { index, parent, outside } = stack.pop();
       if (index === -1) {
-        const hull = !outside && this.hullByBound.get(nodes[parent]?.collisionBound);
-        if (hull) yield hull;
+        const hull = !outside && parent >= 0 && parent < nodes.length ? hulls.indexOfBound(nodes.collisionBound(parent)) : undefined;
+        if (hull !== undefined) yield hull;
         continue;
       }
-      const node = nodes[index], plane = this.partitionPlanes[index];
+      const plane = partition.subarray(4 * index, 4 * index + 4);
       const from = distance(plane, start), to = from + dot(plane, delta), padded = support(plane, scale(extent, 1.1));
-      const solid = node.vertexCount > 0 && !(node.flags & 0x21);
+      const solid = nodes.vertexCount(index) > 0 && !(nodes.flags(index) & 0x21);
       const branches = [
-        { index: node.back, parent: index, outside: outside && !solid, visit: from <= padded || to <= padded },
-        { index: node.front, parent: index, outside: outside || solid, visit: from >= -padded || to >= -padded },
+        { index: nodes.back(index), parent: index, outside: outside && !solid, visit: from <= padded || to <= padded },
+        { index: nodes.front(index), parent: index, outside: outside || solid, visit: from >= -padded || to >= -padded },
       ];
       const near = from >= to ? 1 : 0;
       if (branches[1 - near].visit) stack.push(branches[1 - near]);
@@ -200,8 +152,9 @@ export class BspCollider {
     // The native BSP traversal pads extents by 1.1 before visiting leaves. Its
     // raw clip may be beyond the endpoint and enter the segment after backoff.
     for (const hull of this.lineCandidates(start, delta, extent)) {
-      const next = sweepHull(hull, start, delta, extent, hit?.time ?? 2);
-      if (next && (!hit || next.time < hit.time)) hit = { ...next, node: hull.node };
+      const { hulls } = this.prepare();
+      const next = sweepPlanes(hulls.sweep, hulls.sweepStart[hull], hulls.sweepStart[hull + 1], start, delta, extent, hit?.time ?? 2);
+      if (next && (!hit || next.time < hit.time)) hit = { ...next, node: hulls.node[hull] };
     }
     if (!hit) return null;
     // UModel.LineCheck, Engine.dll 0x103f403b: MAX, not MIN. For a
@@ -217,8 +170,14 @@ export class BspCollider {
       const Location = this.ownerValues.Location.map((v,i) => Math.fround(v + this.offset[i]));
       return !modelPointCheck(this.model, position, extent, brushToWorld({ ...this.ownerValues, Location })).outside;
     }
-    const p = sub(position, this.offset);
-    return this.candidates(p, [0, 0, 0], extent).some(h => h.planes.every(n => distance(n, p) - support(n, extent) < -1e-4));
+    const p = sub(position, this.offset), { hulls } = this.prepare(), planes = hulls.planes;
+    return this.candidates(p, [0, 0, 0], extent).some(h => {
+      for (let k = hulls.planeStart[h]; k < hulls.planeStart[h + 1]; k++) {
+        const n = planes.subarray(4 * k, 4 * k + 4);
+        if (!(distance(n, p) - support(n, extent) < -1e-4)) return false;
+      }
+      return true;
+    });
   }
 }
 

@@ -125,7 +125,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const levelInfoActor = map.actors.find(actor => actor.className === 'LevelInfo') ?? null;
   async function zoneActor(zone) {
     if (zoneActors.has(zone)) return zoneActors.get(zone);
-    const ref = map.model.zones?.[zone]?.actor;
+    const zoneTable = map.model.zones, ref = zoneTable && zone >= 0 && zone < zoneTable.length ? zoneTable.actor(zone) : undefined;
     const actor = (ref > 0 && map.actors.find(candidate => candidate.index === ref)) || levelInfoActor;
     const values = actor ? await classDefaults.forActor(asset, actor) : {};
     // ZoneInfo +0x388 bit 1 (bFogZone) gates SetupForSurf's fog map.
@@ -224,15 +224,16 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const transformNormal = normalMatrix ? n => fromView(new THREE.Vector3(...toView(n)).applyMatrix3(normalMatrix).toArray()) : n => n;
     const moverZone = matrix ? pointZone(map.model, transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2))) : null;
     const bySurface = new Map();
+    const { nodes } = model;
     for (const t of triangles) {
-      const node = model.nodes[t.node], zone = moverZone ?? node.zones[1];
+      const zone = moverZone ?? nodes.zone(t.node, 1);
       // An auto-panned surface pans with the zone on the viewer's side of
       // its node (Render.dll's draw-list zone), so both zones are kept.
-      const panned = model.surfaces[t.surface].flags & (POLY.AutoUPan | POLY.AutoVPan);
-      const zones = panned ? (moverZone === null ? node.zones : [moverZone, moverZone]) : null;
+      const panned = model.surfaces.flags(t.surface) & (POLY.AutoUPan | POLY.AutoVPan);
+      const zones = panned ? (moverZone === null ? [nodes.zone(t.node, 0), nodes.zone(t.node, 1)] : [moverZone, moverZone]) : null;
       const key = `${t.surface}:${zone}${zones ? `:${zones[0]}` : ''}`;
       if (!bySurface.has(key)) bySurface.set(key, { surfaceIndex: t.surface, zone, ts: [],
-        pan: zones ? { zones, plane: node.plane, key: `${actorName ?? ''}:${key}` } : null });
+        pan: zones ? { zones, plane: nodes.planeArray(t.node), key: `${actorName ?? ''}:${key}` } : null });
       bySurface.get(key).ts.push(t);
     }
     const batches = new Map();
@@ -243,7 +244,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const backdrop = { [THREE.FrontSide]: [], [THREE.DoubleSide]: [] };
     let done = 0;
     for (const { surfaceIndex, zone, ts, pan } of bySurface.values()) {
-      const surface = model.surfaces[surfaceIndex];
+      const surface = model.surfaces.at(surfaceIndex);
       if (surface.flags & POLY.Invisible) continue;
       if (surface.flags & POLY.FakeBackdrop) {
         if (!actorName) backdrop[surface.flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide]
@@ -481,7 +482,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     /** Whether a zone's actor (or the LevelInfo) is bFogZone. */
     fogZone: zone => Boolean(fogZones[zone]),
     /** BSP node → surface index of the world model (bsp-occlusion.mjs results). */
-    nodeSurface: Int32Array.from(map.model.nodes, node => node.surface),
+    nodeSurface: Int32Array.from({ length: map.model.nodes.length }, (_, i) => map.model.nodes.surface(i)),
     /** Each mover group's brush matrix; a changed one updates its own and
      * its meshes' world matrices at once. A flag alone is not enough: a
      * mesh's updateWorldMatrix(true, false) (mirrors.mjs) recomputes the

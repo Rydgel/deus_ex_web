@@ -4,11 +4,12 @@ import {modelPointCheck} from '../src/runtime/point-check.mjs';
 import {createCollisionHash} from '../src/runtime/collision-hash.mjs';
 import {createLevelPoints} from '../src/runtime/level-points.mjs';
 import {primitiveCollisionBounds} from '../src/runtime/brush-bounds.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 // Synthetic compiled geometry, captured through original full-level point chain.
 function model(){
  const planes=[[-1,0,0,10],[1,0,0,10],[0,-1,0,10],[0,1,0,10],[0,0,-1,10],[0,0,1,10]],v=new DataView(new ArrayBuffer(4));
  const bits=x=>{v.setFloat32(0,x,true);return v.getInt32(0,true);};
- return {rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))};
+ return modelFromObjects({rootOutside:1,leafHulls:[0,1,2,3,4,5,-1,...[-10,-10,-10,10,10,10].map(bits)],nodes:planes.map((plane,i)=>({plane,back:i===5?-1:i+1,front:-1,collisionBound:0,vertexCount:4,flags:0}))});
 }
 test('native recovery remains written even when a later hull plane reports clear',()=>{
  const h=modelPointCheck(model(),[29.9,0,0],[20,20,43]);

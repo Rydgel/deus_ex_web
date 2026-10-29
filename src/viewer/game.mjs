@@ -60,7 +60,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   for (const actor of map.actors)
     if (mapExportAdmitted(map.pkg, actor.index))
       actors.set(actor.index, { ...actor, values: await defaults.forActor(asset, actor) });
-  const zones = map.model.zones.map(z => actors.get(z.actor)?.values ?? zoneDefault);
+  const zones = Array.from({ length: map.model.zones.length }, (_, i) => actors.get(map.model.zones.actor(i))?.values ?? zoneDefault);
   const collidable = [], nonColliding = [];
   // A saved level (docs/travel.md "Restoring a level"): GameInfo.Login reuses the unoccupied PlayerPawn of Level.PawnList, so the saved pawn
   // is the player and takes no part in the generic actor registration below (the Player facade registers it).
@@ -153,9 +153,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // Level->Model as the query traced it (level-queries.mjs worldModel: the moving brush tracker's while it lives).
     const model = collision.queries.worldModel?.() ?? map.model;
     if (hit.actor !== collision.queries.levelInfo || hit.primitive !== model) return null;
-    const node = model.nodes[hit.item];
-    if (!node) throw new Error('Original world ray returned an invalid surface node');
-    return (model.surfaceTexture ?? surfaceTextures)[node.surface] ?? null;
+    if (!model.nodes.has(hit.item)) throw new Error('Original world ray returned an invalid surface node');
+    return (model.surfaceTexture ?? surfaceTextures)[model.nodes.surface(hit.item)] ?? null;
   };
   player.timeDilation = [...actors.values()].find(a => a.className === 'LevelInfo')?.values.TimeDilation ?? 1;
   const eventHasRecipients = event => {
@@ -166,7 +165,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     {eventHasRecipients});
   let timeSeconds=0;
   const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,nonColliding,surfaceTextures,
-    zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
+    zoneActors:Array.from({length:map.model.zones.length},(_,i)=>actors.get(map.model.zones.actor(i))??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
   if (savedPlayer) playerScene.bindPlayerIdentity(player.collisionActor, savedPlayer.values);
@@ -598,7 +597,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const result = await game.selectItem(weapon);
       return { ok: result.selected, name: result.name, label: result.label };
     },
-    status() { return { player: player.status(), doors: doors.status(), hud:hud?.snapshot()??null, hulls: collision.bsp.hulls.length,
+    status() { return { player: player.status(), doors: doors.status(), hud:hud?.snapshot()??null, hulls: collision.bsp.hullCount,
       deferredEffects:[...player.unimplementedPhysicsEffects],
       random:{initialSeed:randomSeed,state:random.state},
       blockingActors: collision.actors.filter(actor => actor.blocking).length, collidableActors: collidable.length }; },

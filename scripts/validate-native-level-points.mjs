@@ -9,6 +9,7 @@ import {createCollisionHash} from '../src/runtime/collision-hash.mjs';
 import {brushToWorld} from '../src/runtime/coords.mjs';
 import {modelPointCheck} from '../src/runtime/point-check.mjs';
 import {createLevelPoints} from '../src/runtime/level-points.mjs';
+import {typedSceneModels} from './native-model.mjs';
 const captureOnly=process.argv.includes('--capture-only'),reuse=process.argv.includes('--reuse'),f=Math.fround;
 const summaries=[];
 const authoredBounds=JSON.parse(await readFile('reports/movement/native-bounds/cases.json'));
@@ -16,7 +17,7 @@ for(const name of ['00_Training','01_NYC_UNATCOIsland']){
  const directory=path.resolve('reports/movement/native-level-points',name);await mkdir(directory,{recursive:true});
  const sceneRaw=await readFile(`reports/movement/native-level/${name}/scene.json`),scene=JSON.parse(sceneRaw);
  const bits=new DataView(new ArrayBuffer(4));
- for(const model of [scene.model,...scene.actors.map(a=>a.model).filter(Boolean)])for(const node of model.nodes)if(node.planeBits)node.plane=node.planeBits.map(word=>{bits.setUint32(0,word,true);return bits.getFloat32(0,true);});
+ typedSceneModels(scene,scene.actors);
  let cases;
  if(reuse)cases=JSON.parse(await readFile(path.join(directory,'cases.json')));
  else {

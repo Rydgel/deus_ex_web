@@ -18,6 +18,7 @@ import {pointRegion} from '../src/runtime/zone.mjs';
 import {compileScriptVm} from '../src/runtime/script-vm-kernel.mjs';
 import {handleOf} from '../src/runtime/script-object-handles.mjs';
 import {zoneModelSize, writeZoneModel} from '../src/runtime/zone-kernel.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const scaleArg = process.argv.indexOf('--scale');
@@ -103,7 +104,7 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
         point = a.map(v => f(v + (random() * 2 - 1) * spread));
       } else if (r < 0.85) {
         // On a node's plane: the point of the plane nearest a random anchor.
-        const node = bsp.nodes[Math.floor(random() * bsp.nodes.length)], [nx, ny, nz, w] = node.plane;
+        const node = bsp.nodes.at(Math.floor(random() * bsp.nodes.length)), [nx, ny, nz, w] = node.plane;
         const a = anchors[Math.floor(random() * anchors.length)];
         const d = a[0] * nx + a[1] * ny + a[2] * nz - w;
         point = [f(a[0] - d * nx), f(a[1] - d * ny), f(a[2] - d * nz)];
@@ -141,7 +142,7 @@ for (const [label, nodes] of [
   ['deep', [node(1, -1), node(2, -1), node(-1, -1, [2, 1], [9, 8])]],
 ]) {
   for (const zoneActors of [[], [zone], [null, zone, zone]]) {
-    const source = {model: {nodes, zones: []}, levelInfo, zoneActors}, model = upload(source);
+    const source = {model: modelFromObjects({nodes, zones: []}), levelInfo, zoneActors}, model = upload(source);
     for (const z of [-1, 0, -0, 1, NaN]) check(source, model, [0, 0, z], `synthetic ${label}`);
   }
 }

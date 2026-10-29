@@ -112,10 +112,10 @@ try {
     });
     // Views in front of the map's mirrors (surface flag PF_Mirrored), aimed at the polygon.
     const model = decoded.model, mirrorNodes = [];
-    model.nodes.forEach((n, i) => { if (n.vertexCount >= 3 && model.surfaces[n.surface].flags & 0x08000000) mirrorNodes.push(i); });
+    model.nodes.forEach((n, i) => { if (n.vertexCount >= 3 && model.surfaces.at(n.surface).flags & 0x08000000) mirrorNodes.push(i); });
     const mirrorViews = mirrorNodes.length ? Array.from({ length: Math.min(2, mirrorNodes.length) }, (_, k) => {
-      const n = model.nodes[mirrorNodes[Math.floor((k + random()) * mirrorNodes.length / 2) % mirrorNodes.length]], c = [0, 0, 0];
-      for (let j = 0; j < n.vertexCount; j++) { const p = model.points[model.vertices[n.vertexPool + j].point]; for (let a = 0; a < 3; a++) c[a] += p[a] / n.vertexCount; }
+      const n = model.nodes.at(mirrorNodes[Math.floor((k + random()) * mirrorNodes.length / 2) % mirrorNodes.length]), c = [0, 0, 0];
+      for (let j = 0; j < n.vertexCount; j++) { const p = model.points.at(model.vertices.at(n.vertexPool + j).point); for (let a = 0; a < 3; a++) c[a] += p[a] / n.vertexCount; }
       const distance = 120 + random() * 250, eye = c.map((v, a) => v + n.plane[a] * distance + (a === 2 ? 20 : 0)), d = c.map((v, a) => v - eye[a]);
       const units = r => Math.round(r * 32768 / Math.PI);
       return { location: eye, rotation: [(units(Math.atan2(d[2], Math.hypot(d[0], d[1]))) + 65536) & 0xffff, (units(Math.atan2(d[1], d[0])) + 65536) & 0xffff, 0] };

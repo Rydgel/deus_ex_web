@@ -46,7 +46,7 @@ const CAPTURE = { '06_HongKong_WanChai_Underworld': [{ label: 'sndm u210 player 
 
 function oracle(name, model, cases) {
   const modelPath = path.join(work, `${name}-model.json`), casesPath = path.join(work, `${name}-cases.json`);
-  writeFileSync(modelPath, JSON.stringify({ rootOutside: model.rootOutside, leafHulls: model.leafHulls,
+  writeFileSync(modelPath, JSON.stringify({ rootOutside: model.rootOutside, leafHulls: Array.from(model.leafHulls),
     nodes: model.nodes.map(n => ({ ...n, planeBits: n.plane.map(bitsOf) })) }));
   writeFileSync(casesPath, JSON.stringify(cases.map(c => ({ firstBits: c.first.map(bitsOf), secondBits: c.second.map(bitsOf) }))));
   const out = execFileSync(python, ['-I', path.join(root, 'scripts/native-fast-line-check-oracle.py'), game, modelPath, casesPath],

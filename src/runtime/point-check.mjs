@@ -85,10 +85,11 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
   if (model.rootOutside===undefined) throw Error('PointCheck requires compiled BSP root');
   const nodes=model.nodes;
   if (!nodes.length) return Boolean(model.rootOutside);
+  const {f32,base}=nodes;
   const rows=ownerCoords&&[ownerCoords.slice(3,6),ownerCoords.slice(6,9),ownerCoords.slice(9,12)];
   const origin=rows&&rows.map(row=>f(xyz(ownerCoords,row)));
   function transformed(index,hull=false) {
-    const p=nodes[index].plane;if(!rows)return p;
+    const p=nodes.planeArray(index);if(!rows)return p;
     const n=rows.map(row=>f(hull?row[1]*p[1]+row[2]*p[2]+row[0]*p[0]:dot(row,p)));
     return [...n,f(p[3]-(hull?origin[1]*n[1]+origin[2]*n[2]+origin[0]*n[0]:dot(origin,n)))];
   }
@@ -106,38 +107,38 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
   let visits=0;
   function nodeAt(index) {
     if (++visits>nodes.length*8+8) throw Error('Invalid cyclic point BSP');
-    const node=nodes[index];
-    if (!node) throw Error('Invalid point BSP node');
-    return node;
+    if (!(index>=0&&index<nodes.length)) throw Error('Invalid point BSP node');
+    return index;
   }
   if (extent.every(v=>v===0)) {
     // 103f16c5: one descent. Owned, the plane is first carried by the owner's coordinates (below); the leaf the walk ends in is recorded as Item = 2*node+side.
     let index=0,outside=Boolean(model.rootOutside),last=0,side=0;
     const carried=rows&&ownedZeroExtentPlanes(ownerCoords,position);
     while (index!==-1) {
-      const node=nodeAt(index),p=node.plane,solid=node.vertexCount>0&&!(node.flags&0x21);
+      nodeAt(index);
+      const o=base+(index<<4),solid=nodes.vertexCount(index)>0&&!(nodes.flags(index)&0x21);
       last=index;
-      if (carried?carried(p):dot(position,p)-p[3]>0) {outside ||= solid;index=node.front;side=1;}
-      else {outside &&= !solid;index=node.back;side=0;}
+      if (carried?carried([f32[o],f32[o+1],f32[o+2],f32[o+3]]):position[2]*f32[o+2]+position[1]*f32[o+1]+position[0]*f32[o]-f32[o+3]>0) {outside ||= solid;index=nodes.front(index);side=1;}
+      else {outside &&= !solid;index=nodes.back(index);side=0;}
     }
     if(result)result.item=side+last*2;
     return outside;
   }
   function intersects(index) {
-    const bound=nodes[index].collisionBound;
+    const bound=nodes.collisionBound(index);
     if (bound===-1) return false;
     const words=model.leafHulls,planes=[],items=[];
     let cursor=bound;
     if (!Number.isInteger(cursor)||cursor<0||cursor>=words.length) throw Error('Invalid point hull offset');
     while (words[cursor]!==-1&&planes.length<64) {
-      const ref=words[cursor++],node=nodes[ref&~0x40000000];
-      if (!node) throw Error('Invalid point hull plane');
+      const ref=words[cursor++],node=ref&~0x40000000;
+      if (!(node>=0&&node<nodes.length)) throw Error('Invalid point hull plane');
       const plane=transformed(ref&~0x40000000,true);
       planes.push(ref&0x40000000 ? plane.map(v=>-v) : plane);
       items.push(ref&~0x40000000);
     }
     if (words[cursor]!==-1) throw Error('Point hull exceeds native64-plane capacity');
-    const bounds=words.slice(cursor+1,cursor+7).map(asFloat);
+    const bounds=Array.from(words.subarray(cursor+1,cursor+7),asFloat);
     if (bounds.length!==6||!bounds.every(Number.isFinite)) throw Error('Invalid point hull bounds');
     for (let i=0;i<planes.length;i++) if (!face(planes[i],items[i])) return false;
     const [x,y,z,X,Y,Z]=bounds;
@@ -164,15 +165,16 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
   while (stack.length) {
     const {index,parent,outside}=stack.pop();
     if (index===-1) {if (!outside&&intersects(parent)){if(!result)return false;clear=false;}continue;}
-    const node=nodeAt(index),p=transformed(index),solid=node.vertexCount>0&&!(node.flags&mask);
+    nodeAt(index);
+    const p=transformed(index),solid=nodes.vertexCount(index)>0&&!(nodes.flags(index)&mask);
     const distance=f(p[1]*position[1]+p[0]*position[0]+p[2]*position[2]-p[3]);
     const push=f(support(p,padded));
     // Original front recursion precedes back tail traversal. Recovery does not
     // mutate the position used by either branch's boolean test.
     // 103f1b30-103f1b3f: the front child is entered unless `-PushOut >= Dist` (fcomps of -PushOut, test ah,1); 103f1bb9-103f1bc6:
     // the back child unless `Dist > PushOut` (test ah,0x41). A NaN distance enters both.
-    if (c0c3(distance,push)) stack.push({index:node.back,parent:index,outside:outside&&!solid});
-    if (c0(-push,distance)) stack.push({index:node.front,parent:index,outside:outside||solid});
+    if (c0c3(distance,push)) stack.push({index:nodes.back(index),parent:index,outside:outside&&!solid});
+    if (c0(-push,distance)) stack.push({index:nodes.front(index),parent:index,outside:outside||solid});
   }
   return clear;
 }

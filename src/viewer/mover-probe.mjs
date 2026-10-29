@@ -49,10 +49,10 @@ export function moverDecalProbe(game, session, { place = false, name = null, min
       const mine = new Set(surfaces);
       let best = null;
       for (let n = model.originalNodes; n < model.nodes.length; n++) {
-        const node = model.nodes[n];
+        const node = { vertexCount: model.nodes.vertexCount(n), surface: model.nodes.surface(n), vertexPool: model.nodes.vertexPool(n) };
         if (node.vertexCount < 3 || !mine.has(node.surface)) continue;
-        const points = Array.from({ length: node.vertexCount }, (_, k) => model.points[model.vertices[node.vertexPool + k].point]);
-        const normal = model.vectors[model.surfaces[node.surface].normal];
+        const points = Array.from({ length: node.vertexCount }, (_, k) => model.points.at(model.vertices.point(node.vertexPool + k)));
+        const normal = model.vectors.at(model.surfaces.normal(node.surface));
         let area = 0;
         for (let k = 1; k + 1 < points.length; k++) area += dot(cross(sub(points[k], points[0]), sub(points[k + 1], points[0])), normal) / 2;
         const centre = [0, 1, 2].map(c => points.reduce((sum, p) => sum + p[c], 0) / points.length);
@@ -81,7 +81,7 @@ export function moverDecalProbe(game, session, { place = false, name = null, min
     decalState.decal = runtime.spawnActor({ cls: cls.record, level, name: 'None', owner: decalState.mover, instigator: null, location, rotation });
   }
   const model = source.model(), decal = decalState.decal;
-  const surface = decalState.surface >= 0 ? model.surfaces[decalState.surface] : null;
+  const surface = decalState.surface >= 0 ? model.surfaces.at(decalState.surface) : null;
   const top = source.firstSurface, held = [];
   for (let s = top; s < model.surfaces.length; s++) if (level.decals?.store.surfaceDecals(s).length) held.push(s);
   const fromView = ([x, y, z]) => [-z, x, y];
@@ -89,7 +89,7 @@ export function moverDecalProbe(game, session, { place = false, name = null, min
     tracker: true, mover: decalState.mover?.name ?? null, surface: decalState.surface,
     moverLocation: decalState.mover ? [...read(decalState.mover, 'Location')] : null,
     moverRotation: decalState.mover ? [...read(decalState.mover, 'Rotation')] : null,
-    plane: surface ? { base: model.points[surface.base], normal: model.vectors[surface.normal] } : null,
+    plane: surface ? { base: model.points.at(surface.base), normal: model.vectors.at(surface.normal) } : null,
     decal: decal ? { name: decal.name, live: level.actors.includes(decal), surfList: [...read(decal, 'SurfList')],
       base: read(decal, 'Base')?.name ?? null, owner: read(decal, 'Owner')?.name ?? null,
       lastRendered: read(decal, 'LastRenderedTime'), texture: read(decal, 'Texture')?.key ?? null } : null,

@@ -11,20 +11,23 @@ export const POLY = { Invisible: 1, Masked: 2, Translucent: 4, NotSolid: 8, Envi
   Modulated: 0x40, Unlit: 0x400000, Portal: 0x4000000, Mirrored: 0x8000000 };
 
 /** UVs stay in texture-pixel coordinates until texture dimensions are known. */
+const uvOf = (base, textureU, textureV, pan, point, width, height) => {
+  const local = sub(point, base);
+  return [(dot(local, textureU) + pan[0]) / width, (dot(local, textureV) + pan[1]) / height];
+};
 export function surfaceUV(model, surface, point, width, height) {
-  const local = sub(point, model.points[surface.base]);
-  return [(dot(local, model.vectors[surface.textureU]) + surface.pan[0]) / width,
-    (dot(local, model.vectors[surface.textureV]) + surface.pan[1]) / height];
+  return uvOf(model.points.at(surface.base), model.vectors.at(surface.textureU), model.vectors.at(surface.textureV), surface.pan, point, width, height);
 }
 
 export function buildSurfaceGeometry(model, triangles, surfaceIndex, width, height) {
-  const surface = model.surfaces[surfaceIndex];
-  const sourceNormal = model.vectors[surface.normal];
+  const surface = model.surfaces.at(surfaceIndex);
+  const sourceNormal = model.vectors.at(surface.normal);
+  const base = model.points.at(surface.base), textureU = model.vectors.at(surface.textureU), textureV = model.vectors.at(surface.textureV);
   const normal = toView(sourceNormal);
   const positions = [], normals = [], uvs = [], nodes = [], sources = [];
   let degenerate = 0, corrected = 0;
   for (const triangle of triangles) {
-    let p = triangle.points.map(index => model.points[index]), source = triangle.points;
+    let p = triangle.points.map(index => model.points.at(index)), source = triangle.points;
     const alignment = dot(cross(sub(p[1], p[0]), sub(p[2], p[0])), sourceNormal);
     if (Math.abs(alignment) < 1e-6) { degenerate++; continue; }
     nodes.push(triangle.node);
@@ -34,7 +37,7 @@ export function buildSurfaceGeometry(model, triangles, surfaceIndex, width, heig
     sources.push(...source);
     for (const point of p) {
       positions.push(...toView(point)); normals.push(...normal);
-      uvs.push(...surfaceUV(model, surface, point, width, height));
+      uvs.push(...uvOf(base, textureU, textureV, surface.pan, point, width, height));
     }
   }
   return { positions: new Float32Array(positions), normals: new Float32Array(normals),

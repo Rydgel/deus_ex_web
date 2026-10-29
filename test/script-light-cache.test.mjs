@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLighting } from '../src/unreal/lighting.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 function classAsset() {
   const bytes = Uint8Array.from([0, 0, 0, 0, 1, ...Array(12 + 16 + 2 + 4 + 4 + 16).fill(0), 0, 0, 0, 0, 2, 1, 64, 0]);
@@ -18,12 +19,12 @@ function fixture() {
       { index: 2, className: 'TriggerLight', values: { LightType: 1, LightBrightness: 64, LightHue: 85, LightSaturation: 0,
         LightRadius: 3, LightEffect: 0, Location: [0, 0, 10], bSpecialLit: false, bStatic: false, bNoDelete: true } },
     ],
-    model: {
+    model: modelFromObjects({
       vectors: [[0, 0, 1], [1, 0, 0], [0, 1, 0]], points: [[0, 0, 0]],
       surfaces: [{ base: 0, normal: 0, textureU: 1, textureV: 2, flags: 0, lightMap: 0 }],
       lightMaps: [{ dataOffset: 0, pan: [0, 0], clamp: [1, 1], scale: [1, 1], lightActors: 0 }],
       lightBits: Uint8Array.of(0xff), lights: [2, 0], zones: [{ actor: 1 }], nodes: [],
-    },
+    }),
   };
   const assets = { resolve: async (source, index) => ({ key: `Light-${index}`, asset: source, index: 1 }) };
   return { asset, assets, map };

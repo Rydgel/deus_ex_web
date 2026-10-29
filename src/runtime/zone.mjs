@@ -4,13 +4,15 @@ const initialRegion=zone=>({zone,leaf:-1,zoneNumber:0});
 /** Original UModel.PointRegion103f5db0; zoneActors preserves Model.Zones order. */
 export function pointRegion(model,position,levelInfo,zoneActors,numZones=zoneActors.length){
  if(!levelInfo)throw Error('PointRegion requires a LevelInfo fallback');
- if(!model.nodes.length)return initialRegion(levelInfo);
+ const nodes=model.nodes,count=nodes.length;
+ if(!count)return initialRegion(levelInfo);
+ const {i32,f32,u8,base}=nodes,byteBase=base<<2;
  const p=position.map(f);let index=0;
- for(let visits=0;visits<=model.nodes.length;visits++){
-  const node=model.nodes[index];if(!node)throw Error('Invalid PointRegion BSP');
-  const plane=node.plane,side=p[2]*plane[2]+p[1]*plane[1]+p[0]*plane[0]-plane[3]>=0?1:0;
-  const next=side?node.front:node.back;
-  if(next===-1){const zoneNumber=numZones?node.zones[side]:0;return {zone:zoneActors[zoneNumber]||levelInfo,leaf:node.leaves[side],zoneNumber};}
+ for(let visits=0;visits<=count;visits++){
+  if(!(index>=0&&index<count))throw Error('Invalid PointRegion BSP');
+  const o=base+(index<<4),side=p[2]*f32[o+2]+p[1]*f32[o+1]+p[0]*f32[o]-f32[o+3]>=0?1:0;
+  const next=side?i32[o+9]:i32[o+8];
+  if(next===-1){const zoneNumber=numZones?u8[byteBase+(index<<6)+52+side]:0;return {zone:zoneActors[zoneNumber]||levelInfo,leaf:i32[o+14+side],zoneNumber};}
   index=next;
  }
  throw Error('Cyclic PointRegion BSP');

@@ -47,7 +47,7 @@ for (const { map: mapName, actor: actorName } of CASES) {
   void defaults;
   const sink = byName.get(actorName), location = sink.values.Location.map(f);
   // (Its region is set at start-up, before GNewBrushTracker: the static BSP.)
-  const leaf = model.leaves[pointRegion(model, location, {}, []).leaf], lights = [];
+  const leaf = model.leaves.at(pointRegion(model, location, {}, []).leaf), lights = [];
   if (leaf && leaf.permeating >= 0)
     for (let i = leaf.permeating; i < model.lights.length && model.lights[i]; i++) {
       const light = actors.find(a => a.index === model.lights[i]);

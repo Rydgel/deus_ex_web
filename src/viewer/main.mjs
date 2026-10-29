@@ -804,7 +804,7 @@ function resetCamera({ keepLevel = false, travelled = false } = {}) {
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();lockGameKeys(true);
   }
   const start = map.summary.playerStarts.find(p => p.location);
-  const position = start?.location ?? map.model.points[0] ?? [0, 0, 0];
+  const position = start?.location ?? map.model.points.at(0) ?? [0, 0, 0];
   camera.position.fromArray(toView([position[0], position[1], position[2] + 40]));
   pitch = (start?.rotation?.[0] ?? 0) * Math.PI / 32768;
   yaw = -(start?.rotation?.[1] ?? 0) * Math.PI / 32768;

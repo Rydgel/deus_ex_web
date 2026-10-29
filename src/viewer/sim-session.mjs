@@ -145,13 +145,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         }
         return strobeOf.get(ref);
       };
-      model.surfaces.forEach((surface, index) => {
-        const lightMap = surface.lightMap >= 0 ? model.lightMaps[surface.lightMap] : null;
-        if (!lightMap || lightMap.lightActors == null || lightMap.lightActors < 0) return;
+      for (let index = 0; index < model.surfaces.length; index++) {
+        const lightMapIndex = model.surfaces.lightMap(index);
+        const lightActors = lightMapIndex >= 0 && lightMapIndex < model.lightMaps.length ? model.lightMaps.lightActors(lightMapIndex) : -1;
+        if (lightActors < 0) continue;
         const found = [];
-        for (let i = lightMap.lightActors; i < model.lights.length && model.lights[i]; i++) { const actor = isStrobe(model.lights[i]); if (actor) found.push(actor); }
+        for (let i = lightActors; i < model.lights.length && model.lights[i]; i++) { const actor = isStrobe(model.lights[i]); if (actor) found.push(actor); }
         if (found.length) strobeSurfaces.set(index, found);
-      });
+      }
     }
     // A new TimeSeconds is needed for a flip, and some Strobe light to call.
     timeSeconds = Math.fround(timeSeconds);
@@ -188,7 +189,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const drawn = moving ? new Set() : null;
       for (const node of nodes) {
         if (node >= model.nodes.length) continue;
-        const surface = model.nodes[node].surface;
+        const surface = model.nodes.surface(node);
         drawn?.add(surface);
         const actors = strobeSurfaces.get(surface);
         if (actors && actors.some(live)) found++;
@@ -1084,10 +1085,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (!reach) return out;
       if (!strobeVisible) return { ...out, frames: null };
       const nameOf = new Map();
-      const lightNames = lightMap => {
-        const names = [];
-        if (!lightMap || lightMap.lightActors == null || lightMap.lightActors < 0) return names;
-        for (let i = lightMap.lightActors; i < model.lights.length && model.lights[i]; i++) {
+      const lightNames = lightMapIndex => {
+        const names = [], lightActors = lightMapIndex >= 0 && lightMapIndex < model.lightMaps.length ? model.lightMaps.lightActors(lightMapIndex) : -1;
+        if (lightActors < 0) return names;
+        for (let i = lightActors; i < model.lights.length && model.lights[i]; i++) {
           const ref = model.lights[i];
           if (!nameOf.has(ref)) nameOf.set(ref, exportName ? exportName(ref) : String(ref));
           names.push(nameOf.get(ref));
@@ -1099,11 +1100,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const counts = {}, seen = new Set();
         for (const node of nodes) {
           if (node >= model.nodes.length) continue;
-          const surface = model.nodes[node].surface;
+          const surface = model.nodes.surface(node);
           if (seen.has(surface)) continue;
           seen.add(surface);
-          const lightMap = model.surfaces[surface].lightMap >= 0 ? model.lightMaps[model.surfaces[surface].lightMap] : null;
-          for (const name of lightNames(lightMap)) counts[name] = (counts[name] ?? 0) + 1;
+          for (const name of lightNames(model.surfaces.lightMap(surface))) counts[name] = (counts[name] ?? 0) + 1;
         }
         return counts;
       });

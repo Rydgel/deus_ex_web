@@ -196,11 +196,11 @@ async function census(mapName, probe = null) {
     };
     const surfTexture = iSurf => {
       const owner = occlusion.tracker?.surfOwner(iSurf);
-      return owner ? movers[owner.tag - 0x40000000].polys[owner.ordinal]?.texture : model.surfaces[iSurf]?.texture;
+      return owner ? movers[owner.tag - 0x40000000].polys[owner.ordinal]?.texture : model.surfaces.at(iSurf)?.texture;
     };
     const lightMapped = iSurf => {
       const owner = occlusion.tracker?.surfOwner(iSurf);
-      return !(surfFlags(iSurf) & UNLIT) && (owner ? true : (model.surfaces[iSurf]?.lightMap ?? -1) >= 0);
+      return !(surfFlags(iSurf) & UNLIT) && (owner ? true : (model.surfaces.at(iSurf)?.lightMap ?? -1) >= 0);
     };
     const textureKind = new Map();
     const animatedTexture = async ref => {
@@ -253,7 +253,7 @@ async function census(mapName, probe = null) {
       const location = floor ? [front[0], front[1], floor.location[2] + (jc.CollisionHeight ?? 0)] : front;
       const region = pointRegion(model, location, levelInfo, zoneActors, model.zones.length);
       const leafLights = [];
-      const permeating = region.leaf >= 0 ? model.leaves[region.leaf]?.permeating ?? -1 : -1;
+      const permeating = region.leaf >= 0 ? model.leaves.at(region.leaf)?.permeating ?? -1 : -1;
       if (permeating >= 0) for (let i = permeating; model.lights[i]; i++) leafLights.push(model.lights[i]);
       return { location: location.map(v => round(v)), leaf: region.leaf, zone: region.zoneNumber, frontLeaf: pointRegion(model, front, levelInfo, zoneActors).leaf,
         lights: leafLights.map(i => byIndex.get(i)).filter(Boolean) };
@@ -348,7 +348,7 @@ async function census(mapName, probe = null) {
       // and the actor are in front of the plane, and the lines from each to the point where the reflected line crosses the plane are clear.
       const inMirror = new Set();
       for (const fr of r.frames.filter(x => x.kind === 'mirror' && x.parent === 0)) {
-        const plane = lineModel.nodes[fr.iNode]?.plane;
+        const plane = lineModel.nodes.at(fr.iNode)?.plane;
         if (!plane) continue;
         const n = plane.slice(0, 3), side = q => dot(n, q) - plane[3], dc = side(eye);
         if (dc <= 0) continue;

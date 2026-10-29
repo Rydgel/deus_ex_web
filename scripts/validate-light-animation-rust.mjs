@@ -137,10 +137,10 @@ async function loadLighting(name, choice) {
     const moverZone = matrix ? pointZone(map.model, transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2))) : null;
     const seen = new Set();
     for (const t of triangles) {
-      const zone = moverZone ?? model.nodes[t.node].zones[1], key = `${t.surface}:${zone}`;
+      const zone = moverZone ?? model.nodes.at(t.node).zones[1], key = `${t.surface}:${zone}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const surface = model.surfaces[t.surface];
+      const surface = model.surfaces.at(t.surface);
       if (surface.flags & (POLY.Invisible | POLY.FakeBackdrop) || surface.flags & POLY.Unlit) continue;
       try { lighting.surface(model, t.surface, zone, transform, transformNormal, actorName); } catch (error) { errors.push(error.message); }
     }

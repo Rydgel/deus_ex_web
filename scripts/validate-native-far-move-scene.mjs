@@ -4,6 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {gameDirectory} from './game-directory.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+import { typedSceneModels } from './native-model.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const reuse=process.argv.includes('--reuse'),captureOnly=process.argv.includes('--capture-only');
 for(const name of ['00_Training','01_NYC_UNATCOIsland']){
@@ -27,7 +28,7 @@ for(const name of ['00_Training','01_NYC_UNATCOIsland']){
  if(captureOnly){console.log(name,cases.length,'original cases captured');continue;}
  const {createLevelQueries}=await import('../src/runtime/level-queries.mjs'),{traceExtent}=await import('../src/runtime/extent-trace.mjs'),{findSpot}=await import('../src/runtime/fitting.mjs'),{farMoveActor}=await import('../src/runtime/relocation.mjs'),{checkPlayerEncroachment}=await import('../src/runtime/check-encroachment.mjs');
  const bits=new DataView(new ArrayBuffer(4));
- for(const model of [scene.model,...scene.actors.map(a=>a.model).filter(Boolean)])for(const node of model.nodes)if(node.planeBits)node.plane=node.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});
+ typedSceneModels(scene,scene.actors);
  for(const a of scene.actors){
   a.lineage??=['engine.actor',...(a.kind==='Pawn'?['engine.pawn']:a.kind==='Mover'?['engine.mover','engine.brush']:a.kind==='ZoneInfo'?['engine.zoneinfo']:[])];
   a.flags=a.collisionBits;a.actorFlags??=Number(Boolean(a.values.bStatic));a.physics=1;a.pawnFlags=a.id==='$pawn'?2:0;a.isPawn=a.kind==='Pawn';a.controlledPlayer=a.id==='$pawn';a.movingBrush=Boolean(a.model);a.rotation=a.values.Rotation??[0,0,0];

@@ -5,6 +5,7 @@ import { coordsTransform, volumetricLight, fogMap, fogMapKernel } from '../runti
 import { displayRampGlsl } from './light-atlas.mjs';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { lightmapBasis } from '../unreal/lighting.mjs';
+import { arrayTable } from '../unreal/bsp-model.mjs';
 import { toView } from '../unreal/geometry.mjs';
 import { FOG_RENDER_ORDER, FOG_RENDER_ORDER_LAST, FOG_RENDER_ORDER_MASKED } from './render-layers.mjs';
 
@@ -80,7 +81,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   /** A mover polygon's light-map basis over the tracker surface's `facet`
    * (pBase, vTextureU, vTextureV, vNormal) and the Brush's light-map index. */
   function moverBasis(record, facet) {
-    const model = { points: [facet.slice(0, 3)], vectors: [facet.slice(3, 6), facet.slice(6, 9), facet.slice(9, 12)] };
+    const model = { points: arrayTable([facet.slice(0, 3)]), vectors: arrayTable([facet.slice(3, 6), facet.slice(6, 9), facet.slice(9, 12)]) };
     return lightmapBasis(model, { base: 0, textureU: 0, textureV: 1, normal: 2 }, record.lightMap);
   }
   /** Its lattice: lighting.mjs geometry's p00, p10 and p01. */

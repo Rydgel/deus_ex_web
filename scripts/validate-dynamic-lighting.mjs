@@ -52,10 +52,10 @@ for (let i = 0; i < 10; i++)
 for (const light of lights) { light.location = light.location.map(Math.fround); Object.assign(light, { hue: 32, saturation: 140, effect: 13, type: 1 }); }
 
 const facetOf = surfaceIndex => {
-  const surface = model.surfaces[surfaceIndex], lm = model.lightMaps[surface.lightMap];
+  const surface = model.surfaces.at(surfaceIndex), lm = model.lightMaps.at(surface.lightMap);
   const basis = lightmapBasis(model, surface, lm);
-  const facet = { origin: model.points[surface.base], axisU: model.vectors[surface.textureU],
-    axisV: model.vectors[surface.textureV], normal: model.vectors[surface.normal],
+  const facet = { origin: model.points.at(surface.base), axisU: model.vectors.at(surface.textureU),
+    axisV: model.vectors.at(surface.textureV), normal: model.vectors.at(surface.normal),
     pan: [lm.pan[0], lm.pan[1]], scale: lm.scale, clamp: lm.clamp };
   const p00 = basis.point(0, 0), p10 = basis.point(1, 0), p01 = basis.point(0, 1);
   const grid = { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),

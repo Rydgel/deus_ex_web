@@ -87,7 +87,7 @@ function checkFrame(model, fields, rect, lists, where, camera = null, coords = n
           d.map(word), `${where}: D3D vertex of an FTransform (pv ${pv})`);
         if (pv < 0) { stats.clipped++; continue; }
         stats.modelPoints++;
-        const full = modelVertex(frame, depth, model.points[pv]);
+        const full = modelVertex(frame, depth, model.points.at(pv));
         // The transform's own results (X, Y, Z, ScreenX, ScreenY, RZ).
         const ref = [full.view[0], full.view[1], full.view[2]].map(floatWord);
         assert.deepEqual([t[0], t[1], t[2]].map(word), ref.map(word), `${where}: view point of model point ${pv}`);
@@ -100,15 +100,15 @@ function checkFrame(model, fields, rect, lists, where, camera = null, coords = n
           stats.exact++;
           if (camera) {
             // The same model point through the page's camera.
-            const t3 = threeVertex(camera, rect, model.points[pv]), s3 = stats.three;
+            const t3 = threeVertex(camera, rect, model.points.at(pv)), s3 = stats.three;
             const dx = Math.abs(t3.sx - wordFloat(d[0])), dy = Math.abs(t3.sy - wordFloat(d[1])), dz = Math.abs(t3.sz - wordFloat(d[2]));
             s3.points++; s3.sxDiffer += word(floatWord(t3.sx)) !== word(d[0]); s3.syDiffer += word(floatWord(t3.sy)) !== word(d[1]);
             s3.szDiffer += word(floatWord(t3.sz)) !== word(d[2]);
             s3.maxPixel = Math.max(s3.maxPixel, dx, dy); s3.errors.push(Math.max(dx, dy)); s3.maxDepth = Math.max(s3.maxDepth, dz);
             depths.push([wordFloat(d[2]), t3.sz]);
             if (coords) {
-              depthsNow.push([wordFloat(d[2]), threeVertex(coords, rect, model.points[pv]).sz]);
-              const tc = threeVertex(coords, rect, model.points[pv]), sc = stats.coordsCamera;
+              depthsNow.push([wordFloat(d[2]), threeVertex(coords, rect, model.points.at(pv)).sz]);
+              const tc = threeVertex(coords, rect, model.points.at(pv)), sc = stats.coordsCamera;
               sc.points++; sc.sxDiffer += word(floatWord(tc.sx)) !== word(d[0]); sc.szDiffer += word(floatWord(tc.sz)) !== word(d[2]);
               sc.maxDepth = Math.max(sc.maxDepth, Math.abs(tc.sz - wordFloat(d[2])));
               sc.errors.push(Math.max(Math.abs(tc.sx - wordFloat(d[0])), Math.abs(tc.sy - wordFloat(d[1]))));

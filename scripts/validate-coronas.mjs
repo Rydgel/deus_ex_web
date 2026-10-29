@@ -28,6 +28,7 @@ import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { surfaceTextureFlags, renderPassTangent, renderRectangle } from './occlusion-request.mjs';
 import { coordsTransform } from '../src/runtime/volumetric-fog.mjs';
 import { coronaLineVisible, coronaSeen, coronaFade, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 // ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
 const assert = auditAssert();
 
@@ -189,7 +190,7 @@ cases.forEach((c, i) => {
 // The leaf loops: the same lights in the same order.
 let visits = 0, dynamicVisits = 0;
 visitCases.forEach((c, i) => {
-  const model = { leaves: c.leaves.map(([, permeating]) => ({ permeating })), lights: c.flat };
+  const model = modelFromObjects({ leaves: c.leaves.map(([, permeating]) => ({ permeating })), lights: c.flat });
   const expected = [...leafPermeatingLights(model, c.iLeaf).map(ref => ref - 1), ...(c.leafLists[c.iLeaf] ?? [])];
   assert.deepEqual(reference[cases.length + i].visited, expected, `leaf visit case ${i}: lights offered to the helper`);
   visits += expected.length; dynamicVisits += (c.leafLists[c.iLeaf] ?? []).length;

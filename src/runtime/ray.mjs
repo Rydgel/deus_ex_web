@@ -72,14 +72,17 @@ export function traceRayFast(model, start, end, extraNodeFlags = 0, ownerCoords 
   const { nodes } = model;
   if (!nodes.length) return null;
   if (model.rootOutside === undefined) throw new Error('Ray traversal requires a compiled BSP root');
+  // The node table's views (the original FBspNode block; a tracker's view takes them from the kernel's memory): taken once, the
+  // model does not change during a trace.
+  const { i32, f32, u8, base } = nodes, nodeCount = nodes.length, byteBase = base << 2;
   const sx = f(start[0]), sy = f(start[1]), sz = f(start[2]), ex = f(end[0]), ey = f(end[1]), ez = f(end[2]);
   const owned = ownerCoords ? ownedPlanes(model, ownerCoords) : null;
-  const ownedPlane = (node, index) => {
+  const ownedPlane = index => {
     let plane = owned.planes[index];
     if (!plane) {
-      const rows = owned.rows, origin = owned.origin;
-      const normal = rows.map(row => f(dotZYX(node.plane, row)));
-      plane = [...normal, node.plane[3] - dotZYX(origin, normal)];
+      const rows = owned.rows, origin = owned.origin, nodePlane = nodes.planeArray(index);
+      const normal = rows.map(row => f(dotZYX(nodePlane, row)));
+      plane = [...normal, nodePlane[3] - dotZYX(origin, normal)];
       owned.planes[index] = plane;
     }
     return plane;
@@ -115,29 +118,30 @@ export function traceRayFast(model, start, end, extraNodeFlags = 0, ownerCoords 
       let tx = local.points[at + 3], ty = local.points[at + 4], tz = local.points[at + 5];
       while (index !== -1) {
         if (++visits > limit) throw new Error('Invalid cyclic ray BSP');
-        const node = nodes[index];
-        if (!node) throw new Error('Invalid ray BSP node');
-        const solid = node.vertexCount > 0 && !(node.flags & mask);
+        if (!(index >= 0 && index < nodeCount)) throw new Error('Invalid ray BSP node');
+        const o = base + (index << 4), at = byteBase + (index << 6), vertexCount = u8[at + 54], flags = u8[at + 55];
+        const solid = vertexCount > 0 && !(flags & mask);
         let a, b;
         if (!owned) {
-          const p = node.plane;
-          a = f(fz * p[2] + fx * p[0] + fy * p[1] - p[3]);
-          b = f(tz * p[2] + tx * p[0] + ty * p[1] - p[3]);
+          const p0 = f32[o], p1 = f32[o + 1], p2 = f32[o + 2], p3 = f32[o + 3];
+          a = f(fz * p2 + fx * p0 + fy * p1 - p3);
+          b = f(tz * p2 + tx * p0 + ty * p1 - p3);
         } else {
-          const p = ownedPlane(node, index);
+          const p = ownedPlane(index);
           a = f(fz * p[2] + fy * p[1] + fx * p[0] - p[3]);
           b = f(tz * p[2] + ty * p[1] + tx * p[0] - p[3]);
         }
-        if (a > -.001 && b > -.001) { outside ||= solid; index = node.front; }
-        else if (a < .001 && b < .001) { outside &&= !solid; index = node.back; }
+        const front = i32[o + 9], back = i32[o + 8];
+        if (a > -.001 && b > -.001) { outside ||= solid; index = front; }
+        else if (a < .001 && b < .001) { outside &&= !solid; index = back; }
         else {
-          const crossingSolid = node.vertexCount > 0 && !(node.flags & (extraNodeFlags | 0x21));
+          const crossingSolid = vertexCount > 0 && !(flags & (extraNodeFlags | 0x21));
           const fraction = a / (b - a);
           const mx = f(fx + f(f(fx - tx) * fraction)), my = f(fy + f(f(fy - ty) * fraction)), mz = f(fz + f(f(fz - tz) * fraction));
           const frontFirst = a > 0;
-          push(frontFirst ? node.back : node.front, index,
+          push(frontFirst ? back : front, index,
             frontFirst ? outside && !crossingSolid : outside || crossingSolid, mx, my, mz, tx, ty, tz);
-          index = frontFirst ? node.front : node.back;
+          index = frontFirst ? front : back;
           outside = frontFirst ? outside || crossingSolid : outside && !crossingSolid;
           tx = mx; ty = my; tz = mz;
         }
@@ -154,8 +158,8 @@ export function traceRayFast(model, start, end, extraNodeFlags = 0, ownerCoords 
     const backedOff = f(projection / squared) - .5 / Math.sqrt(squared);
     const time = !(backedOff >= 0) ? 0 : backedOff < 1 ? backedOff : 1;
     const location = [f(sx + f(dx * time)), f(sy + f(dy * time)), f(sz + f(dz * time))];
-    const plane = nodes[hitNode].plane;
-    let normal = [plane[0], plane[1], plane[2]];
+    const hitAt = base + (hitNode << 4);
+    let normal = [f32[hitAt], f32[hitAt + 1], f32[hitAt + 2]];
     if (owned) normal = transformVector(normal, owned.rows);
     // The facing test is fcomp + test ah,1: C0 is set for a NaN too (unordered), so a NaN ray faces the other way (docs/fitting.md "NaN in FindSpot").
     else if (x87C0(-dz * normal[2] - dy * normal[1] - dx * normal[0], 0)) normal = normal.map(value => -value);
@@ -175,13 +179,13 @@ function traceRayReference(model, start, end, extraNodeFlags = 0, ownerCoords = 
   const ownedPlanes = new Map();
   const distance = (node, point) => {
     if (!rows) return planeDistance(node.plane, point);
-    let plane = ownedPlanes.get(node);
+    let plane = ownedPlanes.get(node.index);
     if (!plane) {
       const normal = rows.map(row => f(dotZYX(node.plane, row)));
       // The offset remains unrounded in the native x87 stack until distance
       // is stored. Pre-rounding it changes intersections on scaled brushes.
       plane = [...normal, node.plane[3] - dotZYX(origin, normal)];
-      ownedPlanes.set(node, plane);
+      ownedPlanes.set(node.index, plane);
     }
     return f(dotZYX(point, plane) - plane[3]);
   };
@@ -195,8 +199,9 @@ function traceRayReference(model, start, end, extraNodeFlags = 0, ownerCoords = 
     let { index, boundary, outside, start: from, end: to } = stack.pop();
     while (index !== -1) {
       if (++visits > nodes.length * 8 + 8) throw new Error('Invalid cyclic ray BSP');
-      const node = nodes[index];
+      const node = nodes.at(index);
       if (!node) throw new Error('Invalid ray BSP node');
+      node.index = index;
       const solid = node.vertexCount > 0 && !(node.flags & mask);
       const a = distance(node, from), b = distance(node, to);
       if (a > -.001 && b > -.001) { outside ||= solid; index = node.front; }
@@ -217,7 +222,7 @@ function traceRayReference(model, start, end, extraNodeFlags = 0, ownerCoords = 
     }
     if (outside) reachedOutside = true;
     else if (reachedOutside || !(extraNodeFlags & 0x10)) {
-      rawHit = { location: from, node: boundary, normal: nodes[boundary].plane.slice(0, 3) }; break;
+      rawHit = { location: from, node: boundary, normal: nodes.planeArray(boundary).slice(0, 3) }; break;
     }
   }
   if (!rawHit) return null;
