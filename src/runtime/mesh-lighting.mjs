@@ -293,8 +293,8 @@ export const lightsActor = (actor, scene) =>
 export function finishSetup(manager, actor, scene, result, added) {
   // AddLight (0x10b08b30) with an owner: skip the owner itself and dark or
   // typeless lights; every accepted light is class 2.
-  for (const { light, fade: tagFade } of added) {
-    const values = light.values;
+  for (let i = 0; i < added.length; i++) {
+    const light = added[i].light, tagFade = added[i].fade, values = light.values;
     if (light.actor === actor.self || !(values.LightType & 255) || !(values.LightBrightness & 255)) continue;
     if (result.lights.length >= 256) break; // (0x10b495c0 - 0x10b401c0) / 0x94 FLightInfo slots
     const type = values.LightType & 255;

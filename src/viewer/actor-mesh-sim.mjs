@@ -49,6 +49,9 @@ const plainRef=reference=>({key:reference.key,package:reference.asset?.name,inde
  * a scavenge inside the actors step finds them all alive, and V8 decides this literal "tenure" (and the records are then born in
  * old space, about 6 KB a worker frame on the Island) unless it is decided first: allocation-site-warmup.mjs. */
 function newUpdateRecord(id){return {id,visible:false,childOnly:false};}
+// The decision for a binding a pass does not draw: one frozen object for all of them (the page reads `root` and nothing else of it;
+// a weapon's decision, which the sim marks flipSide, is a copy: framePassOf).
+const NOT_IN_FRAME=Object.freeze({root:false});
 // frameVariants of a binding with no child frame that differs from the base (nothing writes to it)
 const NO_VARIANTS=new Map();
 let warmRecord=null;
@@ -715,7 +718,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
        * draw shows in child passes alone. */
       passVisibility(frustum){
         if(disposed)return null;
-        if(childOnly){if(frustum===null)return {root:false};}
+        if(childOnly){if(frustum===null)return NOT_IN_FRAME;}
         else if(!drawnMain)return null;
         if(mode!=='gpu')return childOnly?{root:true}:null;
         if(frustum===null)return {root:true,groups:groupBits()};
@@ -732,7 +735,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         // The frame's own again (`frustum` null): drawn when this frame drew it and, for a
         // root frame other than the main one, when its Frame->Sprite holds it (`inFrame`).
         const root=frustum===null?drawnMain&&inFrame:inFrame;
-        if(!root)return {root:false};
+        if(!root)return NOT_IN_FRAME;
         // The frame's own lighting rides with the decision (frameIndex): the
         // page applies it before the pass and restores the main frame's after.
         // So does its own DrawLodMesh state when it differs from the base's:
@@ -1446,8 +1449,11 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   const framePassOf=(binding,frustum,ids,frameIndex,decisions)=>{
     // A weapon is in the frame when its pawn is and had a hand there.
     const inFrame=!ids||(binding.attachedTo?weapons.inFrame(binding,ids,frameIndex):ids.has(binding.id));
-    const decision=binding.framePass(frustum,inFrame,frameIndex);
-    if(decision&&binding.attachedTo&&weapons.mirrored(binding,frameIndex))decision.flipSide=true;
+    let decision=binding.framePass(frustum,inFrame,frameIndex);
+    if(decision&&binding.attachedTo&&weapons.mirrored(binding,frameIndex)){
+      if(decision===NOT_IN_FRAME)decision={root:false};
+      decision.flipSide=true;
+    }
     if(decision)decisions.set(binding.id,decision);
   };
   // The records of a frame's update are gathered in these arrays (a push-grown array of a few hundred leaves its smaller stores
