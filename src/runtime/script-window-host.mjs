@@ -574,6 +574,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     for (const entry of layout.fields.values()) {
       const binding = bindingFor(object, entry);
       instance.bindings.set(entry.field.key, binding);
+      instance.bindingsVersion++;
       // The object is BOUND now: the Rust receiver table computes it again.
       bumpReceiverEpoch();
       runtime.noteBoundKey(entry.field.key);
@@ -1144,7 +1145,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     setFocusWindow: (win, target) => Mouse.setFocusWindow(W, win, target),
     getMouseWindow: root => Mouse.getMouseWindow(W, root, null),
     paintCursor: (root, gc, mouse) => Mouse.paintCursor(W, root, gc, mouse),
-    moveTabGroup: (win, direction) => moveTabGroupNative(W, win, direction, {...T, ...F, setFocusWindow: (root, target) => Mouse.setFocusWindow(W, root, target)}),
+    moveTabGroup: (win, direction) => moveTabGroupNative(W, win, direction, treeServices()),
     moveFocus: (win, direction, wrap) => Mouse.moveFocus(W, win, direction, wrap,
       {getTabGroupWindow: T.getTabGroupWindow, moveTabGroup: (root, move) => W.native.moveTabGroup(root, move)}),
     // XButtonWindow::ActivateButton 0x100077e0 through its existing translation.
@@ -1434,7 +1435,23 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       activateButton:(w,key)=>W.native.activateButton(w,key),boundary});
   }
   function textLogTick(win,delta) { return Log.textLogTick(W,win,delta); }
-  function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target)}); }
+  // The services of the tab-group and root-tick natives: the tree and family functions (module namespaces, whose exports do not change)
+  // and the focus setter. Merged once; merging the two namespaces for each root tick was most of the HUD tick's allocation.
+  let treeServicesObject = null;
+  function treeServices() { return treeServicesObject ??= {...T, ...F, setFocusWindow: (root, target) => Mouse.setFocusWindow(W, root, target)}; }
+  function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,treeServices()); }
+  // ViewportWindow 1940-1943 (the bodies that reach actor references and the player's AdditionalViews); the leaf setters are host
+  // natives. Apart from handleNative: its inner closures would give every native that reaches it a context object.
+  function viewportNative(call) {
+    const arg=(i,fallback)=>i<call.argumentCount?(refValue(call.evaluateArgument(i))??fallback):fallback;
+    const win=call.receiver,vec=v=>Array.isArray(v)?v.map(Math.fround):['x','y','z'].map(k=>Math.fround(v?.[`core.object.vector.${k}`]??0));
+    const rot=r=>Array.isArray(r)?r.map(v=>v|0):['pitch','yaw','roll'].map(k=>(r?.[`core.object.rotator.${k}`]??0)|0);
+    if(call.index===1940)VP.setViewportActor(W,win,arg(0,null),arg(1,true)?1:0,arg(2,true)?1:0,viewportEnv);   // exec 0x1004b380
+    else if(call.index===1941)VP.setViewportLocation(W,win,vec(arg(0,null)),arg(1,true)?1:0,viewportEnv);    // exec 0x1004b440
+    else if(call.index===1942)VP.setWatchActor(W,win,arg(0,null),arg(1,true)?1:0,viewportEnv);               // exec 0x1004b510
+    else VP.setViewportRotation(W,win,rot(arg(0,null)),viewportEnv);                                        // exec 0x1004b5a0
+    return {handled:true,value:undefined};
+  }
   function textDraw(win,gc) { return D.textDraw(W,win,gc); }
   function buttonDraw(win,gc) { return D.buttonDraw(W,win,gc); }
   function textLogDraw(win,gc) { return Log.textLogDraw(W,win,gc); }
@@ -1641,16 +1658,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
       // ViewportWindow 1940-1943 (the bodies that reach actor references and
       // the player's AdditionalViews); the leaf setters are host natives.
-      if(call.index>=1940&&call.index<=1943){
-        const arg=(i,fallback)=>i<call.argumentCount?(refValue(call.evaluateArgument(i))??fallback):fallback;
-        const win=call.receiver,vec=v=>Array.isArray(v)?v.map(Math.fround):['x','y','z'].map(k=>Math.fround(v?.[`core.object.vector.${k}`]??0));
-        const rot=r=>Array.isArray(r)?r.map(v=>v|0):['pitch','yaw','roll'].map(k=>(r?.[`core.object.rotator.${k}`]??0)|0);
-        if(call.index===1940)VP.setViewportActor(W,win,arg(0,null),arg(1,true)?1:0,arg(2,true)?1:0,viewportEnv);   // exec 0x1004b380
-        else if(call.index===1941)VP.setViewportLocation(W,win,vec(arg(0,null)),arg(1,true)?1:0,viewportEnv);    // exec 0x1004b440
-        else if(call.index===1942)VP.setWatchActor(W,win,arg(0,null),arg(1,true)?1:0,viewportEnv);               // exec 0x1004b510
-        else VP.setViewportRotation(W,win,rot(arg(0,null)),viewportEnv);                                        // exec 0x1004b5a0
-        return {handled:true,value:undefined};
-      }
+      if(call.index>=1940&&call.index<=1943)return viewportNative(call);
       if(call.index>=1720&&call.index<=1812){
         const list=LIST.dispatchListWindowNative(W,call,listEnv,refValue);if(list.handled)return list;
       }

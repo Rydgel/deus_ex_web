@@ -262,6 +262,32 @@ export function writeFixedElement(cell, image, refs, index, value, at = 0) {
   writeCell(element, image, refs, value, at + cell.offset + index * cell.stride, cell.ref + index * element.refCount);
 }
 export const isFixedCell = cell => cell.tag === FIXED;
+export const isPointerCell = cell => cell.tag === POINTER;
+/** A vector or rotator cell (a three-word value copyScalar copies component by component). */
+export const isVector3Cell = cell => cell.tag === VECTOR || cell.tag === ROTATOR;
+/** writeCell(cell, image, refs, copyValue(value), at) for a vector or rotator cell and a three-element array, without making the copy
+ * (the components copyScalar makes are fround or `| 0` of Number(item ?? 0), and the store rounds or wraps the same way): true when
+ * written, false for any other cell or value, which the caller copies and writes. */
+export function writeVector3(cell, image, value, at = 0) {
+  const tag = cell.tag;
+  if ((tag !== VECTOR && tag !== ROTATOR) || !Array.isArray(value) || value.length !== 3) return false;
+  const offset = at + cell.offset;
+  if (tag === VECTOR) {
+    image.setFloat32(offset, Number(value[0] ?? 0), true); image.setFloat32(offset + 4, Number(value[1] ?? 0), true);
+    image.setFloat32(offset + 8, Number(value[2] ?? 0), true);
+  } else {
+    image.setInt32(offset, Number(value[0] ?? 0) | 0, true); image.setInt32(offset + 4, Number(value[1] ?? 0) | 0, true);
+    image.setInt32(offset + 8, Number(value[2] ?? 0) | 0, true);
+  }
+  return true;
+}
+/** One member of a struct cell, as readCell(cell) would put it in the struct's value under `key`, without building the value:
+ * undefined for a cell that is not a struct or has no such member. */
+export function readStructMember(cell, key, image, refs, at = 0, refAt = 0) {
+  if (cell.tag !== STRUCT) return undefined;
+  for (const member of cell.members) if (member.key === key) return readCell(member, image, refs, at + cell.offset, refAt + cell.ref);
+  return undefined;
+}
 
 function readComposite(cell, image, refs, offset, refAt) {
   switch (cell.tag) {

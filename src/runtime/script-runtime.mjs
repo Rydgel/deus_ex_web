@@ -15,8 +15,8 @@ import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,d
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell, scalarCell, pointerOffset } from './script-object-image.mjs';
-import { createFrameLocals, FrameStack, LocalCellStorage } from './script-frame-locals.mjs';
+import { objectImageCells, readCell, writeCell, writeVector3, readFixedElement, isFixedCell, isPointerCell, readStructMember, scalarCell, pointerOffset } from './script-object-image.mjs';
+import { createFrameLocals, FrameStack, LocalCellStorage, setLocalCopy, getLocalCopy } from './script-frame-locals.mjs';
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
 import { loadTraceKernel } from './trace-kernel.mjs';
@@ -242,6 +242,24 @@ const fieldTable=cls=>{
   return table;
 };
 const animationTickViews=new WeakMap();
+// destroyProperties' size services: they read only their arguments, so one object serves every destruction.
+const DESTROY_SERVICES={
+  readSlot:(property,offset)=>{
+    // Parsed packages omit linked ElementSize. StrProperty::Link establishes
+    // the 12-byte FString stride; generic struct offsets remain unresolved.
+    if(offset===0x38&&property.metadata?.type==='string'&&property.metadata.elementSize==null)return 12;
+    if(offset===0x5c&&property.metadata?.type==='array'&&property.metadata.innerMetadata)
+      return property.metadata.innerMetadata;
+    if(offset===0x5c&&property.metadata?.type==='struct'){
+      const members=property.metadata.structFields;
+      if(!members)throw new Error(`Original struct destructor fields are not linked: ${property.key}`);
+      // UStruct::Link builds +68 from NeedCtorLink fields in this original
+      // derived-then-inherited order. +68 is not the +38 Children iterator.
+      return {fields:members.filter(field=>field.metadata.flags&0x00400000)};
+    }
+  },
+};
+
 /** One attached object's VM record. Every record shares this hidden class:
  * the fields later code fills in are declared here, and an actor's
  * pendingKill (its bDeleteMe) is a prototype getter rather than a property
@@ -253,6 +271,8 @@ class ScriptInstance {
     this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
     this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
     this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;
+    // The Rust VM's binding set of this object (script-vm-rust.mjs bindingSet) is kept while no binding was added or replaced.
+    this.bindingsVersion=0;this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
     // The image is [base, base+size) of the runtime's object arena (R0).
     this.cells=storage.cells;this.arena=storage.arena;this.base=storage.base;this.size=storage.size;this.refs=storage.refs;
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
@@ -1141,25 +1161,10 @@ export class ScriptRuntime {
   /** Shared logical storage bridge for UObject and function-local DestroyValue.
    * Fields are supplied in the original linked destructor-chain order. */
   destroyProperties(fields,referenceFor) {
-    const services={
-      readSlot:(property,offset)=>{
-        // Parsed packages omit linked ElementSize. StrProperty::Link establishes
-        // the 12-byte FString stride; generic struct offsets remain unresolved.
-        if(offset===0x38&&property.metadata?.type==='string'&&property.metadata.elementSize==null)return 12;
-        if(offset===0x5c&&property.metadata?.type==='array'&&property.metadata.innerMetadata)
-          return property.metadata.innerMetadata;
-        if(offset===0x5c&&property.metadata?.type==='struct'){
-          const members=property.metadata.structFields;
-          if(!members)throw new Error(`Original struct destructor fields are not linked: ${property.key}`);
-          // UStruct::Link builds +68 from NeedCtorLink fields in this original
-          // derived-then-inherited order. +68 is not the +38 Children iterator.
-          return {fields:members.filter(field=>field.metadata.flags&0x00400000)};
-        }
-      },
-    };
-    for(const field of fields)destroyScriptProperty(field,referenceFor(field),services);
+    for(const field of fields)destroyScriptProperty(field,referenceFor(field),DESTROY_SERVICES);
   }
-  destroyFunctionLocals(fn,locals,{parameters=true}={}) {
+  destroyFunctionLocals(fn,locals,options) {
+    const parameters=options===undefined||(options.parameters??true);
     // UFunction has no inheritance super. UStruct::Link builds +68 in its
     // own Children order, selecting CPF_NeedCtorLink. ProcessEvent skips the
     // parameter prefix at 1013f963; CallFunction destroys that prefix too.
@@ -1470,7 +1475,9 @@ export class ScriptRuntime {
     if(cell){
       const poisoned=instance.poison?.get(field.key);
       if(poisoned?.write)poisoned.read();
-      writeCell(cell,instance.arena.view,instance.refs,codec.copy(value),instance.base);
+      // (a vector or rotator is written from the value's components: its copy was made only to be written)
+      if(!writeVector3(cell,instance.arena.view,value,instance.base))
+        writeCell(cell,instance.arena.view,instance.refs,codec.copy(value),instance.base);
       if(poisoned)this.clearPoison(instance,field.key);
       return;
     }
@@ -1489,6 +1496,14 @@ export class ScriptRuntime {
   writeNamed(receiver,name,value) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
     return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field),handle.cell);
+  }
+  /** writeNamed without the logical copy it returns (a vector written each tick made two arrays, one of them thrown away): for the
+   * services whose callers ignore what a write returns. The storage steps, and any error they raise, are writeInstanceField's. */
+  storeNamed(receiver,name,value) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name),field=handle.field,codec=handle.codec??=propertyCodec(field);
+    const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
+    if(binding)binding.set(codec.store(value,binding.get()));
+    else this.writeStorage(instance,field,value,codec,handle.cell);
   }
   /** Actor.LatentFloat (AActor+0xe0) as {get, set}: Sleep's remaining time
    * (script-sleep.mjs). */
@@ -3114,6 +3129,7 @@ export class ScriptRuntime {
       levelFor:this.actorLifecycle.levelFor??this.levelFor,
       read:(actor,name)=>this.readNamed(actor,name),
       write:(actor,name,value)=>this.writeNamed(actor,name,value),
+      touching:(actor,target,from)=>this.touchingSlot(actor,target,from),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       isProbing:(actor,name)=>this.isProbing(actor,name),
       // ULevel::DestroyActor detaches the target's Base and every based child
@@ -3129,6 +3145,25 @@ export class ScriptRuntime {
       setOwner:(actor,owner)=>this.setOwner(actor,owner),
       conditionalDestroy:actor=>this.conditionalDestroy(actor),
     },netForce);
+  }
+  /** readNamed(receiver, name)[memberKey] of a struct property, without building the struct (every read of a Region for its zone
+   * number made an object with a key added for each member): undefined where the property is not an unbound, unpoisoned image
+   * struct with that member, and the caller reads it whole. */
+  readStructMember(receiver,name,memberKey) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name),cell=handle.cell;
+    if(!cell||(instance.bindings.size&&instance.bindings.has(handle.field.key))||instance.poison?.get(handle.field.key))return undefined;
+    return readStructMember(cell,memberKey,instance.arena.view,instance.refs,instance.base);
+  }
+  /** The first slot at or after `from` of the actor's four-slot Touching array that holds `target`, or -1, compared in the image (the
+   * whole array readNamed returns was allocated for every actor of the level, four times, by a DestroyActor scan). Undefined where
+   * the property is not an unbound, unpoisoned image array of four pointers: the caller reads it whole. */
+  touchingSlot(actor,target,from) {
+    const instance=this.instance(actor),handle=this.namedHandle(instance,'Touching'),cell=handle.cell;
+    if(!cell||!isFixedCell(cell)||cell.dim!==4||(instance.bindings.size&&instance.bindings.has(handle.field.key))
+      ||instance.poison?.get(handle.field.key)||!isPointerCell(cell.element))return undefined;
+    const view=instance.arena.view;
+    for(let slot=from;slot<4;slot++)if(readFixedElement(cell,view,instance.refs,slot,instance.base)===target)return slot;
+    return -1;
   }
   /** UStruct.CleanupDestroyed for one object (script-cleanup.mjs). In play,
    * an object whose visited fields are all image cells has its pointers read
@@ -3194,9 +3229,9 @@ export class ScriptRuntime {
     if(field.key==='engine.actor.base')bumpBaseEpoch();else bumpActorsEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
-      if(mirrored){instance.bindings.set(field.key,mirrored);bumpReceiverEpoch();return;}
+      if(mirrored){instance.bindings.set(field.key,mirrored);instance.bindingsVersion++;bumpReceiverEpoch();return;}
     }
-    instance.bindings.set(field.key,binding);bumpReceiverEpoch();
+    instance.bindings.set(field.key,binding);instance.bindingsVersion++;bumpReceiverEpoch();
     this.noteBoundKey(field.key);
   }
   /** A binding whose value changes only through its setter keeps a copy in
@@ -4672,7 +4707,7 @@ export class ScriptRuntime {
         ?(this.regionValue(actor).zoneNumber??0)&0xff      // pawn+0xd0 byte
         :name in flagWords?flagRead(actor,name)
         :this.readNamed(actor,name),
-      write:(actor,name,v)=>name in flagWords?flagWrite(actor,name,v):this.writeNamed(actor,name,v),
+      write:(actor,name,v)=>name in flagWords?flagWrite(actor,name,v):this.storeNamed(actor,name,v),
       level:actor=>this.levelFor(actor),
       model:lvl=>lvl?.model,
       // ULevel nav surface: LevelInfo.NavigationPointList (+0x548), the
@@ -4862,7 +4897,7 @@ export class ScriptRuntime {
     const stack=this.classLoader?this.frameStack():null,stackIndex=stack?.index,stackTop=stack?.top;
     try{
     const locals=createFrameLocals(fn,this.classLoader,stack),parameters=fn.parameters;
-    for(let index=0;index<parameters.length;index++)locals.set(parameters[index].key,copyValue(parameters[index],args[index]));
+    for(let index=0;index<parameters.length;index++)setLocalCopy(locals,parameters[index],args[index]);
     if(fn.result)locals.set(fn.result.key,copyValue(fn.result,resultReference.get()));
     const suppressed=Boolean((fn.script.functionFlags&0x20)&&instance.singular);
     const result=this.executeScript(fn,receiver,locals);
@@ -4870,7 +4905,7 @@ export class ScriptRuntime {
     // Singular suppression (and a void Return expression) leaves that slot as
     // copied from the caller rather than fabricating a zero return value.
     if(fn.result&&!suppressed&&result!==undefined)locals.set(fn.result.key,copyValue(fn.result,result));
-    for(let index=0;index<parameters.length;index++)args[index]=copyValue(parameters[index],locals.get(parameters[index].key));
+    for(let index=0;index<parameters.length;index++)args[index]=getLocalCopy(locals,parameters[index]);
     if(fn.result)resultReference.set(copyValue(fn.result,locals.get(fn.result.key)));
     this.destroyFunctionLocals(fn,locals,{parameters:false});
     return true;
@@ -4904,21 +4939,22 @@ export class ScriptRuntime {
     // released when this call ends, as CallFunction's FMemMark is.
     const stack=this.classLoader?this.frameStack():null,stackIndex=stack?.index,stackTop=stack?.top;
     try{
-    const locals=createFrameLocals(fn,this.classLoader,stack),out=[];
+    const locals=createFrameLocals(fn,this.classLoader,stack);
+    let out=null;
     // A non-out parameter only needs the argument's value: the VM's
     // evaluateArgumentValue is refValue(evaluateArgument) without an lvalue
     // (linked reads never yield undefined, so the skip test is unchanged).
-    const byValue=typeof context.evaluateArgumentValue==='function';
-    for(const [index,field] of fn.parameters.entries()){
-      if(index>=argumentCount)break;
+    const byValue=typeof context.evaluateArgumentValue==='function',parameters=fn.parameters;
+    for(let index=0;index<parameters.length&&index<argumentCount;index++){
+      const field=parameters[index];
       if(byValue&&!field.metadata.out){
         const value=context.evaluateArgumentValue(index);
-        if(value!==undefined)locals.set(field.key,copyValue(field,value));
+        if(value!==undefined)setLocalCopy(locals,field,value);
         continue;
       }
       const value=evaluateArgument(index);
-      if(value!==undefined)locals.set(field.key,copyValue(field,refValue(value)));
-      if(field.metadata.out&&value?.reference)out.push({field,reference:value});
+      if(value!==undefined)setLocalCopy(locals,field,refValue(value));
+      if(field.metadata.out&&value?.reference)(out??=[]).push({field,reference:value});
     }
     // UObject::ProcessInternal (Core 0x1013f690, 0x1013f6c6-0x1013f6fe): a script function whose name is one of the 64 probe names does not
     // run when its object's StateFrame ProbeMask lacks that bit, whoever called it; CallFunction already evaluated the arguments and
@@ -4930,7 +4966,7 @@ export class ScriptRuntime {
     // ProcessInternal writes the caller's result before returning to the out
     // copyback/destruction loops. Preserve that value outside the local frame.
     const result=fn.result?copyValue(fn.result,value):value;
-    for(const entry of out.reverse())entry.reference.set(copyValue(entry.field,locals.get(entry.field.key)));
+    if(out!==null)for(const entry of out.reverse())entry.reference.set(getLocalCopy(locals,entry.field));
     this.destroyFunctionLocals(fn,locals);
     return result;
     }finally{stack?.restore(stackIndex,stackTop);}

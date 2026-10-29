@@ -1473,8 +1473,10 @@ export async function createScriptDoors({
   Object.defineProperty(level, 'firstViewport', {configurable:true,
     get:()=>level.engine.client.viewports[0]});
   level.zoneLastRenderTime = actor => {
-    const region = runtime.readNamed(actor, 'Region');
-    return level.zoneLastRenderTimes?.[region?.['engine.actor.pointregion.zonenumber']];
+    // (the Region's zone number read in place; the whole struct only where it is not in the image)
+    let zone = runtime.readStructMember(actor, 'Region', 'engine.actor.pointregion.zonenumber');
+    if (zone === undefined) zone = runtime.readNamed(actor, 'Region')?.['engine.actor.pointregion.zonenumber'];
+    return level.zoneLastRenderTimes?.[zone];
   };
   let tickBoundary = null, lastTickDelta = 0;
   // One Actor.Tick of the level's scheduler (aroundActorTick, below): a function made once, called with the tick's arguments.
@@ -1532,7 +1534,7 @@ export async function createScriptDoors({
   // decoration queries. Spawned actors and physicsRotation share these bodies.
   const actorPhysicsServices = {
     read: (target, name) => runtime.readNamed(target, name),
-    write: (target, name, value) => runtime.writeNamed(target, name,value),
+    write: (target, name, value) => runtime.storeNamed(target, name, value),
     physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
     physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physProjectile: (actor,delta)=>runActorProjectile(runtime,actor,delta),

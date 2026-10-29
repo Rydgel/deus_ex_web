@@ -25,9 +25,9 @@ const outArgZero=Object.freeze(new Set([0]));
 const primitiveOutNatives=new Map([[229,new Set([1,2,3])]]);
 for(const index of [135,138,139,140,160,163,164,165,166,182,184,185,221,222,223,224,297,318,319,...decorationOutPrimitiveIndices])
   primitiveOutNatives.set(index,outArgZero);
-export const refValue = v => v?.reference ? v.get() : v;
+export const refValue = v => v?.reference ? (v.getValue !== undefined ? v.getValue() : v.get()) : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
-export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Script assignment requires a variable'); return ref.set(value); };
+export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Script assignment requires a variable'); return ref.setValue !== undefined ? ref.setValue(value) : ref.set(value); };
 
 // The float/vector natives read and write float32 memory words, so their
 // NaN payloads and signed zeros must cross through DataView bit patterns
@@ -344,7 +344,7 @@ export const x87safeNormal = v => x87vector(x87safeNormalWords(v));
 const x87three = { neg: 0, sig: 3n, exp: 0 };
 // Vector/rotator operand shape: three number components (NaN and infinity
 // included — they are float32 bit patterns the original loads too).
-const isVec3 = v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number');
+const isVec3 = v => Array.isArray(v) && v.length === 3 && typeof v[0] === 'number' && typeof v[1] === 'number' && typeof v[2] === 'number';
 
 /** Original bytecode execution with linked engine services.
  * Unsupported instructions/native indices fail, rather than being approximated. */
@@ -553,9 +553,13 @@ const NO_FRAME_OPTIONS = Object.freeze({});
  * context were allocated in old space whatever the sites' state (an audit of 80,894 frames in the interpreter tier found none of the
  * closures young), and with the closure gone the headless roam's old-space growth fell by 60 KB a frame (docs/live-heap.md). */
 function newFrame(engine, script, instance, locals, services, offset, state) {
-  return { instance, locals, script, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services, engine, resume: resumeFrame };
+  return { instance, locals, script, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators: NO_ITERATORS, services, engine, resume: resumeFrame };
 }
 function resumeFrame() { return this.engine.resumeCompiled(this); }
+// The iterators of a frame no foreach has run in: one array every such frame shares, never pushed to (the push sites give the frame
+// its own). Reading it (length, at, pop of an empty list) is what an empty array of its own answered.
+const NO_ITERATORS = [];
+const pushIterator = (frame, continuation) => { if (frame.iterators === NO_ITERATORS) frame.iterators = [continuation]; else frame.iterators.push(continuation); };
 let warmSink = null;
 registerAllocationSiteWarmer(count => {
   const engine = { resumeCompiled() { return undefined; } }, locals = {}, services = {};
@@ -610,7 +614,10 @@ function buildEngine(compiled) {
   function native(index, args, receiver, services, frame) {
     if(moverPrimitiveIndices.has(index))return executeMoverPrimitive(index,args);
     if(decorationPrimitiveIndices.has(index))return executeDecorationPrimitive(index,args);
-    const values = args.map(refValue), [a, b] = values;
+    // (an element loop and two reads: the array destructuring made an iterator and its result objects for every native)
+    const values = new Array(args.length);
+    for (let i = 0; i < values.length; i++) values[i] = refValue(args[i]);
+    const a = values[0], b = values[1];
     // The recovered natives 193/226/229/248/300 are bound only for calls
     // whose operand count and shapes match the declared Core signature; a
     // malformed call keeps the services.native fallback unbound indices use.
@@ -618,7 +625,7 @@ function buildEngine(compiled) {
       index===193 ? values.length===1 && typeof a==='number'
       : index===226 ? values.length===1 && isVec3(a)
       : index===229 ? values.length===4 && isVec3(a)
-      : index===248 ? values.length===3 && values.every(v => typeof v==='number')
+      : index===248 ? values.length===3 && typeof a==='number' && typeof b==='number' && typeof values[2]==='number'
       : index===300 ? values.length===2 && isVec3(a) && isVec3(b)
       : index===173 ? values.length===2 && typeof a==='number' && typeof b==='number'
       : index===160 ? values.length===2 && typeof a==='number' && typeof b==='number'
@@ -1296,7 +1303,7 @@ function buildEngine(compiled) {
         const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
           argumentCount:args.length,evaluateArgument:index=>evNode(args[index],frame,instance)});
         const continuation={iterator,body:entry.next,after};
-        if(iterator.next())frame.iterators.push(continuation);
+        if(iterator.next())pushIterator(frame,continuation);
         else frame.cursor=continuation.after;
       }
     }else if(op===0x31){
@@ -1542,7 +1549,7 @@ function buildEngine(compiled) {
               const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
                 argumentCount:call.args.length,evaluateArgument:index=>evaluate(call.args[index],instance)});
               const continuation={iterator,body:entry.next,after};
-              if(iterator.next())frame.iterators.push(continuation);
+              if(iterator.next())pushIterator(frame,continuation);
               else frame.cursor=continuation.after;
             }
           }else if(n.op===0x31){

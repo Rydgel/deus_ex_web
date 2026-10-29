@@ -48,6 +48,18 @@ function touchSlot(read, actor, index) {
   return touching[index];
 }
 
+// The first Touching slot at or after `from` that holds `receiver`, or -1. A host that can compare the slots in place gives
+// `touching(actor, receiver, from)` (a slot index, or undefined where it cannot); the scan otherwise reads the whole array for
+// each slot, as the original loop did. Either way a slot is read after the callbacks of the slot before it.
+function nextTouch(callbacks, read, actor, receiver, from) {
+  if (callbacks.touching) {
+    const slot = callbacks.touching(actor, receiver, from);
+    if (slot !== undefined) return slot;
+  }
+  for (let slot = from; slot < 4; slot++) if (touchSlot(read, actor, slot) === receiver) return slot;
+  return -1;
+}
+
 function deleted(read, receiver) {
   return flag(read(receiver, 'bDeleteMe'));
 }
@@ -167,8 +179,7 @@ export function destroyScriptActor(receiver, options, netForce = false) {
       callbacks.setOwner(child, null);
       if (deleted(read, receiver)) return true;
     }
-    for (let slot = 0; slot < 4; slot++) {
-      if (touchSlot(read, child, slot) !== receiver) continue;
+    for (let slot = nextTouch(callbacks, read, child, receiver, 0); slot >= 0; slot = nextTouch(callbacks, read, child, receiver, slot + 1)) {
       requireFunction(callbacks.endTouch, 'endTouch');
       callbacks.endTouch(receiver, child, 1);
       if (deleted(read, receiver)) return true;

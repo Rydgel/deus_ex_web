@@ -474,56 +474,74 @@ const readWhole = state => copyStored(state.get(), state.descriptor, 'propertyRe
 const writeLogical = (state, value) =>
   state.set(copyToStorage(value, state.descriptor, state.get(), 'propertyReference.set'));
 
+/** A metadata-carrying lvalue. One is made for every variable operand the VM passes by reference, so it holds five fields and the
+ * state: the rest of what a reference shows (key, metadata, array shape, address offset) is read from the descriptor when asked, and
+ * the `get`/`set` functions callers pass on as detached accessors are made at the first read of those properties. The VM's own
+ * reads and writes call getValue/setValue (refValue and assign, script-vm.mjs), which need neither. */
 class PropertyReference {
   #state;
+  #accessors = null;
+  #array = null;
   constructor(descriptor, field, state, index, container) {
-    const isElement = index !== null;
-    const addressOffset = isElement && descriptor.elementSize !== null
-      ? index * descriptor.elementSize : isElement ? null : 0;
-    this.reference = true;
-    this.key = descriptor.key;
     this.field = field;
-    this.metadata = descriptor.metadata;
-    this.property = descriptor.metadata;
-    this.arrayDimension = descriptor.array ? descriptor.dimension : 1;
-    this.elementSize = descriptor.elementSize;
+    this.descriptor = descriptor;
     this.arrayIndex = index;
-    this.addressOffset = addressOffset;
-    this.array = descriptor.array ? {
-      dimension: descriptor.dimension,
-      elementSize: descriptor.elementSize,
-      index,
-      addressOffset,
-      container: container ?? this,
-    } : null;
-    // Own functions: callers pass ref.get/ref.set on as detached accessors.
-    // readWhole copies every element (copyScalar each, non-bool) before the
-    // index; a storage that reads the one element's cell yields that same
-    // element value without copying its neighbours.
-    this.get = isElement
-      ? typeof state.readElement === 'function' && descriptor.element.type !== 'bool'
-        ? () => {
-          const element = state.readElement(index);
-          return copyScalar(element === NO_ELEMENT ? readWhole(state)[index] : element,
-            descriptor.element, 'arrayReference.get');
-        }
-        : () => copyScalar(readWhole(state)[index], descriptor.element, 'arrayReference.get')
-      : () => readWhole(state);
-    this.set = isElement ? value => {
-      const whole = readWhole(state);
-      whole[index] = copyScalar(value, descriptor.element, 'arrayReference.set');
-      writeLogical(state, whole);
-      return copyScalar(whole[index], descriptor.element, 'arrayReference.set');
-    } : value => {
-      state.set(copyToStorage(value, descriptor, state.get()));
-      return copyFromDescriptor(descriptor, value, 'arrayReference.set');
-    };
+    this.container = container;
     this.#state = state;
   }
+  get key() { return this.descriptor.key; }
+  get metadata() { return this.descriptor.metadata; }
+  get property() { return this.descriptor.metadata; }
+  get arrayDimension() { return this.descriptor.array ? this.descriptor.dimension : 1; }
+  get elementSize() { return this.descriptor.elementSize; }
+  get addressOffset() {
+    const descriptor = this.descriptor, index = this.arrayIndex;
+    return index !== null && descriptor.elementSize !== null ? index * descriptor.elementSize : index !== null ? null : 0;
+  }
+  get array() {
+    const descriptor = this.descriptor;
+    if (!descriptor.array) return null;
+    return this.#array ??= {
+      dimension: descriptor.dimension,
+      elementSize: descriptor.elementSize,
+      index: this.arrayIndex,
+      addressOffset: this.addressOffset,
+      container: this.container ?? this,
+    };
+  }
+  /** The value: readWhole of the property, or of the one element (copyScalar of the element a storage that reads one cell yields
+   * on its own; readWhole copies every element before the index). */
+  getValue() {
+    const state = this.#state, index = this.arrayIndex;
+    if (index === null) return readWhole(state);
+    const element = this.descriptor.element;
+    if (typeof state.readElement === 'function' && element.type !== 'bool') {
+      const one = state.readElement(index);
+      return copyScalar(one === NO_ELEMENT ? readWhole(state)[index] : one, element, 'arrayReference.get');
+    }
+    return copyScalar(readWhole(state)[index], element, 'arrayReference.get');
+  }
+  /** Store `value` and return the logical copy of what was stored. */
+  setValue(value) {
+    const state = this.#state, index = this.arrayIndex, descriptor = this.descriptor;
+    if (index === null) {
+      state.set(copyToStorage(value, descriptor, state.get()));
+      return copyFromDescriptor(descriptor, value, 'arrayReference.set');
+    }
+    const element = descriptor.element, whole = readWhole(state);
+    whole[index] = copyScalar(value, element, 'arrayReference.set');
+    writeLogical(state, whole);
+    return copyScalar(whole[index], element, 'arrayReference.set');
+  }
+  // Own functions of the reference once asked for: callers pass ref.get/ref.set on as detached accessors.
+  get get() { return (this.#accessors ??= this.#makeAccessors()).get; }
+  get set() { return (this.#accessors ??= this.#makeAccessors()).set; }
+  #makeAccessors() { return {get: () => this.getValue(), set: value => this.setValue(value)}; }
   static stateOf(value) {
     return value !== null && typeof value === 'object' && #state in value ? value.#state : undefined;
   }
 }
+PropertyReference.prototype.reference = true;
 
 /** The declared element type ('object', 'struct', ...) an lvalue reads, or
  * null for a value that is not a metadata-carrying property reference. */

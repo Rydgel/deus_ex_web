@@ -270,9 +270,10 @@ export class PerceptionHost {
     const view = this.vm.arena.view, base = this.scan;
     view.setUint32(base, count, true);
     for (let i = 0; i < count; i++) {
-      const [h, info] = this.scanEntry(actors[i]), at = base + 4 + 8 * i;
+      // (scanEntry's pair, without the array)
+      const light = actors[i], h = light ? handleOf(light) : 0, at = base + 4 + 8 * i;
       view.setUint32(at, h, true);
-      view.setUint32(at + 4, info, true);
+      view.setUint32(at + 4, light ? this.vm.receiverInfo(h) : 0, true);
     }
     this.scanKey = {actors, count, epoch};
     if (DIFFERENTIAL) differential.scans++;

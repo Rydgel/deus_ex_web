@@ -567,7 +567,11 @@ export class RustScriptVm {
    * bindings only grow, and each addition advances the receiver epoch. */
   bindingSet(handle) {
     const identity = identityOfHandle(handle), runtime = this.runtime;
-    const instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity), ids = [];
+    const instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity);
+    // The set stays what it was while the object gained or replaced no binding (a receiver epoch advance, for any object, is not a
+    // change of this one: the key's sort and join were most of the allocation of a frame the level's actors changed in).
+    if (instance.bindSetVm === this && instance.bindSetVersion === instance.bindingsVersion) return instance.bindSet;
+    const ids = [];
     for (const [field, binding] of instance.bindings) if (binding.mirrored !== true) ids.push(fieldKeyId(field));
     ids.sort((a, b) => a - b);
     const key = ids.join(',');
@@ -580,6 +584,7 @@ export class RustScriptVm {
       for (const id of ids) this.arena.bytes[address + 4 + id] = 1;
       this.bindingSets.set(key, address);
     }
+    instance.bindSet = address; instance.bindSetVersion = instance.bindingsVersion; instance.bindSetVm = this;
     return address;
   }
   computeReceiverInfo(handle) {
@@ -1005,7 +1010,8 @@ export class RustScriptVm {
     const view = this.arena.view, at = this.events.runsAt + 16 * id, serial = view.getUint32(at + 12, true);
     if (run !== undefined && run.serial === serial) return run;
     const template = this.events.templates[view.getUint32(at, true)], handle = view.getUint32(at + 4, true);
-    const built = new Run(this, template.compiled, template.lowered, this.identity(handle), template.services, null,
+    // (the pooled Run of this depth, made ready again: the body before it at this depth has returned, as for acquire)
+    const built = this.acquire(id, template.compiled, template.lowered, this.identity(handle), template.services, null,
       template.layout, view.getUint32(at + 8, true), template.resultField);
     built.serial = serial;
     this.frames[id] = built;
