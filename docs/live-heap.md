@@ -919,24 +919,26 @@ roam is not the page's and the stamps step does not run), its comparisons betwee
 `--heap-leaves N` (the leaves kept for each step in `<out>.heap.json`).
 
 **Measured, browser** (`hitch-run.mjs --heap-sampling all --heap-leaves 120 --seconds 60 --mode roam`, Chromium, worker mode, the
-Island, each tree on its own dev server and CDP port; the roam is not pinned, so two runs a side; KB a worker frame, the profile's
-`frames` count 4,533 to 4,780). The "before" is an export of master `314d6501`, the "after" the branch head (`8b74be62`):
+Island, each tree on its own dev server and CDP port; the roam is not pinned, so two runs before and three after; KB a worker
+frame, the profile's `frames` count 4,533 to 4,779). The "before" is an export of master `314d6501`, the "after" the branch:
 
-| Step | before 1 | before 2 | after 2 | after 3 |
-| --- | ---: | ---: | ---: | ---: |
-| tick (`begin`) | 885.6 | 909.6 | 444.8 | 456.4 |
-| actors | 356.7 | 378.6 | 194.7 | 194.6 |
-| hud (Galaxy's Update inside it) | 122.2 | 127.5 | 104.4 (17.1) | 107.3 (17.2) |
-| coronas | 84.7 | 95.7 | 120.8 | 120.5 |
-| stamps | 41.4 | 46.6 | 34.8 | 34.2 |
-| **whole worker** | **1,559.0** | **1,632.6** | **965.8** | **979.7** |
-| whole worker, a drawn frame | 2,107.6 | 1,974.8 | 1,149.0 | 1,165.4 |
+| Step | before 1 | before 2 | after 2 | after 3 | after 4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| tick (`begin`) | 885.6 | 909.6 | 444.8 | 456.4 | 503.2 |
+| actors | 356.7 | 378.6 | 194.7 | 194.6 | 193.9 |
+| hud (Galaxy's Update inside it) | 122.2 | 127.5 | 104.4 (17.1) | 107.3 (17.2) | 109.9 (17.2) |
+| coronas | 84.7 | 95.7 | 120.8 | 120.5 | 120.1 |
+| stamps | 41.4 | 46.6 | 34.8 | 34.2 | 34.8 |
+| **whole worker** | **1,559.0** | **1,632.6** | **965.8** | **979.7** | **1,030.2** |
+| whole worker, a drawn frame | 2,107.6 | 1,974.8 | 1,149.0 | 1,165.4 | 1,228.7 |
 
-The whole worker fell from 1,596 to 973 KB a worker frame (-39%; 2,041 to 1,157 KB a drawn frame, -43%): the tick by half
-(898 to 451), the actors by 47% (368 to 195). A run between (after 1: 957.6, tick 404.6, actors 195.2) was made before the
-FastLineCheck, laser and stamps changes and is not in the table. A run's tick varies by 10% between runs (405 to 456 on the same
-code, the later ones with the later changes), since the roam differs; the leaves are the steadier comparison. Top leaves of the two
-steps (KB a worker frame):
+The whole worker fell from 1,596 to 992 KB a worker frame (-38%; 2,041 to 1,181 KB a drawn frame, -42%): the tick by about half
+(898 to 468), the actors by 47% (368 to 194). A run between (after 1: 957.6, tick 404.6, actors 195.2) was made before the
+FastLineCheck, laser and stamps changes and is not in the table. The "after 4" run is the head (`83eea77e`), the others the head
+before its last commit, which changed only the frames the level's actors change in. A run's tick varies by 20% between runs of the
+same code (405 to 503 KB, with `bindingSet` of the other branch, 12.6 to 23.3 KB, and `readComposite` moving with the roam: it is
+not pinned and meets different NPCs and epochs); the leaves are the steadier comparison. Top leaves of the two steps (KB a worker
+frame):
 
 | Tick leaf | before 1, 2 | after 2, 3 |
 | --- | ---: | ---: |
