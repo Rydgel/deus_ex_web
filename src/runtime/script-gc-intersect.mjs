@@ -57,10 +57,11 @@ const fail = (message, details) => {
 export function gcIntersect(object, clipX, clipY, clipWidth, clipHeight, services = {}) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function'))
     fail('GC.Intersect requires a canonical GC object', {kind: 'REFERENCE', value: object});
-  for (const [name, value] of [['ClipX', clipX], ['ClipY', clipY],
-    ['clipWidth', clipWidth], ['clipHeight', clipHeight]])
-    if (typeof value !== 'number')
-      fail(`GC.Intersect requires a numeric ${name}`, {kind: 'VALUE', value});
+  // (no array literal per call: the HUD runs this for every DrawText)
+  if (typeof clipX !== 'number') fail('GC.Intersect requires a numeric ClipX', {kind: 'VALUE', value: clipX});
+  if (typeof clipY !== 'number') fail('GC.Intersect requires a numeric ClipY', {kind: 'VALUE', value: clipY});
+  if (typeof clipWidth !== 'number') fail('GC.Intersect requires a numeric clipWidth', {kind: 'VALUE', value: clipWidth});
+  if (typeof clipHeight !== 'number') fail('GC.Intersect requires a numeric clipHeight', {kind: 'VALUE', value: clipHeight});
   const L = gcMemory(object, services);
   const base = L.base;
   const ox = L.read(base + GC.originX, 'f32');

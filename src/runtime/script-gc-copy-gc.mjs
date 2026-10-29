@@ -63,23 +63,28 @@ export function gcCopyGC(object, copy, services = {}) {
   const flags = L.read(dst + GC.flags, 'u32');
   L.write(dst + GC.flags, 'u32',
     ((flags & ~0x3f) | (L.read(src + GC.flags, 'u32') & 0x3f)) >>> 0);
-  for (const offset of [GC.polyFlags, GC.textPolyFlags, GC.tileColor])
-    L.write(dst + offset, 'u32', L.read(src + offset, 'u32'));
+  // (the offset lists are unrolled: no array literal per call, the HUD copies a GC for every DrawText)
+  L.write(dst + GC.polyFlags, 'u32', L.read(src + GC.polyFlags, 'u32'));
+  L.write(dst + GC.textPolyFlags, 'u32', L.read(src + GC.textPolyFlags, 'u32'));
+  L.write(dst + GC.tileColor, 'u32', L.read(src + GC.tileColor, 'u32'));
   for (let offset = GC.tileFloats; offset <= GC.tileFloats + 0xc; offset += 4)
     L.write(dst + offset, 'u32', L.read(src + offset, 'u32'));
   L.write(dst + GC.textColor, 'u32', L.read(src + GC.textColor, 'u32'));
   for (let offset = GC.textFloats; offset <= GC.textFloats + 0xc; offset += 4)
     L.write(dst + offset, 'u32', L.read(src + offset, 'u32'));
-  for (const offset of [GC.normalFont, GC.boldFont, GC.unknown84,
-    GC.underlineHeight, GC.baselineOffset, GC.textVSpacing])
-    L.write(dst + offset, 'u32', L.read(src + offset, 'u32'));
+  L.write(dst + GC.normalFont, 'u32', L.read(src + GC.normalFont, 'u32'));
+  L.write(dst + GC.boldFont, 'u32', L.read(src + GC.boldFont, 'u32'));
+  L.write(dst + GC.unknown84, 'u32', L.read(src + GC.unknown84, 'u32'));
+  L.write(dst + GC.underlineHeight, 'u32', L.read(src + GC.underlineHeight, 'u32'));
+  L.write(dst + GC.baselineOffset, 'u32', L.read(src + GC.baselineOffset, 'u32'));
+  L.write(dst + GC.textVSpacing, 'u32', L.read(src + GC.textVSpacing, 'u32'));
   L.write(dst + GC.hAlign, 'u8', L.read(src + GC.hAlign, 'u8'));
   L.write(dst + GC.vAlign, 'u8', L.read(src + GC.vAlign, 'u8'));
   const textFlags = L.read(dst + GC.textFlags, 'u32');
   L.write(dst + GC.textFlags, 'u32',
     ((textFlags & ~0x3) | (L.read(src + GC.textFlags, 'u32') & 0x3)) >>> 0);
-  for (const offset of [GC.unknown9c, GC.unknownA0])
-    L.write(dst + offset, 'u32', L.read(src + offset, 'u32'));
+  L.write(dst + GC.unknown9c, 'u32', L.read(src + GC.unknown9c, 'u32'));
+  L.write(dst + GC.unknownA0, 'u32', L.read(src + GC.unknownA0, 'u32'));
 }
 
 export const execGcCopyGC = gcCopyGC;

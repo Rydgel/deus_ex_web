@@ -11,7 +11,8 @@
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
 //   Chromium: [--angle metal|gl] (default metal on macOS, gl elsewhere) [--exe PATH] [--throttle 4] [--trace] (V8 GC events in the JSON's
 //     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
-//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
+//     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--heap-steps 8] (<out>.heap.json: the totals by site, leaf, sim-session step and
+//     file, and `byStep`: each of the N largest steps' top leaves and top 5-frame sites; the KB a frame is printed) [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
 //     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
@@ -200,7 +201,7 @@ if(traced){
 }
 if(heapSampling&&workerSession){
   const {result}=await send('HeapProfiler.stopSampling',{},workerSession);
-  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map();let total=0;
+  const sites=new Map(),leaf=new Map(),step=new Map(),file=new Map(),stepLeaf=new Map(),stepSites=new Map();let total=0;
   const label=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}:${f.lineNumber+1}`;
   const fn=f=>`${f.functionName||'(anon)'} ${f.url.split('/').slice(-2).join('/').split('?')[0]}`;
   const bump=(m,k,v)=>m.set(k,(m.get(k)??0)+v);
@@ -209,10 +210,25 @@ if(heapSampling&&workerSession){
     let st=stepName;
     if(stack.length&&/^frame viewer\/sim-session\.mjs/.test(stack[stack.length-1]))st=fn(node.callFrame);
     if(node.selfSize){bump(sites,here.slice(-5).reverse().join(' < '),node.selfSize);bump(leaf,fn(node.callFrame),node.selfSize);
-      bump(step,st??'(outside frame)',node.selfSize);bump(file,node.callFrame.url.split('/').slice(-2).join('/').split('?')[0]||'(native)',node.selfSize);}
+      bump(step,st??'(outside frame)',node.selfSize);bump(file,node.callFrame.url.split('/').slice(-2).join('/').split('?')[0]||'(native)',node.selfSize);
+      // the step x leaf and step x 5-frame-site cells (the leaf's own file and function, so a step's allocation shows what builds it)
+      bump(stepLeaf,`${st??'(outside frame)'}\t${fn(node.callFrame)}`,node.selfSize);bump(stepSites,`${st??'(outside frame)'}\t${here.slice(-5).reverse().join(' < ')}`,node.selfSize);}
     for(const c of node.children)visit(c,here,st);})(result.profile.head,[],null);
   const top=(m,n)=>[...m].sort((a,b)=>b[1]-a[1]).slice(0,n);
-  await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60)}));
+  // --heap-steps N (default 8): the N largest steps each get their top leaves and top 5-frame sites (byStep), and a KB-per-frame summary is printed.
+  const frames=dump?.summary?.frames??null,stepCount=Number(option('heap-steps',8));
+  const byStep={};
+  for(const [name,bytes] of top(step,stepCount)){
+    const cell=m=>top(new Map([...m].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),25);
+    byStep[name]={bytes,leaf:cell(stepLeaf),sites:top(new Map([...stepSites].filter(([k])=>k.startsWith(`${name}\t`)).map(([k,v])=>[k.slice(name.length+1),v])),15)};
+  }
+  await writeFile(`${out}.heap.json`,JSON.stringify({mode:heapSampling,total,frames,sites:top(sites,400),leaf:top(leaf,150),step:top(step,60),file:top(file,60),byStep}));
+  const kb=bytes=>frames?(bytes/1024/frames).toFixed(1):'-';
+  console.log(`heap sampling ${heapSampling}: ${(total/1048576).toFixed(0)} MB over ${frames} frames = ${kb(total)} KB a frame`);
+  for(const [name,entry] of Object.entries(byStep)){
+    console.log(`  ${kb(entry.bytes).padStart(7)} KB/frame  ${name}`);
+    for(const [leafName,bytes] of entry.leaf.slice(0,6))console.log(`      ${kb(bytes).padStart(7)}  ${leafName}`);
+  }
 }
 if(workerProfiled){const {result}=await send('Profiler.stop',{},workerSession);await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(result.profile));}
 await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));

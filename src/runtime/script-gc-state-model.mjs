@@ -145,6 +145,54 @@ function requireMem(services) {
   return mem;
 }
 
+const gcInt32 = value => {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    modelFail('GC heap read returned a non-integer', {kind: 'VALUE', value});
+  return value | 0;
+};
+const gcUint32 = value => {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    modelFail('GC heap read returned a non-integer', {kind: 'VALUE', value});
+  return value >>> 0;
+};
+const gcFloat32 = value => {
+  if (typeof value !== 'number')
+    modelFail('GC heap read returned a non-number', {kind: 'VALUE', value});
+  return Math.fround(value);
+};
+
+/** The checked accessors over one (heap service, object address) pair. A method pair on a class, not a closure pair: the HUD
+ * takes one of these for every GC native it runs (docs/live-heap.md "Cut: HUD step"). */
+class GcMemory {
+  constructor(mem, object, services, base) {
+    this.mem = mem;
+    this.object = object;     // the object this entry was made for (the first one at this address)
+    this.services = services;
+    this.base = base;
+  }
+  read(address, kind) {
+    const value = this.mem.read(address, kind);
+    if (value && typeof value.then === 'function') rejectAsync(value, `read 0x${address.toString(16)}`);
+    switch (kind) {
+      case 'i32': case 'i16': case 'i8': return gcInt32(value);
+      case 'u32': case 'u16': case 'u8': return gcUint32(value);
+      case 'f32': return gcFloat32(value);
+      default: return modelFail(`GC unsupported heap kind ${kind}`, {kind: 'VALUE', value: kind});
+    }
+  }
+  write(address, kind, value) {
+    const result = this.mem.write(address, kind, value);
+    if (result && typeof result.then === 'function') rejectAsync(result, `write 0x${address.toString(16)}`);
+    return result;
+  }
+}
+
+// One accessor pair per (services, address): the services object of a window host lives as long as the host, and the GCs it runs
+// are a few dozen heap addresses, so a GC native costs no allocation. The accessors hold no state of their own (`mem` is read
+// from the services at each gcMemory call and compared), so a cached pair behaves as a fresh one.
+const gcMemories = new WeakMap();
+const GC_MEMORIES_LIMIT = 4096;
+
 /** Checked accessors over the injected byte-addressable heap service. */
 export function gcMemory(object, services) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function'))
@@ -153,39 +201,17 @@ export function gcMemory(object, services) {
   const base = rejectAsync(services.objectAddress ? services.objectAddress(object) : object.base, 'objectAddress');
   if (typeof base !== 'number' || !Number.isInteger(base) || base <= 0)
     modelFail('GC requires the object heap address', {kind: 'SERVICE', value: base});
-  const int32 = value => {
-    if (typeof value !== 'number' || !Number.isInteger(value))
-      modelFail('GC heap read returned a non-integer', {kind: 'VALUE', value});
-    return value | 0;
-  };
-  const uint32 = value => {
-    if (typeof value !== 'number' || !Number.isInteger(value))
-      modelFail('GC heap read returned a non-integer', {kind: 'VALUE', value});
-    return value >>> 0;
-  };
-  const float32 = value => {
-    if (typeof value !== 'number')
-      modelFail('GC heap read returned a non-number', {kind: 'VALUE', value});
-    return Math.fround(value);
-  };
-  const checked = kind => {
-    if (kind === 'i32' || kind === 'i16' || kind === 'i8') return int32;
-    if (kind === 'u32' || kind === 'u16' || kind === 'u8') return uint32;
-    if (kind === 'f32') return float32;
-    return modelFail(`GC unsupported heap kind ${kind}`, {kind: 'VALUE', value: kind});
-  };
-  // rejectAsync with the label built only for the failure message.
-  const read = (address, kind) => {
-    const value = mem.read(address, kind);
-    if (value && typeof value.then === 'function') rejectAsync(value, `read 0x${address.toString(16)}`);
-    return checked(kind)(value);
-  };
-  const write = (address, kind, value) => {
-    const result = mem.write(address, kind, value);
-    if (result && typeof result.then === 'function') rejectAsync(result, `write 0x${address.toString(16)}`);
-    return result;
-  };
-  return {mem, object, services, base, read, write};
+  let entry = gcMemories.get(services);
+  if (entry === undefined || entry.mem !== mem || entry.byBase.size >= GC_MEMORIES_LIMIT) {
+    entry = {mem, byBase: new Map()};
+    gcMemories.set(services, entry);
+  }
+  let memory = entry.byBase.get(base);
+  if (memory === undefined) {
+    memory = new GcMemory(mem, object, services, base);
+    entry.byBase.set(base, memory);
+  }
+  return memory;
 }
 
 // ================= recovered shared helper bodies =================
