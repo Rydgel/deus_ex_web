@@ -503,26 +503,20 @@ export class ScriptRuntime {
       write:(object,key,value)=>this.writeNamed(object,key,value),
       reference:object=>{this.instance(object);return object;},
       isA:(object,name)=>{
+        // (the key made once: BindEvents asks this of every actor of the level)
+        const key=`engine.${name.toLowerCase()}`;
         for(let cls=this.instance(object).cls;cls;cls=cls.base)
-          if(cls.record.key===`engine.${name.toLowerCase()}`)return true;
+          if(cls.record.key===key)return true;
         return false;
       },
       bindActor:args=>{
         const key=this.instance(args.event).cls.record.key;
-        if(key==='consys.coneventspeech')return bindSpeechActor({...args,
-          read:(object,key)=>this.readNamed(object,key),
-          write:(object,key,value)=>this.writeNamed(object,key,value),
-        });
-        if(key==='consys.coneventanimation'||key==='consys.coneventtrade')
-          return bindConversationAction({...args,
-            read:(object,key)=>this.readNamed(object,key),
-            write:(object,key,value)=>this.writeNamed(object,key,value),
-          });
+        const read=this.bindRead??=(object,key)=>this.readNamed(object,key),write=this.bindWrite??=(object,key,value)=>this.writeNamed(object,key,value);
+        if(key==='consys.coneventspeech')return bindSpeechActor({...args,read,write});
+        if(key==='consys.coneventanimation'||key==='consys.coneventtrade')return bindConversationAction({...args,read,write});
         if(isConversationCheckObjectBindClass(key)){
           const services=this.conversationLifecycle?.checkObject;
-          return bindConversationCheckObjectActor({...args,
-            read:(object,key)=>this.readNamed(object,key),
-            write:(object,key,value)=>this.writeNamed(object,key,value),
+          return bindConversationCheckObjectActor({...args,read,write,
             classRef:services?.classRef,
             createPackage:typeof services?.createPackage==='function'
               ? details=>services.createPackage(details):null,
@@ -532,9 +526,7 @@ export class ScriptRuntime {
         }
         if(isConversationTransferObjectBindClass(key)){
           const services=this.conversationLifecycle?.transferObject;
-          return bindConversationTransferObjectActor({...args,
-            read:(object,key)=>this.readNamed(object,key),
-            write:(object,key,value)=>this.writeNamed(object,key,value),
+          return bindConversationTransferObjectActor({...args,read,write,
             classRef:services?.classRef,
             createPackage:typeof services?.createPackage==='function'
               ? details=>services.createPackage(details):null,
