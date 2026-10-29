@@ -462,6 +462,9 @@ export function readStructMetadata(asset, index, { includeChildren = true } = {}
   };
 }
 
+// The replication of a function without FUNC_Net, shared by all of them (nothing writes it).
+const NO_REPLICATION = Object.freeze({ enabled: false, offset: null });
+
 /** Read UFunction's v68/v69 native/operator/replication tail and parameters. */
 export function readFunctionMetadata(asset, index, { includeChildren = true } = {}) {
   const c = context(asset, index);
@@ -489,7 +492,7 @@ export function readFunctionMetadata(asset, index, { includeChildren = true } = 
     kind: 'function',
     replicationOffset,
     repOffset: replicationOffset,
-    replication: { enabled: hasReplication, offset: replicationOffset },
+    replication: hasReplication ? { enabled: true, offset: replicationOffset } : NO_REPLICATION,
     operatorPrecedence,
     functionFlags,
     flags: functionFlags,

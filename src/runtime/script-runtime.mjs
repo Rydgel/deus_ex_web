@@ -190,6 +190,10 @@ import {GAME_DIRECTORY} from './script-game-directory.mjs';
 const imagedMotionWord=instance=>instance.cells&&instance.base?flagWord(instance,MOTION_WORD):null;
 
 const lower=name=>String(name).toLowerCase();
+const NO_CHILDREN=Object.freeze([]);
+// A body without a null-Context result keeps one shared empty Map (zeroContextResult only reads it), not a Map of its own.
+const NO_CONTEXT_RESULTS=new Map();
+const keptContextResults=results=>results.size?results:NO_CONTEXT_RESULTS;
 // Event and function names are a small fixed vocabulary: keep their lowercase.
 const lowerNames=new Map();
 const lowerName=name=>{
@@ -824,12 +828,15 @@ export class ScriptRuntime {
     const bindings=await this.objects.link(script,compiled.decoded);
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
-    this.contextResults.set(script,await prepareContextResults(this,script,compiled.decoded));
+    this.contextResults.set(script,keptContextResults(await prepareContextResults(this,script,compiled.decoded)));
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const fields=[];
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
     record.function={record,script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
       result:fields.find(field=>field.metadata.return)??null};
+    // The serialized children were read to find the parameters' identities, whose own metadata Play uses (fields, parameters, result):
+    // the function's copies of them, and the list built from them, are released (docs/live-heap.md, steps 2 and 3).
+    script.children=NO_CHILDREN;script.parameters=NO_CHILDREN;
     // Most linked bodies never run: the tree goes until the first run decodes it again (docs/live-heap.md step 8).
     compiled.release();
     return record;
@@ -841,7 +848,7 @@ export class ScriptRuntime {
     const bindings=await this.objects.link(script,compiled.decoded);
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
-    this.contextResults.set(script,await prepareContextResults(this,script,compiled.decoded));
+    this.contextResults.set(script,keptContextResults(await prepareContextResults(this,script,compiled.decoded)));
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const labels=new Map();
     if(script.labelTableOffset!==0xffff){

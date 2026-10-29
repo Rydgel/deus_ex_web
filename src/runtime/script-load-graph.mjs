@@ -239,9 +239,12 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   }
 
   function makeRecord({cls, outer, name, flags, linker = null, kind = null}) {
+    // The numeric fields start as null and take their values below: V8 keeps a field tagged when its first value is not a number. The
+    // addresses (0x70000000 and up) and the flag words (high bits set) are not small integers in the browser, and a field that ever
+    // held one boxes every record's value as a heap number of its own (docs/live-heap.md, steps 2 and 3).
     const record = {
-      nativeAddress: syntheticAddress,
-      address: syntheticAddress,
+      nativeAddress: null,
+      address: null,
       // `key`/`name`-family slots the item serializer reads for member keys
       // carry the name text; the numeric +0x20 index lives in nativeSlots.
       key: nameText(name),
@@ -249,7 +252,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       nativeSlots: new NativeSlots(),
       loadOrdinal: -1, // its place in the load edges (script-load-edges.mjs)
       nativeConstructor: null,
-      objectFlags: flags >>> 0,
+      objectFlags: null,
       base: null,
       kind,
       instanceValues: new Map(),
@@ -258,6 +261,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       script: null,
       defaults: null,
     };
+    record.nativeAddress = syntheticAddress;
+    record.address = syntheticAddress;
+    record.objectFlags = flags >>> 0;
     recordsByAddress.set(syntheticAddress, record);
     syntheticAddress += 0x40;
     const vtable = KIND_VTABLE.get(kind);
