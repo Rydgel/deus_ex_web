@@ -1,5 +1,6 @@
 import { counted, nameAt, objectAt, readObject, vector } from './objects.mjs';
 import { PackageError } from './package.mjs';
+import { modelFromObjects, PolygonNodes } from './bsp-model.mjs';
 
 export function readPolys(pkg, bytes, index) {
   const { entry, reader: r } = readObject(pkg, bytes, index);
@@ -43,11 +44,14 @@ export function moverModelFromPolys(model, polygons, { specialLit = false } = {}
     surfaces.push({ texture: polygon.texture, flags, base, normal, textureU, textureV, lightMap: polygon.brushPolygon,
       brushPolygon: index, pan: polygon.pan });
     const [nx, ny, nz] = polygon.normal, [bx, by, bz] = polygon.base;
-    nodes.push({ plane: [nx, ny, nz, nx * bx + ny * by + nz * bz], surface: index, zones: [0, 0], vertexCount: polygon.vertices.length });
+    nodes.push({ plane: [nx, ny, nz, nx * bx + ny * by + nz * bz], surface: index, vertexCount: polygon.vertices.length });
     const first = points.length;
     for (const vertex of polygon.vertices) { points.push(vertex); trackedIndex.push(vertexOrdinal++); }
     if (flags & 1) return;
     for (let k = 1; k < polygon.vertices.length - 1; k++) triangles.push({ points: [first, first + k, first + k + 1], surface: index, node: index });
   });
-  return { model: { ...model, points, vectors, surfaces, nodes, trackedIndex }, triangles };
+  // The tables (bsp-model.mjs) the brush's own were read as; the nodes keep their planes' offsets as doubles.
+  const typed = modelFromObjects({ points, vectors, surfaces }), polygonNodes = new PolygonNodes(nodes.length);
+  nodes.forEach((node, i) => { polygonNodes.planes.set(node.plane, 4 * i); polygonNodes.surfaces[i] = node.surface; polygonNodes.counts[i] = node.vertexCount; });
+  return { model: { ...model, points: typed.points, vectors: typed.vectors, surfaces: typed.surfaces, nodes: polygonNodes, trackedIndex }, triangles };
 }

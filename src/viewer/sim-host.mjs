@@ -148,7 +148,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     // Model->Surfs[Node.iSurf].Texture.
     const polygonTextures = new Map();
     if (trackerMovers) {
-      const records = await walkingSurfaceTextures(assets, asset, { surfaces: trackerMovers.flatMap(m => m.polys.map(p => ({ texture: p.texture }))) });
+      const polygons = trackerMovers.flatMap(m => m.polys.map(p => p.texture));
+      const records = await walkingSurfaceTextures(assets, asset, { surfaces: { length: polygons.length, texture: i => polygons[i] } });
       let k = 0;
       for (const m of trackerMovers) { polygonTextures.set(m, records.slice(k, k + m.polys.length)); k += m.polys.length; }
     }

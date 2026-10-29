@@ -101,6 +101,23 @@ export class BspNodes extends NodeAccess {
   }
 }
 
+/** The nodes of a mover brush as the tracker's polygons make them (polys.mjs moverModelFromPolys): one node a polygon, with the plane
+ * the polygon's normal and `normal . base` kept as the doubles it is computed in (a float32 table could not hold the offset), the
+ * surface the polygon's, both zones 0, and the polygon's vertex count. The accessors are NodeAccess's that these nodes have fields for. */
+export class PolygonNodes extends Records {
+  constructor(count) {
+    super();
+    this.length = count; this.planes = new Float64Array(4 * count); this.surfaces = new Int32Array(count); this.counts = new Int32Array(count);
+  }
+  has(i) { return i >= 0 && i < this.length && Number.isInteger(i); }
+  plane(i, k) { return this.planes[4 * i + k]; }
+  surface(i) { return this.surfaces[i]; }
+  vertexCount(i) { return this.counts[i]; }
+  zone() { return 0; }
+  planeArray(i) { const p = this.planes; return [p[4 * i], p[4 * i + 1], p[4 * i + 2], p[4 * i + 3]]; }
+  at(i) { return this.has(i) ? { plane: this.planeArray(i), surface: this.surfaces[i], zones: [0, 0], vertexCount: this.counts[i] } : undefined; }
+}
+
 /** Points and vectors: three float32 a record. */
 export class Vec3s extends Records {
   constructor(count) { super(); this.length = count; this.data = new Float32Array(3 * count); }

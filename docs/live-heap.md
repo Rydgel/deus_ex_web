@@ -247,10 +247,12 @@ Firefox GC markers, not only by heap size.
      arguments included; and operands as handle arrays the Rust VM reads.
    * This is the Rust core's target ([Rust core](rust-core.md) "Target architecture").
      Verify against the interpreter's existing verify modes.
-9. **The BSP model as typed arrays in the simulation.** Nodes, vertices and surfaces as
-   column arrays, and the JavaScript readers moved to them or to the Rust kernels that
-   already hold Wasm copies (point region, zone, line checks, hull build).
-   * Expected: 1 to 2 M objects on the Island; it scales with the map.
+9. **The BSP model as typed arrays: done 2026-10-30.** `readModel` gives the nodes as the
+   original 64-byte FBspNode block and the other records as small typed tables; the
+   collision hulls are Float64Arrays built on first use; every simulation and page reader
+   reads the views, and the Rust kernels' uploads copy the columns. See "Step 9's results".
+   * Expected: 1 to 2 M objects on the Island; it scales with the map. Measured: see
+     "Step 9's results".
 
 Steps 1 and 2 are small. Steps 3 to 7 are medium, and each stands alone. Steps 8 and 9
 are large and follow the Rust core's direction. The V8-only costs (boxed doubles,

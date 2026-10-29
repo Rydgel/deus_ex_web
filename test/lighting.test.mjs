@@ -105,7 +105,7 @@ test('mover polygon decoder and correspondence use authored bases, not empty BSP
   const lit = [{ ...polygons[0], brushPolygon: 3, flags: 0x41000000 }, { ...polygons[0], brushPolygon: -1, flags: 1 }];
   const mover = moverModelFromPolys(model, lit, { specialLit: true });
   assert.deepEqual(mover.model.surfaces.map(s => s.lightMap), [3, -1]);
-  assert.equal(mover.model.surfaces[0].flags, 0x100000, 'PolyFlags & 0x3cffffff, PF_SpecialLit for a bSpecialLit mover');
+  assert.equal(mover.model.surfaces.flags(0), 0x100000, 'PolyFlags & 0x3cffffff, PF_SpecialLit for a bSpecialLit mover');
   assert.equal(mover.triangles.length, 1, 'an invisible polygon draws nothing');
   assert.equal(model.surfaces[0].lightMap, -1);
   assert.throws(() => readPolys(pkg, bytes.subarray(0, -1), 1), /Truncated/);
