@@ -41,9 +41,9 @@ export function lodFrame({coords,fx,fov},settings=RENDER_LOD_SETTINGS) {
 }
 
 const PF_INVISIBLE=1;
-/** One binding's LOD state. `faces` are readLodMeshSurfaces' faces (vertex
- * indices with the special prefix), `faceWords` their [v0, v1, v2, flags]. */
-export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
+/** One binding's LOD state. `faceWords` are the mesh's faces (MeshFaces.words,
+ * mesh-faces.mjs): [v0, v1, v2, flags] with the special prefix in the vertices. */
+export function createMeshLod(payload,faceWords,{kernel=null}={}) {
   const topology=meshLodTopology(payload);
   if(!topology)return null;
   const {special,modelVerts:N}=topology,V=payload.frameVertexCount,F=topology.faceCount;
@@ -57,14 +57,13 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
   const lightingOf=(count,resolved)=>{
     let entry=lighting.get(count);
     if(entry){lighting.delete(count);lighting.set(count,entry);return entry;}
-    const words=new Uint32Array(F*4),list=new Array(F);
+    const words=new Uint32Array(F*4);
     for(let i=0;i<F;i++){
       const at=i*3,flags=faceWords[i*4+3];
-      if(resolved[at]<0){words.set([0,0,0,(flags|PF_INVISIBLE)>>>0],i*4);list[i]={vertices:[0,0,0],flags:(flags|PF_INVISIBLE)>>>0};continue;}
-      const vertices=[resolved[at],resolved[at+1],resolved[at+2]];
-      words.set([...vertices,flags],i*4);list[i]={vertices,flags};
+      if(resolved[at]<0){words[i*4+3]=(flags|PF_INVISIBLE)>>>0;continue;}
+      words[i*4]=resolved[at];words[i*4+1]=resolved[at+1];words[i*4+2]=resolved[at+2];words[i*4+3]=flags;
     }
-    entry={faceWords:words,faces:list};
+    entry={faceWords:words};
     lighting.set(count,entry);
     if(lighting.size>6){const [oldest,old]=lighting.entries().next().value;lighting.delete(oldest);kernel?.releaseLightingMesh(old.faceWords);}
     return entry;
@@ -131,7 +130,7 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
           corners.faces.forEach((face,i)=>{for(let k=0;k<3;k++)resolved[i*3+k]=face?face[k]+special:-1;});
         }
       }
-      const light=state.active?lightingOf(count,resolved):{faceWords,faces};
+      const light=state.active?lightingOf(count,resolved):{faceWords};
       return {state,positions,resolved,scratch,lighting:light};
     },
     dispose(){for(const entry of lighting.values())kernel?.releaseLightingMesh(entry.faceWords);lighting.clear();},

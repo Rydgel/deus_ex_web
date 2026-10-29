@@ -38,15 +38,17 @@ const remasked=(data,flags)=>Boolean(flags&POLY.Masked&&!data.masked&&!data.fire
 
 /** The mesh's drawn faces in face groups, keyed by skin and face flags, in
  * first-use order (DrawLodMesh's face list; PF_Invisible faces are not
- * drawn). `skin(face)` is the face's texture reference. */
+ * drawn). `faces` is the mesh's MeshFaces block (mesh-faces.mjs);
+ * `skin(flags, texture)` is a face's texture reference. */
 export function meshFaceGroups(faces,skin) {
-  const groups=new Map();
-  for(const [faceIndex,face] of faces.entries()) {
-    if(face.flags&POLY.Invisible)continue;
-    const reference=skin(face);
-    if(!reference)return {error:`skin slot ${face.texture} is empty`};
-    const key=`${reference.key}:${face.flags}`;
-    if(!groups.has(key))groups.set(key,{key,reference,flags:face.flags,faces:[]});
+  const groups=new Map(),{words,texture}=faces;
+  for(let faceIndex=0;faceIndex<faces.count;faceIndex++) {
+    const flags=words[faceIndex*4+3];
+    if(flags&POLY.Invisible)continue;
+    const reference=skin(flags,texture[faceIndex]);
+    if(!reference)return {error:`skin slot ${texture[faceIndex]} is empty`};
+    const key=`${reference.key}:${flags}`;
+    if(!groups.has(key))groups.set(key,{key,reference,flags,faces:[]});
     groups.get(key).faces.push(faceIndex);
   }
   return {groups};
@@ -55,12 +57,11 @@ export function meshFaceGroups(faces,skin) {
 /** A group's corner arrays, as the draw order needs them: vertex indices,
  * UVs and corner ids for each face's corners 0, 2, 1. */
 export function groupCorners(faces,group) {
-  const indices=[],uvs=[],corners=[];
+  const indices=[],uvs=[],corners=[],{words,uv}=faces;
   for(const faceIndex of group.faces) {
-    const face=faces[faceIndex];
     for(const corner of [0,2,1]) {
-      indices.push(face.vertices[corner]);
-      uvs.push(...face.uv[corner].map(value=>value/256));
+      indices.push(words[faceIndex*4+corner]);
+      uvs.push(uv[faceIndex*6+corner*2]/256,uv[faceIndex*6+corner*2+1]/256);
       corners.push(faceIndex*3+corner);
     }
   }

@@ -77,6 +77,8 @@ const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){r
 async function capture(page,{frames,device,tolerance,admission,lodViews,attachedOnly=false}) {
   return page.evaluate(async({frames,device,tolerance,admission,lodViews,attachedOnly})=>{
     const {accumulateFaceNormal,faceKept}=await import('/src/runtime/mesh-lighting.mjs');
+    // (the binding's faces are mesh-faces.mjs' typed block; the checks below read them as objects, in the reference readers' form)
+    const {faceObjects,faceList}=await import('/src/runtime/mesh-faces.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
     const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
     const certifiedBefore=certificateStats.certified,ambiguousBefore=certificateStats.ambiguous;
@@ -126,7 +128,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews,attached
         // by the next frame before it is drawn; nothing of it is drawn yet.
         if(!state.handle||!state.plan||state.plannedFrame>gpu.frame||!state.updated){report.pending=(report.pending??0)+1;continue;}
         report.actors++;if(attached)report.attached.compared++;
-        const {handle,plan,faces,faceWords,groups}=state,V=handle.mesh.V,F=handle.mesh.F;
+        const {handle,plan,faceWords,groups}=state,faces=faceObjects(state.faces),V=handle.mesh.V,F=handle.mesh.F;
         const tween=plan.channels.some(op=>op.tween&&op.alpha>0);
         if(focus&&actor.actor===focus){report.admission.captures++;if(tween)report.admission.tweenCaptures++;}
         // Visibility first: the exact spheres come from the CPU shadow.
@@ -134,7 +136,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews,attached
         // The CPU LOD on the exact output: drawn positions, resolved corners
         // and the lighting's reduced faces (null at full detail).
         const lod=state.lodDrawn(),drawnPoints=lod?Float32Array.from(lod.positions):cpu;
-        const litFaces=lod?lod.lighting.faces:faces,litWords=lod?lod.lighting.faceWords:faceWords;
+        const litFaces=lod?faceList(lod.lighting.faceWords):faces,litWords=lod?lod.lighting.faceWords:faceWords;
         if(lod){report.coverage.lod++;if(lod.state.morph)report.coverage.lodMorph++;if(lod.resolved?.some(v=>v<0))report.coverage.lodReduced++;
           const key=actor.summary.actor;report.lodActors??={};
           report.lodActors[key]={count:lod.state.count,start:lod.state.start,morph:lod.state.morph,
@@ -382,7 +384,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews,attached
               }
               report.variant.label={count:spec.count,morph:spec.morph,start:variant.params.start};
               const variantCamera=state.cameraDrawn(child,selection,spec.count);
-              checkLit(report.variant,{points:variantCamera.positions,facesList:variant.drawn.lighting.faces,words:variant.drawn.lighting.faceWords,
+              checkLit(report.variant,{points:variantCamera.positions,facesList:faceList(variant.drawn.lighting.faceWords),words:variant.drawn.lighting.faceWords,
                 camera:child,mirror:childMirror,colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
               // The main frame's pass: its LOD state and lighting again.
               gpu.beginLightRun();gpu.setLod(handle,mainParams);gpu.setLighting(handle,plainMain);gpu.lightRun(mainCamera);
@@ -402,10 +404,10 @@ async function capture(page,{frames,device,tolerance,admission,lodViews,attached
         if(actor.path!=='gpu'||!actor.root.visible)continue;
         const state=actor.gpuState();
         if(!state.handle||!state.plan||state.plannedFrame>gpu.frame||!state.updated||!state.frameSetups.size)continue;
-        const {handle,faces,faceWords}=state,V=handle.mesh.V,F=handle.mesh.F,stats=report.attached;
+        const {handle,faceWords}=state,faces=faceObjects(state.faces),V=handle.mesh.V,F=handle.mesh.F,stats=report.attached;
         const published=state.plan.channels.find(op=>op.channel<0)?.count??V;
         state.exactOutput();
-        const lod=state.lodDrawn(),litFaces=lod?lod.lighting.faces:faces,litWords=lod?lod.lighting.faceWords:faceWords;
+        const lod=state.lodDrawn(),litFaces=lod?faceList(lod.lighting.faceWords):faces,litWords=lod?lod.lighting.faceWords:faceWords;
         for(const [index,prepared] of state.frameSetups){
           const {setup,flags,unlit}=prepared,camera=state.cameraMatrix(null,index);
           const plain={flags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],camera:camera.flat(),mirror:1,

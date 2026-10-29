@@ -16,8 +16,7 @@ import {TextureStore} from '../unreal/textures.mjs';
 import {ActorMeshTextures} from './actor-mesh-textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {decodeLodMeshPayload} from '../runtime/lodmesh-payload.mjs';
-import {readLodMeshSurfaces} from '../runtime/lodmesh-materials.mjs';
-import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
+import {meshFaces} from '../runtime/mesh-faces.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {actorPassRenderOrder} from './render-layers.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
@@ -29,16 +28,22 @@ import {groupCorners,resolveMeshSkin} from './actor-mesh-skins.mjs';
 import {easterSkins} from './easter-skins.mjs';
 import {copyPositions,lodCornerIndices,setMeshBounds} from './actor-mesh-sim.mjs';
 
+/** The face vertices of every face in order, as the environment mapping's normals read them (the faces' words, three of four). */
+function environmentFaceIndices(faces) {
+  const out=new Uint32Array(faces.count*3),{words}=faces;
+  for(let i=0;i<faces.count;i++){out[i*3]=words[i*4];out[i*3+1]=words[i*4+1];out[i*3+2]=words[i*4+2];}
+  return out;
+}
+
 /** The decoded mesh of a creation record, shared by its bindings. */
 function meshSource(assets,cache,mesh) {
   let entry=cache.get(mesh.key);
   if(entry)return entry;
   const build=asset=>{
     const payload=decodeLodMeshPayload(asset.pkg,asset.bytes,mesh.index);
-    // A classic UMesh (docs/umesh.md) has its triangles for surfaces.
-    const faces=payload.payloadStatus==='decoded-mesh'?readUMeshSurfaces(payload):readLodMeshSurfaces(payload),faceWords=new Uint32Array(faces.length*4);
-    faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
-    return {payload,faces,faceWords,asset};
+    // The mesh's faces as typed blocks (a classic UMesh, docs/umesh.md, has its triangles for surfaces).
+    const faces=meshFaces(payload);
+    return {payload,faces,faceWords:faces.words,asset};
   };
   const loaded=assets.loaded?.(mesh.package);
   entry=loaded?{ready:build(loaded)}:{pending:assets.get(mesh.package).then(asset=>(entry.ready=build(asset)))};
@@ -77,7 +82,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   function core(){
     if(disposed)return;
     const {payload,faces,faceWords}=source;
-    if(creation.environment&&!creation.classic)faceIndices=Uint32Array.from(faces.flatMap(face=>face.vertices));
+    if(creation.environment&&!creation.classic)faceIndices=environmentFaceIndices(faces);
     if(mode==='gpu'){
       gpuHandle=gpu.allocate(payload,faceWords,{environment:creation.environment,key:creation.mesh.key});
       bases={vbase:gpuHandle.vbase,cbase:gpuHandle.cbase};
@@ -155,10 +160,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const uv=group.geometry.getAttribute('uv');
       let at=0;
       for(const faceIndex of group.faces){
-        const face=faces[faceIndex];
         for(const corner of [0,2,1]){
-          if(scratch){const word=scratch[face.wedges[corner]];uv.array[at]=((word>>>16)&255)/256;uv.array[at+1]=(word>>>24)/256;}
-          else{uv.array[at]=face.uv[corner][0]/256;uv.array[at+1]=face.uv[corner][1]/256;}
+          if(scratch){const word=scratch[faces.wedges[faceIndex*3+corner]];uv.array[at]=((word>>>16)&255)/256;uv.array[at+1]=(word>>>24)/256;}
+          else{uv.array[at]=faces.uv[faceIndex*6+corner*2]/256;uv.array[at+1]=faces.uv[faceIndex*6+corner*2+1]/256;}
           at+=2;
         }
       }
@@ -382,7 +386,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
           faces++;for(let k=0;k<3;k++)vertices.add(words[i+k]&0xffff);
         }
         return {id,path:mode,ready,visible:root.visible,lod:dropped?{faces,vertices:vertices.size,
-          emptyGroups:null}:null,gpuFaces:faces,gpuVertices:vertices.size,faces:source.faces.length};
+          emptyGroups:null}:null,gpuFaces:faces,gpuVertices:vertices.size,faces:source.faces.count};
       }
       const resolved=shown.lod?.resolved??null;
       let faces=0;const vertices=new Set();
@@ -390,7 +394,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       // `cameraPoints`: the geometry holds the camera-space points of the state shown (applyCamera).
       return {id,path:mode,ready,visible:root.visible,lod:resolved?{count:shown.lod.count,faces,vertices:vertices.size,
         emptyGroups:groups.filter(group=>group.lodEmpty).length}:null,
-        faces:source?.faces.length??null,cameraPoints:cameraFor===shown};
+        faces:source?.faces.count??null,cameraPoints:cameraFor===shown};
     },
     /** Validation access: the GPU slot and the decoded faces. */
     get gpuHandle(){return gpuHandle;},get groups(){return groups;},get source(){return source;},

@@ -1,6 +1,7 @@
 /** Original surface layout and skin selection; docs/script-lodmesh-materials.md. */
 import {LodMeshError} from './lodmesh.mjs';
 import {refValue} from './script-vm.mjs';
+import {buildLodMeshFaces,faceObjects} from './mesh-faces.mjs';
 
 function checkedIndex(index) {
   if(!Number.isInteger(index)||index< -0x80000000||index>0x7fffffff)
@@ -52,31 +53,9 @@ export function execGetMeshTexture(call,services) {
 
 /** Full-resolution faces only: no reduced-LOD selection, morphing or culling.
  * Vertices address the complete GetFrame buffer, including its special prefix.
- * UVs remain the original byte coordinates; the draw adapter owns scaling. */
+ * UVs remain the original byte coordinates; the draw adapter owns scaling.
+ * The faces are mesh-faces.mjs' typed block (buildLodMeshFaces) as objects, the
+ * form the validators compare with the original; Play reads the block itself. */
 export function readLodMeshSurfaces(mesh,{polyFlags=0}={}) {
-  const array=(offset,size)=>{
-    const a=mesh.arrays.get(offset);
-    if(!a||a.elementSize!==size||a.data.byteLength!==a.num*size)
-      throw new LodMeshError(`Invalid original surface array at ${offset.toString(16)}`);
-    return {count:a.num,view:new DataView(a.data.buffer,a.data.byteOffset,a.data.byteLength)};
-  };
-  const faces=array(0x144,8),wedges=array(0x15c,4),materials=array(0x168,8);
-  const special=mesh.scalarBits.get(0x184)|0,result=[];
-  for(let i=0;i<faces.count;i++){
-    const at=i*8,material=faces.view.getUint16(at+6,true);
-    if(material>=materials.count)throw new LodMeshError('Original face material is out of range');
-    const face={wedges:[],vertices:[],uv:[],material,
-      flags:(materials.view.getUint32(material*8,true)|polyFlags)>>>0,
-      texture:materials.view.getInt32(material*8+4,true)};
-    for(let j=0;j<3;j++){
-      const wedge=faces.view.getUint16(at+j*2,true);
-      if(wedge>=wedges.count)throw new LodMeshError('Original face wedge is out of range');
-      const vertex=wedges.view.getUint16(wedge*4,true)+special;
-      if(vertex>=mesh.frameVertexCount)throw new LodMeshError('Original wedge vertex is out of range');
-      face.wedges.push(wedge);face.vertices.push(vertex);
-      face.uv.push([wedges.view.getUint8(wedge*4+2),wedges.view.getUint8(wedge*4+3)]);
-    }
-    result.push(face);
-  }
-  return result;
+  return faceObjects(buildLodMeshFaces(mesh,{polyFlags}));
 }

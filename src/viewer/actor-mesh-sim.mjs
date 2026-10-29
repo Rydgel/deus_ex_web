@@ -24,6 +24,7 @@ import {POLY} from '../unreal/geometry.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {SETUP,setupSequence} from '../runtime/bsp-occlusion.mjs';
 import {createMeshLod,lodFrame} from './actor-mesh-lod.mjs';
+import {meshFaces} from '../runtime/mesh-faces.mjs';
 import {createWeaponAttachments} from './actor-weapon-sim.mjs';
 import {classicMeshBindingSteps} from './actor-umesh-sim.mjs';
 import {lodMorphScalars,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
@@ -200,12 +201,11 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
     if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
     return originalObjectIndex;
   }};
-  const faces=attach?runtime.getMeshSurfaces(meshReference):runtime.getActorMeshSurfaces(actor);
-  const faceWords=new Uint32Array(faces.length*4);
-  faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
-  const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  // The mesh's faces: one typed block shared by every binding of the mesh (mesh-faces.mjs).
+  const faces=meshFaces(payload),faceWords=faces.words;
+  const hasEnvironment=faces.anyFlags(POLY.Environment);
   // DrawLodMesh's distance LOD (actor-mesh-lod.mjs); null without it.
-  const meshLod=lod?createMeshLod(payload,faces,faceWords,{kernel}):null;
+  const meshLod=lod?createMeshLod(payload,faceWords,{kernel}):null;
   const fullCount=payload.frameVertexCount-(payload.scalarBits.get(0x184)|0);
   // The last LOD inputs and results: the requested and returned counts, the
   // detail bits, and the drawn state (drawn positions, resolved corners).
@@ -349,7 +349,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
     publishLodMeshOps(payload,ops,lodMeshCameraMatrix(payload,actor,coords,services),{output,stride:12,kernel});
     let drawn=selection?meshLod.after(selection,returned,output):null;
     if(drawn&&!drawn.state.active&&!drawn.state.morph)drawn=null;
-    return drawn??{positions:new Float32Array(output.buffer),lighting:{faces,faceWords}};
+    return drawn??{positions:new Float32Array(output.buffer),lighting:{faceWords}};
   }
   /** CPU lighting of one frame: the corner colours over that frame's
    * camera-space buffer and reduced faces. `points` is that buffer after the
@@ -361,12 +361,12 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       topology=drawn.lighting;
     // The weapon is lit as DrawMesh does: the pawn is the light sink and the frame's Mirror is 1.0 (attach.lightFrame).
     if(attach){ctx=attach.lightFrame(ctx);prepared??=attach.takePrepared(frameIndex)??lighting.setupMesh(actor,null,ctx,attach.setup());}
-    const result=lighting.lightMesh(actor,drawn.positions,topology.faces,topology.faceWords,prepared,ctx,true);
+    const result=lighting.lightMesh(actor,drawn.positions,topology.faceWords,null,prepared,ctx,true);
     if(!result)return null;
     return {colors:result.colors.slice(),points:drawn.positions,summary:{lights:result.setup.lights.length,flags:result.flags}};
   }
   try {
-    const partition=meshFaceGroups(faces,face=>face.flags&POLY.Environment?environmentTexture():meshTexture(face.texture));
+    const partition=meshFaceGroups(faces,(flags,texture)=>flags&POLY.Environment?environmentTexture():meshTexture(texture));
     if(partition.error)throw new Error(`${actorName} ${partition.error}`);
     for(const [groupKey,group] of partition.groups) {
       try {
@@ -374,7 +374,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         // is dropped on both sides.
         const {flags}=yield {skin:group};
         const indices=[];
-        for(const faceIndex of group.faces){const face=faces[faceIndex];for(const corner of [0,2,1])indices.push(face.vertices[corner]);}
+        for(const faceIndex of group.faces)for(const corner of [0,2,1])indices.push(faceWords[faceIndex*4+corner]);
         const entry={key:groupKey,reference:group.reference,flags:group.flags,drawFlags:flags,faces:group.faces,indices,
           environment:Boolean(group.flags&POLY.Environment),sphere:new THREE.Sphere(),positions:null,bounds:{}};
         groups.set(groupKey,entry);
@@ -478,10 +478,10 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       if(mode==='gpu'){
         const params=variantParams(variant);
         return {state:params.active?{active:true,morph:params.morph,start:params.start,count:params.count}:null,
-          admitted:params.active?countLevel(meshLod.topology.faceLevel,params.count):faces.length,vertices:null};
+          admitted:params.active?countLevel(meshLod.topology.faceLevel,params.count):faces.count,vertices:null};
       }
       const drawn=variantCpu(variant).drawn;
-      return {state:drawn?{...drawn.state}:null,admitted:drawn?.resolved?countAdmitted(drawn.resolved):faces.length,
+      return {state:drawn?{...drawn.state}:null,admitted:drawn?.resolved?countAdmitted(drawn.resolved):faces.count,
         vertices:drawn?.resolved?countVertices(drawn.resolved):null};
     }
     function boxSphere(group){
@@ -964,11 +964,11 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
           if(meshLod)record.lod=lodRecord();
         }
         if(lastLod&&mode==='cpu')Object.assign(lastLod,{returned:lastReturned,state:lodDrawn?{...lodDrawn.state}:null,
-          admitted:lodDrawn?.resolved?countAdmitted(lodDrawn.resolved):faces.length,
+          admitted:lodDrawn?.resolved?countAdmitted(lodDrawn.resolved):faces.count,
           vertices:lodDrawn?.resolved?countVertices(lodDrawn.resolved):null,updated:true});
         else if(lastLod)Object.assign(lastLod,{returned:lastReturned,
           state:gpuLodScalars?{active:true,morph:gpuLodScalars.morph,start:gpuLodScalars.start,count:gpuLodScalars.count}:null,
-          admitted:gpuLodScalars?countLevel(meshLod.topology.faceLevel,gpuLodScalars.count):faces.length,vertices:null,updated:true});
+          admitted:gpuLodScalars?countLevel(meshLod.topology.faceLevel,gpuLodScalars.count):faces.count,vertices:null,updated:true});
         // The child frames whose state differs from the base's.
         frameVariants=NO_VARIANTS;
         if(meshLod&&lodFrames.length>1&&!planDegraded){
