@@ -162,6 +162,10 @@ export function computerTick(W,win,delta){
 }
 export const COMPUTER_DRAW_OPS=Object.freeze({setFonts:gcSetFonts,setStyle:gcSetStyle,
   setTileColor:gcSetTileColor,setTextColor:gcSetTextColor,drawText:gcDrawText,drawIcon:gcDrawIcon,drawPattern:gcDrawPattern});
+/** The raw f32 dword a cell coordinate becomes (f32Bits(S(I(v))) in x87 terms): fild of the int32 is exact in the extended
+ * register, fstp to f32 rounds once to nearest even, which is Math.fround of the exact double. No x87 values: the HUD draws a
+ * computer window one character at a time and each one took four of these (docs/live-heap.md "Cut: HUD step"). */
+export const cellBits=v=>f32Bits(Math.fround(v));
 /** 1000fae0. Native fixed-cell draw calls pass raw f32 dwords to the GC. */
 export function computerDrawBuffer(W,win,gc,ops=COMPUTER_DRAW_OPS){
   const s=W.gc.services;ops.setFonts(gc,W.u32(win,O.textFont),W.u32(win,O.textFont),s);
@@ -170,11 +174,12 @@ export function computerDrawBuffer(W,win,gc,ops=COMPUTER_DRAW_OPS){
     if(type===5){
       ops.setTileColor(gc,W.u32(win,O.unknown1c8),s);
       const pixel=read(W,p,0x1c)&2,x=read(W,p,12,'i32'),y=read(W,p,16,'i32');
-      ops.drawIcon(gc,f32Bits(S(I(pixel?x:Math.imul(x,fw)))),f32Bits(S(I(pixel?y:Math.imul(y,fh)))),read(W,p,8),s);
+      ops.drawIcon(gc,cellBits(pixel?x:Math.imul(x,fw)),cellBits(pixel?y:Math.imul(y,fh)),read(W,p,8),s);
     }else if(type===0){
       let color=read(W,p,0xa),factor=null;
-      if(gt(X(W.f32(win,O.fadeOutTimer)),X(0)))factor=D(X(W.f32(win,O.fadeOutTimer)),X(W.f32(win,O.fadeOutStart)));
-      else if(gt(X(W.f32(win,O.fadeSpeed)),X(0))&&gt(X(read(W,p,4,'f32')),X(0)))
+      // (an f32 against zero: gt(X(a),X(0)) is a>0, NaN included; the x87 values only where the fade runs)
+      if(W.f32(win,O.fadeOutTimer)>0)factor=D(X(W.f32(win,O.fadeOutTimer)),X(W.f32(win,O.fadeOutStart)));
+      else if(W.f32(win,O.fadeSpeed)>0&&read(W,p,4,'f32')>0)
         factor=D(sub(X(W.f32(win,O.fadeSpeed)),X(read(W,p,4,'f32'))),X(W.f32(win,O.fadeSpeed)));
       if(factor){
         let out=color&0xff000000;
@@ -183,7 +188,8 @@ export function computerDrawBuffer(W,win,gc,ops=COMPUTER_DRAW_OPS){
       }
       ops.setTextColor(gc,color,s);
       const ch=read(W,p,8,'u16');
-      ops.drawText(gc,...[Math.imul(read(W,p,0x10,'i32'),fw),Math.imul(read(W,p,0x14,'i32'),fh),fw,fh].map(v=>f32Bits(S(I(v)))),ch?String.fromCharCode(ch):'',s);
+      const cx=Math.imul(read(W,p,0x10,'i32'),fw),cy=Math.imul(read(W,p,0x14,'i32'),fh);
+      ops.drawText(gc,cellBits(cx),cellBits(cy),cellBits(fw),cellBits(fh),ch?String.fromCharCode(ch):'',s);
     }
   }
   if(!W.u32(win,O.cursorTexture)||!W.ptr(win,O.inputWindow))return;
@@ -192,7 +198,7 @@ export function computerDrawBuffer(W,win,gc,ops=COMPUTER_DRAW_OPS){
   ops.setStyle(gc,2,s);ops.setTileColor(gc,W.u32(win,O.cursorColor),s);
   const x=Math.imul(W.i32(win,O.textX),W.i32(win,O.fontWidth));
   const y=(Math.imul((W.i32(win,O.textY)+1)|0,W.i32(win,O.fontHeight))-W.i32(win,O.cursorHeight))|0;
-  ops.drawPattern(gc,...[x,y,W.i32(win,O.cursorWidth),W.i32(win,O.cursorHeight),0,0].map(v=>f32Bits(S(I(v)))),W.u32(win,O.cursorTexture),s);
+  ops.drawPattern(gc,cellBits(x),cellBits(y),cellBits(W.i32(win,O.cursorWidth)),cellBits(W.i32(win,O.cursorHeight)),cellBits(0),cellBits(0),W.u32(win,O.cursorTexture),s);
 }
 /** 1000ed60. */
 export function computerDraw(W,win,gc,ops=COMPUTER_DRAW_OPS){

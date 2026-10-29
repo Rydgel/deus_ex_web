@@ -63,7 +63,7 @@ function firstDiff(got, expected, path = '') {
   return null;
 }
 
-function makeRunner(fn, heap, texCache) {
+function makeRunner(fn, heap, texCache, transient = false) {
   return caseSpec => {
     heap.resetCase();
     const spec = {};
@@ -94,6 +94,8 @@ function makeRunner(fn, heap, texCache) {
       allocateObject: a => heap.allocateObject(a),
       constructUObject: a => heap.constructUObject(a),
       texCache,
+      // the window host's flag: callVirtual reads a glyph's emit block at the call (the copies below), so one object may be reused
+      transientPayloads: transient,
       callVirtual: (slot, thisArg, cmd) => {
         if (slot === DRAW_STUB) {
           heap.events.push({
@@ -176,13 +178,13 @@ assert.equal(oracle.methodBody, meta.methodBody, 'method body address');
 // ---- bit-exact replay ----------------------------------------------------------
 const report = {native: meta.function, cases: {}, mutations: []};
 
-const runAll = async fn => {
+const runAll = async (fn, transient = false) => {
   // One shared heap + realize cache per run — the oracle's cache is
   // process-global .bss that persists across cases, so prior-case textures
   // still occupy records when the next case runs (the Unlock events).
   const heap = new GcHeap();
   const texCache = makeTexCache(heap);
-  const run = makeRunner(fn, heap, texCache);
+  const run = makeRunner(fn, heap, texCache, transient);
   const failures = [];
   for (const [name, caseSpec] of Object.entries(oracle.cases)) {
     let got;
@@ -203,6 +205,10 @@ const runAll = async fn => {
 
 for (const failure of await runAll(mod.gcDrawText)) {
   assert.fail(failure);
+}
+// The same cases with the window host's transient glyph block (script-gc-draw-text.mjs glyphCommand): the events match the oracle's.
+for (const failure of await runAll(mod.gcDrawText, true)) {
+  assert.fail(`transient payload: ${failure}`);
 }
 for (const name of Object.keys(oracle.cases)) report.cases[name] = 'pass';
 

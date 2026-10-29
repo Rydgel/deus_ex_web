@@ -6,6 +6,8 @@ import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {runChildWithWatchdog} from './training-probe-lib.mjs';
 import * as C from '../src/runtime/script-window-computer-playback.mjs';
+import {x87int32 as I, x87store as S} from '../src/runtime/script-vm.mjs';
+import {f32Bits} from '../src/runtime/script-gc-draw-model.mjs';
 if(!process.argv.includes('--child')){
   const result=await runChildWithWatchdog({script:fileURLToPath(import.meta.url),args:[],out:'.cache/computer-playback-validation.json',capMiB:2048,label:'computer-playback'});
   console.log(`window-computer-playback: ${result.data.cases} original same-heap comparisons pass (${result.peakMiB} MiB peak RSS)`);
@@ -35,5 +37,13 @@ if(!process.argv.includes('--child')){
     const diff=[];for(let i=0;i<bytes.length;i++)if(bytes[i]!==expected[i])diff.push('+'+i.toString(16)+': '+bytes[i].toString(16)+' != '+expected[i].toString(16));
     assert.equal(diff.length,0,c.name+' heap: '+diff.slice(0,20).join(', '));
   }
+  // cellBits (Math.fround) stands for the x87 form f32Bits(S(I(v))) the draw used: fild of an int32 is exact in the extended register
+  // and fstp rounds once to nearest even, as fround does. Every int32 near zero, around each power of two from 2^24 (where f32 stops
+  // holding every integer) and a seeded spread of the rest.
+  const samples=[];
+  for(let v=-70000;v<=70000;v++)samples.push(v);
+  for(let e=24;e<=31;e++)for(const sign of [1,-1])for(let d=-3000;d<=3000;d++){const v=sign*(2**e)+d;if(v>=-2147483648&&v<=2147483647)samples.push(v);}
+  for(let x=12345,i=0;i<150000;i++){x=Math.imul(x,1664525)+1013904223|0;samples.push(x);}
+  for(const v of samples)assert.equal(C.cellBits(v),f32Bits(S(I(v))),'cell coordinate '+v+' as an f32 dword');
   writeFileSync(process.argv[process.argv.indexOf('--out')+1],JSON.stringify({cases:native.cases.length}));
 }

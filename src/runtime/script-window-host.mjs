@@ -1717,7 +1717,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // deletes it (destroyGc). The first text DrawText of a window's GC makes one (the Underworld capture's GC519..GC521,
   // docs/object-index-captures.md). Its slot holder, by the node's address.
   const pushedNodes = new Map();
-  const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
+  // `transientPayloads`: callVirtual below reads a glyph's emit block at the call and keeps none of it, so UGC::DrawText may hand it
+  // one object rewritten for each glyph (script-gc-draw-text.mjs glyphCommand).
+  const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object), transientPayloads: true,
     allocateObject: () => {
       const node = heap.allocRaw(GC.size), holder = {name: nextName(gcClass)};
       takeOriginalSlot(holder, 'GC');
