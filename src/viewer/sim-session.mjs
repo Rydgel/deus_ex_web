@@ -387,6 +387,19 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // A frame's drawn polygons' nodes (draw lists 0 to 2, each in OccludeBsp's order) and the tracked movers' polygons among them,
   // from its flat draw lists (bsp-occlusion.mjs `flatDraw`: per list, each entry's iSurf, iZone and polygon count, and the
   // polygons' nodes).
+  // The bindings by id, kept while the list is the same bindings in the same order (a Map of all of them, 300 on the Island, made
+  // again every frame was most of what the stamps step allocated).
+  let idIndex = { list: [], map: new Map() };
+  function bindingsById(bindings) {
+    const list = idIndex.list;
+    let same = list.length === bindings.length;
+    for (let i = 0; same && i < list.length; i++) if (list[i] !== bindings[i]) same = false;
+    if (same) return idIndex.map;
+    const map = new Map();
+    for (let i = 0; i < bindings.length; i++) map.set(bindings[i].id, bindings[i]);
+    idIndex = { list: bindings.slice(), map };
+    return map;
+  }
   function concatenated(listNodes, total) {
     const nodes = new Uint32Array(total);
     nodes.set(listNodes[0]); nodes.set(listNodes[1], listNodes[0].length); nodes.set(listNodes[2], listNodes[0].length + listNodes[1].length);
@@ -1327,8 +1340,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // `actorPasses`: the page applies the actor layer's mirror pass
         // decisions (no runtime error); otherwise its last state draws.
         const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
-        const byId = new Map();
-        for (let i = 0; i < bindings.length; i++) byId.set(bindings[i].id, bindings[i]);
+        const byId = bindingsById(bindings);
         // OccludeBsp's Frame->Sprite for the main frame (occludeMain); the
         // mirror and sky passes keep the frustum.
         const main = inspect ? null : current?.visibility?.main ?? null;

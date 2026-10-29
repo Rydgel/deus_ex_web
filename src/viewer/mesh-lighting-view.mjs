@@ -1,5 +1,5 @@
 import { getAxes } from '../runtime/camera.mjs';
-import { traceRay, traceRayFast } from '../runtime/ray.mjs';
+import { traceRay, traceRayClear, traceRayFast } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 import { movingLightInView, lazyLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { coronaFrame } from '../runtime/coronas.mjs';
@@ -9,6 +9,7 @@ import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs
 import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { renderScanMode } from '../runtime/script-vm-render.mjs';
+const PROBE_DIFFERENTIAL = typeof process !== 'undefined' && process.env?.LINE_PROBE_DIFFERENTIAL === '1';
 
 const f = Math.fround;
 // The slot of a light field no one has read yet.
@@ -35,7 +36,19 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   // tracker, `lineModel()` gives Level->Model with the movers' fragment
   // nodes as the tracker last left them (bsp-occlusion.mjs lineModel), as
   // the original's level model holds them; otherwise the static model.
+  // While the tracker lives and its collision model is the level's world model (level-queries.mjs worldModel), the kernel traces
+  // it: the tracker's nodes are one block of memory that lineModel() and the collision model both read, and the kernel's import
+  // follows its generation (corona-scan.mjs, level-queries.mjs lineProbe). lineModel() builds its view where the JavaScript needs it.
   const clear = (from, to) => {
+    const collision = frame.model.trackedCollision?.() ?? null;
+    if (collision !== null) {
+      const result = traceRayClear(collision, from, to);
+      if (result !== undefined) {
+        if (PROBE_DIFFERENTIAL && result !== (traceRayFast(lineModel(), from, to) === null))
+          throw new Error(`mesh lighting trace differential mismatch: ${JSON.stringify({ from, to, result })}`);
+        return result;
+      }
+    }
     const tracked = lineModel();
     return (tracked ? traceRayFast(tracked, from, to) : traceRay(frame.model, from, to)) === null;
   };

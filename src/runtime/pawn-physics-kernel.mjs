@@ -92,6 +92,8 @@ export class PawnPhysicsHost {
     this.valid = false;
     this.classes = new Map();
     this.instances = new WeakMap();
+    this.movePool = [];
+    this.walkPool = [];
   }
   attach(x) {
     this.x = x;
@@ -184,19 +186,37 @@ export class PawnPhysicsHost {
     view.setUint32(walk.stateAt, model, true);
     view.setUint32(walk.stateAt + 4, ops.worldActor ? handleOf(ops.worldActor) : 0, true);
     const depth = this.vm.movePawn.contexts.length;
-    this.vm.movePawn.contexts.push({pawn, actor, ops: ops.move, hits: null, times: null});
-    walk.contexts[depth] = {pawn, actor, ops};
+    this.vm.movePawn.contexts.push(this.moveContext(depth, pawn, actor, ops.move));
+    walk.contexts[depth] = this.walkContext(depth, pawn, actor, ops);
     c.pawnDepth = depth;
     c.walkCounts = directWalkBegin(walk);
     c.walkHandedBack = false;
     if (STATS) stats.calls++;
     return depth;
   }
+  // The contexts of a depth are kept and written again (a pair of objects for each pawn's physics at each tick); end() clears
+  // them, so they hold no pawn between uses. A context used for MoveActor (move-pawn-kernel.mjs) has the fields it sets.
+  moveContext(depth, pawn, actor, ops) {
+    let c = this.movePool[depth];
+    if (c === undefined) return this.movePool[depth] = {pawn, actor, ops, hits: null, ignoreBases: undefined, start: undefined, extent: undefined, keepsHit: undefined};
+    c.pawn = pawn; c.actor = actor; c.ops = ops; c.hits = null;
+    c.ignoreBases = undefined; c.start = undefined; c.extent = undefined; c.keepsHit = undefined;
+    return c;
+  }
+  walkContext(depth, pawn, actor, ops) {
+    let c = this.walkPool[depth];
+    if (c === undefined) return this.walkPool[depth] = {pawn, actor, ops};
+    c.pawn = pawn; c.actor = actor; c.ops = ops;
+    return c;
+  }
   /** The walk's contexts popped (also after an import threw). */
   end(c) {
     const depth = c.pawnDepth;
     if (depth === undefined) return;
     c.pawnDepth = undefined;
+    const used = this.movePool[depth], walked = this.walkPool[depth];
+    if (used !== undefined) { used.pawn = used.actor = used.ops = used.hits = null; }
+    if (walked !== undefined) { walked.pawn = walked.actor = walked.ops = null; }
     directWalkEnd(this.vm.walkLoop, c.walkCounts, c.walkHandedBack);
     c.walkCounts = null;
     this.vm.movePawn.contexts.length = depth;

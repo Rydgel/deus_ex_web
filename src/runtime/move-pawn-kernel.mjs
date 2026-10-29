@@ -53,6 +53,8 @@ const C_SKIP = 1, C_WORLD = 2, C_BRUSH = 4, C_PLAYER_OR_PROJECTILE = 8, C_SOURCE
 // The ABI with move_pawn.rs: words per hit record (HIT_WORDS) and in MP_IO.
 export const HIT_WORDS = 5, IO_WORDS = 14;
 
+// js_move_hits's query, reused (its vectors are written before each call).
+const hitsQuery = {end: [0, 0, 0], start: [0, 0, 0], extent: [0, 0, 0], checkActors: false, worldActor: null, extra: 0};
 export class MovePawnHost {
   constructor(vm) {
     this.vm = vm;
@@ -75,20 +77,22 @@ export class MovePawnHost {
     if (!instance?.cells || !instance.base || instance.arena !== this.vm.arena ||
       instance.poison?.size || instance.imageToken?.released || instance.nativeObject?.released) { declined('instance', actor?.name); return undefined; }
     if (!pawn.pawn || pawn.movingBrush || pawn.model) { declined('kind', actor?.name); return undefined; }
-    if (!Array.isArray(delta) || delta.length !== 3 || !delta.every(v => typeof v === 'number') ||
-      (newRotation !== null && (!Array.isArray(newRotation) || newRotation.length !== 3 || !newRotation.every(int32)))) { declined('args', actor?.name); return undefined; }
+    // (indexed tests: an every() with a callback and the spread call below each made an object per move)
+    if (!Array.isArray(delta) || delta.length !== 3 || typeof delta[0] !== 'number' || typeof delta[1] !== 'number' || typeof delta[2] !== 'number' ||
+      (newRotation !== null && (!Array.isArray(newRotation) || newRotation.length !== 3 || !int32(newRotation[0]) || !int32(newRotation[1]) || !int32(newRotation[2])))) { declined('args', actor?.name); return undefined; }
     const mover = this.vm.moveActor;
     mover.table();
     if (!mover.eligiblePawn(instance)) { declined('fields', actor?.name); return undefined; }
     const depth = this.contexts.length;
-    const context = {pawn, actor, ops, hits: null, times: null};
+    const context = {pawn, actor, ops, hits: null};
     if (DIFFERENTIAL) context.keepsHit = keepsHit(pawn, delta, newRotation);
     this.contexts.push(context);
     const x = this.x, stack = x.__stack_pointer.value;
     let code;
     try {
-      code = x.move_pawn(depth, instance.base, f(delta[0]), f(delta[1]), f(delta[2]),
-        newRotation ? 1 : 0, ...(newRotation ?? [0, 0, 0]), ignoreBases ? 1 : 0);
+      code = newRotation
+        ? x.move_pawn(depth, instance.base, f(delta[0]), f(delta[1]), f(delta[2]), 1, newRotation[0], newRotation[1], newRotation[2], ignoreBases ? 1 : 0)
+        : x.move_pawn(depth, instance.base, f(delta[0]), f(delta[1]), f(delta[2]), 0, 0, 0, 0, ignoreBases ? 1 : 0);
     } catch (error) {
       // An import threw through the Rust frames: the reference's error at
       // the same point. Put the shadow stack back for the next call.
@@ -98,7 +102,9 @@ export class MovePawnHost {
       this.contexts.pop();
     }
     if (code === 0) { counts.handedBack++; return undefined; }
-    const io = new Float64Array(this.vm.arena.memory.buffer, this.ioAt, IO_WORDS);
+    const buffer = this.vm.arena.memory.buffer;
+    if (this.ioView === undefined || this.ioView.buffer !== buffer) this.ioView = new Float64Array(buffer, this.ioAt, IO_WORDS);
+    const io = this.ioView;
     const time = io[0], index = io[1], success = io[2] !== 0;
     const queryDelta = [io[3], io[4], io[5]], position = [io[6], io[7], io[8]];
     let hit = null;
@@ -149,15 +155,22 @@ export class MovePawnHost {
     return {
       js_move_hits(depth, records, sx, sy, sz, ex, ey, ez, rx, ry, rz, checkActors, world) {
         const c = context(depth), ops = c.ops;
-        c.start = [sx, sy, sz]; c.extent = [rx, ry, rz];
-        const hits = ops.multiLineCheck({end: [ex, ey, ez], start: [sx, sy, sz], extent: [rx, ry, rz],
-          checkActors: Boolean(checkActors), worldActor: world ? ops.worldActor : null, extra: 0});
+        if (DIFFERENTIAL) { c.start = [sx, sy, sz]; c.extent = [rx, ry, rz]; }
+        // The query's vectors are scratch: the line check reads them and keeps none (the kernel takes the numbers, the JavaScript
+        // path copies each vector before using it).
+        const query = hitsQuery, end = query.end, start = query.start, extent = query.extent;
+        end[0] = ex; end[1] = ey; end[2] = ez; start[0] = sx; start[1] = sy; start[2] = sz; extent[0] = rx; extent[1] = ry; extent[2] = rz;
+        query.checkActors = Boolean(checkActors); query.worldActor = world ? ops.worldActor : null;
+        const hits = ops.multiLineCheck(query);
+        query.worldActor = null;
         if (!Array.isArray(hits) || hits.length > 64) return -1;
         c.hits = hits;
         // Per hit: time, the normal and the actor's handle (move_pawn.rs
         // HIT_WORDS), for the selection and for the walking loop's result.
-        const view = new Float64Array(host.vm.arena.memory.buffer, records, 64 * HIT_WORDS);
-        c.times = hits.map(h => h.time);
+        const buffer = host.vm.arena.memory.buffer;
+        if (host.hitView === undefined || host.hitView.buffer !== buffer || host.hitView.byteOffset !== records)
+          host.hitView = new Float64Array(buffer, records, 64 * HIT_WORDS);
+        const view = host.hitView;
         for (let i = 0; i < hits.length; i++) {
           const h = hits[i], at = i * HIT_WORDS;
           view[at] = h.time;

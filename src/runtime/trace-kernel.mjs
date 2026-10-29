@@ -285,6 +285,18 @@ class TraceKernel {
     this.stats.fallback++;
     return undefined;
   }
+  /** Whether traceRay (zero extent, no owner, no extra node flags) finds no hit, as a boolean, or undefined for the JavaScript to
+   * answer: the same call as `ray`, without the result object a hit builds. */
+  rayClear(model, start, end) {
+    const base = this.base(model);
+    if (base === 0 || !start || !end) return undefined;
+    this.stats.ray++;
+    const status = this.x.trace_ray(base, start[0], start[1], start[2], end[0], end[1], end[2], 0, 0);
+    if (status === MISS) return true;
+    if (status === HIT) return false;
+    this.stats.fallback++;
+    return undefined;
+  }
   /** traceExtent's result, or undefined for the JavaScript to answer. */
   extent(model, start, end, extent, ownerCoords) {
     if (!finite3(start) || !finite3(end) || !finite3(extent)) return undefined;

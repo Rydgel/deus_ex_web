@@ -77,9 +77,10 @@ export function followDecalTracker(decals) {
       throw new DecalBoundaryError('AttachDecal.tracker', 'the tracked level model no longer fits the decal model');
     decals.generation = generation;
   }
-  for (const { surfaces, rotation } of source.movers()) {
-    const r = rotation();
-    for (const s of surfaces) decals.model.setRotation(s, r);
+  const movers = source.movers();
+  for (let i = 0; i < movers.length; i++) {
+    const surfaces = movers[i].surfaces, r = movers[i].rotation();
+    for (let k = 0; k < surfaces.length; k++) decals.model.setRotation(surfaces[k], r);
   }
 }
 /** Drop a level's decals (a reload: the original's UModel is loaded anew). */

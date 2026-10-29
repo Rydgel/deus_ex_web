@@ -49,13 +49,16 @@ function climbLadder(pawn,dt,iterations){
 
 /** The scanner's segments: the pawn's stored position, the scan start, the
  * four scan ends' X/Y and the floor end. */
+const SCAN_OFFSETS=[0,-16384,16384,32768];
 export function surfaceScanInputs(pawn){
- const position=pawn.position.map(f),radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
+ // (indexed, without the map and its callback: this runs for every walking pawn at every tick)
+ const source=pawn.position,position=[f(source[0]),f(source[1]),f(source[2])],radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
  const start=[position[0],position[1],f(position[2]-f(height*f(.95)))];
- const ends=[0,-16384,16384,32768].map(offset=>{
-  const angle=(yaw+offset)|0;
-  return [f(start[0]+f(2*radius*rotatorSin((angle+16384)|0))),f(start[1]+f(2*radius*rotatorSin(angle)))];
- });
+ const ends=new Array(4);
+ for(let k=0;k<4;k++){
+  const angle=(yaw+SCAN_OFFSETS[k])|0;
+  ends[k]=[f(start[0]+f(2*radius*rotatorSin((angle+16384)|0))),f(start[1]+f(2*radius*rotatorSin(angle)))];
+ }
  return {position,start,ends,floorEnd:[position[0],position[1],f(position[2]-f(height+2*radius))]};
 }
 
