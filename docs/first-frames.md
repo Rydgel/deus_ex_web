@@ -103,14 +103,43 @@ the viewport's size is set as `begin` sets it (the first tick reads `UViewport S
 is the 246 errors it reports on 02_NYC_BatteryPark). The first post is then sent `preTicked` with no dt; `begin` takes the
 tick's errors and travel request, and ticks only for the posts merged into that frame after the first one (their dt; none, no
 tick). A tick the worker could not make (failed, travelled, a live replay) leaves the frame its own: `begin` gives it
-`FIRST_FRAME_DT`. The page does not ask for a travel's arrival (its first frame measures its dt from the frame before the load),
-for a loaded game's level, when a start cheat, the loadout or the easter egg act on the level first, nor inline (Firefox's
-default, where nothing is idle: the tick would move into the load's blocked thread).
+`FIRST_FRAME_DT`. A travel's arrival and a loaded game's level take it too, with the loading frame ("Travel and loaded games"
+below). The page does not ask when a start cheat or the easter egg act on the level first, for the loadout of a map opened
+directly, nor inline (Firefox's default, where nothing is idle: the tick would move into the load's blocked thread).
+`?preTick=off` (measurement only) leaves every first tick to its first frame, the A arm.
 
 `frame-alloc-meter.mjs --pre-tick` makes the tick ahead and posts the frame as the page does; every frame hash equals the run
 without it on the four maps (`validate-pre-tick.mjs` checks two), so the tick sequence the game sees is the one it saw. What
 changes is when the first tick runs and what the posts merged during it are: they reach the next frame as their dt (the host
 chooses the dts in Play, and the game takes whatever it is given, as before).
+
+## Travel and loaded games
+
+A level entered by travel (every level after the first in the default start: New Game reaches the intro and the Island that way)
+and a loaded game (`LoadGame`, a travel with `?loadgame=N`) were left out at first, because their first tick is the loading
+frame: DeusEx.exe's main loop passes `appSeconds() - OldTime` to the engine's Tick and does not reset `OldTime` across the load
+(docs/travel.md "The first tick after the load"), and the page measures the first frame's dt from the last frame before the load
+(`main.mjs` `travelFrameTime`). They take the pre-tick now (2026-10-30), with that loading frame measured from the last frame
+before the load to the `host` mark: `(performance.now() - travelFrameTime) / 1000`, the dt the first post would have measured
+less the page's build that follows the worker's load (`host` to `ready`, 170 to 570 ms here). That build is not the level's
+time, as a load that much shorter would not be. The level's actors see no difference past the 0.4 s clamp of `ULevel::Tick`
+(every load here is over 2 s); `TimeSeconds` reads the shorter loading frame, 0.1 to 0.7 s less than the frame-measured one in the runs below
+(which already was this host's load time, not the original's). A travel arrival whose `travelFrameTime` is unknown takes
+`FIRST_FRAME_DT`, as its first frame did.
+
+Chromium, worker mode, the default start's New Game path (DX -> 00_Intro by travel -> 01_NYC_UNATCOIsland by travel), then
+QuickSave and `LoadGame -1` on the Island; `.work/first-frames/load-frames.mjs`, three interleaved runs per arm, the frames of
+each arrival split at its load's start (the hitch log's `map` event is sampled once a second and can fall after the first frames):
+
+| arrival | `?preTick=off`: first worker frames, max in 5 s | pre-tick: first worker frames, max in 5 s |
+|---|---|---|
+| 00_Intro (travel) | 206 44 13 · 196 42 23 · 208 20 44; 206 196 208 | 22 20 11 · 22 21 11 · 23 22 13; 34 34 36 |
+| 01_NYC_UNATCOIsland (travel) | 219 83 24 · 208 39 68 · 253 37 72; 219 208 253 | 34 33 25 · 27 32 19 · 28 34 22; 34 32 34 |
+| 01_NYC_UNATCOIsland (loaded game) | 75 35 18 · 72 22 26 · 71 34 15; 75 72 71 | 22 29 28 · 19 32 15 · 22 29 16; 29 32 29 |
+
+No page error and no Play stop in the twelve runs. `TimeSeconds` once the level is ready: intro 2.55 to 2.62 s without,
+2.09 to 2.13 with; the Island 2.75 to 2.80 without, 2.56 to 2.66 with; the loaded game (its saved time plus the loading frame)
+11.30 to 11.42 without, 10.69 to 10.77 with.
 
 ## Before and after
 
@@ -166,8 +195,8 @@ and the first drawn frame comes 200 to 350 ms earlier on the Island. A 60 s Isla
 * The first tick is still 250 ms on the Island (headless), and 76 ms on Training. The pieces left in it: the spawns (about 50 ms:
   construction, the events, the collision view, the zone), the 177 first lowerings (24 ms; lowering a function on its second run
   would save the 81 that run once, 9 ms, and cost their interpretation), the first `describe` of 767 actors (14 ms), landings and
-  `FarMoveActor`. A tick made ahead of the first frame hides them in Play; a travel's arrival, a loaded game and Firefox's inline
-  mode still pay them in a frame.
+  `FarMoveActor`. A tick made ahead of the first frame hides them in Play (travel arrivals and loaded games included); a start
+  cheat, the easter egg, the loadout of a map opened directly and Firefox's inline mode still pay them in a frame.
 * The ticks after the first, in the browser, are 26 to 49 ms for four or five frames (the landings of the falling pawns, with the
   dts of posts that merged while the frame before ran): under 50 ms in every run here, with little room.
 * The page's first drawn frame is 67 to 83 ms on the main thread (1,134 uploads, 69 MB: `p.textures` 22 ms, `gl.upload` 26 ms,

@@ -338,6 +338,8 @@ let simLastPost=null;
 // `preTicked` and no dt of its own. FIRST_FRAME_DT is sim-session.mjs's: the dt that first post would have measured.
 let preTickPending=false;
 const FIRST_FRAME_DT=1000/60/1000;
+// Measurement only: ?preTick=off leaves every level's first tick to its first frame, the A arm (docs/first-frames.md).
+const preTickParam=new URLSearchParams(location.search).get('preTick')!=='off';
 // The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
 // tick receives the load, as the original's does (docs/travel.md "The first tick after the load"; game.mjs `loadingFrameSeconds`).
 let travelFrameTime=null;
@@ -1009,12 +1011,15 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     loadMark('host');
     // The level's first tick (about 200 ms on the Island: every pawn's first state code) would be the first frame's, and the page would wait for
     // it after the load. The worker is done with the level and idle while the page builds its meshes and swaps its world in: it makes the tick
-    // now, with the dt the first post would carry (sim-session.mjs preTick). Not for a travel's arrival, whose first frame measures its dt from
-    // the frame before the load, nor a loaded game's level, nor when a start cheat, the loadout or the easter egg act on the level first.
+    // now, with the dt the first post would carry (sim-session.mjs preTick). A travel's arrival (a loaded game's too) makes it with the loading
+    // frame, measured from the last frame before the load to now: the page's build after it is not the level's time, as a shorter load would
+    // not be (docs/first-frames.md "Travel and loaded games"). Not when a start cheat or the easter egg act on the level first, nor the loadout of
+    // a map opened directly (an arrival keeps its inventory).
     preTickPending = false;
-    if (simClient && nextHost.game && mode === 'play' && !travel && !filed && !easterParam && !loadoutParam && !startCheats.length) {
+    if (simClient && preTickParam && nextHost.game && mode === 'play' && !easterParam && !(loadoutParam && !travel) && !startCheats.length) {
       preTickPending = true;
-      simClient.call('preTick', { dt: FIRST_FRAME_DT, width: renderer.domElement.width, height: renderer.domElement.height, aspect: canvasAspect, resizes: resizeCount })
+      const dt = travel && travelFrameTime !== null ? Math.max(0, (performance.now() - travelFrameTime) / 1000) : FIRST_FRAME_DT;
+      simClient.call('preTick', { dt, width: renderer.domElement.width, height: renderer.domElement.height, aspect: canvasAspect, resizes: resizeCount })
         .catch(() => {});
     }
     loadTimeline.simMarks = simClient ? nextHost.loadMarks : nextHost.loadMarks?.map(([step, at]) => [step, Math.round(at - loadTimeline.start)]) ?? null;
