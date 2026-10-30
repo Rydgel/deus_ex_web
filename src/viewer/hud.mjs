@@ -8,11 +8,14 @@
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
 import {sharedProceduralTextures} from './procedural-textures.mjs';
-/** A tile batch's material for a texture and Style (createHudRenderer), the shader warm-up's too (hudWarmup). */
+/** A tile batch's material for a texture and Style (createHudRenderer), the shader warm-up's too (hudWarmup).
+ * A modulated tile is masked too: D3DDrv.dll DrawTile (0x10005ba0) replaces the PolyFlags of a PF_Modulated tile with
+ * PF_Modulated|PF_Masked (0x42, at 0x10005c27) before SetBlending (0x10008270), whose PF_Masked bit is ALPHATESTENABLE, so its
+ * index-zero texels are not drawn; the shader is then the masked style's (one program). */
 function tileMaterial(texture,style){
   return new THREE.ShaderMaterial({uniforms:{map:{value:texture}},
     vertexShader:'attribute vec3 tint; varying vec2 texCoord; varying vec3 tileColor; void main(){texCoord=uv;tileColor=tint;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-    fragmentShader:`uniform sampler2D map; varying vec2 texCoord; varying vec3 tileColor; void main(){vec4 c=texture2D(map,texCoord);${style===2?'if(c.a<0.5)discard;':''}gl_FragColor=vec4(c.rgb*tileColor,1.);}`,
+    fragmentShader:`uniform sampler2D map; varying vec2 texCoord; varying vec3 tileColor; void main(){vec4 c=texture2D(map,texCoord);${style===2||style===4?'if(c.a<0.5)discard;':''}gl_FragColor=vec4(c.rgb*tileColor,1.);}`,
     // Keep every HUD tile in one render list so parent frames precede
     // opaque portraits and masked glyphs, exactly in Window draw order.
     depthTest:false,depthWrite:false,side:THREE.DoubleSide,transparent:true,
@@ -100,7 +103,10 @@ export async function createHudRenderer({assets,preload=[]}){
     const uv=attrs.uv.array,t=vertex*2;
     uv[t]=us;uv[t+1]=vs;uv[t+2]=ue;uv[t+3]=vs;uv[t+4]=us;uv[t+5]=ve;
     uv[t+6]=ue;uv[t+7]=vs;uv[t+8]=ue;uv[t+9]=ve;uv[t+10]=us;uv[t+11]=ve;
-    const tint=attrs.tint.array,r=color[0]/255,g=color[1]/255,b=color[2]/255;
+    // A modulated tile ignores the tile color: D3DDrv.dll DrawTile writes the vertex color 0xffffffff for PF_Modulated
+    // (0x10005c5c to 0x10005c9d) and Color * MaxColor only for the other styles. DeusExScopeView draws HUDScopeView modulated
+    // right after the black tile color of its borders.
+    const white=style===4,tint=attrs.tint.array,r=white?1:color[0]/255,g=white?1:color[1]/255,b=white?1:color[2]/255;
     for(let i=p;i<p+18;i+=3){tint[i]=r;tint[i+1]=g;tint[i+2]=b;}
   }
   /** One HUD frame in window order. A ViewportWindow's 'viewport' command

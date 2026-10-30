@@ -14,7 +14,8 @@ function tile(command,image){
     width=Math.min(x+width,clip.x+clip.width)-left;height=Math.min(y+height,clip.y+clip.height)-top;
     u+=left-x;v+=top-y;x=left;y=top;if(width<=0||height<=0)return null;}
   const us=u/image.width,vs=v/image.height,ue=(u+ul)/image.width,ve=(v+vl)/image.height;
-  const tint=new Float32Array(18);for(let i=0;i<6;i++)tint.set(color.map(c=>c/255),i*3);
+  // D3DDrv.dll DrawTile (0x10005c5c to 0x10005c9d): a PF_Modulated tile's vertex color is 0xffffffff, whatever the tile color
+  const tint=new Float32Array(18);for(let i=0;i<6;i++)tint.set(style===4?[1,1,1]:color.map(c=>c/255),i*3);
   return {image:image.key,style,
     position:new Float32Array([x,y,0,x+width,y,0,x,y+height,0,x+width,y,0,x+width,y+height,0,x,y+height,0]),
     uv:new Float32Array([us,vs,ue,vs,us,ve,ue,vs,ue,ve,us,ve]),tint};
@@ -64,6 +65,8 @@ test('HUD batches consecutive materials without changing the ordered tile stream
       const style=material.blending===THREE.CustomBlending?(material.blendSrc===THREE.DstColorFactor?4:3):
         material.fragmentShader.includes('discard')?2:1;
       assert.equal(material.blendDst,style===4?THREE.SrcColorFactor:THREE.OneMinusSrcColorFactor);
+      // A modulated tile is alpha-tested as a masked one (DrawTile's PolyFlags 0x42, SetBlending's ALPHATESTENABLE)
+      assert.equal(material.fragmentShader.includes('discard'),style===2||style===4);
       for(let i=0;i<count;i+=6){
         const entry={image:image.key,style};
         for(const name of ['position','uv','tint']){
@@ -93,6 +96,9 @@ test('HUD batches consecutive materials without changing the ordered tile stream
       command('font',2,{x:30,clip:{x:0,y:0,width:10,height:10}})];
     verify();assert.equal(drawCalls,6);assert.equal(actual.length,71);
     commands=[command('portrait',4),...Array.from({length:9},()=>command('font',3))];verify();
+    // DeusExScopeView: the black borders' tile color is still set when HUDScopeView draws modulated; the tile draws white
+    commands=[command('font',1,{color:[0,0,0]}),command('portrait',4,{color:[0,0,0]}),command('font',2,{color:[0,0,0]})];verify();
+    assert.deepEqual([...actual[1].tint],Array(18).fill(1));
     commands=[command('font',2)];verify();
     commands=[];verify();
     commands=Array.from({length:130},()=>command('font',2));verify();assert.equal(drawCalls,1);

@@ -116,6 +116,27 @@ retained all 90 submissions. Local check sources are `.work/hud-pixels.mjs`
 and `.work/hud-reference.mjs`, outside Git. This is adapter equivalence,
 not an additional claim about the original rasterizer.
 
+## Modulated tiles (2026-10-30)
+
+A DSTY_Modulated tile ignores the GC's tile color and is masked. Deus Ex's `D3DDrv.dll` `UD3DRenderDevice::DrawTile` (body
+`0x10005ba0`, vtable `0x10018004` slot `0x7c`, thunk `0x10001172`) replaces the PolyFlags of a `PF_Modulated` tile with `0x42`
+(PF_Modulated|PF_Masked, at `0x10005c27`) before `SetBlending` (`0x10008270`: DESTCOLOR/SRCCOLOR blending, and ALPHATESTENABLE
+from the PF_Masked bit), and writes the vertex color `0xffffffff` for it (`0x10005c5c` to `0x10005c9d`); only the other styles take
+`Color * MaxColor | 0xff000000`. `hud.mjs` does the same: a style 4 tile draws with a white tint and discards the index-zero texels
+(the masked style's shader).
+
+The page multiplied modulated tiles by the tile color. `DeusExScopeView.DrawWindow` sets the tile color to 0,0,0 for its black
+borders and then draws `HUDScopeView` (or the binoculars' `HUDBinocularView_1`/`_2`) modulated, so every scope view (the rifle, any
+weapon with a scope mod: the pistol, stealth pistol, mini-crossbow, plasma rifle and GEP gun, ScopeFOV 10 to 25) and the binoculars
+were black: a 2·src·dst tile with a black source. It was so before the live-heap work (`89bd1edd` too). Other modulated draws drawn
+after a non-white tile color change with it: the vision augmentation's tints (`DrawVisionAugmentation` sets no tile color of its
+own), the frob display's backgrounds (`colBackground`, `colText`) and the credits' background (`colBlack`).
+
+`node scripts/validate-scope-view-play.mjs` (worker mode, 00_Training, `?loadout=1`): belt 5 draws the rifle, `[` (ToggleScope) zooms
+it, and the lens centre shows the world while the screen outside it is black (it fails on the old tiles, lens mean 0).
+`test/hud-compositor.test.mjs` checks the white tint and the masked shader of a style 4 tile after a black tile color. Not
+compared with the original's pixels: the binoculars, the scope mods and the other windows above.
+
 ## Focused validation
 
 `node scripts/validate-play-hud.mjs` exercises the live original HUD tree,
