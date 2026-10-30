@@ -2497,7 +2497,12 @@ of each merge exit 0 in memory-capped scopes, load-saves and travel-endings amon
 * **The first frames after a map's load.** 226 to 572 ms of worker tick in the first frames of Play on every tree measured (no GC in
   them; "Everything merged on two cores"). Headless (`bench-sim.mjs --warm 0`) the Island's first ticks show it too (445 ms against a
   16 ms median): the state code's first SpawnActor calls (the pawns' starting inventory, about 105 ms) and the first landings of the
-  pawns (`moveRiders`, about 70 ms). Not GC: the next work, outside this document.
+  pawns (`moveRiders`, about 70 ms). Not GC: worked in [first frames](first-frames.md): the riders' scan of `Level.Actors` reads Base
+  from the object image (34 to 10 ms), a default written with its own value keeps the class image (18 to 10 ms), an array element is
+  stored alone (ChangeAlly 26 to 9 ms), headless tick 0 308 to 255 ms; and in Play the page asks the worker for the first tick ahead of
+  the first frame, while it finishes its load (`preTick`): the Island's first worker frames 271, 114, 53, 34 ms are now 36, 43, 26, 38,
+  none over 50 ms in five seconds, and the load is not slower. What is left (the tick itself, 250 ms headless, and the page's
+  67 to 83 ms first draw) is listed there under "Open".
 * **What remained of the two-core freezes (closed 2026-10-30).** "Everything merged on two cores": no GC frame over 50 ms is left on
   two cores, and the user reports the Mac smooth in Chrome and Firefox. The history: "The script VM and world query cuts on two cores": with the worker at about 0.6 MB
   a frame (from 1.6 two cuts ago) the major GCs are as many as before (five in five minutes, set by the memory reducer and the

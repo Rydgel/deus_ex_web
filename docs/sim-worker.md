@@ -541,7 +541,11 @@ Step 8, third part (`sim-worker.mjs`, `sim-client.mjs`, `host-clock.mjs`):
 - **Map load.** The map counts as ready once the worker's replies to the
   mode change and Player start (PlayerCalcView) have pointed the camera; on
   the page they are synchronous. A late reply had moved the free camera
-  back one step after Inspect's first frame.
+  back one step after Inspect's first frame. The level's first tick is
+  made ahead of the first frame (`call('preTick')` at the load's `host`
+  mark, while the worker would idle; that frame is posted `preTicked` with
+  no dt of its own): [first frames](first-frames.md) "Ahead of the first
+  frame".
 - **Checks.** Against step 6 inline (`.work/base`), `?sim=worker` gives
   identical digests and frames on Island and 02_NYC_Smug walking, Training,
   and Smug in Inspect with the free camera flying.
