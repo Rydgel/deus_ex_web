@@ -159,7 +159,9 @@ async function handle(data) {
       const scene = data.options?.sceneLater ? sceneFor(data.id).promise.finally(() => scenes.delete(data.id)) : null;
       host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes, { triangles: false }), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed), process: keepProcess,
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
-        onProgress: message => send({ type: 'progress', message }) });
+        onProgress: message => send({ type: 'progress', message }),
+        // SaveCurrentLevel's PaintProgress frame goes now, before the save's work: the page draws it while this thread saves (docs/loading-frame.md "Saving")
+        onPaintProgress: frame => send({ type: 'paint', load: loadId, frame }) });
       const summary = host.actorSim?.summary;
       send({ type: 'loaded', id: data.id, game: Boolean(host.game), hud: Boolean(host.game?.hud), lit: Boolean(host.meshLighting), notes: host.notes, gameNotes: host.game?.notes ?? [],
         events: host.events.splice(0), hudTextures: host.hudTextures,

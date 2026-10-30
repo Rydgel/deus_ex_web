@@ -21,8 +21,21 @@ export function brightnessGamma(brightness) {
   return divisor > 0 ? Math.min(1 / divisor, 3.4028234663852886e38) : 3.4028234663852886e38;
 }
 
+/** A FramebufferTexture of the drawing buffer's size (`current` when it already is). */
+function sized(current, width, height) {
+  if (current && current.image.width === width && current.image.height === height) return current;
+  current?.dispose();
+  const texture = new THREE.FramebufferTexture(width, height);
+  texture.minFilter = texture.magFilter = THREE.NearestFilter;
+  texture.colorSpace = THREE.NoColorSpace;
+  // three leaves the allocation's UNPACK_FLIP_Y in place, which raw
+  // typed-array uploads (gpu-mesh.mjs) would inherit.
+  texture.flipY = false;
+  return texture;
+}
+
 export function createDisplayRamp() {
-  let texture = null;
+  let texture = null, progressTexture = null;
   let crtDisplay = null;
   const savedScissor = new THREE.Vector4();
   const uniforms = { frame: { value: null }, gamma: { value: 1 } };
@@ -47,6 +60,8 @@ export function createDisplayRamp() {
     /** The ramp's scene, for the shader warm-up (shader-warmup.mjs). */
     scene,
     reset() { crtDisplay?.reset(); },
+    /** The last frame's raw colours (the drawing buffer before the ramp, as `apply` copied it), or null before the first. */
+    get rawFrame() { return texture; },
     /** The clear colour whose ramped value is `color` (a THREE.Color). */
     rawClear(color, gamma) {
       const inverse = 1 / gamma;
@@ -54,23 +69,17 @@ export function createDisplayRamp() {
     },
     /** Ramp the default framebuffer in place; the renderer's viewport must
      * cover the whole drawing buffer. */
-    apply(renderer, gamma, crt = false, preset = 'aperture', compare = false) {
+    apply(renderer, gamma, crt = false, preset = 'aperture', compare = false, { progress = false } = {}) {
       const width = renderer.domElement.width, height = renderer.domElement.height;
-      if (!texture || texture.image.width !== width || texture.image.height !== height) {
-        texture?.dispose();
-        texture = new THREE.FramebufferTexture(width, height);
-        texture.minFilter = texture.magFilter = THREE.NearestFilter;
-        texture.colorSpace = THREE.NoColorSpace;
-        // three leaves the allocation's UNPACK_FLIP_Y in place, which raw
-        // typed-array uploads (gpu-mesh.mjs) would inherit.
-        texture.flipY = false;
-        uniforms.frame.value = texture;
-      }
+      // A PaintProgress frame drawn over the last frame (main.mjs drawProgressFrame) goes through a copy of its own: `rawFrame` stays the
+      // last frame's, which a second one draws again.
+      const copy = progress ? (progressTexture = sized(progressTexture, width, height)) : (texture = sized(texture, width, height));
+      uniforms.frame.value = copy;
       renderer.setRenderTarget(null);
-      renderer.copyFramebufferToTexture(texture);
+      renderer.copyFramebufferToTexture(copy);
       uniforms.gamma.value = gamma;
       if (crt) {
-        (crtDisplay ??= createCrtDisplay(geometry)).apply(renderer, texture, gamma, preset);
+        (crtDisplay ??= createCrtDisplay(geometry)).apply(renderer, copy, gamma, preset);
         if (compare) {
           // Same original frame, gamma and full-image coordinates on both
           // sides. Scissor only the final original pass; never recopy CRT.
@@ -83,6 +92,6 @@ export function createDisplayRamp() {
         }
       } else { crtDisplay?.reset(); renderer.render(scene, camera); }
     },
-    dispose() { texture?.dispose(); geometry.dispose(); material.dispose(); crtDisplay?.dispose(); },
+    dispose() { texture?.dispose(); progressTexture?.dispose(); geometry.dispose(); material.dispose(); crtDisplay?.dispose(); },
   };
 }

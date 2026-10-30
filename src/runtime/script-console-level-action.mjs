@@ -9,7 +9,9 @@
  * for (0, 0, 0) and FlashScale (+0x610) for (0.1, 0.1, 0.1), calls Draw(Viewport, 1, NULL, NULL) (vtable +0x78) and swaps them back:
  * a whole frame of the old level, the HUD windows included (the PostRenderFlash event), darkened by EndFlash (alpha 25), then the
  * console's PostRender event (Draw 0x1038f772, after EndFlash) and its DrawLevelAction: LoadingMessage centred in LargeFont, STY_Translucent,
- * DrawColor (0, 0, 255). Engine.Console.PrintActionMessage measures it with Canvas.StrLen and draws it with Canvas.DrawText:
+ * DrawColor (0, 0, 255). DeusEx.dll's SaveCurrentLevel (0x1000fac0) calls PaintProgress too (0x1000fd83), with LevelAction =
+ * LEVACT_Saving (0x1000fd7a) and nothing else changed, before it files the level (`paintProgress`): SavingMessage, the same way.
+ * Engine.Console.PrintActionMessage measures it with Canvas.StrLen and draws it with Canvas.DrawText:
  *
  * - execStrLen (native 464, 0x10377650): CurX and CurY truncated to int and zeroed, WrappedStrLenf (vtable +0x68, 0x10377380) =
  *   WrappedPrint(STY_None, ..., Center 0), CurX and CurY restored from the ints, XL and YL from the ints.
@@ -177,11 +179,20 @@ export async function createConsoleLevelAction({runtime, assets}) {
      * tiles after EndFlash as HUD tile commands.
      */
     paint({player, levelInfo, width, height, action, hudPaint}) {
-      const viewport = read(player, 'Player'), console = viewport && read(viewport, 'Console');
-      if (!console) throw new Error('The loading frame requires the viewport Console');
       write(levelInfo, 'LevelAction', action);
       write(levelInfo, 'Pauser', '');
       write(player, 'bShowMenu', false);
+      try { return this.paintProgress({player, width, height, hudPaint}); }
+      finally { write(levelInfo, 'LevelAction', LEVEL_ACTION.none); }
+    },
+    /**
+     * PaintProgress alone (0x10388740), with the level's LevelAction as its caller left it: SaveCurrentLevel's frame (LevelAction 2, set at
+     * DeusEx 0x1000fd7a and cleared at 0x1000ffa4 after the save; Pauser and bShowMenu untouched). The flash swap around `hudPaint()`, then
+     * the console's DrawLevelAction; returns `{hud, console}` as `paint` does.
+     */
+    paintProgress({player, width, height, hudPaint}) {
+      const viewport = read(player, 'Player'), console = viewport && read(viewport, 'Console');
+      if (!console) throw new Error('The loading frame requires the viewport Console');
       const scale = [...read(player, 'FlashScale')], fog = [...read(player, 'FlashFog')];
       write(player, 'FlashFog', LOADING_FRAME.flashFog.map(f32)); write(player, 'FlashScale', LOADING_FRAME.flashScale.map(f32));
       let hud, tiles = [];
@@ -197,7 +208,6 @@ export async function createConsoleLevelAction({runtime, assets}) {
         tiles = drawLevelAction(console, {width, height});
       } finally {
         write(player, 'FlashFog', fog); write(player, 'FlashScale', scale);
-        write(levelInfo, 'LevelAction', LEVEL_ACTION.none);
       }
       return {hud, console: tiles};
     },

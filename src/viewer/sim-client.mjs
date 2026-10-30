@@ -42,6 +42,11 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
         }
         if (!outstanding) settle();
         break;
+      // SaveCurrentLevel's PaintProgress frame, posted in the save (docs/loading-frame.md "Saving"): it waits in order with the snapshots,
+      // as `{progress}`, and drawFrame draws it after the snapshots that arrived before it
+      case 'paint':
+        if (data.load === activeLoad) { if (onFrame) onFrame({ progress: data.frame }); else waiting.push({ progress: data.frame }); }
+        break;
       case 'failure': {
         const error = Object.assign(new Error(data.error.message), { stack: data.error.stack });
         if (data.request === 'init') ready?.reject(error);

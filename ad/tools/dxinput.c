@@ -104,7 +104,7 @@ static int locate(int verbose) {
 static int vkFor(const char *name) {
   static const struct { const char *name; int vk; } table[] = {
     {"TILDE", VK_OEM_3}, {"PRINT", VK_SNAPSHOT}, {"ENTER", VK_RETURN}, {"ESC", VK_ESCAPE}, {"SPACE", VK_SPACE}, {"BACK", VK_BACK}, {"TAB", VK_TAB},
-    {"MULTIPLY", VK_MULTIPLY}, {"UP", VK_UP}, {"DOWN", VK_DOWN}, {"LEFT", VK_LEFT}, {"RIGHT", VK_RIGHT},
+    {"MULTIPLY", VK_MULTIPLY}, {"ADD", VK_ADD}, {"UP", VK_UP}, {"DOWN", VK_DOWN}, {"LEFT", VK_LEFT}, {"RIGHT", VK_RIGHT},
     {"SHIFT", VK_SHIFT}, {"CTRL", VK_CONTROL}, {"ALT", VK_MENU}, {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4},
     {"F5", VK_F5}, {"F6", VK_F6}, {"F7", VK_F7}, {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10},
     {"F11", VK_F11}, {"F12", VK_F12}, {"HOME", VK_HOME}, {"END", VK_END}, {"PGUP", VK_PRIOR}, {"PGDN", VK_NEXT},

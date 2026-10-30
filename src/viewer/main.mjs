@@ -33,6 +33,7 @@ import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { expandHudStream } from '../runtime/script-window-command-stream.mjs';
 import { createFlashPass } from './flash-pass.mjs';
+import { createProgressFrame } from './progress-frame.mjs';
 import { createActorMeshDraw } from './actor-mesh-draw.mjs';
 import { bindingView } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
@@ -303,10 +304,12 @@ function useFrameProjection(projection, mirror = 1) {
 }
 let hudRenderer=null;
 const flashPass=createFlashPass();
+// SaveCurrentLevel's PaintProgress frame: the last frame's world and HUD drawn again (drawProgressFrame, docs/loading-frame.md "Saving").
+const progressFrame=createProgressFrame();
 const shaderWarmup=shaderWarmupOn()?createShaderWarmup(renderer):null;
 /** A level's shader warm-up: at its load, and again after a context restore (docs/context-loss.md). */
 const levelWarmup=(level,gpu)=>shaderWarmup?.start({world:level,gpu,displayGamma:level.displayGamma,
-  mirrors:level.mirrors.stats.planes>0,detail:detailTexturesOn(),roots:[displayRamp?.scene,flashPass.scene].filter(Boolean)})??null;
+  mirrors:level.mirrors.stats.planes>0,detail:detailTexturesOn(),roots:[displayRamp?.scene,flashPass.scene,progressFrame.scene].filter(Boolean)})??null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
@@ -350,6 +353,12 @@ let travelFrameTime=null;
 let travelHeld=false;
 // The last loading frame's console tiles and flash (deusExViewer.loadingFrame).
 let lastLoadingFrame=null;
+// SaveCurrentLevel's PaintProgress frames drawn (drawProgressFrame), the last few, with when each was drawn and replaced (deusExViewer.savingFrames).
+const savingFrames=[];
+// ?sim=inline: a PaintProgress frame the save drew on this thread, and the snapshot simulated with it, each drawn in a display frame of its own (animate).
+const inlineFrames=[];
+// The world whose simulation frame was drawn last: a PaintProgress frame draws that frame again, only in the level it belongs to.
+let drawnWorld=null;
 let infoLinkAudioContext=null;
 // Galaxy's music (docs/galaxy-music.md "Phase 5: Output"): an AudioWorklet
 // owns the library (galaxy-music-output.mjs); the simulation talks to it on
@@ -941,7 +950,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   // The original start keeps the mouse through a travel, as the original's viewport does across a level load.
   if (!originalStart || !travel) releasePointer();
-  keys.clear();
+  keys.clear(); inlineFrames.length = 0;
   // A travel (New Game, a level's exit, a loaded game) leaves LoadMap's PaintProgress frame of the level it leaves on the canvas
   // (travelTo, docs/loading-frame.md) for the whole load, the page's own build included. The page's gate is for a load with no level
   // frame behind it (the first map, a map from the list) and for a load error; with the tools (?debug=1) the steps show in the status line.
@@ -1023,7 +1032,9 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary, process: keepProcess, restore: Boolean(filed),
       onAudioVoice: event => { void galaxyVoice(event); },
-      onProgress: progress });
+      onProgress: progress,
+      // SaveCurrentLevel's PaintProgress frame, drawn by the save on this thread (a key's between frames, a tick's in a frame): animate draws it next
+      onPaintProgress: frame => { inlineFrames.push({ progress: frame }); } });
     loadMark('host');
     // The level's first tick (about 200 ms on the Island: every pawn's first state code) would be the first frame's, and the page would wait for
     // it after the load. The worker is done with the level and idle while the page builds its meshes and swaps its world in: it makes the tick
@@ -2046,6 +2057,9 @@ window.deusExViewer = { status,
 loadTimings: () => loadTimeline && structuredClone(loadTimeline),
 /** The last loading frame drawn (docs/loading-frame.md): the level it was drawn in, the buffer size, the console's tiles and the flash. */
 loadingFrame: () => lastLoadingFrame && structuredClone(lastLoadingFrame),
+/** SaveCurrentLevel's PaintProgress frames drawn (docs/loading-frame.md "Saving"), oldest first: the level, the buffer size, the console's tiles, the flash,
+ * and the page clock (ms) at which each was drawn and at which the next frame replaced it (null while it is on screen). */
+savingFrames: () => structuredClone(savingFrames),
 /** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
 saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true),
   /** The stored directories and their files ({dir, files: [{name, size}]}) and one file's bytes (an array): what the specs read back of a save. */
@@ -2385,7 +2399,7 @@ function animate(time) {
     }
     return;
   }
-  const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
+  const previousTime = lastTime, dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading && !travelHeld) {
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
@@ -2414,7 +2428,16 @@ function animate(time) {
       postSimFrame(time);
       snap = lockstep ? null : simClient.take();
       draw = Boolean(snap);
-    } else if (sim) snap = simFrame({ ...simFrameInput(time), dt });
+    } else if (sim) {
+      // (inline, a save's PaintProgress frame (onPaintProgress) is drawn in a display frame of its own, then the snapshot simulated with it; a
+      // display frame that draws a queued one simulates nothing and its time goes to the next tick's dt)
+      if (inlineFrames.length) lastTime = previousTime;
+      else {
+        const simulated = simFrame({ ...simFrameInput(time), dt });
+        if (inlineFrames.length) inlineFrames.push(simulated); else snap = simulated;
+      }
+      if (inlineFrames.length) snap = inlineFrames.shift();
+    }
     if (draw) drawFrame(snap, time);
     if (draw && loadTimeline && loadTimeline.firstDraw === null) loadTimeline.firstDraw = Math.round(performance.now() - loadTimeline.start);
   }
@@ -2426,9 +2449,14 @@ function animate(time) {
  * world alone). */
 let lastVisibility = null, lastCoronaScan = null;
 function drawFrame(snap, time) {
+  // SaveCurrentLevel's PaintProgress frame, in order with the snapshots (sim-client.mjs 'paint', the inline queue)
+  if (snap?.progress) { drawProgressFrame(snap.progress); return; }
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
   framePhases.draws++; frameCount++;
+  progressFrame.beginFrame(); drawnWorld = world;
+  const shownSaving = savingFrames.at(-1);
+  if (shownSaving && shownSaving.replacedAt === null) shownSaving.replacedAt = performance.now();
   // The HUD's tile commands arrive as numbers (script-window-command-stream.mjs); the list is made where it is drawn.
   if (snap?.hud?.stream) { snap.hud.commands = expandHudStream(snap.hud.stream); snap.hud.stream = null; }
   if (graphics.lost) graphics.drawnLost++;
@@ -2697,7 +2725,7 @@ function drawFrame(snap, time) {
   }
   // UD3DRenderDevice::EndFlash follows the PostRenderFlash event that paints the HUD windows (docs/screen-flash.md).
   if (playing && !runtimeError && snap?.hud?.flash) {
-    try { flashPass.render(renderer, snap.hud.flash); } catch (error) { pauseForRuntimeError(error); }
+    try { flashPass.render(renderer, snap.hud.flash, () => progressFrame.keepBeforeFlash(renderer)); } catch (error) { pauseForRuntimeError(error); }
   }
   // The console's PostRender event follows EndFlash (Draw 0x1038f772): on LoadMap's PaintProgress frame, DrawLevelAction's LOADING
   // (sim-session.mjs hud `progress`, docs/loading-frame.md).
@@ -2725,6 +2753,28 @@ function drawFrame(snap, time) {
     camera.position.copy(live.position); camera.quaternion.copy(live.quaternion); setProjectionState(camera, live.projection);
     camera.userData = live.userData; ({ pitch, yaw } = live); camera.updateMatrixWorld();
   }
+}
+/** SaveCurrentLevel's PaintProgress frame (DeusEx 0x1000fd83, docs/loading-frame.md "Saving"): UGameEngine::Draw of the level as the save
+ * finds it, which is the frame drawn last (progress-frame.mjs), with the flash PaintProgress swaps in (EndFlash's alpha 25) and the console's
+ * DrawLevelAction SAVING after it, then the ramp. With ?sim=worker it is drawn while the worker saves and stays until the next snapshot, as the
+ * original's stays through the save; inline the save has held this thread, and it is shown for one display frame after it (animate). It is not
+ * kept for a save's picture (GenerateSnapshot read the frame before it). Not drawn without the last frame's colours at this buffer size (a
+ * resize since, ?gamma=material) or the console's tiles for it. */
+function drawProgressFrame(frame) {
+  if (!world || drawnWorld !== world || !hudRenderer || !displayRamp || graphics.lost || runtimeError || mode !== 'play') return false;
+  const width = renderer.domElement.width, height = renderer.domElement.height;
+  if (frame.width !== width || frame.height !== height || !progressFrame.restore(renderer, displayRamp.rawFrame)) return false;
+  framePhases.draws++; frameCount++;
+  try {
+    flashPass.render(renderer, frame.flash);
+    hudRenderer.render(renderer, width, height, frame.console);
+  } catch (error) { pauseForRuntimeError(error); }
+  displayRamp.apply(renderer, world.displayGamma.value, crtEnabled, crtShader, crtCompare, { progress: true });
+  const shown = savingFrames.at(-1);
+  if (shown && shown.replacedAt === null) shown.replacedAt = performance.now();
+  savingFrames.push({ map: currentMap, width, height, tiles: frame.console, flash: frame.flash, drawnAt: performance.now(), replacedAt: null });
+  if (savingFrames.length > 8) savingFrames.shift();
+  return true;
 }
 /** ?sim=worker in lockstep: a snapshot drawn as it arrives. */
 function drawLockstep(snapshot) {

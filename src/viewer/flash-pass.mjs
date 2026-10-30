@@ -26,11 +26,13 @@ export function createFlashPass() {
   return {
     /** The pass's scene, for the shader warm-up (shader-warmup.mjs). */
     scene,
-    /** Draw the flash of the frame (`{scale, fog}`, the planes Draw hands to Lock); returns whether anything drew. */
-    render(renderer, flash) {
+    /** Draw the flash of the frame (`{scale, fog}`, the planes Draw hands to Lock); returns whether anything drew. `before()` runs first when
+     * it draws (main.mjs keeps the frame without it for a PaintProgress frame drawn later). */
+    render(renderer, flash, before = null) {
       if (!flash) return false;
       const plan = endFlash({ scale: flash.scale, fog: flash.fog, sizeX: renderer.domElement.width, sizeY: renderer.domElement.height, device });
       if (!plan.drawn) return false;
+      before?.();
       const { a, r, g, b } = plan.colour;
       material.uniforms.flash.value.set(r / 255, g / 255, b / 255, a / 255);
       renderer.clearDepth();

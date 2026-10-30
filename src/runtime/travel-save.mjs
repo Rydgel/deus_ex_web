@@ -5,7 +5,8 @@
  * set to None; the same for the SkillSystem and its Skills; the FlagBase's DeleteAllFlags, the FlagBase destroyed and the property None; the
  * carried decoration DestroyActor'd and None. (The player, its inventory and key ring stay in the level that is filed: measured.)
  *
- * SaveCurrentLevel(-2): LevelInfo.LevelAction = 2; the moving brush tracker is shut down (log); CleanupDestroyed(1); the file name is
+ * SaveCurrentLevel(-2): LevelInfo.LevelAction = 2; PaintProgress (`setPaintProgress`: the host's frame with the console's SAVING,
+ * docs/loading-frame.md "Saving"); the moving brush tracker is shut down (log); CleanupDestroyed(1); the file name is
  * `<DeusExLevelInfo.MapName>.dxs` in Save\Current; SavePackage writes `Save.tmp`, which is then moved over it (level-save.mjs); every mover's
  * SavedPos goes to (-1,-1,-1); the tracker is recreated (log); LevelAction = 0. Without a DeusExLevelInfo it logs `WARNING!  DeusExLevelInfo MISSING!`
  * and saves nothing. The log lines are the measured ones (docs/travel.md "What each travel did"); `Save=` is the elapsed time in milliseconds. */
@@ -24,6 +25,8 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
     if (!level.url) throw new Error('SaveCurrentLevel: the level has no URL (GLevel->URL is set where the session loads the level, game.mjs)');
     return level.url;
   };
+  // UGameEngine::PaintProgress (vtable +0xb8) as SaveCurrentLevel calls it: the session that draws frames (sim-session.mjs), or none.
+  let paintProgress = null;
 
   /** PruneTravelActors. */
   function pruneTravelActors() {
@@ -53,6 +56,9 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
     const packageName = asset.name;
     const setAction = value => { try { write_(levelInfo(), 'LevelAction', value); } catch { /* an unlinked property */ } };
     setAction(2);
+    // PaintProgress (0x1000fd83, after `LevelAction = 2` at 0x1000fd7a): a frame of the level with LevelAction 2, drawn before the save's work
+    // and on screen through it
+    paintProgress?.();
     log('Init', `Shut down moving brush tracker for Level ${packageName}.MyLevel`);
     runtime.cleanupDestroyed(level, true);
     if (!info) { log('Log', 'WARNING!  DeusExLevelInfo MISSING!'); setAction(0); return null; }
@@ -80,5 +86,7 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
   }
   const classIsMover = cls => { for (let c = cls; c; c = c.base) if (c.record.key === 'engine.mover') return true; return false; };
   void lower;
-  return { pruneTravelActors, saveCurrentLevel };
+  return { pruneTravelActors, saveCurrentLevel,
+    /** The PaintProgress call's frame (`fn()`, with LevelAction already 2), or null for none. */
+    setPaintProgress(fn) { paintProgress = fn; } };
 }

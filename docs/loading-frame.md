@@ -1,7 +1,8 @@
 # The loading frame
 
 What the original shows while a map loads, who draws it, and how Play draws it (2026-10-30). Before this, Play covered every load with
-the page's own gate (`#gate`: "Loading original map", "Reading …", "Compiling shaders").
+the page's own gate (`#gate`: "Loading original map", "Reading …", "Compiling shaders"). The same PaintProgress frame with "SAVING" is
+drawn while a game is saved ([Saving](#saving), 2026-10-30).
 
 ## What the original shows
 
@@ -111,7 +112,7 @@ the grab with a worst difference of 6 levels (35,167 values equal, 709 within 2,
 ### Checks
 
 * `scripts/validate-loading-frame-play.mjs` (Chromium worker by default; `--browser firefox`, `--sim inline`): on 00_Training,
-  `LocalTravel 00_TrainingCombat` and then `QuickSave` + `LoadGame -1`. Each: the gate never shows from the travel to the arrival; the
+  `LocalTravel 00_TrainingCombat` and then the Quick Save key + `LoadGame -1` (and the saves of [Saving](#saving)). Each load: the gate never shows from the travel to the arrival; the
   loading frame's flash is `{scale: [0.05f × 3, 0], fog: 0}`; its console tiles equal PrintActionMessage's layout computed from Engine.u's
   LargeFont for the canvas size (page, x, y, size, U/V, colour (0, 0, 255), style 3); on screen during the load the frame is darkened and
   the LOADING cells hold blue pixels; the next level arrives with no stop.
@@ -119,11 +120,104 @@ the grab with a worst difference of 6 levels (35,167 values equal, 709 within 2,
   `validate-inline-restore-play` (waits for the gate hidden), `browser-tests/original-start-input.spec.mjs`, `load-game.spec.mjs`,
   `original-start-load-game.spec.mjs`.
 
+## Saving
+
+### What the original shows
+
+Measured under Wine on the Linux host (the same window as above; `scripts/travel-probe.sh saving` in follow mode with `DX_SAVE_BACKUP`,
+so the prefix's own QuickSave and slots were put back after the session). `import` takes about 1.2 s a grab while the game draws, too slow
+for this frame: the captures are ffmpeg's x11grab of the Wine desktop window at 60 frames a second with wall-clock times
+(`.work/loading-screen/saving/rec.sh`; `runs.sh` lists the runs of identical frames; outside Git):
+
+| save | captures | on screen |
+|---|---|---|
+| the Quick Save key (GreyPlus, numpad +) on 00_Training, 3 times | `quicksave1..3.mkv` | SAVING for 4 captured frames each: 67 ms (50 to 83) |
+| Save Game from the main menu on 00_Training (the new slot, Enter), 3 times | `savegame1..3.mkv` | 2 or 3 frames (33 to 50 ms) of the world with no HUD, then SAVING for 3 frames each: 50 ms |
+| `LocalTravel 00_TrainingCombat` from 00_Training (the same mission) | `travel1.mkv` | SAVING for 3 frames (50 ms), then LOADING for 467 ms |
+| the Quick Save key on 01_NYC_UNATCOIsland, twice | `island-qs1..2.mkv` | SAVING for 150 ms and 133 ms |
+
+The engine log's `Save=` for SaveCurrentLevel's level package was 38 to 41 ms on 00_Training and 104 ms on the Island (`.work/travel/saving/`):
+the frame stays for the save's own work and the rest of that frame, so its time follows the level's size and the machine.
+
+The frame is the frame before it, darkened as LOADING's is (luma 27.9 to 17.1 in the capture's limited range: 16 + 11.9 × 25/255 = 17.2),
+with "SAVING" in blue: its ink 125 × 23 pixels at x 577..701, y 347..369 of the 1280 × 720 viewport, centred, the same 1,392 blue pixels
+in all three kinds of save (`qs1/`, `sg1/`, `tr1/`). A Quick Save and the travel darken the HUD with the world; the menu save's frame has no HUD.
+
+### Who draws it
+
+`SaveCurrentLevel` (DeusEx `0x1000fac0`, [travel](travel.md#prunetravelactors-and-savecurrentlevel)): `LevelInfo.LevelAction = 2`
+(`0x1000fd7a`), `PaintProgress()` (`0x1000fd83`, `call [edx + 0xb8]` with the engine as `this`), `GWarn->BeginSlowTask(LocalizeProgress("Saving",
+"DeusEx"))` unless Position is -1, the save, `LevelAction = 0` (`0x1000ffa4`) and `GCache.Flush`. PaintProgress is LoadMap's (above): the
+flash swapped for (0.1, 0.1, 0.1) / (0, 0, 0), a whole `Draw`, the flash put back. Pauser and bShowMenu are left as they are; DrawLevelAction's
+Pauser branch needs `LEVACT_None` and LEVACT_Saving picks `SavingMessage` (Engine.int `SAVING`), in LargeFont, STY_Translucent, (0, 0, 255),
+centred by PrintActionMessage as LOADING is. Every save ends in `SaveCurrentLevel`: `SaveGame` (the Quick Save, the Save Game screen, the
+console's `SAVEGAME n`) calls `SaveCurrentLevel(index)` after it wrote `SaveInfo.dxs` and took the picture (GenerateSnapshot read the
+frame before the SAVING one), and a travel within a mission calls `SaveCurrentLevel(-2)` before LoadMap.
+
+**Which frame.** The `Draw` is of the level as the save finds it:
+
+* The Quick Save is a key binding's exec. DeusEx.exe's main loop calls `Engine->Tick(DeltaTime)` (`0x10914877`, the guard `UpdateWorld`),
+  which ticks the level and draws the frame, then `GWindowManager->Tick`, EnforceTickRate's sleep, and only then dispatches the window
+  messages (`PeekMessage`/`TranslateMessage`/`DispatchMessage`, `0x10914a91..0x10914b5c`), UT432's `MainLoop` (`UnEngineWin.h`) in the same
+  order. The key's message reaches the binding there, between two frames: nothing has moved since the frame drawn last, and the next
+  tick's DeltaTime (appSeconds since the last) includes the save. (WinDrv's path from `WM_KEYDOWN` to the binding's exec is not traced in the
+  DLL; UT432's runs it from the window procedure.)
+* The Save Game screen: `MenuScreenSaveGame.SaveGame(rowId)` hides the root window (`root.Hide()`, "a snapshot of the game that doesn't have
+  the UI in it"), its Tick waits two ticks, and `PerformSave` runs `ClearWindowStack`, `player.SaveGame(index, name)`, `root.Show()`: the
+  frames drawn meanwhile are the world alone (the captures' 2 or 3 frames) of the level the menus paused (`UIPauseGame`: `ShowMenu`, which
+  sets bShowMenu and the pause), and the save's `Draw` is the last of them, still without the root window. `ClearWindowStack`'s
+  `UnPauseGame` clears bShowMenu and the pause just before `SaveGame`, so DrawLevelAction prints SAVING (with bShowMenu it returns at once).
+  The HUD comes back with the frame after the save.
+* The travel's `SaveCurrentLevel(-2)` is in Browse, after the tick that travelled: its frame is that tick's state, which LoadMap's
+  LOADING frame then draws again.
+
+### Play
+
+* **The simulation side** (`travel-save.mjs`): `saveCurrentLevel` calls the session's PaintProgress right after `LevelAction = 2`, before
+  the brush tracker, CleanupDestroyed and the serialization (`setPaintProgress`). The session (`sim-session.mjs` `savingFrame`) runs
+  `script-console-level-action.mjs` `paintProgress`: the flash swapped and read as the HUD paint reads it (PaintProgress's), the console's
+  FrameX/FrameY and the canvas for the last frame's size, the original `Console.DrawLevelAction` (LevelAction is 2: SAVING), the flash put back.
+  LoadMap's `paint` is now that call wrapped in its own steps (LevelAction 1, Pauser, bShowMenu).
+* **When it reaches the page.** With the worker (the default) the frame is posted at once from inside the save (`sim-worker.mjs`
+  `onPaintProgress`, message `paint`); the page queues it in order with the snapshots (`sim-client.mjs`) and draws it while the worker is
+  still saving; the next snapshot replaces it when the save is done. So it is on screen for the save's own time in Play, as the original's
+  is for its, and the worker's next tick receives the time the save took (the page's posts during it are merged into it). A Quick Save's
+  key and a console line run in the worker before the frame's tick, as the original's run between frames.
+* **The page** (`main.mjs` `drawProgressFrame`, `progress-frame.mjs`): the original's `Draw` would draw the frame drawn last again (above),
+  so the page draws that frame's raw colours back (the display ramp's copy of its drawing buffer, `display-ramp.mjs` `rawFrame`, or the copy
+  made just before its flash when it had one: PaintProgress replaces the frame's flash), then PaintProgress's flash (EndFlash alpha 25), the
+  console's SAVING tiles and the ramp. The ramp of a SAVING frame goes through a copy of its own, so a second save before the next snapshot
+  draws the same last frame. The frame is not kept for a save's picture. `deusExViewer.savingFrames()` lists the SAVING frames drawn, with
+  when each was drawn and replaced.
+* **Inline** (`?sim=inline`, Firefox's default): the save runs on the page's thread (a key's handler, or the frame's tick for the Save
+  Game screen), which presents nothing until it returns. The SAVING frame is queued (`onPaintProgress`) and drawn alone in the next display
+  frame, the snapshot simulated with it in the one after; those display frames simulate nothing and their time goes to the next tick.
+* **Measured in Play** on the same host (`validate-loading-frame-play`, Chromium, worker, 1024 × 659 buffer): the SAVING frame was on screen
+  133 and 150 ms for the Quick Save on 00_TrainingCombat, 180 and 182 ms for the menu Save Game on 00_Training and 133 ms before the travel's
+  LOADING, in two runs (the original's 67, 50 and 50 ms on 00_Training). The frame stays exactly as long as Play's save takes, which is two to three and a half
+  times the original's: the level's serialization in JavaScript (`level-save.mjs`), the rest of that frame and the post of the next
+  snapshot. Its ink is SAVING's, 125 × 23, centred on the glyph cells; the menu save's frame before it has no HUD. In Firefox inline the
+  frame is drawn alone in one display frame after the save (14 and 23 to 25 ms between its draw and the next; 2 to 3 ms for the travel, whose
+  tick and save fill the frame before, so Firefox runs the next display frame at once).
+
+### Checks
+
+`scripts/validate-loading-frame-play.mjs` ([above](#checks)) on 00_Training: a menu Save Game (ShowMainMenu, the Escape key's menu; its Save Game; Enter in the new slot's name), the travel to
+00_TrainingCombat and the Quick Save key there. Each draws one SAVING frame whose flash is PaintProgress's and whose tiles equal
+PrintActionMessage's layout of "SAVING" from Engine.u's LargeFont; the canvas read back in the display frame after it is darkened and its blue
+text is SAVING's measured ink (125 × 23, centred on the glyph cells); the frame before it shows the HUD's body display for the Quick Save and not for the menu save (root.Hide()); the slot is written
+(Save0001, QuickSave) and its picture is not darkened (the frame before: mean grey 32.6 and 20.4 against the canvas's 29.4 and 20.9). The time each was on screen is reported beside the original's.
+
 ## Not done or not verified
 
-* **SAVING.** `SaveCurrentLevel` draws a PaintProgress frame with `LevelAction = 2` before it files a level: a travel within a mission
-  (replaced by the LOADING frame once filed) and every Save Game and Quick Save (shown while the save writes, then play goes on). Play's
-  save runs inside the worker's tick and posts no frame before it: no SAVING frame is drawn. Its duration in the original was not measured.
+* **The SAVING frame's world and HUD are the last frame's**, drawn again, not a new render of the level: the same picture as the original's
+  `Draw` when nothing has moved since that frame (a key's save between frames, the paused Save Game screen). The travel's
+  `SaveCurrentLevel(-2)` follows the tick that travelled, so the original's SAVING frame there is one tick newer than the frame Play darkens
+  (the LOADING frame after it is that tick's). A frame drawn under a flash comes back from the copy before the flash (not compared with the original).
+* **Inline**, the SAVING frame is presented after the save (one display frame), not during it: the page's thread runs the save.
+* **None is drawn** with `?gamma=material` (no raw copy of the frame), after a canvas resize since the last frame, or before a level's first frame.
+* **`BeginSlowTask`** (the Save Game screen's and a travel's, not the Quick Save's) feeds GWarn's progress, which the captures show nothing of
+  in the game window; not modelled.
 * **The rest of Console.PostRender** (the Border pattern with `bNoDrawWorld`, the time demo, the console lines and border,
   DrawSingleView's messages) is not run, on the loading frame or on any other Play frame; DrawLevelAction is, and on the loading frame
   its only reachable branch is the LevelAction message.

@@ -51,7 +51,7 @@ const hostStarts = [];
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, fullscreen = null, scene = null, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, restore = false, onConversationSpeech = null, onAudioVoice = null,
-  onProgress = () => {}, process = null }) {
+  onProgress = () => {}, onPaintProgress = null, process = null }) {
   // Before the first load keeps what it reads: the allocation sites the frame loop shares with the load are decided here (allocation-site-warmup.mjs)
   warmAllocationSites();
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
@@ -98,8 +98,9 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   const session = createSimSession(game, { assets, events, exportName });
   session.setScene(stampScene, actorSim);
   if (meshLighting) session.setMeshLighting(meshLighting);
-  // The console's canvas: LoadMap's PaintProgress frame, when a travel leaves this level, prints its DrawLevelAction message (docs/loading-frame.md).
-  if (game.hud) session.setLevelAction(await createConsoleLevelAction({ runtime, assets }));
+  // The console's canvas: LoadMap's PaintProgress frame, when a travel leaves this level, prints its DrawLevelAction message (docs/loading-frame.md);
+  // SaveCurrentLevel's goes to `onPaintProgress` as the save draws it.
+  if (game.hud) session.setLevelAction(await createConsoleLevelAction({ runtime, assets }), onPaintProgress);
   const hudTextures = game.hud ? session.hudTextures() : null;
   // The player's view model, with the layout of the page's own GPU mesh
   // instance for it.

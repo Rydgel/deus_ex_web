@@ -142,7 +142,7 @@ Every failure is a `StorageError` with a `kind` (`browser-storage.mjs`; the fold
   texture and palette numbers come from the Texture class's name counter (`Texture0`/`Palette0` in the first save of a process, as measured) and the SaveInfo/Texture/Palette objects are not in the registry model; the order of
   the object names at the end of the name table and of the Texture and Palette in the export table are the original process's history (41 saves show both orders) and Play uses the first save's; the time stamp is the browser's local
   clock and `InternalTime` its monotonic clock; a flag object's Outer is the FlagBase (the desktop game's 2026-09 save has that; 96% of the internet saves' flags have the player, the ones a travel text imported);
-  the progress bar `SaveCurrentLevel` shows (`BeginSlowTask`, `PaintProgress`) is not drawn.
+  `SaveCurrentLevel`'s `BeginSlowTask` progress is not modelled (its `PaintProgress` frame, SAVING, is drawn: [loading frame](loading-frame.md#saving)).
 * Cost: a frame is kept (one framebuffer copy a frame) only while a window holds the mouse or a save waits; gameplay frames are untouched. The copy was **not measured** (headless Chromium has a software GL).
   The bytes cross the worker boundary as copies (about 8 MB for the Island), once per save.
 

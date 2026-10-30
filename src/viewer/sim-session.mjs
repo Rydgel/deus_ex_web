@@ -94,6 +94,16 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   let coronaScan = null, weaponSim = null, size = null;
   // The console's canvas for LoadMap's PaintProgress frame (script-console-level-action.mjs, docs/loading-frame.md).
   let levelAction = null;
+  // SaveCurrentLevel's PaintProgress frame (travel-save.mjs, docs/loading-frame.md "Saving"), drawn in the save, between frames or in a
+  // tick: the flash PaintProgress swaps in and the console's DrawLevelAction tiles for the last frame's size. Its world and HUD are the
+  // frame the page drew last, which the page draws again under them (main.mjs drawProgressFrame).
+  const savingFrame = () => {
+    const viewer = game.player.collisionActor, [width, height] = size;
+    let flash = null;
+    const { console } = levelAction.paintProgress({ player: viewer, width, height,
+      hudPaint: () => { flash = viewportFlash({ flashScale: runtime.readNamed(viewer, 'FlashScale'), flashFog: runtime.readNamed(viewer, 'FlashFog') }); } });
+    return { action: LEVEL_ACTION.saving, width, height, flash, console };
+  };
   // The original BSP occlusion (bsp-occlusion.mjs) and DrawWorld's frame
   // counter (0x10b5a700), which schedules its bound tests. Unless
   // ?actorOcclusion=frustum, the main frame's OccludeBsp waits for
@@ -1309,8 +1319,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * records before the first frame). */
     takeEvents() { return events.splice(0); },
     setWeapon(overlay) { weaponSim = overlay; },
-    /** The console's canvas (script-console-level-action.mjs createConsoleLevelAction) for the loading frame. */
-    setLevelAction(value) { levelAction = value; },
+    /** The console's canvas (script-console-level-action.mjs createConsoleLevelAction) for the loading frame, and `deliver(frame)`, which
+     * receives SaveCurrentLevel's PaintProgress frame (docs/loading-frame.md "Saving") the moment the save draws it, before the save's work. */
+    setLevelAction(value, deliver = null) {
+      levelAction = value;
+      game.doors.scriptRuntime.levelSaver?.setPaintProgress(value && deliver ? () => { if (size) deliver(savingFrame()); } : null);
+    },
     /** URender's per-frame mesh lighting setup for the main viewport
      * (mesh-lighting-view.mjs beginFrame) with this frame's moving lights;
      * `seconds` is the viewport clock (the page's frame time). */
