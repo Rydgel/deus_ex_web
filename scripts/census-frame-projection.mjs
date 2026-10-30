@@ -2,7 +2,7 @@
 // (play-camera.mjs setFrameProjection against the FOV and the constant
 // half-pixel centre it replaced), in Play's default worker mode: at seeded
 // views of the Island, the Paris club and Training, the page draws the same
-// frozen frame (the window blurred: no simulation step, Level time still)
+// frozen frame (deusExViewer.freeze(): no simulation step, Level time still)
 // three times, with the frame projection, with the FOV's, and with the frame
 // projection again. The last against the first is the noise floor (anything
 // that is not the projection); the middle against the first is the change.
@@ -78,7 +78,7 @@ try {
       await page.evaluate(args => window.deusExViewer.placeProbe(args), {location: at.map((c, k) => c + (k === 2 ? 10 : 0)),
         rotation: [Math.floor(random() * 3000) - 1500 & 0xffff, Math.floor(random() * 65536), 0]});
       await frames(40);
-      await page.evaluate(() => window.dispatchEvent(new Event('blur')));   // freeze: no simulation step
+      await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));   // freeze: no simulation step
       await frames(6);
       await page.evaluate(() => window.deusExViewer.frameProjection(true)); await frames(3);
       // Wait for the frozen frame to settle (textures, light maps and meshes still arriving).

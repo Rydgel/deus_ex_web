@@ -7,7 +7,7 @@
  *
  * On 00_Training the player looks at JaimeReyes0's feet (the pawn's Shadow
  * decal) and, in a second view, at a tracked mover's fragment with a BulletHole
- * spawned on it. The frame is frozen (window blurred) and drawn four ways:
+ * spawned on it. The frame is frozen (deusExViewer.freeze()) and drawn four ways:
  *   A  vertex stage on, decals drawn      B  stage off (camera matrices), decals
  *   D  stage on, decal layer hidden       E  stage off, decal layer hidden
  * A against D is the decal's coverage with the chain, B against E with the
@@ -72,7 +72,7 @@ try {
   }, { shots: [a, b, c, d].map(image => image.toString('base64')), width: size.width, height: size.height });
   const view = async (label, minimum) => {
     await frames(40);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await frames(6);
     const state = await page.evaluate(() => ({ drawn: window.deusExViewer.decals()?.drawnTriangles ?? 0, fp: window.deusExViewer.vertexProjection(),
       master: window.deusExViewer.visibility()?.master ?? null }));

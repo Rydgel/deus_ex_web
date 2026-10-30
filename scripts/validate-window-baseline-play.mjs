@@ -45,11 +45,10 @@ const player=game.player.collisionActor,level=runtime.levelFor(player);
 const native=runtime.invokeNative.bind(runtime),calls=[],completed=[],accelerators=[],sizing=[],configured=[],botSounds=[];
 const originalConfiguration=W.v.configurationChanged;
 W.v.configurationChanged=(win)=>{const result=originalConfiguration(win);configured.push(win);return result;};
-const keys=new Map([...runtime.functions.values()].map(record=>[record.function,record.key]));
 const executeScript=runtime.executeScript.bind(runtime);
 runtime.executeScript=(fn,receiver,...rest)=>{
   const value=executeScript(fn,receiver,...rest);
-  completed.push({key:keys.get(fn),receiver});
+  completed.push({key:fn.record.key,receiver});   // (a FunctionRecord: its function record's key)
   return value;
 };
 runtime.invokeNative=call=>{

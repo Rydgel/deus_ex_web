@@ -1,5 +1,5 @@
 /** D3DDrv's detail-texture pass drawn by Play's page, in the default worker mode (docs/frame-projection.md "Detail textures",
- * "Play"). The window is blurred (no simulation step, level time still) and one frozen frame is drawn several ways:
+ * "Play"). The frame is frozen (deusExViewer.freeze(): no simulation step, level time still) and one frozen frame is drawn several ways:
  *   A  the default: the simulation's fans drawn in the recorded states;
  *   B  the detail scene hidden (the frame without the pass);
  *   C  shown again (A must repeat: the noise floor);
@@ -139,7 +139,7 @@ try {
     for (const view of job.views) {
       await page.evaluate(args => window.deusExViewer.placeProbe(args), view);
       await frames(40);
-      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
       await drawn(6);
       const info = await page.evaluate(() => window.deusExViewer.detail());
       assert.ok(info.on, `${view.name}: the page has a detail scene`);
@@ -227,7 +227,7 @@ try {
     const { page, errors, frames, drawn } = await open(MIRROR.map, '');
     await page.evaluate(args => window.deusExViewer.placeProbe(args), MIRROR);
     await frames(40);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await drawn(6);
     const info = await page.evaluate(() => window.deusExViewer.detail());
     const withFans = info.frames.map(f => f.index);
@@ -256,7 +256,7 @@ try {
     const { page, errors, frames, drawn } = await open(JOBS[0].map, '&detailTextures=0');
     await page.evaluate(args => window.deusExViewer.placeProbe(args), JOBS[0].views[0]);
     await frames(40);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await drawn(6);
     const info = await page.evaluate(() => window.deusExViewer.detail());
     assert.equal(info.on, false, '?detailTextures=0: no detail scene');

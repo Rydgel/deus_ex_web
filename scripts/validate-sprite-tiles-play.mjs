@@ -4,7 +4,7 @@
  * page's vertex shader builds DrawActorSprite's rectangle, UCanvas::DrawTile's clip and
  * D3DDrv's four vertices from them (sprite-tile-glsl.mjs).
  *
- * The frame is frozen (window blurred, the sprite scene stops taking snapshots). In three
+ * The frame is frozen (deusExViewer.freeze(), the sprite scene stops taking snapshots). In three
  * views (the vent, and rotated so the smoke straddles the frame's edges), for each sprite
  * drawn in the main frame, the sprite alone (the others on a layer the camera does not
  * see) against the frame without any sprite:
@@ -124,7 +124,7 @@ try {
   }, [indices, on]);
   const view = async (label, expectSprites) => {
     await frames(40);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await frames(6);
     // The simulation keeps sending snapshots; the sprite scene stops taking them so the frame, its records and the Setup floats stay one state.
     await page.evaluate(() => { const scene = window.__deusSprites.scene; if (!scene.keepUpdate) { scene.keepUpdate = scene.update; scene.update = () => {}; } });

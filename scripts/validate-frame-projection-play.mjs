@@ -1,7 +1,7 @@
 /** The original's vertex projection in Play's default worker mode
  * (docs/frame-projection.md): at seeded views of the Island and the Paris club
  * and in front of the Bar's and the Smugglers' mirrors (mirror child frames),
- * the page draws one frozen frame (the window blurred: no simulation step,
+ * the page draws one frozen frame (deusExViewer.freeze(): no simulation step,
  * Level time still) four ways and compares the PNGs of the 3D view:
  *   A  the vertex stage on (every pass that has a frame projects its vertices
  *      with Render.dll's and D3DDrv's chain),
@@ -128,7 +128,7 @@ try {
     for (const view of list) {
       await page.evaluate(args => window.deusExViewer.placeProbe(args), view);
       await frames(40);
-      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
       await drawn(6);
       // --noise-with off: A and C use the camera's matrices, to tell the frame's own noise from the stage's.
       const stage = option('noise-with', 'on') !== 'off';

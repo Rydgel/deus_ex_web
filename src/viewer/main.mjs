@@ -158,7 +158,8 @@ const randomSeed=seedParam===null?undefined:Number(seedParam)>>>0;
 // ?hold=1: the frame loop does nothing until deusExViewer.release(), whose
 // first frame takes a 1/60 s step; with ?seed= and a paused fake clock two
 // runs then see the same frames (scripts/validate-sim-split.mjs).
-let held=new URLSearchParams(location.search).get('hold')==='1';
+const holdParam=new URLSearchParams(location.search).get('hold')==='1';
+let held=holdParam;
 // ?simVerify=1: every frame, the simulation side's drawn set (sim-session.mjs
 // stamps, which writes LastRenderTime) against what three.js drew: the
 // onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
@@ -1041,9 +1042,10 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // now, with the dt the first post would carry (sim-session.mjs preTick). A travel's arrival (a loaded game's too) makes it with the loading
     // frame, measured from the last frame before the load to now: the page's build after it is not the level's time, as a shorter load would
     // not be (docs/first-frames.md "Travel and loaded games"). Not when a start cheat or the easter egg act on the level first, nor the loadout of
-    // a map opened directly (an arrival keeps its inventory).
+    // a map opened directly (an arrival keeps its inventory), nor under ?hold=1, whose level ticks only in the frames a test releases (the
+    // strobe checks hold TriggerLight1 before its first Tick).
     preTickPending = false;
-    if (simClient && preTickParam && nextHost.game && mode === 'play' && !easterParam && !(loadoutParam && !travel) && !startCheats.length) {
+    if (simClient && preTickParam && !holdParam && nextHost.game && mode === 'play' && !easterParam && !(loadoutParam && !travel) && !startCheats.length) {
       preTickPending = true;
       const dt = travel && travelFrameTime !== null ? Math.max(0, (performance.now() - travelFrameTime) / 1000) : FIRST_FRAME_DT;
       simClient.call('preTick', { dt, width: renderer.domElement.width, height: renderer.domElement.height, aspect: canvasAspect, resizes: resizeCount })
@@ -2133,6 +2135,9 @@ async settingsProbe(step) {
 /** Validation: the pointer given back as the page gives it (releasePointer): the game is handed no Escape, so a test's absolute
  * moves and clicks reach a menu that stays open. A user's release is the browser's Escape rule (handEscape). */
 releasePointer() { releasePointer(); },
+/** Validation: a frozen frame. The simulation halts (the frame input's `run`) and the page keeps drawing the last snapshot, as a lost
+ * focus did before 4bf5b4bd; `freeze(false)` goes on without catching up. The page's own controls never freeze. */
+freeze(on = true) { paused = Boolean(on); if (!on) resumeClock = true; },
 async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;

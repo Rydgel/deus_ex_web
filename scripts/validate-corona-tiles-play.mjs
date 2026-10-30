@@ -5,7 +5,7 @@
  * vertices from it (sprite-tile-glsl.mjs fpCanvasTile) in the master frame (main.mjs sets the frame
  * around the corona pass).
  *
- * The frame is frozen (window blurred, the corona pass stops taking icons). In each view, the corona
+ * The frame is frozen (deusExViewer.freeze(), the corona pass stops taking icons). In each view, the corona
  * alone against the frame without coronas:
  *   - its lit pixels lie inside the reference tile (src/runtime/sprite-tile.mjs iconVertices from the
  *     icon and the frame's rectangle: the D3D pixel centres its quad covers) and fill most of it;
@@ -110,7 +110,7 @@ try {
   const view = async (label, yawOffset) => {
     if (yawOffset) await page.evaluate(([rotation]) => window.deusExViewer.placeProbe({ rotation }), [[aim.rotation[0], (aim.rotation[1] + yawOffset + 65536) & 0xffff, 0]]);
     await frames(70);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await frames(6);
     // The simulation keeps sending snapshots; the corona pass stops taking them so the frame, its icons and the fade stay one state.
     await page.evaluate(() => { const pass = window.__deusCoronas.pass; if (!pass.keepUpdate) { pass.keepUpdate = pass.update; pass.update = () => ({}); } });

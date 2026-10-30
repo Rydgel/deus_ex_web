@@ -5,7 +5,7 @@
  * (two distances, three lateral offsets). The mirror's OccludeBsp child frame then holds sprites in its Frame->Sprite: the
  * sprite records carry `frames` and FDynamicSprite::Setup's floats of that child frame, `screens[frame]`.
  *
- * The frame is frozen (window blurred, the sprite scene no longer taking snapshots). For each sprite a child frame draws,
+ * The frame is frozen (deusExViewer.freeze(), the sprite scene no longer taking snapshots). For each sprite a child frame draws,
  * drawn alone in that frame (hidden in the main frame and in the other passes), against the frame without any sprite:
  *   - the pixels the reflection adds lie inside the reference tile (src/runtime/sprite-tile.mjs from the record's Setup
  *     floats of that child frame and the master frame's rectangle: the canvas holds the master frame while a child frame
@@ -143,7 +143,7 @@ try {
     totals.views++;
     await page.evaluate(([location, rotation]) => window.deusExViewer.placeProbe({ location, rotation }), [view.location, view.rotation]);
     await frames(60);
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
     await frames(6);
     // The simulation keeps sending snapshots; the sprite scene stops taking them so the frame, its records and Setup's floats stay one state.
     await page.evaluate(() => { const scene = window.__deusSprites.scene; if (!scene.keepUpdate) { scene.keepUpdate = scene.update; scene.update = () => {}; } });

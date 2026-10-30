@@ -59,8 +59,8 @@ try {
     if (name === 'DeusExMover1') {
       // The yaw fan (RotationRate yaw -20000, 20000/65536 turns per second): the centroid turns about the fan's own Location axis.
       const ca = centroid(pa), cb = centroid(pb);
-      // 2: a frozen frame (the page loses focus: the simulation halts and the page keeps the last frame), the tracker's points read in the same instant.
-      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      // 2: a frozen frame (deusExViewer.freeze(): the simulation halts and the page keeps the last frame), the tracker's points read in the same instant.
+      await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
       await frames(10);
       const frozen = await probe({ points: true });
       const rows = await vertices(frozen.movers.filter(m => FANS.includes(m.name)).map(m => ({ name: m.name, points: m.points })));

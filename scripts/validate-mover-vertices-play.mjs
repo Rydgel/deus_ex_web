@@ -127,7 +127,7 @@ try {
     const view = async (mover, eye) => {
       await page.evaluate(args => window.deusExViewer.placeProbe(args), aim(eye, locations.get(mover.name)));
       await frames(40);
-      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze()));
       await frames(6);
       const drawn = (await probe({})).movers.find(m => m.name === mover.name)?.drawn ?? 0;
       const focus = () => page.evaluate(() => window.dispatchEvent(new Event('focus')));

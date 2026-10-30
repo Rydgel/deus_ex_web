@@ -127,7 +127,7 @@ try {
     '-format', '%[fx:mean] %[fx:standard_deviation]', 'info:'], {encoding: 'utf8'}).trim().split(' ').map(Number) : null;
   log('decal on/off');
   // The decal block's share of the camera window: the same (paused) frame without it.
-  await page.evaluate(() => window.dispatchEvent(new Event('blur'))); await frames(8);
+  await page.evaluate(() => (window.dispatchEvent(new Event('blur')), window.deusExViewer.freeze())); await frames(8);
   const shotOn = path.join(scratch, 'camera-on.png'), shotOff = path.join(scratch, 'camera-off.png');
   await page.screenshot({path: shotOn});
   await page.evaluate(() => window.deusExViewer.viewportDecals(false)); await frames(8);
