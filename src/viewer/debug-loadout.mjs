@@ -1,4 +1,4 @@
-/** The debugging page's loadout (README "debugging page": `?loadout=1` at each Player start, Tools ▸ Give loadout now), on whichever
+/** The debugging page's loadout (docs/development.md "debugging page": `?loadout=1` at each Player start, Tools ▸ Give loadout now), on whichever
  * side runs the simulation (sim-worker.mjs `call`, or the page with ?sim=inline). Everything JC receives comes from the original's own
  * code, run through the recovered console command chain as view-probe.mjs `exec` runs it:
  *   - `bCheatsEnabled` is written first, the stand-in for typing `set DeusEx.JCDentonMale bCheatsEnabled True` (as view-probe.mjs does);
