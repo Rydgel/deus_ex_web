@@ -1575,7 +1575,7 @@ Wasm): 7,147 / 7,180 / 6,861 ms before, 7,215 / 7,028 / 6,927 ms after: inside t
 
 **What is left, and why.**
 * The family is at 126 k objects (the aim was 150 k) and 0.74 M edges (the aim was 0.6 M). What is left in it:
-  * Per binding, the closures of `meshBindingSteps` (`actor-mesh-sim.mjs`): 30 k closures over 313 bindings (96 a binding: the
+  * (Measured again, not done: "Actor hosts and mesh bindings (2026-10-30)", "What is left".) Per binding, the closures of `meshBindingSteps` (`actor-mesh-sim.mjs`): 30 k closures over 313 bindings (96 a binding: the
     returned object's methods, the 24 helpers of the `try` block, the helpers of the generator's scope), 180 k edges, with their
     contexts (the generator scope has 72 slots, the `try` block's 41) and 787 out-of-object property arrays (34 k edges), about
     250 k of the edges in all.
@@ -2012,19 +2012,20 @@ tick 10.98 / 9.75 / 9.68 ms before, 9.36 / 10.91 / 9.49 ms after: not slower, in
 GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
 
 **What is left, and why.**
-* The hosts' AccessorPairs: V8 makes one for each accessor property of each object, so a map actor still holds 24 (about 58 k) and a
+* (Done: "Actor hosts and mesh bindings (2026-10-30)" below. The cause was not what is written here: the hosts were dictionary-mode objects, and the
+  fix was `MapActorHost`, not a shared prototype of accessors alone.) The hosts' AccessorPairs: V8 makes one for each accessor property of each object, so a map actor still holds 24 (about 58 k) and a
   pawn view about ninety. They go only with the accessors on a shared prototype, which means hosts built from a class: the host
   literals are made in `map.mjs` and `game.mjs`, and an enumeration of a host (`Object.keys`, a spread) would lose the members.
   Not started.
-* The entries behind those accessors: 14 objects a map actor (5 `Pose`, 4 `Mirror`, 2 link, 3 `FlagWord`, their arrays), 40 k on
+* (Done, "Actor hosts and mesh bindings (2026-10-30)".) The entries behind those accessors: 14 objects a map actor (5 `Pose`, 4 `Mirror`, 2 link, 3 `FlagWord`, their arrays), 40 k on
   the Island. They could be one object a host, or per class with the instance read through `this`.
-* A pawn view's ~35 methods are closures over its local readers (the 15.6 k anonymous closures of the receiver family in the last roam).
+* (The view is a fast-mode object now, "Actor hosts and mesh bindings (2026-10-30)"; the methods are still closures.) A pawn view's ~35 methods are closures over its local readers (the 15.6 k anonymous closures of the receiver family in the last roam).
   Converting them means the view as a class with its state as fields (the work "Step 4's results" describes for the
   mesh bindings).
-* `instance.bindings` is still a Map for each of the 12 k objects (24 k objects, 0.2 M edges), holding five shared entries. A shared
+* (Done, "Actor hosts and mesh bindings (2026-10-30)".) `instance.bindings` is still a Map for each of the 12 k objects (24 k objects, 0.2 M edges), holding five shared entries. A shared
   immutable header table with copy on write would drop most of it; every writer (`bindProperty`, the window host, three validators)
   would go through one method.
-* `identities.properties` (83 k, 0.51 M edges, the decoded map's property tags, read only by `prepareMapProperties`): each is an object with a
+* (Done, "Actor hosts and mesh bindings (2026-10-30)".) `identities.properties` (83 k, 0.51 M edges, the decoded map's property tags, read only by `prepareMapProperties`): each is an object with a
   late-added `byteLength` (a property array each, from the spread in `map.mjs:17`). Not this step's file.
 * `ScriptRuntime.instances.refs` (12 k arrays and their element stores: every class has a reference slot), the Touching arrays' four
   AccessorPairs each (7 k), the `latent` and `cursor` accessors of each running state frame (1.4 k pairs), and `identities.values`'s
@@ -2032,6 +2033,133 @@ GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
 * The marking time per major GC on two cores is not measured for this branch. By step 7's and 8's ratios (7.6% and 12% fewer pointer
   references for 13% and 10% shorter marking) 18% fewer pointer references would be expected to shorten it, which is a prediction.
   The Mac and Firefox are not measured.
+
+## Actor hosts and mesh bindings (2026-10-30)
+
+Host representation only: every change below keeps the values its readers see. Branch `worktree-agent-abdc72d8a2546f87f`, from master
+ca8ab34e (steps 2, 3, 4, 5 and 9 merged); twelve commits (ten of code, two of tests and a validator), each checked as listed below.
+
+**What V8 did to these structures.** Two rules explain most of what the hosts held; neither is in the earlier steps' notes. A third, found
+by this step's own mistake, is at the end.
+* *Dictionary mode.* All 2,237 map actor hosts of the Island were dictionary-mode objects (`%HasFastProperties`): 47 keys each on average
+  (106 k in all), a three-word table slot for each, plus an AccessorPair of its own for each of the 22 accessors the installers define
+  (49 k). The cause is the conversion: V8 normalizes an object when one of its data properties is redefined as an accessor (measured with
+  `--allow-natives-syntax`: a new accessor on a fast object, or thirty of them, stays fast; a data-to-accessor conversion, and any `delete`,
+  does not). A host's `position`, `radius`, `height`, `flags`, `base`, `touching`, `rotation`, `physics`, `velocity` and the rest are data
+  properties from level load (game.mjs, player-scene.mjs prepareActor) until the installers turn them into accessors at attach.
+* *Accessor pairs and hidden classes.* A fast object that adds an accessor property gets it from a transition shared by every object that adds
+  the same name with the same getter and setter: the AccessorPair is in the shared map's descriptors, not on the object. But if the transition
+  exists with another pair, V8 does not branch: it normalizes the object. A pawn's physics view defined `deleted`, `collideWorld`,
+  `collisionBits`, `flags` and `actorFlags` over one pair for a map pawn (the image's words) and another for a spawned pawn (composed from the
+  bool fields), so after the first kind every view of the other kind was a dictionary: 22 of the Island's 80 views after 200 ticks, the
+  player's and every spawned pawn's. The view's literal also had `controlledPlayer` as a data property that was then redefined as an
+  accessor: the same conversion, so all 58 map pawns' views were dictionaries.
+* *A cache keyed by a shared object keeps a level.* A leaf cell is one object for every class and every level (step 5's `sharedCell`), so a
+  WeakMap or a Map keyed by a cell is never emptied. The first version of the host state cached the shared `PoseField`, `MirrorField` and
+  `BaseField` objects by cell and interned the entry arrays in a global Map; their codecs reach the class graph of the level they were made
+  for, so the Island's worker held the level loaded before it (a second script process: 4.95 M objects and 28.6 M pointer references after
+  the 30 s walk against 3.75 M and 19.9 M for the base tree, and 259 MB of heap against 196 MB). The headless runs load one level and did not
+  show it; the browser's session loads two (the default map, then the Island). It was found by exporting the branch's commits and measuring each
+  one's worker heap after the same 30 s walk (`profile-live-heap` without the snapshot, outside Git): 196 MB at the bindings commit, 192 at the
+  tags, 263 at the host state. The caches are keyed by the codec now (it belongs to the field, which goes with its level) and the interned
+  arrays are a trie of WeakMaps keyed by the entries.
+
+**What the structures were and what they are.**
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| A map actor host | a dictionary-mode object (47 keys on average, a table slot for each, and an AccessorPair of its own for each of its 22 accessors) | a `MapActorHost` (`host-accessors.mjs`): a fast-mode object whose own properties are its data. The 33 image-backed members are accessors of its prototype (`defineBackedMember`); until an installer takes one into the object image its value is in the host's pending table, which is what the data property held. The installers move the value into the image (`peekPending`, `dropPending`) and the accessor then goes through the host's state as before; a plain host (the player's identity, fixtures) is installed as before. 2,217 of the Island's 2,237 hosts are fast-mode objects (the 18 movers, a BreakableGlass and the LevelInfo are not: what makes the movers dictionary-mode was not found; they own no accessor) |
+| A host's pose, mirror, link and flag-word state | 14 objects: 5 `Pose`, 4 or more `Mirror`, 2 link, 3 `FlagWord` objects and an array for each slot | one `PoseSet`, `MirrorSet`, `LinkSet`, `ActorWords` object a host (its instance and `values`) over an interned array of entries shared by every host of the class (`PoseField`, `MirrorField`, `BaseField`, `TouchingField`: the spec, the cell and the codec; `host-accessors.mjs` `internEntries`) |
+| A map actor's Touching array | an Array with four accessor properties of its own: four AccessorPairs, a dictionary of elements, a property array for the link | `TouchingSlots` (`slotArrayClass`): an Array subclass of length 4, species Array, whose four slot accessors are on the class's prototype |
+| `instance.bindings` of a header-only object (about 9,500 of the 12 k) | a Map and its table for five entries every object shares | `SharedBindings` (`script-bindings.mjs`): a Map that cannot be changed, a trie of the header prefixes made once. `ScriptInstance.setBinding`/`deleteBinding` (`setBindingOf`) are the only writers; an instance moves to the next table when it binds the next header binding in order, and gets a Map of its own (the same entries in the same order) at any other binding |
+| The decoded map's property tags | an object per tag with `byteLength` added after the spread (a property array each), kept for the life of the level: 83 k objects on the worker and as many on the page | one literal; released (`releaseMapPropertyTags`: `properties` null on the decoded actors and their host copies) once `createScriptDoors` has attached every map actor; `prepareMapProperties` reads them again from the package for a later caller. The page of a level the worker simulates decodes the map with `decodeMap({properties: false})` (one line of main.mjs) |
+| A pawn's physics view | a dictionary-mode object (a table slot and an AccessorPair for each of its 106 members) | a fast-mode object whose accessors are in the hidden class's descriptors, once for all views: `controlledPlayer` is defined, not converted, and the five members that differed between map and spawned pawns are one function pair branching on `access.imaged` |
+
+What differs for a reader, by design, and is asserted in the tests: the 33 members are not own properties of a `MapActorHost` (`Object.keys`, a
+spread and `hasOwn` do not list them; `in`, reads, writes and the attributes of every other property are the same); `delete host.member` of an
+installed member was a TypeError (a non-configurable own accessor) and is a no-op (`hostDelete` does the delete of a member no installer took;
+player-scene.mjs uses it); a store to a getter-only member after it was taken still throws, with `#<MapActorHost>` in the message; a Touching
+array has no keys of its own (they were 0 to 3). A search of `src` for enumerations of hosts (`Object.keys`, `entries`, spreads, `for in`,
+`getOwnPropertyDescriptors`, `hasOwn`, `Object.assign` from a host) found none of a map host that depends on the members: the player's identity, whose descriptors
+are copied (player.mjs), is a plain object, and the restore path copies a `MapActorHost` with `Object.assign` (game.mjs, the saved player) before any member is set.
+
+**Checks.**
+* Fidelity. References first, on the untouched worktree (ca8ab34e): frame-alloc-meter Island (600 frames, warm 900) `c8cf5fff928609c1`, 03_NYC_747
+  `f6337bff0cf741fc`, 00_Training `e4b017e7b1bc0439`, `hud-stream-digest --frames 1500 --stream` `16bfe2bd08ed1653`. On the final tree `--compare`
+  reports identical frames on all four, and bench-sim (300 ticks) gives Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747
+  `ad8e591a01434df5` (also checked at the commits in between).
+* Differentials, old against new:
+  * `test/host-members.test.mjs`: the four installer modules of ca8ab34e verbatim (`test/helpers/*-reference.mjs`) and the new ones on twin hosts, on
+    plain hosts and on `MapActorHost`s, over the real classes (actor, pawn, playerpawn, mover, inventory, levelinfo): install, every member read and
+    written, resets, live pose, live vectors, the level target, the player's port, release, errors, base epochs and rider counts, what enumerating
+    the host yields, and the calls made on the object image (method and offset, in order), its bytes and its refs; a mutation of either module made it fail.
+  * `test/pawn-view-members.test.mjs`: the pawn view of ca8ab34e verbatim against the new one on map, composed and player pawns: members in order
+    with their attributes, every value read, writes, and the service calls; every view is a fast-mode object (a child process with `--allow-natives-syntax`).
+  * `test/binding-table.test.mjs`: 400 random sequences of header and other bindings and deletes against a plain Map: entries, order, size, has.
+  * `test/intern-entries.test.mjs` (lists with holes, and the interned arrays and their entries are collected in a child process with `--expose-gc`; the
+    first version's global Map kept 12 of 12), `test/map-actor-host.test.mjs`, `test/map-property-tags.test.mjs` and `scripts/validate-map-property-tags.mjs`
+    (60 actors of the 52 classes of 00_Training: 727 authored fields and 19,871 initial values the same from the tags released and the tags read again).
+  * 925 unit tests pass.
+* Validators, each exit 0, one at a time, in memory-capped scopes (the run was cut off once by the host's memory limit and restarted capped):
+  script-vm-interp, script-vm-x87, script-process, class-loader, property-destroy, cleanup-destroyed-live, native-actor-physics, native-walking,
+  native-walking-surface, walk-kernel, walk-loop-kernel, rider-move-kernel, native-based-actors, native-set-rotation-riders, actor-tick,
+  actor-tick-kernel, pawn-nav, triggers, trigger-actions, window-computer, keypad, play-hud, mover-push-play, decals-play, mirrors-play,
+  island-conversation, save-load-play, root-snapshot, save-game, level-save, travel, load-saves, map-property-tags, and on the final tree travel-endings
+  (869 s), gpu-mesh, mesh-lighting-play, umesh-play, weapon-play, weapon-gpu-play, anim-dilation-play and context-loss-play (it failed once, "the snapshot in flight
+  was applied while the context was lost", on a host running travel-endings and other sessions' jobs, and passed twice alone, as it does on the base tree).
+  `validate-rider-move-kernel` was red on ca8ab34e itself (step 9 left its hand-made BSP nodes in the object form: `nodes.plane is not a function`);
+  it builds them with `modelFromObjects` now. level-save, travel and load-saves need `.work/travel` and `.work/internet-saves` (outside Git) and
+  native-set-rotation-riders `reports/movement` (copied from the main checkout); without them they skip or fail with ENOENT.
+* A 60 s worker-mode Island roam (`hitch-run.mjs --mode roam`): 4,664 frames, 0 errors, 59.8 fps, no gap over 50 ms (worker p50 10.9 ms, p95 16.0).
+* `npm run build:wasm`: no Rust file changed, no cargo warnings.
+
+**Heap.** The Island's worker, forced GCs (`profile-live-heap.mjs`, `heap-families.mjs`, the pointer references counted by `.work/pointer-refs.mjs`
+outside Git: edges that are not to Smi nodes nor weak). The two 240 s roams turn at random, so their routes differ; the 30 s walk is the same route.
+The headless run is deterministic (400 ticks after the boot, four forced GCs, `v8.writeHeapSnapshot`).
+
+| | Objects | References (snapshot edges) | Pointer references | JS heap (used of total) |
+| --- | ---: | ---: | ---: | ---: |
+| Worker, 30 s walk, before (ca8ab34e; two runs) | 3.748 M, 3.757 M | 25.06 M, 25.13 M | 19.95 M, 20.02 M | 196 of 205 MB |
+| Worker, 30 s walk, after | 3.500 M (-6.7%) | 23.40 M (-6.7%) | 18.51 M (-7.3%) | 187 of 196 MB (-4.6%) |
+| Worker, 240 s roam, before | 4.019 M | 26.88 M | 21.69 M | 208 of 217 MB |
+| Worker, 240 s roam, after | 3.753 M (-6.6%) | 25.17 M (-6.4%) | 20.20 M (-6.9%) | 198 of 205 MB (-4.8%) |
+| Worker, headless, 400 ticks, before | 2.971 M | 18.53 M | 18.14 M | 286.1 MB used |
+| Worker, headless, 400 ticks, after | 2.720 M (-8.4%) | 17.06 M (-7.9%) | 16.67 M (-8.1%) | 273.1 MB used (-4.5%) |
+| Page, 240 s roam, before | 1.879 M | 7.80 M | 6.34 M | 89 of 94 MB |
+| Page, 240 s roam, after | 1.748 M (-7.0%) | 7.01 M (-10.2%) | 5.76 M (-9.2%) | 88 of 91 MB |
+
+("Objects" are the snapshot's nodes including the number-value strings and Smi nodes this Chromium adds; `heap-families` leaves the strings out: the
+walk's 3.27 M objects before are 3.02 M after.) The run-to-run spread of the same route is 0.2% (the two before runs).
+
+The families this step's lists name (the 240 s roams, objects / edges, before to after; first-reach attributions): `identities.properties` 83 k /
+0.51 M to gone; `ScriptRuntime.instances.receiver` 86 k / 0.67 M to 53 k / 0.49 M (its AccessorPairs 33,438 to 1,900); `ScriptRuntime.instances.bindings` 39 k /
+0.26 M to 17 k / 0.12 M (its Maps 12,568 to 1,898: those left are the map actors', the windows' and other objects with bindings of their own); `identities` (the
+hosts it reaches first, 1,752 of them) 27 k / 0.54 M to 27 k / 0.32 M (`MapActorHost` objects with 12,921 property arrays and no dictionary); `identities.<symbol actorLinkFields>`,
+`<symbol actorPoseFields>` and `<symbol actorMirrorFields>` 46 k / 0.26 M to gone (their state is in the host's families); `CollisionWorld.actors.properties` 13 k /
+0.08 M to gone; the pawn views' dictionaries (`identities._pawnPhysics` 14 k / 0.10 M, `CollisionWorld.actors._pawnPhysics` 9 k / 0.06 M in the walk) to
+13 k / 0.12 M for the views of this roam (fast-mode, their closures remain); `host.disposeAudio` 105 k / 0.78 M to 69 k / 0.56 M (it reached the property
+tags). Unchanged: `host.actorSim` 118 to 122 k / 0.68 to 0.71 M, `ScriptRuntime.instances.refs` 33 k / 0.28 M, `identities.values` 25 k / 0.23 M.
+
+**Load time and speed.** Three interleaved headless Island boots (bench-sim `bootMs`, the base arm an export of ca8ab34e with the same Wasm; both arms give
+the 3-tick digest `b9e9e6d3020982cf`), on a host running other sessions' work: 7,916 / 8,334 / 8,363 ms before, 8,334 / 8,377 / 7,879 ms after. Three
+interleaved 300-tick runs: the simulation's CPU per tick 12.63 / 13.27 / 14.61 ms before, 12.31 / 14.55 / 13.91 ms after (medians 13.27 and 13.91, inside
+the 2 ms spread of each arm; the hosts are fast-mode objects now, which should help reads of `host.position` and the like, but this host was too busy to
+show it). The frames of a 30 s walk in a browser worker: 2,789 before, 2,813 after.
+
+**What is left, and why.**
+* The mesh bindings' closures (item 7). Not started. In the final roam `host.actorSim` still holds 28 k closures with their contexts and feedback cells
+  (about 60 k objects, 250 k edges: 1.7% of the worker's objects, 1.0% of its references). `meshBindingSteps` is one generator of about 900 lines whose
+  seventy mutable `let`s and ninety-odd helpers close over each other and over the binding's state; a class needs each of them as a field and each helper
+  as a method, with no unit-level reference to compare against, only the GPU and lighting validators and the frame digests.
+* The 18 movers, a BreakableGlass and the LevelInfo host are still dictionary-mode (no accessor of their own; a `delete` or a run of keyed stores in
+  the mover setup is the likeliest cause, not found). The 299 `values` objects of the pawns (91 keys, `{...classDefaults, ...actor.values}`) and the 166 running
+  state frames (`latent` and `cursor` redefined as accessors by `ScriptState.startFrame`, an object made by `createFrame`) are dictionaries as well; the
+  frames are in files this step does not own. The hosts' other 20 data properties, and `identities.values`, `initialProperty`, `entry` (about 70 k objects), are untouched.
+* A pawn view's ~35 methods are closures over its local readers (12.5 k closures in the receiver family): the view as a class with its state as fields.
+* `instance.refs` (33 k objects, 0.28 M edges: an array of the class's reference slots for each object) was not looked at: every write of a reference cell
+  passes the array to `writeCell`, so a lazy array needs every writer.
+* Not measured: the marking time per major GC on two cores, Firefox and the Mac. By the ratios of steps 7 and 8 (7.6% and 12% fewer pointer references for
+  13% and 10% shorter marking) 7% fewer pointer references would be expected to shorten the worker's marking by about 6 to 8%, which is a prediction.
 
 ## Open
 
@@ -2062,7 +2190,9 @@ GCs after the boot) holds 355.7 MB used before and 309.0 MB after.
   the cycles still mark 170 to 250 ms within a few frames. Step 9 ("Step 9's results") then took 770 k objects and 2.7 M pointer
   references (the BSP model and its hulls, as typed tables) out of the worker; and step 5 ("Step 5's results") a further 18% of the pointer references (29.63 M to 24.30 M on its own branch) and 19% of the
   objects; their marking on two cores is not measured yet. The Mac (twelve cores, where the concurrent markers take more of it)
-  and Firefox inline are not measured against these cuts.
+  and Firefox inline are not measured against these cuts. "Actor hosts and mesh bindings (2026-10-30)" took a further 270 k objects and 1.5 M
+  pointer references out of the worker (-6.7% and -7.3% on the same 30 s walk; the hosts stop being dictionary-mode objects, the header bindings, the
+  property tags and the pawn views follow); its marking on two cores is not measured either.
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the
