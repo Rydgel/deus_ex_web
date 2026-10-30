@@ -197,6 +197,13 @@ export function installLinkFields(host, instance, fields) {
 /** Whether `host` has its `prop` (base or touching) installed as a link. */
 export const hasLinkField = (host, prop) => Boolean(host?.[LINKS]?.fields.some(entry => entry?.spec.prop === prop));
 
+/** The instance behind `host`'s installed Base link, or null: the host reads `host.base` from that instance's image (the rider
+ * scan's direct reads, move-riders.mjs). */
+export const baseLinkInstance = host => {
+  const set = host?.[LINKS];
+  return set !== undefined && set.fields[SPECS[BASE_KEY].index] !== undefined ? set.instance : null;
+};
+
 /** Whether `prop` is a link member name. */
 export const isLinkProp = prop => prop === 'base' || prop === 'touching';
 

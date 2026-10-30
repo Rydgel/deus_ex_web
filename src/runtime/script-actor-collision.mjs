@@ -149,6 +149,9 @@ const SHARED=Object.freeze({
   set(v){const view=this[VIEW];for(const [name,mask] of MOTION_BOOLS)view.put(name,Boolean(v&mask));}},
 });
 
+/** Whether `actor.base` is the spawned view's own Base member (a read of its Base field and nothing else). */
+export const hasViewBase=actor=>actor[VIEW]!==undefined&&Object.getOwnPropertyDescriptor(actor,'base')?.get===fieldGetter('Base');
+
 /** Install the spawned actor's collision/native view on the constructed
  * script identity. Field-backed properties read and write the object's real
  * script storage through `read`/`write` (namedReference); host-only members

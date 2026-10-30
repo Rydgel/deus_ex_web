@@ -469,6 +469,7 @@ function moveOps(pawn, services, dispatch, decorate, ignoreBases) {
       riderCacheKey: 'pawn-physics',
       actors: level.actors,
       baseOf: other => { const base = other.base; return base !== undefined ? base : readOther(other, 'Base'); },
+      baseInstance: services.baseInstance,
       location: other => other.position ?? readOther(other, 'Location'),
       rotation: other => other.rotation ?? readOther(other, 'Rotation'),
       isPawn: other => Boolean(other.lineage?.includes('engine.pawn')),

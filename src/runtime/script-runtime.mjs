@@ -49,8 +49,9 @@ import { liveVector } from './actor-mirror-fields.mjs';
 import { saveConfig, configRoot, loadConfig as loadObjectConfig, defaultsObject } from './script-config.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
-  setActorCollision, setActorCollisionSize, setActorPhysics,
+  setActorCollision, setActorCollisionSize, setActorPhysics, hasViewBase,
 } from './script-actor-collision.mjs';
+import { baseLinkInstance } from './actor-link-fields.mjs';
 import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim, execTweenBlendAnim, isAnimating } from './play-anim.mjs';
 import { execGetAnimGroup } from './script-get-anim-group.mjs';
 import { animationView, animationTickView } from './script-anim.mjs';
@@ -2874,6 +2875,7 @@ export class ScriptRuntime {
         riderCacheKey:'spawned-move',
         actors:level.actors,
         baseOf:other=>{const base=other.base;return base!==undefined?base:this.readNamed(other,'Base');},
+        baseInstance:other=>this.riderBaseInstance(other),
         location:other=>other.position??this.readNamed(other,'Location'),
         rotation:other=>other.rotation??this.readNamed(other,'Rotation'),
         isPawn:other=>Boolean(other.lineage?.includes('engine.pawn')),
@@ -2903,6 +2905,21 @@ export class ScriptRuntime {
     // which passes bIgnoreBases=1 — a riding item must not be blocked by the
     // base carrying it.
     return playerMove(view,delta,this.spawnedRiderServices(view,level),rotation);
+  }
+  /** The instance whose image cell `other.base` reads, for the rider scan's direct Base reads (move-riders.mjs), or null when a
+   * read of `other.base` is not a plain read of that cell: a host without its Base link (the controlled player's binding), a
+   * binding or a poisoned value, an instance without an image. A released allocation is the scan's to check at each read. */
+  riderBaseInstance(other) {
+    let instance=baseLinkInstance(other);
+    if(instance===null&&hasViewBase(other)){
+      try{instance=this.instance(other);}catch{return null;}
+    }
+    if(!instance||!instance.base||!instance.arena)return null;
+    const cell=instance.cells?.get(ACTOR_BASE_KEY);
+    if(!cell||!isPointerCell(cell)||cell.actorBase!==true)return null;
+    if(instance.bindings.size&&instance.bindings.has(ACTOR_BASE_KEY))return null;
+    if(instance.poison?.has(ACTOR_BASE_KEY))return null;
+    return instance;
   }
   /** Admit a serialized map actor to the recovered ULevel move entries. The
    * level-load host is the native actor (map-actor-native.mjs): its +0x1dc
@@ -4638,6 +4655,8 @@ export class ScriptRuntime {
       field:(actor,name)=>this.namedReference(actor,name),
       read:(actor,name)=>this.readNamed(actor,name),
       write:(actor,name,value)=>this.writeNamed(actor,name,value),
+      // The rider scan's direct Base reads (move-riders.mjs)
+      baseInstance:other=>this.riderBaseInstance(other),
       // The class default object's value (UClass::Defaults), e.g. physPathing's
       // FovAngle scale.
       classDefault:(actor,name)=>{
