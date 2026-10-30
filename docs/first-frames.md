@@ -105,7 +105,9 @@ tick's errors and travel request, and ticks only for the posts merged into that 
 tick). A tick the worker could not make (failed, travelled, a live replay) leaves the frame its own: `begin` gives it
 `FIRST_FRAME_DT`. A travel's arrival and a loaded game's level take it too, with the loading frame ("Travel and loaded games"
 below). The page does not ask when a start cheat or the easter egg act on the level first, for the loadout of a map opened
-directly, nor inline (Firefox's default, where nothing is idle: the tick would move into the load's blocked thread).
+directly, nor inline (Firefox's default, where nothing is idle: the tick would move into the load's blocked thread), nor under
+`?hold=1`, whose level ticks only in the frames a test releases (`live-acceptance.mjs` replays and the strobe checks, which hold
+TriggerLight1 before its first Tick; a pre-tick there broke every replay from 7525ca4d until 2026-10-30).
 `?preTick=off` (measurement only) leaves every first tick to its first frame, the A arm.
 
 `frame-alloc-meter.mjs --pre-tick` makes the tick ahead and posts the frame as the page does; every frame hash equals the run

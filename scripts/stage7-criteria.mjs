@@ -126,9 +126,9 @@ add('7.9.3', 'a graphics device that never comes back: the page says so, and a r
   {machine: LINUX, proof: ['validate-context-loss-play.mjs with no restore'], weak: 'the toast exists ([context loss](context-loss.md)); not tested'});
 
 // 7.10 Regression coverage --------------------------------------------------------------------------------------------------------------
-add('7.10.1', 'the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`)', 'P', 'FAIL',
+add('7.10.1', 'the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`)', 'P', 'PARTIAL',
   {machine: `${LINUX}, with the Mac's stores`, proof: ['run-validators.mjs'],
-    weak: 'fails: six reds on a clean head on 2026-10-27 (host-services-play, world-batch-gpu, texture-sampling, lodmesh-lod-play, master-frame-play, conversations-census timeout)'});
+    weak: 'on 2026-10-30, after the 6 reds of 2026-10-27 and 25 newer ones were fixed (ac8e211b, 65ab361c, the reds-2026-10-30 branch on 82482dcb): 677 passed, 8 skipped, 1 failed; validate-gpu-mesh stalled idle to the 600 s limit and passes alone (104 s) and on 1.5 cores (116 s), its stall not explained (the runner now prints a killed check\'s last stdout); not run on the closing commit'});
 add('7.10.2', 'the browser suite passes in every supported browser', 'P', 'PARTIAL',
   {machine: `${MAC}, ${LINUX}`, proof: ['`npx playwright test` (projects chromium, firefox, webkit)', 'SUITE_RUN, `--suite`'],
     weak: 'Chromium and Firefox 41 of 41 on Linux (2026-10-28, with two Chromium reruns); WebKit and the Mac not run'});

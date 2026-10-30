@@ -113,7 +113,7 @@ heading with `placeProbe`'s ViewRotation write.
 "Frame work" is the page's `animate` and the worker's `w.dur`, per frame. 7.2.1 takes the larger of the two medians, since in
 worker mode the two run side by side and the slower bounds the frame rate.
 
-## The scoreboard (2026-10-28)
+## The scoreboard (2026-10-30)
 
 | Clause | PASS | PARTIAL | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -126,9 +126,9 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.7 Graphics capability and failures | 1 | 1 | 0 | 1 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 0 | 2 | 0 | 1 | 0 |
-| 7.10 Regression coverage | 0 | 1 | 1 | 1 | 0 |
+| 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 1 | 18 | 2 | 13 | 3 |
+| **Total** | 1 | 19 | 1 | 13 | 3 |
 
 ## The rows
 
@@ -216,7 +216,7 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.10.1 | the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`) | P | run-validators.mjs | Linux, with the Mac's stores | fails: six reds on a clean head on 2026-10-27 (host-services-play, world-batch-gpu, texture-sampling, lodmesh-lod-play, master-frame-play, conversations-census timeout) | FAIL |
+| 7.10.1 | the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`) | P | run-validators.mjs | Linux, with the Mac's stores | weak: on 2026-10-30, after the 6 reds of 2026-10-27 and 25 newer ones were fixed (ac8e211b, 65ab361c, the reds-2026-10-30 branch on 82482dcb): 677 passed, 8 skipped, 1 failed; validate-gpu-mesh stalled idle to the 600 s limit and passes alone (104 s) and on 1.5 cores (116 s), its stall not explained (the runner now prints a killed check's last stdout); not run on the closing commit | PARTIAL |
 | 7.10.2 | the browser suite passes in every supported browser | P | `npx playwright test` (projects chromium, firefox, webkit), SUITE_RUN, `--suite` | Mac, Linux | weak: Chromium and Firefox 41 of 41 on Linux (2026-10-28, with two Chromium reruns); WebKit and the Mac not run | PARTIAL |
 | 7.10.3 | the Stage 4, 5 and 6 gates pass on the closing commit | P, O | validate-stage4-acceptance.mjs, validate-stage5-acceptance.mjs, stage6-criteria.mjs | Linux, Mac | needed: a run on one commit (last runs: Stage 4 on 2026-10-17, Stage 5 on 2026-10-21, Stage 6's rows by 2026-10-26) | MISSING |
 

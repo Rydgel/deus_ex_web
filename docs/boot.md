@@ -104,6 +104,8 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
   every Escape: WinDrv's window procedure answers WM_KEYDOWN itself;
 * a lost focus lets go of the held input and the game goes on (the user's choice, 2026-10-30; before, a blur paused Play until a click,
   "Click the view to resume"); a hidden page runs no frame and comes back with an ordinary step, not the time it was hidden.
+  A check that needs a still frame calls `deusExViewer.freeze()` (validation only): the simulation halts, as a blur did, and the page
+  keeps drawing the last snapshot; `freeze(false)` goes on with no catch-up.
 
 The keys and the wheel the first click makes the game's, and the Keyboard Lock list, are in [input bindings](input-bindings.md).
 

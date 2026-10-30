@@ -240,7 +240,7 @@ const start = name => {
     if (!job.killed) timings[name] = ms;
     saveCaches();
     const skipped = /^SKIP /m.test(job.out);
-    results.push({ name, code, ms, out: job.out, err: job.err, skipped, peak: job.peak });
+    results.push({ name, code, ms, out: job.out, err: job.err, skipped, peak: job.peak, killed: Boolean(job.killed) });
     if (code !== 0) failures++;
     const tag = code !== 0 ? 'FAIL' : skipped ? 'skip' : 'ok  ';
     console.log(`[${pad(results.length)}/${all.length}] ${tag} ${(ms / 1000).toFixed(1)}s ${(job.peak / 1024).toFixed(1)}G  ${name}`);
@@ -276,6 +276,8 @@ const cpu = results.reduce((n, r) => n + r.ms, 0) / 1000;
 for (const r of results.filter(r => r.code !== 0)) {
   console.log(`\n=== FAILED ${r.name} (exit ${r.code}) ===`);
   console.log((r.err || r.out).split('\n').slice(0, 25).join('\n'));
+  // A killed validator's stderr holds the reason; its stdout's tail shows how far it got (a stall prints no failure of its own).
+  if (r.killed && r.out.trim()) console.log(`last stdout:\n${r.out.trimEnd().split('\n').slice(-12).join('\n')}`);
 }
 const slow = [...results].sort((a, b) => b.ms - a.ms).slice(0, 5);
 console.log(`\nslowest: ${slow.map(r => `${r.name.replace(/^validate-|\.mjs$/g, '')} ${(r.ms / 1000).toFixed(0)}s`).join(', ')}`);
