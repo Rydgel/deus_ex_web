@@ -34,24 +34,24 @@ export function defineEntryAccessor(target, prop, slot, index) {
   Object.defineProperty(target, prop, {configurable: false, enumerable: true, get, set});
 }
 
-const entryIds = new WeakMap();
-let nextEntryId = 1;
-const interned = new Map();
+// A trie over the entries of a list, one WeakMap a level keyed by the entry itself: nothing global holds a level's entries (their cells and
+// codecs reach the level's class graph), so the arrays go with the entries when the level does. A string-keyed Map of the arrays kept the first
+// level of a browser session alive after the second was loaded (the Island's worker held two script processes).
+const HOLE = {};
+const trie = {children: new WeakMap(), array: null};
+const noEntries = {array: null};
 /** One frozen array for every list of entries that holds the same entries (by identity) at the same positions (holes
- * included): the hosts of a class all install the same members, so the array a host's state keeps is the class's. The
- * entries are objects shared per cell (their identity is stable), compared by a number made for each. */
+ * included): the hosts of a class all install the same members, so the array a host's state keeps is the class's. */
 export function internEntries(list) {
-  let key = '';
+  if (list.length === 0) return noEntries.array ??= Object.freeze([]);
+  let node = trie;
   for (let index = 0; index < list.length; index++) {
-    const entry = list[index];
-    if (entry === undefined) { key += ','; continue; }
-    let id = entryIds.get(entry);
-    if (id === undefined) entryIds.set(entry, id = nextEntryId++);
-    key += `${id},`;
+    const key = list[index] === undefined ? HOLE : list[index];
+    let next = node.children.get(key);
+    if (next === undefined) node.children.set(key, next = {children: new WeakMap(), array: null});
+    node = next;
   }
-  let shared = interned.get(key);
-  if (shared === undefined) interned.set(key, shared = Object.freeze(list.slice()));
-  return shared;
+  return node.array ??= Object.freeze(list.slice());
 }
 
 /** A class of four-slot arrays whose elements are the accessors `slots` (four {get, set} pairs, shared functions that find their
