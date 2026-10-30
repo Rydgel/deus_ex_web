@@ -57,3 +57,44 @@ test('the linker enters only names whose flags meet the game\'s load context, fo
   assert.equal(s.intern('Name\u0000Suffix'), 'Name');
   assert.equal(s.spell('NAME'), 'Name');
 });
+
+// The table against the Map it replaced (folded text -> spelling), through growth, collections and runtime names.
+test('the spelling table agrees with a Map model through thousands of entries, collections and repeated spellings', () => {
+  const fold = text => text.replace(/[a-z]+/g, run => run.toUpperCase());
+  const model = {entries: new Map(), permanent: new Set()};
+  const enter = (package_, held) => {
+    for (const entry of package_.names) {
+      if (!((entry.flags >>> 0) & 0x30000)) continue;
+      const text = entry.name.includes('\0') ? entry.name.slice(0, entry.name.indexOf('\0')) : entry.name;
+      if (!text) continue;
+      const key = fold(text);
+      if (!model.entries.has(key)) model.entries.set(key, text);
+      held?.add(key);
+    }
+  };
+  let seed = 3;
+  const next = n => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
+  const recase = text => [...text].map(c => next(3) === 0 ? (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()) : c).join('');
+  const word = () => recase(`Name${next(1500)}_${['a', 'Bc', 'é'][next(3)]}`);
+  const make = count => pkg(...Array.from({length: count}, () => ({name: word(), flags: next(4) ? 0x70010 : 0x40010})));
+  const s = new NameSpelling();
+  const startup = make(900);
+  s.addBoot(startup); enter(startup, model.permanent);
+  for (let round = 0; round < 6; round++) {
+    const map = make(1200 + next(800));
+    s.beginLevel(map);
+    const held = new Set(); enter(map, held);
+    for (const key of [...model.entries.keys()]) if (!model.permanent.has(key) && !held.has(key)) model.entries.delete(key);
+    const extra = make(600); s.enterPackage(extra); enter(extra, null);
+    for (let i = 0; i < 300; i++) {
+      const text = word() + (next(10) === 0 ? '\0tail' : '');
+      const trimmed = text.split('\0')[0], live = model.entries.get(fold(trimmed));
+      if (next(2)) assert.equal(s.spell(text), live ?? text);
+      else {
+        const want = live ?? trimmed;
+        if (live === undefined && trimmed) model.entries.set(fold(trimmed), trimmed);
+        assert.equal(s.intern(text), want);
+      }
+    }
+  }
+});

@@ -12,7 +12,7 @@ import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
 import { createExtStringSource } from './script-text-parser-natives.mjs';
-import { readObject, exportAt } from '../unreal/objects.mjs';
+import { readObject, exportAt, entryOf } from '../unreal/objects.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
@@ -681,7 +681,7 @@ export async function createScriptDoors({
   const triggerState = await runtime.prepareState(deusEx, deusExIndex('deusexmover.triggertoggle', 'DeusExMover.TriggerToggle state'));
 
   function nativePath(call) {
-    return lower(call.script?.entry?.path ?? call.record?.entry?.path ?? '');
+    return lower(call.script?.entry?.path ?? (call.record ? entryOf(call.record)?.path : undefined) ?? '');
   }
 
   function callbackView(receiver) {
@@ -1936,7 +1936,7 @@ export async function createScriptDoors({
     const resolve = async ref => {
       if (!ref) return null;
       const object = await runtime.objects.resolve(asset, ref);
-      if (object.entry.className !== 'State') return null;   // the class itself: the actor has no state
+      if (entryOf(object).className !== 'State') return null;   // the class itself: the actor has no state
       await runtime.prepareState(object.asset, object.index);
       return runtime.states.get(object.key) ?? null;
     };

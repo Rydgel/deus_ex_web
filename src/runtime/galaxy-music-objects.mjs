@@ -26,6 +26,7 @@
  * (appRealloc) reads as 0. */
 import {readMusicExport} from '../unreal/music-module.mjs';
 import {loadLazyByteArray} from './script-lazy-byte-array.mjs';
+import { entryOf } from '../unreal/objects.mjs';
 
 /** Bytes of an FCompactIndex holding `value` (6 bits, then 7 per byte). */
 const compactLength = value => {
@@ -65,7 +66,7 @@ function exportMusic(song) {
     },
   };
   return {
-    fullName: `Music ${asset.name}.${song.entry?.path ?? song.name}`,
+    fullName: `Music ${asset.name}.${entryOf(song)?.path ?? song.name}`,
     handle: 0,
     lazy,
     load: () => loadLazyByteArray(lazy, services),

@@ -68,11 +68,12 @@ export class ScriptObjects {
     const key = `${asset.name}.${entry.path}`.toLowerCase(), table = this.tableOf(asset, entry);
     let identity = table.get(key);
     if (!identity) {
+      // The identity keeps no entry: `entryOf(identity)` makes it from `asset` and `index` (docs/live-heap.md "Package tables").
       // One literal with the keys the process adds later (the load record, the prepared function, the property's metadata and its link in
       // progress): each added after the literal was an out-of-line property array on every identity, 31,600 objects on the Island
       // (docs/live-heap.md "Load records and functions"). It stays a plain object (bench-sim's digest hashes by prototype).
       // `fieldPending` is the link's promise while it runs and `true` once it has finished (ScriptRuntime.field).
-      table.set(key, identity = {asset, index: index | 0, entry, key, kind: entry.className, name: entry.name,
+      table.set(key, identity = {asset, index: index | 0, key, kind: entry.className, name: entry.name,
         loadRecord: undefined, function: undefined, metadata: undefined, fieldPending: undefined});
       if (table === this.packageObjects) this.process?.hold(identity);
     }
@@ -97,7 +98,7 @@ export class ScriptObjects {
       throw new Error(`A host identity binds a level's export, not the process's: ${key}`);
     const existing = this.objects.get(key);
     if (existing && existing !== identity) throw new Error(`Package identity was already resolved: ${key}`);
-    Object.assign(identity, {...resolved, key, kind: resolved.entry.className, name: resolved.entry.name});
+    Object.assign(identity, {asset: resolved.asset, index: resolved.index, key, kind: resolved.entry.className, name: resolved.entry.name});
     this.objects.set(key, identity);
     return identity;
   }

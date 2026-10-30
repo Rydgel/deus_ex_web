@@ -5,7 +5,7 @@ import {
 } from './script-static-load-object.mjs';
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
-import { importAt, exportAt } from '../unreal/objects.mjs';
+import { importAt, exportAt, entryOf } from '../unreal/objects.mjs';
 import { ExportTable } from '../unreal/package-tables.mjs';
 
 // The live DataLink capture reaches this package export before an
@@ -250,7 +250,7 @@ export class PreparedDynamicLoadGraph{
     if(field==='outer'){
       const resource=this.resourceFor(object);
       if(resource)return resource.outer;
-      if(object?.asset&&object?.entry?.outer===0)
+      if(object?.asset&&entryOf(object)?.outer===0)
         return this.resources.packages.get(object.asset.name.toLowerCase())??undefined;
     }
     return undefined;

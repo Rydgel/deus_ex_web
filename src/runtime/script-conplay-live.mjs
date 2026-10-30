@@ -8,7 +8,7 @@ import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
 import {createGalaxyVolumes} from './galaxy-volumes.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
-import { exportAt } from '../unreal/objects.mjs';
+import { exportAt, entryOf } from '../unreal/objects.mjs';
 
 /** A loaded package (DeusEx.u, loaded since boot) as the registered Core.Package
  * object StaticFindObject finds: the same record the DeusExConText package has
@@ -297,7 +297,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   // Galaxy (docs/galaxy-audio.md "Speech through Galaxy's voices").
   const soundRequests=[];
   function handleNative(call){
-    const scriptPath=String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase();
+    const scriptPath=String(call.script?.entry?.path??(call.record?entryOf(call.record)?.path:undefined)??'').toLowerCase();
     if(call.index===3002||call.index===3003){
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};

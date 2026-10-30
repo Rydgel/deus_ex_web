@@ -6,7 +6,7 @@
  * class identity, decodes the recovered LodMesh data and Sound WAV payload,
  * and leaves other native payloads opaque.
  */
-import { objectAt, exportAt } from '../unreal/objects.mjs';
+import { objectAt, exportAt, entryOf } from '../unreal/objects.mjs';
 import {ScriptObjects} from './script-objects.mjs';
 import {decodeLodMeshPayload} from './lodmesh-payload.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
@@ -216,7 +216,7 @@ export class ScriptResourceRegistry {
       return existing;
     }
 
-    const entry = object.entry;
+    const entry = entryOf(object);
     const record = {
       key,
       kind: entry.className,
@@ -226,7 +226,6 @@ export class ScriptResourceRegistry {
       fullPath: `${object.asset.name}.${entry.path}`,
       asset: object.asset,
       index: object.index,
-      entry,
       object,
       outer: null,
       nativeClass: null,
@@ -551,7 +550,7 @@ export class ScriptResourceRegistry {
       return;
     }
     if(native.resourceKind==='Sound'){
-      record.payload=decodeSoundResource({pkg:record.asset.pkg,bytes:record.asset.bytes,entry:record.entry});
+      record.payload=decodeSoundResource({pkg:record.asset.pkg,bytes:record.asset.bytes,entry:entryOf(record)});
       record.payloadStatus=record.payload.payloadStatus;
       record.payloadComplete=record.payload.payloadComplete;
       record.unsupported.push(...record.payload.unsupported);

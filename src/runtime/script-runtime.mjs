@@ -113,7 +113,7 @@ import { serializeScriptReferences } from './script-reference-serialization.mjs'
 import { serializeRuntimeActor } from './script-runtime-serialization.mjs';
 import { readScriptStructValue } from './script-struct-values.mjs';
 import { loadScriptStructLayout } from './script-struct-layout.mjs';
-import { readObject, exportAt } from '../unreal/objects.mjs';
+import { readObject, exportAt, entryOf } from '../unreal/objects.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
 import { extensionStringToName } from './script-extension-strings.mjs';
 import { scriptIsInState, scriptGetStateName } from './script-state-queries.mjs';
@@ -819,8 +819,9 @@ export class ScriptRuntime {
       await this.loadClass(record.asset,record.index);
       return record;
     }
-    if(!record.entry?.classIndex)throw new Error(`Native object class is not linked: ${record.key}`);
-    record.objectClass=await this.loadClass(record.asset,record.entry.classIndex);
+    const recordEntry=entryOf(record);
+    if(!recordEntry?.classIndex)throw new Error(`Native object class is not linked: ${record.key}`);
+    record.objectClass=await this.loadClass(record.asset,recordEntry.classIndex);
     return record;
   }
   castObject(value,target,kind) {
@@ -1829,13 +1830,13 @@ export class ScriptRuntime {
   /** A string property's default values in its declaring class and in every
    * subclass the same package exports. */
   async defaultStringValues(field){
-    const asset=field?.asset,owner=field?.entry?.outer;
-    if(!asset||!(owner>0)||!/^strproperty$/i.test(field.entry.className??''))return [];
+    const asset=field?.asset,fieldEntry=field&&entryOf(field),owner=fieldEntry?.outer;
+    if(!asset||!(owner>0)||!/^strproperty$/i.test(fieldEntry.className??''))return [];
     const exports=asset.pkg.exports,values=new Set();
     const descends=index=>{for(let i=index;i>0;i=exports.superIndex(i-1))if(i===owner)return true;return false;};
     for(let index=1;index<=exports.length;index++){
       if(exports.className(index-1)!=='Class'||!descends(index))continue;
-      const cls=await this.loadClass(asset,index),member=this.lookupMember(cls,'fields',field.entry.name??field.name);
+      const cls=await this.loadClass(asset,index),member=this.lookupMember(cls,'fields',fieldEntry.name??field.name);
       if(!member)continue;
       try{const value=this.defaultValue(cls,member);if(typeof value==='string'&&value)values.add(value);}catch{}
     }
@@ -1865,7 +1866,7 @@ export class ScriptRuntime {
     if(this.preparedObjects.has(reference.key))return this.preparedObjects.get(reference.key);
     if(this.instances.has(reference))return reference;
     const pending=(async()=>{
-      const {asset,entry}=reference;
+      const {asset}=reference,entry=entryOf(reference);
       const cls=await this.loadClass(asset,entry.classIndex);
       for(let current=cls;current;current=current.base)if(current.record.key==='engine.actor')
         throw new Error('Loaded Actor preparation requires the original world host');

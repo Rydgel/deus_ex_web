@@ -18,6 +18,10 @@ export function exportAt(pkg, ref) { return ref > 0 ? pkg?.exports.at(ref - 1) :
 /** The import a negative reference names, or undefined. */
 export function importAt(pkg, ref) { return ref < 0 ? pkg?.imports.at(-ref - 1) : undefined; }
 
+/** The package entry of a thing that carries `asset` and `index`: a package identity (script-objects.mjs, which keeps no entry of its own: 40,000 views
+ * on the Island) or a copy of one, or a holder that has its own `entry` (a decoded export, a resource record). */
+export function entryOf(holder) { return holder.entry ?? exportAt(holder.asset?.pkg, holder.index); }
+
 export function objectAt(pkg, index) {
   if (index === 0) return null;
   const entry = Number.isInteger(index) ? (index > 0 ? pkg.exports.at(index - 1) : pkg.imports.at(-index - 1)) : undefined;

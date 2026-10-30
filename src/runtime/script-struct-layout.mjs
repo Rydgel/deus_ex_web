@@ -5,6 +5,7 @@ import {SCRIPT_BOOL_PROPERTY_LINK} from './script-bool-property-link.mjs';
 import {SCRIPT_STR_PROPERTY_LINK} from './script-str-property-link.mjs';
 import {SCRIPT_STRUCT_PROPERTY_LINK} from './script-struct-property-link.mjs';
 import {NativeSlots} from './native-slots.mjs';
+import { entryOf } from '../unreal/objects.mjs';
 
 const vtables=new Map(Object.entries(SCRIPT_SCALAR_PROPERTY_LINK.properties)
   .map(([kind,body])=>[kind,body.vtable]));
@@ -32,7 +33,7 @@ export async function loadScriptStructLayout(runtime,record,ancestry=[]) {
   while(child){
     if(seen.has(child.key))throw new Error(`Cyclic struct layout Children: ${child.key}`);
     seen.add(child.key);
-    const owner=await runtime.objects.resolve(child.asset,child.entry.outer);
+    const owner=await runtime.objects.resolve(child.asset,entryOf(child).outer);
     if(owner!==record)throw new Error(`Unsupported foreign Outer in struct layout: ${child.key}`);
     const node={record:child,key:child.key,kind:child.kind,nativeSlots:new NativeSlots(),preloaded:true};
     put(node,0x18,layout);put(node,0x2c,null);
