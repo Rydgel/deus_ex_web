@@ -122,6 +122,158 @@ triangles with NaN positions where DrawLodMesh flags them out. Both draw
 nothing for that frame, and no simulation state reads the points. A nonfinite
 DrawScale is still refused.
 
+## The first GetFrame is the first draw's (2026-10-30)
+
+**Report.** In 00_Intro, at the camera's cut to the clinic (the camera at
+(301, -6503, -45), under "Why contain it?" and "...the underclasses are starting
+to get desperate"), the six waiting pawns (BumMale1, Doctor0, BumFemale1,
+JunkieMale0, BumMale7, Hooker1) stood with their arms out and relaxed into
+their idle over about 0.3 s. The original shows them in their idle pose from
+the first frame.
+
+**The pawns' state is the original's.** All six are authored with
+`bForceStasis` true. `ScriptedPawn.Standing`'s `Stand` label sets
+`bStasis = True` and calls `PlayWaiting`, whose `LoopAnimPivot('BreatheLight', ,
+0.3)` starts a tween (`AnimFrame` -0.2, `TweenRate` 0.667). The next tick's
+`AActor::InStasis` ([actor tick](script-actor-tick.md): bForceStasis skips the
+physics test, the pawn is far from the camera and never rendered) holds the
+animation there. The original's trace `in2` (`.work/live-acceptance/00_Intro/
+original-trace-in2.jsonl`) has BumFemale1 at `BreatheLight` -0.2, `bStasis` 1,
+`bForceStasis` 1 and `LastRenderTime` -10 from unfrozen tick 52 to tick 2088,
+the tick whose end cuts the camera to the clinic. Tick 2089 reads
+`LastRenderTime` 114.599327, tick 2088's clock: the first frame after the cut
+drew the pawns with `AnimFrame` -0.2, and the tween runs from tick 2089 (frame
+-0.1889, then 0 at 2106). Play's simulation is the same: headless and in
+the page, the pawns hold -0.2 until the cut and resume when stamped.
+
+**What the original draws then.** That frame's DrawLodMesh is the pawn's first
+GetFrame call. In Engine.dll the only reference to the body `0x10355360` is its
+export thunk's `jmp` at `0x103013bb`; nothing in Engine.dll calls the thunk or
+the body. Of the shipped DLLs, only Render.dll imports
+`?GetFrame@ULodMesh@@QAEXPAVFVector@@HVFCoords@@PAVAActor@@AAH@Z` (non-virtual,
+SDK `UnMesh.h`; Editor.dll imports the classic `UMesh::GetFrame`). Render's
+IAT slot `0x10b5d6b4` is reached by `call [slot]` at `0x10b0ee0f`, in
+DrawLodMesh, and by an import thunk `jmp [slot]` at `0x10b276e2` that nothing
+calls, jumps to or stores. So no cache item exists before an actor's first
+draw, and that call takes the normal path above: the negative frame clamps to
+zero, the pose is the sequence's first frame (`BreatheLight`'s), and the cache
+header keeps the creation values (frame 0, sequence None, completion 1). The
+next draws tween from that pose toward the same frame, which shows no change.
+(`python3 -I scripts/scan-lodmesh-getframe-callers.py` prints these sites.)
+
+**What Play drew.** The actor layer made each binding's cache item at the
+admission, at the map's load, when the pawns still held their serialized
+`Fighter` frame 0: arms out, the T-pose. Two pieces made that item the one
+the first draw found:
+
+1. `meshBindingSteps` runs a GetFrame when it creates the binding, to have a
+   first pose and bounds for the page. `update` already ran GetFrame only for
+   drawn bindings (the main frame's Frame->Sprite or a child frame), but the
+   admission's item was never thrown away.
+2. The intro's first frame has an empty render viewport (`renderViewport`
+   0×0: `drawWorld` false; the page draws no 3D, and `begin` runs no
+   OccludeBsp). The session still ran the actor layer for it with no
+   Frame->Sprite and, as mirrors might render, no culling at all. Every
+   admitted binding took a drawn update: it was posed and lit, in `Fighter`
+   frame 0.
+
+At the cut the first real draw found that item, took the tween path (its
+sequence None ≠ BreatheLight: reset, alpha 0) and drew `Fighter` frame 0, then
+tweened to BreatheLight's first frame as the pawn's tween ran.
+
+**The change.**
+
+* `actor-mesh-sim.mjs`: a binding remembers whether a frame has drawn it. The
+  first drawn update empties its cache before its GetFrame (CPU) or plan (GPU,
+  `planGpu(requests, first)`, the same flush as the first-pass rule in
+  [GPU mesh](gpu-mesh.md) "First pass"). It does so only when the pose (or the
+  LOD's requested counts) changed since the admission. When nothing changed,
+  the admission's call had the same inputs on an empty cache, so its output and
+  cache are those of the first draw's call, and it stands: a binding first
+  drawn before its pose changes (most of them, drawn from their admission
+  frame) makes the same records as before.
+* `actor-umesh-sim.mjs` (the classic meshes) applies the same rule. Render's
+  DrawMesh calls UMesh::GetFrame through the vtable (`+0x70`, [UMesh](umesh.md)).
+  Its other virtual call sites are **not traced**.
+* `sim-session.mjs` `actors()`: a Play frame that draws no world gives the
+  layer an empty Frame->Sprite. No binding is drawn, posed or lit in it, as
+  DrawLodMesh and SetupForActor are not reached. The layer still admits new
+  actors. This applies the existing "a frame whose render viewport is empty
+  draws no 3D" ([sim worker](sim-worker.md)) to the actor layer. How the
+  original reaches no actor draw in such a frame (DrawWorld skipped, or a
+  zero-size frame) is the existing model and was not traced here.
+
+**Against the original.** A new capture of the original under Wine (tag
+`cl1`: `scripts/live-original.sh 00_Intro --ticks 2100 --delta 0.0166666675
+--monitor 20 --tag cl1 --no-ghost --original-brightness 0.666667 --shot cl1z
+--shot-ctrl --cmds "2088:@ctrlshot cl1a|2089:@ctrlshot cl1b"`, `DX_HYPRLAND=0`
+under the prefix's virtual desktop) repeats `in2`: the cut at the end of
+unfrozen tick 2088 and BumFemale1 at BreatheLight -0.2 in stasis until then.
+Its frames are held after tick 2088 (level time 106.184181, the first clinic
+frame), after 2089 and at 2100. In each, the pawns stand in their idle pose.
+Play's replay of that trace (`live-acceptance.mjs play --tag cl1 --ticks N
+--shot name --phonemes ... --no-ghost --keep-traveling`), compared with
+`conversation-acceptance.mjs compare --scene intro` (whole frame, 1280×720):
+
+| Frame | Tree | identical | over 10 off the edges | edge recall/precision | pawn regions, mean abs. difference (BumFemale1, BumMale1) |
+| --- | --- | --- | --- | --- | --- |
+| cl1a (2088) | before | .567 | 215,802 | .548/.517 | 3.87, 8.91 (the arms out, BumMale1 in `Fighter`) |
+| cl1a (2088) | after | .959 | 66 | .998/.998 | 0.055, 0.045 |
+| cl1z (2100) | before | .450 | 109,707 | .691/.664 | 2.09, 4.84 (mid-tween out of `Fighter`) |
+| cl1z (2100) | after | .652 | 335 | .995/.995 | 0.36, 0.21 |
+
+cl1a after the change is inside the conversation gate's thresholds (.94
+identical, 150 off the edges, .99 edges). In cl1z the silhouettes agree. The
+rest is a uniform one-level difference over the whole frame (mean absolute
+R/G/B 0.32/0.24/0.17) and one flickering block at the right doorway (x 1240).
+That is lighting state at the held frame, not pose. The original against
+itself differs as much (`in2r` in3 .642, [visual acceptance](visual-acceptance.md)),
+and it was not examined further. Stored: `.work/acceptance/00_Intro/cl1{a,b,z}-original.png` (and `-time.txt`), `.work/live-acceptance/00_Intro/*-cl1.*`.
+
+**Checks.** `scripts/validate-first-draw-pose.mjs` (headless, the worker's
+`createSimHost` and `session.frame`, 00_Intro): the first frame has `drawWorld`
+false and no visible binding record. At each clinic pawn's first drawn frame,
+the pawn is at BreatheLight -0.2, and the binding's pose equals GetFrame on an
+empty cache word for word. The pose a cache made at the admission tweens from
+must differ from it (more than one unit: 18 to 25 units here). On the tree
+before the change the check fails: 60 bindings visible in the first frame,
+and every pawn's first drawn pose is the tween from the admission's `Fighter`
+cache. Play (worker, Chromium, the New Game path) frames
+of the cut: `.work/hospital-tpose/shots-clinic-before/` (T-pose at frame 0,
+relaxed by frame 8) and `shots-clinic-after/` (posed at frame 0).
+
+Digests against the untouched tree (bf0a01ca, headless):
+
+* frame-alloc-meter, identical: Island 600 frames after 900
+  (`c8cf5fff928609c1`), Training 400 after 200 (`e4b017e7b1bc0439`), and
+  `--warm 0` Island (`ff75e37ad00c6185`) and Training (`24dff4e600df8641`).
+* frame-alloc-meter on 00_Intro `--warm 0` (400 frames): 27 frames differ, all
+  from this change.
+  * Frame 0, the empty viewport: 60 bindings drawn before, none now.
+  * Frames 1, 139, 162 and 167: Earth1, the stealth pistol, MaggieChow0,
+    BobPage0 and WaltonSimons0 send their first draw's material, groups and LOD
+    records at their first real draw instead of at frame 0. Their GetFrame
+    plans are equal.
+  * Frames 140 to 161: only the frame's pack differs (the plans and
+    SetupForActor results it carries), while MaggieChow0's first draw runs its
+    course.
+* bench-sim (it has no actor layer): Island `15e3720088490242` and Training
+  `148077479825af78`.
+* hud-stream-digest `--stream` (1500 frames): `16bfe2bd08ed1653`.
+
+All but the `--warm 0` Island run are also the references in
+[first frames](first-frames.md). Also passing:
+validate-npc-mesh-preview, -spawn-mesh-binding, -actor-mesh-scene,
+-mirror-plan-play (the collapsed canvas: 24 resizes and switches), -gpu-mesh,
+-sim-split, -travel-newgame-play, and `node --test test/lodmesh-calls.test.mjs
+test/hud-compositor.test.mjs`. The replays' frames are in
+`.work/hospital-tpose/replay-before/` and `.work/acceptance/00_Intro/cl1{a,z}-play.png`.
+
+**Not modelled, as before.** GCache's own eviction (`CacheSizeMegs=4`):
+the original can lose an item of an actor not drawn for a long while and take
+the normal path again, while Play keeps it. GCache's flushes at a map's load or
+`FLUSH` were not traced (each binding's cache is new with the binding).
+
 ## Original comparisons and runtime integration
 
 `scripts/native-lodmesh-frame-oracle.py` executes the complete unchanged original

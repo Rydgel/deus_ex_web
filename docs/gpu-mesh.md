@@ -225,7 +225,9 @@ Render.DrawLodMesh (`10b0ea80`, call at `10b0ee0f`;
 docs/script-lodmesh-materials.md), so its first one happens when the actor is
 first drawn, and until the slot's first run (`gpu.frame <
 firstPassFrame`) a new plan flushes the preview's CPU cache first and is
-itself the first GetFrame.
+itself the first GetFrame. So does the plan of the first frame that draws the
+binding when its pose changed since the admission (2026-10-30, the intro's
+clinic pawns: [first draw](script-lodmesh-frame.md#the-first-getframe-is-the-first-draws-2026-10-30)).
 
 ## Face, vertex and corner passes: DrawLodMesh lighting on the GPU
 

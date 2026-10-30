@@ -64,6 +64,8 @@ const wordFloat = word => (bitWords[63] = word, bitFloats[63]);
 
 /** The dt of a level's first frame: the page posts it with no earlier post to measure from (main.mjs postSimFrame). */
 export const FIRST_FRAME_DT = 1000 / 60 / 1000;
+/** The Frame->Sprite of a frame that draws no world (actors): no binding ids. */
+const NO_SPRITES = new Set();
 
 /** `assets` is the simulation side's asset store (sprite texture sizes).
  * `events` is the ordered queue of what the simulation hands the page
@@ -1210,7 +1212,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       time('sprites');
       if (actorScene && !stopped()) {
-        const actors = this.actors({ camera: inspect, pack });
+        const actors = this.actors({ camera: inspect, pack, drawWorld: !input.play || drawWorld });
         collect(actors.errors);
         snapshot.actors = actors.frame;
       }
@@ -1309,8 +1311,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     },
     /** The actor mesh layer's main-frame update (actor-mesh-sim.mjs) with
      * the frame camera's frustum; with mirrors that may draw, actors only
-     * child frames draw are admitted and nothing is culled early. */
-    actors({ camera: inspect = null, pack = null } = {}) {
+     * child frames draw are admitted and nothing is culled early. A Play
+     * frame that draws no world (`drawWorld` false: the root window's render
+     * viewport is empty, and begin ran no OccludeBsp for it) has an empty
+     * Frame->Sprite: no binding is drawn, posed (GetFrame) or lit in it, as
+     * DrawLodMesh is not reached (docs/script-lodmesh-frame.md "The first
+     * GetFrame is the first draw's"). The layer still admits new actors. */
+    actors({ camera: inspect = null, pack = null, drawWorld = true } = {}) {
       const errors = [], view = inspect ?? camera;
       let frame = null;
       try {
@@ -1318,7 +1325,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const frustum = new THREE.Frustum().setFromProjectionMatrix(
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
         const requested = !inspect && current?.visibility ? new Set(current.visibility.mirrors) : null;
-        const children = drawn ? drawn.mayRender(view, requested) : false;
+        const children = drawWorld && drawn ? drawn.mayRender(view, requested) : false;
         // The main frame's dynamics run after the layer's reads; mirror child
         // frames then follow OccludeBsp's requests.
         // The LOD's FovAngle is the viewport actor's (game.view()).
@@ -1333,7 +1340,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility),
           // the main frame's PrjXM..PrjYP, which DrawLodMesh's outcodes of a pawn's special vertices read (docs/weapon-attachment.md)
-          prj: inspect ? null : frameMaster()?.prj ?? null, ...(pack ? { pack } : {}) });
+          prj: inspect ? null : frameMaster()?.prj ?? null, ...(pack ? { pack } : {}), main: drawWorld ? undefined : NO_SPRITES });
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
     },

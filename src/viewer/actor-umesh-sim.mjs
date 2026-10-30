@@ -106,7 +106,10 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   };
   const environmentInfo=()=>{const reference=hasEnvironment?environmentTexture():null;return reference?infos.get(reference.key)??null:null;};
 
-  let frameOutput=new Uint8Array(payload.frameVertexCount*12),lastOps=[],lastPose=null,materialStateApplied=false,lastStyle,lastGlow,drawnMain=false,childOnly=false;
+  // `drawnBefore`: as the LodMesh binding's (actor-mesh-sim.mjs): Render's DrawMesh calls UMesh::GetFrame through the vtable
+  // (+0x70, docs/umesh.md), so the admission's call stands for the first draw's only while the pose is the one it read. (Other
+  // virtual call sites of UMesh::GetFrame are not traced: docs/script-lodmesh-frame.md "The first GetFrame is the first draw's".)
+  let frameOutput=new Uint8Array(payload.frameVertexCount*12),lastOps=[],lastPose=null,materialStateApplied=false,lastStyle,lastGlow,drawnMain=false,childOnly=false,drawnBefore=false;
   const pose=()=>{
     const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
     const self=animationActor===actor;
@@ -242,6 +245,8 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
       const current=pose();
       const changed=!current.every((value,index)=>Object.is(value,lastPose[index]));
       lastPose=current;
+      if(changed&&!drawnBefore)for(const key of [...cache.entries.keys()])cache.flush(key);
+      drawnBefore=true;
       if(changed){const t=clock();poseWorld();record.posed=posedCopy();if(classicStats.on)classicStats.pose+=clock()-t;}
       // One SetupForActor and DrawMesh pass in the main frame (the frame whose Frame->Sprite holds the actor).
       if(lighting&&view.lit&&lighting.frame&&!childOnly) {

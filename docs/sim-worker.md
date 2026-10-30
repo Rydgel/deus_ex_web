@@ -377,8 +377,10 @@ by the page and applied before the next tick would not be exact.
   a pass drawn with another pass's decisions throws instead of passing
   silently. A frame whose render viewport is empty draws no 3D
   ([conversation camera](conversation-camera.md): the session already ran
-  no OccludeBsp, sky, corona pass or view model for it), so it has no
-  mirror passes on either side either; before, both fell back to frustum
+  no OccludeBsp, sky, corona pass or view model for it, and since 2026-10-30
+  its actor layer draws, poses and lights no binding: [first
+  draw](script-lodmesh-frame.md#the-first-getframe-is-the-first-draws-2026-10-30)),
+  so it has no mirror passes on either side either; before, both fell back to frustum
   planning with whatever aspect the camera kept, and stamped the actors
   those passes saw. `validate-mirror-plan-play` resizes the window across
   a collapsed canvas and back while facing the 02_NYC_Bar mirror, in Play

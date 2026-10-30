@@ -262,6 +262,11 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   // the order the page receives creation records; a plan the CPU path takes
   // instead is materialized, which gives getLodMeshFrame's output.
   let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false,plannedFrame=-1,firstPassFrame=-1;
+  // Whether a frame has drawn the binding. The original's only GetFrame call is DrawLodMesh's (Render 0x10b0ee0f), so its cache
+  // item is made by the first frame that draws the actor. The call above, at admission, stands for that one only while the pose
+  // is still the one it read: a drawn update after the pose changed empties the cache first (docs/script-lodmesh-frame.md
+  // "The first GetFrame is the first draw's").
+  let drawnBefore=false;
   const frame=layout?planFirst():getLodMeshFrame(payload,actor,coords,services);
   if(!layout)callOps=[frame.ops];
   function planFirst(){
@@ -537,14 +542,15 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
      * (a cache entry created this tick while tweening) are replaced by the
      * base call alone and the child frames draw its state (`planDegraded`). */
     let planDegraded=false;
-    function planGpu(requests=[fullCount]){
+    function planGpu(requests=[fullCount],first=false){
       // A slot's plans take effect when its GPU pass runs. Until the first
       // one has run, the actor has not been drawn and the GPU holds none of
       // its cache poses; a new plan would overwrite that first one, and a
       // tween in it would start from an empty state. The original's first
       // GetFrame happens when the actor is first drawn, so the cache
-      // restarts: this plan is the first.
-      if(layout.frame<firstPassFrame)for(const key of [...cache.entries.keys()])cache.flush(key);
+      // restarts: this plan is the first. So it is for the first frame that
+      // draws the binding (`first`).
+      if(first||layout.frame<firstPassFrame)for(const key of [...cache.entries.keys()])cache.flush(key);
       const call=vertexCount=>planLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount});
       planDegraded=false;
       let merged=null,plans=null;
@@ -875,6 +881,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
     // checks before this point turn most bindings away: they are in `update`, which makes none.
     function updateDrawn(view,record,at,u32,f32,verify){
         record.visible=true;record.childOnly=childOnly;drawnMain=!childOnly;
+        const first=!drawnBefore;drawnBefore=true;
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
         // the unlit inspection path applies it to the texture directly.
@@ -936,7 +943,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         lastDetail=detailKey;
         let posed=false;
         if((poseChanged||callsChanged)&&mode==='gpu'){
-          if(planGpu(requests))record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);
+          if(planGpu(requests,first))record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);
           posed=true;
         }
         // The GPU path's LOD parameters after GetFrame (the morph and corner
@@ -956,6 +963,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         if((poseChanged||lodChanged)&&mode==='cpu'){
           // A plan evaluated for this frame before a fallback already posed it.
           if(!posed&&(poseChanged||callsChanged)){
+            if(first)for(const key of [...cache.entries.keys()])cache.flush(key);
             const calls=requests.map(count=>getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:count}));
             callReturned=calls.map(call=>call.vertexCount);callOps=calls.map(call=>call.ops);
             lastReturned=callReturned.at(-1);
