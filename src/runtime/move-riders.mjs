@@ -152,6 +152,21 @@ function fillSlot(table, i, other, services) {
   table.ats[i] = instance.arena === table.arena ? instance.base + instance.cells.get(BASE_KEY).offset : 0;
 }
 
+/** The first index at or after `from` (the actors' length when there is none) whose slot is filled for its actor and either reads a Base
+ * word equal to `handle` or takes the plain reads; null slots and slots whose Base word differs are passed. A function of its own, small
+ * and hot, so it is compiled early and runs at the speed of the loop. `handle` is -1 when no image can name the mover. */
+function nextCandidate(hosts, ats, actors, from, handle, view) {
+  const length = actors.length;
+  for (let i = from; i < length; i++) {
+    const other = actors[i];
+    if (!other) continue;
+    if (hosts[i] !== other) return i;
+    const at = ats[i];
+    if (at === 0 || view.getUint32(at, true) === handle) return i;
+  }
+  return length;
+}
+
 const entryCurrent = (entry, actor) => entry.epoch === baseEpoch() && entry.riderEpoch === riderEpochOf(actor);
 const NO_MOTION = [0, 0, 0];
 
@@ -251,6 +266,9 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
   let handle = table === null ? 0 : existingHandle(actor);
   let view = table?.arena?.view;
   for (let i = start; i < actors.length; i++) {
+    // The table's tight loop runs to the next slot that is a rider by its Base word or that it cannot decide (not filled for the actor in
+    // it, or one that takes the plain reads); the rest of the body is that slot's.
+    if (table !== null && view !== undefined) { i = nextCandidate(table.hosts, table.ats, actors, i, handle === 0 ? -1 : handle, view); if (i >= actors.length) break; }
     const other = actors[i];
     if (!other) continue;
     let based;
