@@ -1,475 +1,415 @@
+<p align="center">
+  <img src="docs/readme/banner.svg" alt="deus_ex_web: a night skyline over a perspective grid" width="100%">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.fr.md">Français</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 # Deus Ex on the web
 
-The aim is to make the original Deus Ex playable in a browser using its original
-maps, assets, and game behavior. **Stage 3 is complete within its adopted scope:**
-Training passes all five runtime criteria across 95 probes, and all 83
-single-player maps reach only boundaries assigned to later stages in the startup
-census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
-**Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
-run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is complete** (2026-10-21): its adopted gate passes 50 of 50 on master
-([Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)), each criterion on
-original captures of Liberty Island and Training replayed tick by tick in Play (see below).
-**Stage 6 saves, travel and the campaign are complete** (2026-10-26): all 54 of its
-rows pass. Every mission's placed chain, both sides of each lasting choice and one Play
-run from New Game to an ending equal the original under Wine
-([Stage 6 below](#stage-6-campaign--complete-2026-10-26)).
+An independent reimplementation of **Deus Ex** (Ion Storm, 2000) that runs in a desktop
+browser and aims to behave exactly like the original game.
 
-The target is **100% original fidelity**. Every supported behavior needs original
-data, script, native-code or measured evidence. Unverified substitutes remain
-incomplete work. See [the project rule](AGENTS.md).
+It is not a remake, and it does not emulate the Windows game. Your own copy of the game
+supplies the maps, textures, sounds, music and compiled UnrealScript. This project runs
+that bytecode in its own virtual machine, and it reimplements the engine's native code
+from analysis of the original x86 binaries. Each behavior is checked against the
+original: its DLLs run under a CPU emulator for routine-by-routine comparisons, and the
+game itself runs under Wine to record reference traces and frames.
 
-Delivery is **local only**, as requested. No website is deployed; do not publish
-or push further hosting updates unless the user asks.
+The simulation core is written in **Rust and compiled to WebAssembly**. JavaScript is the
+host glue: **three.js and WebGL2** draw the picture, **Web Audio** plays sound and music,
+and a **Web Worker** keeps the simulation off the page's main thread.
 
-## How Play runs
+> [!IMPORTANT]
+> This repository contains **no game files**. To play, you need your own legally
+> obtained copy of Deus Ex, such as *Deus Ex: Game of the Year Edition* from GOG or
+> Steam. See [Legal](#legal).
 
-- **Simulation in a worker.** By default the game simulation (script ticks,
-  physics, the HUD's window tree, the render scans and Galaxy's Update) runs in
-  a module Web Worker. Each frame it posts a plain-data snapshot that the page
-  draws with three.js/WebGL2. `?sim=inline` keeps the simulation on the page;
-  the Training previews, the NPC focus list and `?simVerify=1` need it. See
-  [simulation worker](docs/sim-worker.md).
-- **Rust core.** Script bytecode runs in the Rust interpreter
-  (`native/script-vm`, compiled to WebAssembly). The same crate holds the
-  tick's event and state dispatch, pawn and actor physics, BSP occlusion, the
-  render and light scans, particles, Fire.dll textures, the light-map merge,
-  the volumetric fog loop and lip-sync analysis. New runtime work goes there
-  first; JavaScript is host glue (three.js, DOM, Web Audio, validators). Each
-  port keeps its JavaScript or oracle reference and a `js`/`verify` URL switch.
-  See [Rust core](docs/rust-core.md).
-- **GPU meshes.** Actor GetFrame interpolation and DrawLodMesh lighting run as
-  WebGL2 passes, bit-exact with the CPU kernels (`?gpuMesh=0` selects the CPU
-  reference; software WebGL keeps it). See [GPU mesh](docs/gpu-mesh.md).
-- **Frame hitch recorder.** `?hitchlog=1` records every frame's page, worker and
-  WebGL timings plus per-second heaps, wasm memories, renderer counts and shader
-  programs; Ctrl+Shift+H saves a JSON for `scripts/analyze-hitchlog.mjs`. Off,
-  it installs nothing. See [hitch recorder](docs/hitch-log.md).
-- **Music and sound.** Galaxy's sequencer and mixer run in Rust inside an
-  AudioWorklet, fed directly by the simulation over a MessageChannel: music,
-  sound-effect voices and zone reverb (`?sfx=webaudio` keeps the older Web
-  Audio effects path). See [Galaxy music](docs/galaxy-music.md) and
-  [galaxy audio](docs/galaxy-audio.md).
+**Contents:** [Status](#status) · [Getting started](#getting-started) ·
+[Controls](#controls) · [Saves](#saves) · [How it works](#how-it-works) ·
+[How fidelity is checked](#how-fidelity-is-checked) · [Performance](#performance) ·
+[Contributing](#contributing) · [Documentation](#documentation) · [Legal](#legal) ·
+[License](#license)
 
-Frame cost and the 120 fps target are tracked in
-[play frame cost](docs/play-frame-cost.md) and the
-[Play CPU plan](docs/play-cpu-plan.md).
+## Status
 
-## What works
+The work is split into stages ([roadmap](docs/roadmap.md)). Each stage closes on a fixed
+list of criteria. For the game's behavior, each criterion is a comparison with the original.
 
-- A JavaScript UE1 package reader shared between Node and browser APIs. All 219
-  installed packages validate, with no unresolved package dependencies. Tagged
-  actor properties and compiled BSP world geometry decode across all 88 maps.
-- Browser folder selection reads the user's local installation without uploading
-  game files. The development server can also read this workspace's installation.
-  The map list offers every installed map; the 83 single-player maps are the
-  measured scope.
-- Original LoadMap startup and Login, the original DeusExHUD, the main menu
-  (Escape) and the installed key bindings, routed through the recovered
-  InputEvent → XInputExt → viewport Exec chain.
-- Movement and collision through the original physics routines (walking,
-  falling, landing, ladders, swimming), compared against original DLL execution.
-  Doors and other movers run the original `DeusExMover` scripts and
-  `physMovingBrush`. Pushed decorations run `DeusExDecoration.Bump` and their
-  physics ([movement](docs/movement.md), [swimming](docs/swimming.md),
-  [rolling](docs/rolling.md), [doors](docs/doors.md)).
-- Using things runs the original frob paths: doors, light switches, keypads,
-  DataCubes, the nano key ring, and item pickup into the inventory and object
-  belt ([mover frob](docs/script-mover-frob.md),
-  [item pickup](docs/script-item-pickup.md)).
-- Weapons: number keys run the original `ActivateBelt N`; weapons draw in
-  first person through `PutInHand`/`BringUp` and fire and swing through the
-  original ticked weapon states. Two crowbar hits break a Training crate into its
-  original fragments and contents ([weapon equip](docs/script-weapon-equip.md),
-  [crate destruction](docs/script-crate-destruction.md)). On Liberty Island the
-  player's pistol hurts and kills Terrorists, hostile NPCs aim and fire back
-  (Tracers, hit regions, armor), batons and crowbars knock out, explosions run
-  `HurtRadius`, and the player's death runs to the level's end, each compared
-  with the original ([Stage 5](docs/stage-5-exit-criteria.md)).
-- DataLinks, InfoLink transmissions and first-person and third-person
-  conversations run the original ConPlay scripts, with subtitles, speech and
-  mission timers ([DataLink scope](docs/script-datalink-live.md),
-  [conversation](docs/script-instructor-conversation.md),
-  [conversation camera](docs/conversation-camera.md)).
-- Every visible actor mesh draws with original lighting
-  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md))
-  and DrawLodMesh's distance LOD ([LOD](docs/script-lodmesh-lod.md); `?meshLod=off`
-  draws full detail). An armed pawn holds its gun in every frame that draws him
-  (the main frame, mirrors, a security camera's window), posed from its mesh's
-  special triangle as Render.dll does and lit right after the pawn in the original's
-  order ([weapon attachment](docs/weapon-attachment.md)); on the GPU mesh path
-  ([GPU mesh](docs/gpu-mesh.md#a-pawns-weapon-2026-10-15)) unless `?weapons=cpu`;
-  `?weapons=off`, `?weaponMirrors=0`).
-- Unit/format tests, real-data validation commands, and browser regression
-  tests. Optional local native-DLL comparisons check translated routines against
-  the original DLLs under an emulator ([native exec diff](docs/native-exec-diff.md),
-  [level queries](docs/level-queries.md)).
+| Stage | Scope | Status |
+| --- | --- | --- |
+| 0–2 | Read the original packages, draw maps with their lighting, a first playable slice | Done (two Stage 2 checks deferred) |
+| 3 | The script runtime and the engine's native functions | Done: Training passes its gate, and all 83 single-player maps start and run |
+| 4 | Presentation: meshes, lighting, effects, HUD, menus, sound and music | Done (2026-10-17): 70 of 70 criteria |
+| 5 | Gameplay: movement, AI, combat, stealth, skills, augmentations, conversations | Done (2026-10-21): 50 of 50 scenarios |
+| 6 | Saves, map travel and the whole campaign | Done (2026-10-26): 54 of 54 rows |
+| 7 | Browser support, performance and reliability | In progress ([criteria](docs/stage-7-exit-criteria.md)) |
 
-**Current boundaries:** Stage 3 completion covers the measured runtime paths,
-not every interaction or full campaign compatibility. Stage 5 gameplay is
-proven only where its gate passes (below); the other gameplay rows play in Play
-but have no original capture yet. Stage 6's campaign
-rows compare placed chains, not free play: the walk and the fights between the steps are
-not part of them (the user's decision, [Stage 6 exit criteria](docs/stage-6-exit-criteria.md)). The final original camera/motion comparison
-and actual window/tab pause acceptance deferred from Stage 2 remain open.
+In practice, the page starts the way the original does: the splash screen, the logo map
+with its camera flight, then the main menu. From there you can start a new game, play
+Training, save and load. One automated run played from New Game through every mission to
+one of the endings in a single process (86 map changes). The state carried from each
+mission into the next matched the original's.
 
-## Stage 3 completion — 2026-09-28
+What runs, from translated original code:
 
-- Training's gate passes startup, tick, interaction, object lifecycle and
-  host-substitute checks. Its 95 probes include a continuous public-input route
-  from PlayerStart1 through `DL_part2`.
-- The all-maps census covers original LoadMap startup and Login, ten seconds of
-  ticking, a Player-start reload and ten further seconds. All **83/83**
-  single-player maps have no unclassified Stage 3 boundary, boot failure or crash.
-  At the 2026-09-28 completion **53/83** ran without any boundary; after the
-  conversation census of 2026-10-02 (up to ten conversations per map played to
-  their end) **77/83** are clean and the rest stop only at Stage 5 AI navigation
-  natives (518, 523) and the ReachablePathnodes iterator.
-- Interactions outside Training remain unprobed. The census continues past
-  deferred boundaries with declared zero results; behavior downstream of those
-  returns is not original-game fidelity evidence. Implementing those features
-  may expose additional runtime work.
-- Saves, map travel and the measured fresh-entry `PlayerTraveling` marker remain
-  explicit Stage 6 tolerances. AI navigation, broader movement, combat and other
-  gameplay systems belong to Stage 5.
+- Movement and physics: walking, jumping, crouching, falling, ladders and swimming. Doors
+  and lifts work, and you can push, carry and throw objects.
+- Combat and stealth: weapons, NPCs that see, hear, patrol, fight and raise alarms,
+  security cameras, turrets, laser tripwires and explosions.
+- Character systems: the inventory and belt, skills, augmentations, lockpicks and
+  multitools, keypads, computers and datacubes.
+- Conversations, DataLinks and InfoLink messages, with subtitles, speech, lip sync and
+  the conversation camera.
+- The original HUD and menus, including the options screens and key rebinding.
+- The original renderer's look: light maps, moving lights, mesh lighting, mirrors, fog,
+  coronas, particles, decals and animated textures.
+- Music and sound through a reimplementation of the game's Galaxy audio engine.
+- The intro, the credits and the three endings.
 
-The [exit criteria and measured results](docs/stage-3-exit-criteria.md) are the
-current status. The [September 20 audit](docs/stage-3-completion-audit.md) and
-[earlier handoff](docs/stage-3-handoff.md) are historical checkpoints.
+Limits:
 
-## Stage 4 presentation — complete 2026-10-17
+- "Done" means the stage's criteria pass. It does not mean that every interaction on every
+  map has been compared with the original. Stage 5's scenarios are on Training and Liberty
+  Island. Stage 6 compares each mission's scripted chain of steps, not free play. Elsewhere
+  the game runs from translated original code, but has not been checked case by case, so
+  expect bugs.
+- Multiplayer, gamepads, touch screens and the screenshot key are not supported.
+- Safari and Windows have not been tested.
 
-The adopted gate (`scripts/validate-stage4-acceptance.mjs`) passes 70 of 70
-criteria in one run, and 26 maps match the original's own frames at matched
-cameras and level time (122 of 130 views, [visual acceptance](docs/visual-acceptance.md)).
-Each item runs in Play from translated original code, with the evidence and
-limits in the linked document. The [roadmap](docs/roadmap.md#4-restore-the-remaining-presentation)
-keeps the dated record.
+The detailed record is in [project status](docs/status.md), and each stage's exit criteria
+document lists what it proves and what stays open.
 
-- **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
-  weapon, with every LightType ([mesh lighting](docs/mesh-lighting.md)), with
-  GetFrame and lighting on the GPU, bit-exact with the CPU kernels
-  ([GPU mesh](docs/gpu-mesh.md)); DrawLodMesh's distance LOD (count
-  selection, vertex morph, collapsed faces and interpolated UVs, bit-equal to
-  Render.dll at the pass's 24 bits) on both paths ([LOD](docs/script-lodmesh-lod.md)).
-- **Visibility:** Render.dll's OccludeBsp, master frame, dynamics, moving
-  brush tracker and mirror/sky child frames in the Rust core, bit-exact; Play
-  draws each frame's polygons, mirrors, sky and fog surfaces from its own
-  result ([BSP occlusion](docs/bsp-occlusion.md)), and decals and fog on movers
-  ([brush tracker](docs/brush-tracker.md)).
-- **Light maps:** Render.dll's static path, DefaultTexture for untextured
-  surfaces ([static lighting](docs/static-lighting.md)); pulse, flicker,
-  strobe and waver lights re-merged each frame; moving lights such as AugLight
-  and security cameras on BSP and mover light maps
-  ([moving lights](docs/moving-normal-lighting.md)); movers drawn from their
-  brush polygons.
-- **Mirrors:** every static and mover mirror plane, nested to the original
-  recursion depth, with the player in reflections
-  ([mirror surfaces](docs/mirror-surfaces.md)).
-- **Textures and effects:** Fire.dll fire and water textures
-  ([fire textures](docs/fire-texture.md)), animated and auto-panned surfaces
-  ([texture animation](docs/texture-animation.md)), particles and sprites
-  ([particles](docs/particles.md)), light coronas ([coronas](docs/coronas.md)),
-  laser beams ([lasers](docs/lasers.md)), volumetric fog on BSP surfaces
-  ([volumetric fog](docs/volumetric-fog.md)) and decals such as the Shadow
-  blobs under pawns ([decals](docs/decals.md)).
-- **Sound and music:** Galaxy's ambient and script sounds, effect voices and
-  zone reverb through its own mixer ([galaxy audio](docs/galaxy-audio.md)),
-  and each map's music, from the original loader, sequencer, mixer and Update
-  music section, bit-exact with Galaxy.dll ([Galaxy music](docs/galaxy-music.md)).
-- **Conversations:** the third-person conversation camera and letterbox
-  ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
-  sync ([lip sync](docs/lip-sync.md)).
-- **Options menus:** Esc > Settings opens the original Controls, Customize
-  Keys, Game options, Display, Brightness, Sound and Adjust Colors screens.
-  They run the original scripts over the translated ScaleWindow value-string
-  natives, Core casts and `get`/`set ini:` on the engine's native config
-  classes ([settings menus](docs/settings-menus.md),
-  [native config](docs/script-native-config.md)). Brightness drives the display
-  ramp, the volume sliders the Galaxy mixer, Decals the decal pass, Mouse
-  Sensitivity and Invert Mouse the original `PlayerInput`. INI files are not
-  written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
-  explicit boundaries.
+## Getting started
 
-**Carried past the close** (no gating row holds them): the security cameras'
-window views, a pointer focus difference, the Wine brightness gap, the gate's
-concurrency flakes (the official run is `--jobs 1`) and speech's decoded audio,
-excluded by decision ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)).
+### Requirements
 
-## Stage 5 gameplay — complete 2026-10-21
+- **Node.js 22.12** or newer, with npm.
+- **Rust** with the `wasm32-unknown-unknown` target (tested with Rust 1.99, installed
+  through [rustup](https://rustup.rs)). This is required: the game's core is compiled
+  from the three crates in `native/`.
+- **Deus Ex: Game of the Year Edition.** The project is developed against the GOG release,
+  version 1.112fm. Other 1.112fm releases, such as Steam's GOTY Edition, are expected to
+  work but have not been tested.
+- A desktop browser with WebGL2 and WebAssembly (see [Supported browsers](#supported-browsers)),
+  a keyboard and a mouse.
 
-The [Stage 5 exit criteria](docs/stage-5-exit-criteria.md) define 50 scenarios on
-the three Training maps and Liberty Island, each with the original-side evidence
-that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
-as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
-
-**Gate: 50 of 50 pass, none fail** (the official run on master 3230773, 2026-10-21:
-[Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)). The passing
-rows are proven by live traces of the original game: `DeusEx.exe` runs under
-CrossOver (the Mac) or Wine (the Linux host) with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
-records the watched actors, the random stream, the AI events and every object
-creation per tick. Play then replays the same inputs and must match them tick by
-tick (`scripts/validate-stage5-live.mjs --scene <tag>`, stored scenes of the Island and the three Training maps). Two
-rows on native movement bodies are O3 comparisons instead: every call of the ladder and
-crate-stack scenes, replayed through Engine.dll on Play's recorded inputs
-(`scripts/validate-stage5-o3.mjs`). Proven so far:
-
-- **Combat:** the player's pistol against a Terrorist, NPCs firing at the player,
-  knockouts, an explosion's damage and noise, the player's death to the level's end.
-- **Stealth:** Training's stealth maze (a soldier sees the player, trips the alarm units,
-  the soldiers turn neutral and the exit door closes until Switch0), a patrolling
-  Terrorist seeing the player, a pawn finding a body,
-  a broken laser beam raising the alarm, hacking the laser trap's control panel,
-  a shot waking and drawing the guards, a run's footsteps heard by a guard where a walk's
-  are not, a security camera raising the alarm that
-  wakes the turret, an EMP grenade against the bot, the turret and the camera, and a
-  Terrorist who sees the player in the light and not in the shadow.
-- **Conversations:** Training's M00MeetPage and holo-Jaime, MeetPaul's weapon choice, Filben's key, Gunther's rescue and the
-  weapon the player gives him, the commander's branches, overheard conversations and barks, and the
-  flags that change the world.
-- **Exploration:** breath and drowning under water, the contaminated pool with and without
-  the HazMat suit, carrying and throwing a decoration, fall damage, jumping, the ladder,
-  pushing and climbing a crate, AugLight in the dark room, items and skill points; Training's
-  doors, key ring, lockpick, datacube, keypads and Multitool hack, the cadet's body carried to the
-  table, the repair and medical bots' windows, and the Island's personal and security terminals
-  and its ATM, driven by key edges, with the terminals' frames.
-- **Combat (Training):** the crowbar breaking the crates (and the DataLink that follows),
-  the pistol and rifle ranges (the scope's FOV, the skill the Mission00 timer grants), a
-  LAM on the breakable wall, the instructor taking the inventory.
-- **Routes and objectives:** the airshaft and water routes, the back entrance through
-  a door blown open by a rocket, killing or sparing the commander, and the mission's completion.
-
-Collision and line traces now read the moving brush tracker's level model, as the
-original's do (doors and lifts block shots, moves and spawns where they were last
-drawn; checked against Engine.dll). The dying player's camera starts from the body's
-rotation, as the engine's draw passes it, and a breakable door's fragments are placed
-as Engine.dll's FindSpot places them, NaN probes included. The user adopted the criteria on
-2026-10-21 ([decisions](docs/stage-5-exit-criteria.md#what-the-user-decided-2026-10-21)); the placed approaches were re-captured with held keys on 2026-10-21 (`air2`, `obs1`, `swm3`; [held keys](docs/stage-5-exit-criteria.md#held-keys-2026-10-20)).
-Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
-also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
-
-## Stage 6 campaign — complete 2026-10-26
-
-The [Stage 6 exit criteria](docs/stage-6-exit-criteria.md) define 54 rows (3 more are
-excluded): the start and the menus, persistence (saves, loads, return visits), the
-transitions, and per mission its required chain, both sides of its lasting choices and
-every conversation, the three endings, and the campaign in one run.
-`node scripts/stage6-criteria.mjs` prints the scoreboard. **All 54 pass.**
-
-- **Mission chains** (6.4.NN.1, [chains](docs/stage-6-chains.md)): each mission is a
-  scripted route of placed steps (conversations and their choices, computers, keypads,
-  map exits) run in Play (`scripts/chain-play.mjs`) and in the original under Wine
-  (`scripts/chain-original.mjs`) from the same save. The flags, door states and travel
-  text at every snapshot are compared (`scripts/validate-stage6-chain.mjs`).
-- **Carried choices** (6.4.NN.2, [flag census](docs/stage-6-flag-census.md)): 66 units, one
-  for each side of each lasting flag, compared on what the later mission's reader observes
-  (`scripts/validate-flag-census.mjs`).
-- **The campaign in one run** (6.6.1): one Play process from New Game through all fourteen
-  chains to ending 3 (86 map changes). Each mission's exit text equals the original's
-  (`scripts/validate-full-run.mjs`).
-
-What the original itself varies between runs is not compared: a flag a script draws with
-`FRand` is checked by presence only, fights the placements would provoke are kept from
-starting (the player is undetectable there), and doors that close again by themselves are
-not read. Everything a chain's steps decide is compared exactly. Play fixes the comparisons
-found: the camera's zone stamped every frame (pawns near the player stay awake), FName
-spelling across levels (map actors' Name properties included), class defaults carried
-across travel, a loaded level keeping its file's URL, and the first tick after a load
-spanning the load (the page). The user closed the stage on 2026-10-26 on the rows' last
-runs, without a gate that runs every proof together on one commit (Stages 4 and 5 had one);
-the rows that last ran before the Play fixes above are named in
-[the exit criteria](docs/stage-6-exit-criteria.md#stage-6-close).
-
-## Open the viewer
-
-Use Node 22.12 or newer (or a newer supported Node LTS release), and a Rust
-toolchain with the WebAssembly target (tested with Rust 1.99):
+### 1. Get the code
 
 ```sh
+git clone https://github.com/Rydgel/deus_ex_web.git
+cd deus_ex_web
 npm ci
 rustup target add wasm32-unknown-unknown
+```
+
+### 2. Add your game files
+
+Put your installed game folder in the repository root, under the name
+`Deus Ex GOTY Edition`. You can copy it from where GOG or Steam installed the game, or
+make a symbolic link to it.
+
+```text
+deus_ex_web/
+└── Deus Ex GOTY Edition/
+    ├── Help/
+    ├── Maps/
+    ├── Music/
+    ├── Sounds/
+    ├── System/      (contains DeusEx.u)
+    └── Textures/
+```
+
+Git ignores this folder. A folder named `game/` works too, or you can set
+`DEUS_EX_GAME_DIR` to the installation's path.
+
+You can also skip this step. When the page finds no game folder, it asks you to choose
+one, and the browser reads the files locally. Nothing is uploaded.
+
+### 3. Build and run
+
+```sh
+npm run build:wasm
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The page starts as the original does: the splash, then
-the logo map with its camera flight, in the original's 4:3 shape; Escape opens the main menu,
-whose Training button travels to training (docs/boot.md, docs/travel.md). The first click takes
-the mouse, as the original captures it; the page stays in its window. Alt+Enter, the original's
-fullscreen toggle (or the Display menu's Full-Screen choice), takes fullscreen and the mouse, and
-gives them back: in Chrome or Edge, in fullscreen, Escape reaches the game and keeps the mouse (hold
-Escape to leave fullscreen). In a window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. Every binding of the
-original's User.ini reaches the game: the keys, the three mouse buttons and the wheel (weapon and item switching), and in
-fullscreen in Chrome or Edge the keys a browser reserves for itself (F1 to F12, Tab…) (docs/input-bindings.md). With the extracted
-`Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
-folder containing Maps, Textures, System and Help. The local production preview always uses
-this folder picker. Your saves: the original's Load Game screen lists the saves the page keeps in the browser
-(the page's own Saves window opens from a Saves button shown beside the picture while a menu is open, and from the folder screen), or in a
-`Save` folder you pick (Chromium: the desktop game's own, or the game folder), and imports a desktop `Save` folder or
-exports a zip in Firefox and Safari; the dev server also lists the game folder's `Save`, read-only (docs/save-storage.md).
-Saving and loading work in the original's format (docs/travel.md "Play, step 4"): the Load Game screen, the QuickLoad key (numpad `/`) and the menu after a death load a slot, the desktop game's own slots included (41 of 41 real slots load; the AC fans of `09_NYC_ShipFan` spin as the original's do, [docs/rotating-brushes.md](docs/rotating-brushes.md)).
-`http://127.0.0.1:5173/?debug=1` is the debugging page described below:
-the toolbar, Play/Inspect, the map list (training loads first) and the diagnostics.
-Original data is kept outside source control and outside the website build.
+`npm run build:wasm` compiles the Rust crates to WebAssembly. `npm run dev` also runs it
+before it starts the development server, so you only need it on its own after you change
+Rust code.
 
-`npm run dev`, `npm run build` and `npm test` first compile the three Rust
-crates under `native/` to WebAssembly (`npm run build:wasm`): `script-vm` (the
-simulation core and render kernels), `lodmesh-kernel` (mesh posing) and
-`galaxy-kernel` (music). Rebuild after changing Rust code.
+Open <http://127.0.0.1:5173>. The page starts like the original. Click the picture to
+capture the mouse, press <kbd>Escape</kbd> for the main menu, then choose New Game,
+Training or Load Game.
 
-Each Vite server keeps its pre-bundled dependencies (three.js) in `.vite-cache/` under the
-root it serves (`cacheDir` in `vite.config.mjs`; ignored), not in `node_modules/.vite`.
-Worktrees often symlink `node_modules` to the main checkout's; with one shared cache, a
-server started from another checkout deleted and rebuilt it (Vite's cache key includes the
-root), and a page loading meanwhile got `504 (Outdated Optimize Dep)` for three.js.
+`http://127.0.0.1:5173/?debug=1` opens the developer page, with a map list, a free
+inspection camera and diagnostics. The [development guide](docs/development.md) describes it.
 
-On the debugging page (`?debug=1`): in **Play**, the installed key bindings apply: WASD moves, Space jumps, X
-crouches, Shift walks, left click fires, right click uses, number keys select
-belt items and Escape opens the main menu. Double-click locks the mouse. In
-**Inspect**, WASD/arrow keys fly, Q/E move down/up, and Shift increases speed.
-**Player start** reloads the map's player start in Play, or resets the
-inspection camera in Inspect. **Give loadout** (Tools) gives JC the Dragon's
-Tooth sword, the stealth pistol, assault rifle, assault shotgun, sniper rifle
-and GEP gun, 10 lockpicks, 10 multitools, 5 medkits and 5 bioelectric cells,
-every augmentation at its top level, the skills, full ammunition and 100,000
-credits; `?debug=1&loadout=1` gives it at each Player start and each map opened
-from the list (not after a travel or a loaded game, whose inventory is the
-player's). It runs the original's own code through the console command chain
-(`src/viewer/debug-loadout.mjs`): each item is `summon`ed and picked up by
-`ParseRightClick`, then the cheats `AllAugs`, `AllSkills`, `AllAmmo` and
-`AllCredits` run. Two fields are written by hand: `bCheatsEnabled` first, as
-for `?cheat=`, and `FrobTarget` before each pickup, the stand-in for aiming at
-the item. Training's mission script still confiscates the inventory where the
-original does (Mission00, MunitionsTrooperReady). **Diagnostics** provides
-wireframe, actor markers, surface inspection, counts, and format notes. It also offers an
-original-lighting toggle, separate display brightness, conversation subtitles
-and exact reference-camera coordinates. Brightness follows the original D3D
-display curve: 0.60 is the default; 0.40 leaves framebuffer values unchanged
-for capture comparisons. **Hide UI** gives the game view the whole window, and
-**Screen shape** selects the original 4:3 view.
-
-To run the production build locally:
+To try the production build locally:
 
 ```sh
 npm run build
 npm run preview
 ```
 
-The preview uses `http://127.0.0.1:5174` and requires folder selection.
+The preview runs at <http://127.0.0.1:5174> and always asks for the game folder. The
+build never contains game data.
 
-## Validate and inspect data
+### Supported browsers
 
-```sh
-npm test
-npm run inventory
-npm run validate:game
-npm run validate:viewer
-node scripts/validate-gameplay.mjs
-npm run export:training
-npx playwright install chromium firefox
-npm run test:browser
-```
-
-`npm run test:browser` runs the browser suite once per Playwright project:
-`chromium`, `firefox`, and `webkit` on macOS (install it there with
-`npx playwright install webkit`); `npm run test:browser -- --project firefox`
-runs one. The last run by browser is in
-[the Stage 7 criteria](docs/stage-7-exit-criteria.md#the-browser-suite-by-browser).
-While the checkout is being edited (a dev server reloads the page when a
-served file changes), `DX_SUITE_TREE=<worktree>` serves a frozen worktree of
-the commit under test on ports 5195 and 5196 instead; it needs its own
-`node_modules` link, game folder link, Wasm build and `dist`.
-
-For a full validator sweep, use `npm run validate` (four parallel validator
-jobs by default), or explicitly `npm run validate -- --jobs 4`. Use focused
-validators while developing a slice; a full sweep is not required after every
-small change. The runner locates the local native-probe Python environment
-automatically and reports failures and skipped checks separately. It also
-bounds memory. Validators run in their own process groups. A validator starts
-only while the recorded peaks fit the budget (`--mem-budget`, default half of
-physical memory up to 8 GiB). One that passes the per-validator cap
-(`--mem-cap`, default 6 GiB) is killed and reported as failed, as is one that
-exceeds its time limit. On macOS the runner measures memory footprint,
-including compressed and swapped pages, and it admits fewer jobs under system
-memory pressure.
-
-The stage gates and the Stage 5 census:
-
-```sh
-node scripts/validate-stage4-acceptance.mjs --jobs 1
-node scripts/census-stage5.mjs --json .work/stage5-census.json
-node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report .work/stage5-gate.json
-node scripts/validate-stage5-acceptance.mjs --jobs 4 --report .work/stage5-gate.json   # census and replays side by side
-node scripts/validate-stage5-live.mjs --scene cmb1
-```
-
-They need the stored original captures under `.work/` (kept outside Git); a check
-whose capture is absent reports SKIP. New captures need the original game under
-CrossOver (`scripts/live-original.sh`, one capture at a time).
-
-Build before browser testing. One mouse-lock check opens a focused Chromium window;
-that check requires a desktop session. Browser screenshots go into `reports/browser/`.
-The tools discover `Deus Ex GOTY Edition/`, then `game/`, or use `DEUS_EX_GAME_DIR`.
-
-```sh
-node scripts/inventory.mjs "/path/to/Deus Ex"
-node scripts/validate-game.mjs "/path/to/Deus Ex"
-node scripts/validate-viewer.mjs 00_Training
-npm run inspect -- "/path/to/Deus Ex/Maps/00_Training.dx"
-node scripts/export-map.mjs "/path/to/Deus Ex/Maps/00_Training.dx" reports/training
-```
-
-Use the `node` commands directly when redirecting JSON to files; npm adds a status
-banner. Create `reports/` before redirecting. Missing input, malformed packages,
-or failed validation produce nonzero exit statuses.
-
-The diagnostic training export writes `world.obj`, `summary.json`, `actors.json`,
-and `footprint.svg`. It keeps original Unreal units with Z up. Its 25,674 triangles
-are the untextured world-only diagnostic mesh, before renderer filtering and
-static doors. The footprint overlays every height and is not a game screenshot.
-
-## Roadmap
-
-- **Stage 0:** validate original packages and dependencies — complete.
-- **Stage 1:** render training with textures and an inspection camera — complete.
-- **Stage 1.5:** restore original static lighting and shadows — complete.
-- **Stage 2:** playable movement/collision/door slice delivered; remaining validation deferred.
-- **Stage 3:** original script/native runtime and object lifecycle — complete for
-  the Training gate and all 83 single-player maps' startup census; coverage limits
-  are recorded above.
-- **Stage 4:** restore animated actors, visual effects, audio, and original interfaces —
-  complete (2026-10-17, gate 70 of 70).
-- **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations —
-  complete (2026-10-21, gate 50 of 50).
-- **Stage 6:** persist saves and map state, then validate the full campaign —
-  complete (2026-10-26, 54 of 54 rows).
-- **Stage 7:** meet browser compatibility, performance, and reliability targets.
-
-The numbered stages and acceptance criteria are in [the roadmap](docs/roadmap.md).
-We are building an independent browser runtime through reverse engineering of the
-original data, UnrealScript bytecode, and native behavior. The runtime does not
-execute Windows binaries; the original DLLs run only in the optional local
-comparison tools. Gameplay uses our own VM and native function implementations;
-SurrealEngine's capabilities do not define our support targets.
-
-## Layout
-
-| Path | Purpose |
+| Browser | Status |
 | --- | --- |
-| `src/unreal/` | Binary package, object, map, texture, and geometry decoding |
-| `src/runtime/` | Script runtime host, natives, collision, physics, Galaxy audio and the Wasm kernel wrappers |
-| `src/viewer/` | Browser rendering, the simulation worker and its page client, HUD, audio output and diagnostics |
+| Chrome, Chromium (macOS, Linux) | Tested. The simulation runs in a Web Worker. |
+| Firefox (macOS, Linux) | Tested. The simulation runs on the page, where Firefox's garbage collector pauses less. |
+| Edge and other Chromium browsers | Expected to behave like Chrome. Not tested. |
+| Safari | Not tested yet. It has no Keyboard Lock and cannot save to a folder. |
+| Phones and tablets | Not supported: the game needs a keyboard and a mouse. |
+
+The browser test suite passes 41 of 41 tests in Chromium and Firefox on Linux (2026-10-28).
+Windows has not been tested, because neither development machine runs it.
+
+## Controls
+
+The keys are the original's defaults from `DefUser.ini`, kept as they were in 2000. For
+example, <kbd>R</kbd> looks up and <kbd>;</kbd> reloads. You can change them in the game,
+under Options → Controls → Customize Keys, and the page remembers your changes. Keys are
+read by their position on the keyboard, as on a US QWERTY layout: on an AZERTY keyboard,
+for example, you move with <kbd>Z</kbd> <kbd>Q</kbd> <kbd>S</kbd> <kbd>D</kbd>.
+
+| Action | Keys |
+| --- | --- |
+| Move, strafe | <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or the arrow keys |
+| Look | Mouse |
+| Jump | <kbd>Space</kbd> |
+| Crouch | <kbd>X</kbd> |
+| Walk (hold) / toggle walking | <kbd>Shift</kbd> / <kbd>Caps Lock</kbd> |
+| Lean left / right | <kbd>Q</kbd> / <kbd>E</kbd> |
+| Look up / down, center the view | <kbd>R</kbd> / <kbd>V</kbd>, <kbd>F</kbd> |
+| Turn left / right | <kbd>Z</kbd> / <kbd>C</kbd> |
+| Fire or attack | Left mouse button |
+| Use, open, pick up | Right mouse button |
+| Drop the item in hand / put it away | Middle mouse button or <kbd>Tab</kbd> / <kbd>Backspace</kbd> |
+| Select a belt item | <kbd>0</kbd>–<kbd>9</kbd>, mouse wheel |
+| Reload / change ammunition | <kbd>;</kbd> / <kbd>'</kbd> |
+| Scope / laser sight | <kbd>[</kbd> / <kbd>]</kbd> |
+| Augmentations | <kbd>F3</kbd>–<kbd>F12</kbd> |
+| Inventory / goals and notes | <kbd>F1</kbd> or <kbd>I</kbd> / <kbd>F2</kbd> or <kbd>G</kbd> |
+| Main menu / pause | <kbd>Escape</kbd> / <kbd>Pause</kbd> |
+| Quick save / quick load | Numpad <kbd>+</kbd> / Numpad <kbd>/</kbd> |
+
+In the browser:
+
+- **Mouse.** The first click in the picture captures the mouse pointer. In a window,
+  <kbd>Escape</kbd> opens the main menu and the browser also releases the pointer; click
+  again to capture it.
+- **Fullscreen.** <kbd>Alt</kbd>+<kbd>Enter</kbd>, the original's fullscreen key, switches
+  fullscreen on and off. The Display menu's Full-Screen option does the same.
+- **Reserved keys.** In Chrome's fullscreen, Keyboard Lock gives the game the keys a
+  browser normally keeps for itself, such as <kbd>F1</kbd>–<kbd>F12</kbd> and
+  <kbd>Tab</kbd>. Hold <kbd>Escape</kbd> for about two seconds to leave fullscreen.
+  Firefox and Safari have no Keyboard Lock, so <kbd>F11</kbd> and the browser's own
+  shortcuts stay with the browser.
+- **Browser shortcuts.** Outside fullscreen, <kbd>Ctrl</kbd> and <kbd>⌘</kbd> shortcuts,
+  such as reload or opening a new tab, still work. No page can take system shortcuts such
+  as <kbd>Alt</kbd>+<kbd>Tab</kbd> or <kbd>⌘</kbd>+<kbd>Q</kbd>.
+- **Pausing.** The game pauses when the window loses focus.
+
+Every binding, with the browser key it comes from and what it was checked to do, is listed
+in [input bindings](docs/input-bindings.md).
+
+## Saves
+
+Saves use the original format. A save is the same folder of `.dxs` files that the desktop
+game writes (`Save0001/SaveInfo.dxs` plus one file per visited map). The desktop game's
+saves load here: 41 of 41 real saves from other players' playthroughs load. The original
+game, run under Wine, loads saves made here (checked with several saves).
+
+Where they are kept:
+
+- **In the browser** by default, in IndexedDB.
+- **In a folder on disk**, in Chrome and other Chromium browsers (File System Access API). You can choose the
+  desktop game's own `Save` folder or the game folder, in which case its `Save` subfolder
+  is used. The browser asks for permission again on a later visit.
+- **Import and export** in Firefox and Safari, which cannot write to a folder: import a
+  desktop `Save` folder, or export your saves as a zip.
+- The development server also lists the installation's own `Save` folder, read-only.
+
+Use the game's Save Game and Load Game screens, or the quick save and quick load keys. The
+page's Saves window, which picks a folder, imports and exports, opens from the **Saves**
+button beside the picture while a menu is open. Browsers can clear a site's storage (Safari
+does after seven days without a visit), so keep a folder or an export of saves you care
+about. Settings changed in the options menus are kept in the browser too. Details:
+[save storage](docs/save-storage.md).
+
+## How it works
+
+```mermaid
+flowchart LR
+  files[("Your game folder<br/>.u .dx .utx .uax .umx")]
+  subgraph sim["Simulation: a Web Worker (on the page in Firefox)"]
+    reader["Package reader<br/>(JavaScript)"]
+    core["Rust core (WebAssembly)<br/>UnrealScript VM, tick dispatch,<br/>physics, collision, BSP occlusion"]
+    natives["Native functions<br/>translated from the original DLLs"]
+    reader --> core
+    core <--> natives
+  end
+  subgraph page["Page"]
+    draw["three.js / WebGL2<br/>world, GPU meshes, HUD"]
+    audio["AudioWorklet<br/>Galaxy mixer and music (Rust)"]
+  end
+  files --> reader
+  core -- "frame snapshot" --> draw
+  core -- "sound and music" --> audio
+  draw -- "keyboard and mouse" --> core
+```
+
+- **Packages.** A reader written for this project decodes the original Unreal packages:
+  maps, textures, meshes, sounds, music and script classes. It runs in Node and in the
+  browser.
+- **Scripts.** The game's logic is the original compiled UnrealScript. A virtual machine
+  in the Rust core runs that bytecode as it is. It is not decompiled or rewritten.
+- **Native code.** The engine's C++ functions (physics, collision, AI queries, the window
+  system, rendering and audio) are reimplemented from analysis of the original x86 DLLs.
+  Hot paths are in Rust; the rest is JavaScript.
+- **Rendering** follows the original renderer's own steps: BSP occlusion, light maps, mesh
+  lighting, mirrors and fog. WebGL2 draws the result, and mesh animation and lighting run
+  on the GPU, bit-exact with the CPU code.
+- **Audio.** The Galaxy sequencer and mixer run in Rust inside an AudioWorklet.
+- **No Windows code runs in the game.** The original DLLs are used only by the optional
+  local comparison tools.
+
+| Path | Contents |
+| --- | --- |
+| `src/unreal/` | Package, object, map, texture and geometry decoding |
+| `src/runtime/` | Script runtime host, native functions, collision, physics, Galaxy audio, Wasm wrappers |
+| `src/viewer/` | The page: rendering, the simulation worker and its client, HUD, audio output, diagnostics |
 | `native/` | Rust crates compiled to WebAssembly: `script-vm`, `lodmesh-kernel`, `galaxy-kernel` |
-| `scripts/` | Inventory, validators, native oracles, censuses and profiling |
-| `tools/` | Native capture helpers for the original game |
-| `test/`, `browser-tests/` | Synthetic binary fixtures and browser regression checks |
-| `docs/` | Findings, recovered contracts, evidence, and the roadmap |
-| `vite.config.mjs` | Code-only build and local development data adapter |
-| `game/`, `reports/`, `.cache/` | Local data, generated output, references; ignored |
+| `scripts/` | Validators, native-code oracles, censuses, profiling |
+| `tools/` | Capture helpers for the original game |
+| `test/`, `browser-tests/` | Unit tests and the Playwright browser suite |
+| `docs/` | Research notes, recovered behavior, evidence and the roadmap |
 
-## Format references
+## How fidelity is checked
 
-The readers were written for this project. Serialized layouts were checked against
-SurrealEngine's open-source package, object, model, texture, and palette readers.
-[Data findings](docs/extracted-data.md) and [rendering notes](docs/rendering.md)
-record the source links and limits. SurrealEngine is a reference, not a runtime
-dependency. Three.js supplies the browser renderer.
+The rule ([AGENTS.md](AGENTS.md)): each behavior comes from original evidence, meaning game
+data, bytecode, native instructions or measurements of the original game, and is compared
+with the original. Lookalike substitutes are not accepted, and behavior without enough
+evidence is marked unsupported.
+
+- **Native oracles.** The original DLLs from your installation, checked by hash, run in the
+  [Unicorn](https://www.unicorn-engine.org) CPU emulator. A translated routine gets the
+  same inputs and must produce the same results, memory and events, bit for bit. This
+  includes the rounding of x87 floating-point math.
+- **Traces of the running game.** The original runs under Wine (Linux) or CrossOver (macOS)
+  with a tracer that records the watched actors, the random number stream, AI events and
+  object creation on every tick. The browser version replays the same inputs and must match
+  it tick by tick.
+- **Matched frames.** Screenshots of the original and of the browser version are taken
+  with the same camera at the same level time, then compared: 26 maps, 122 of 130 views.
+- **Campaign chains.** Each mission's scripted route runs in both from the same save, and
+  the flags, door states and travel text are compared at every step.
+
+The checks:
+
+```sh
+npm test                       # unit tests (builds the Wasm, then node --test test/*.test.mjs)
+npm run validate -- --jobs 4   # the validator sweep, scripts/validate-*.mjs, four jobs in parallel
+npx playwright install chromium firefox
+npm run test:browser           # the browser suite (Chromium and Firefox; WebKit on macOS)
+```
+
+Most validators read the game folder. The native comparisons need a Python environment with
+Unicorn and Capstone:
+
+```sh
+python3 -m venv .cache/native-probe-env
+.cache/native-probe-env/bin/pip install capstone==5.0.9 unicorn==2.1.4
+```
+
+Comparisons with the running game use recorded captures, which stay outside Git. A check
+whose capture is missing reports SKIP. The [development guide](docs/development.md) covers
+the stage gates, the runner's memory limits and the inspection tools.
+
+## Performance
+
+The target is 120 fps, which means 8.3 ms of work per frame on the reference machine (an
+Apple M2 Pro at 1440×960), without changing what the simulation computes. Several things
+help:
+
+- In Chrome, the simulation runs in a Web Worker, so simulating and drawing overlap.
+- Hot paths run in Rust and WebAssembly, and mesh animation and lighting run on the GPU.
+- The latest work (October 2026) removed Chrome's garbage-collection freezes. The
+  simulation's live JavaScript heap on Liberty Island fell from about 8.2 to 2.6 million
+  objects. On the developer's Mac, Chrome and Firefox now play smoothly.
+
+Still open: a short stall right after a map loads. The 120 fps target is not met
+everywhere yet, and the Stage 7 frame-time rows still need their measurements on the
+reference machine. `?hitchlog=1` records the timing of every frame
+([hitch recorder](docs/hitch-log.md)).
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) first. In short:
+
+- Start from the original. Find the responsible data, bytecode or native routine, write
+  down what it does, and build reference cases before changing the game in the browser.
+- Never commit original game files, extracted scripts, binaries or captures.
+- New runtime work goes in the Rust core. JavaScript is for host glue: rendering, the page,
+  Web Audio and validators.
+- Run the focused validators for what you changed and `npm test`. Run the full sweep with
+  `npm run validate -- --jobs 4` when a change is wide.
+- Judge a performance change by interleaved A/B medians. Fidelity comes first.
+- Single-player comes first; multiplayer is the last priority.
+
+## Documentation
+
+`docs/` holds about 400 notes, roughly one per subsystem, each with its evidence. Good
+places to start:
+
+- [Roadmap](docs/roadmap.md) and [project status](docs/status.md)
+- Exit criteria: [Stage 3](docs/stage-3-exit-criteria.md), [Stage 4](docs/stage-4-exit-criteria.md),
+  [Stage 5](docs/stage-5-exit-criteria.md), [Stage 6](docs/stage-6-exit-criteria.md),
+  [Stage 7](docs/stage-7-exit-criteria.md)
+- [Development guide](docs/development.md): the debugging page, URL switches, validators,
+  inspection tools
+- Architecture: [Rust core](docs/rust-core.md), [simulation worker](docs/sim-worker.md),
+  [GPU meshes](docs/gpu-mesh.md), [BSP occlusion](docs/bsp-occlusion.md),
+  [Galaxy music](docs/galaxy-music.md), [Galaxy audio](docs/galaxy-audio.md)
+- The game's start and travel: [start](docs/boot.md), [travel, saving and loading](docs/travel.md),
+  [save storage](docs/save-storage.md)
+- Verification: [native exec diff](docs/native-exec-diff.md), [visual acceptance](docs/visual-acceptance.md)
+- Performance: [frame cost](docs/play-frame-cost.md), [live heap](docs/live-heap.md),
+  [hitch recorder](docs/hitch-log.md)
+
+## Legal
+
+- This is an independent project. It is not affiliated with, endorsed by or sponsored by
+  Eidos, Square Enix or any other holder of the rights to Deus Ex.
+- Deus Ex is a trademark of its owner. The name is used only to say which game this
+  project works with.
+- The repository does not include or distribute any of the original game's files: no maps,
+  textures, sounds, music, script packages or extracted scripts, executables or DLLs.
+  Original files are read only from a copy that you provide, on your own machine.
+- To play, you need your own legally obtained copy of the game.
+- This section describes the project. It is not legal advice and does not promise anything
+  about the project's legal status in any country.
+
+## License
+
+No license has been chosen yet. There is no `LICENSE` file, so the code is not currently
+offered under an open-source license.
+
+Third-party code in the repository keeps its own license. The CRT display shaders in
+`src/viewer/shaders/` come from libretro and other authors under the GPL, public domain,
+or MIT/Unlicense ([details](src/viewer/shaders/README.md)). Dependencies installed by npm,
+such as three.js (MIT), have their own licenses.
+
+## Acknowledgements
+
+Deus Ex was created by Ion Storm and published by Eidos Interactive in 2000. This project
+uses [three.js](https://threejs.org), [Vite](https://vite.dev) and
+[Playwright](https://playwright.dev). Its research relies on
+[Unicorn](https://www.unicorn-engine.org), [Capstone](https://www.capstone-engine.org),
+[Wine](https://www.winehq.org) and CrossOver. [SurrealEngine](https://github.com/dpjudas/SurrealEngine)'s
+package readers served as a reference for the file formats.
