@@ -284,9 +284,15 @@ python3 -m venv .cache/native-probe-env
 
 ## 许可证
 
-目前尚未选定许可证。仓库中没有 `LICENSE` 文件，因此代码暂时没有以开源许可证的形式提供。
+Copyright (C) 2026 Jerome Mahuet 及贡献者。
 
-仓库中的第三方代码保留其各自的许可证。`src/viewer/shaders/` 中的 CRT 显示着色器来自 libretro 及其他作者，分别采用 GPL、公有领域或 MIT/Unlicense 许可（[详情](src/viewer/shaders/README.md)）。通过 npm 安装的依赖（如 three.js，MIT 许可证）各有其许可证。
+本项目是自由软件：你可以依据自由软件基金会发布的 [GNU Affero 通用公共许可证](LICENSE)第 3 版，或（由你选择）任何更新的版本，重新分发和/或修改本项目。发布本项目是希望它有用，但不提供任何担保；详情请参阅许可证。
+
+简而言之：任何分发本项目或其修改版本的人，或将修改版本作为公开网站或服务运行的人，都必须以相同许可证提供完整源代码。任何人都不能据此制作闭源或专有版本。
+
+该许可证仅涵盖本项目自身的代码和文档，不授予对《杀出重围》本身的任何权利：游戏文件不属于本仓库，其所有权归各自的权利人所有（参见[法律声明](#法律声明)）。
+
+仓库中的第三方代码保留其各自的许可证。`src/viewer/shaders/` 中的 CRT 显示着色器来自 libretro 及其他作者：CRT-Royale 采用 GPL-2.0 或更新版本，CRT-Aperture 和 CRT-EasyMode 采用 GPL（未注明版本），CRT-Lottes 属于公有领域，SatPixie 采用 MIT/Unlicense（[详情](src/viewer/shaders/README.md)），均与 AGPL 兼容。通过 npm 安装的依赖（如 three.js，MIT 许可证）各有其许可证。
 
 ## 致谢
 

@@ -397,13 +397,28 @@ places to start:
 
 ## License
 
-No license has been chosen yet. There is no `LICENSE` file, so the code is not currently
-offered under an open-source license.
+Copyright (C) 2026 Jerome Mahuet and contributors.
+
+This project is free software: you can redistribute it and/or modify it under the terms of
+the [GNU Affero General Public License](LICENSE) as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later version. It is
+distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; see the license
+for details.
+
+In short: anyone who distributes this project or a modified version of it, or runs a
+modified version as a public website or service, must make its complete source available
+under the same license. No closed or proprietary version can be made of it.
+
+The license covers this project's own code and documentation only. It grants nothing in Deus
+Ex itself: the game's files are not part of this repository and remain the property of
+their rights holders (see [Legal](#legal)).
 
 Third-party code in the repository keeps its own license. The CRT display shaders in
-`src/viewer/shaders/` come from libretro and other authors under the GPL, public domain,
-or MIT/Unlicense ([details](src/viewer/shaders/README.md)). Dependencies installed by npm,
-such as three.js (MIT), have their own licenses.
+`src/viewer/shaders/` come from libretro and other authors under the GPL (CRT-Royale
+GPL-2.0-or-later; CRT-Aperture and CRT-EasyMode, version unspecified), public domain
+(CRT-Lottes) or MIT/Unlicense (SatPixie) ([details](src/viewer/shaders/README.md)); all are
+compatible with the AGPL. Dependencies installed by npm, such as three.js (MIT), have their
+own licenses.
 
 ## Acknowledgements
 

@@ -430,13 +430,28 @@ chacune avec ses preuves. Pour commencer :
 
 ## Licence
 
-Aucune licence n'a encore été choisie. Il n'y a pas de fichier `LICENSE` : le code n'est
-donc pas proposé sous une licence libre pour le moment.
+Copyright (C) 2026 Jerome Mahuet et contributeurs.
+
+Ce projet est un logiciel libre : vous pouvez le redistribuer et/ou le modifier selon les
+termes de la [GNU Affero General Public License](LICENSE) publiée par la Free Software
+Foundation, version 3 de la licence ou (à votre choix) toute version ultérieure. Il est
+distribué dans l'espoir d'être utile, mais SANS AUCUNE GARANTIE ; voir la licence pour plus
+de détails.
+
+En bref : quiconque distribue ce projet ou une version modifiée, ou fait tourner une version
+modifiée comme site ou service public, doit en rendre tout le code source disponible sous la
+même licence. Aucune version fermée ou propriétaire ne peut en être tirée.
+
+La licence ne couvre que le code et la documentation propres à ce projet. Elle n'accorde
+aucun droit sur Deus Ex lui-même : les fichiers du jeu ne font pas partie de ce dépôt et
+restent la propriété de leurs ayants droit (voir [Mentions légales](#mentions-légales)).
 
 Le code tiers présent dans le dépôt garde sa propre licence. Les shaders d'affichage CRT de
-`src/viewer/shaders/` viennent de libretro et d'autres auteurs, sous GPL, dans le domaine
-public, ou sous MIT/Unlicense ([détails](src/viewer/shaders/README.md)). Les dépendances
-installées par npm, comme three.js (MIT), ont leurs propres licences.
+`src/viewer/shaders/` viennent de libretro et d'autres auteurs, sous GPL (CRT-Royale en
+GPL-2.0 ou ultérieure ; CRT-Aperture et CRT-EasyMode, version non précisée), dans le domaine
+public (CRT-Lottes) ou sous MIT/Unlicense (SatPixie) ([détails](src/viewer/shaders/README.md)) ;
+toutes ces licences sont compatibles avec l'AGPL. Les dépendances installées par npm, comme
+three.js (MIT), ont leurs propres licences.
 
 ## Remerciements
 
