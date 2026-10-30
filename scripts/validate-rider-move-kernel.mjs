@@ -10,6 +10,7 @@ import {playerMove} from '../src/runtime/player-move.mjs';
 import {pointRegion, setActorZone} from '../src/runtime/zone.mjs';
 import {writeZoneModel} from '../src/runtime/zone-kernel.mjs';
 import {handleOf} from '../src/runtime/script-object-handles.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const module = await compileScriptVm(), memory = new WebAssembly.Memory({initial: 64}), env = {memory};
@@ -19,9 +20,9 @@ const x = (await WebAssembly.instantiate(module, {env})).exports;
 const base = (x.__heap_base.value + 15) & ~15, modelAt = base + 256;
 const view = new DataView(memory.buffer), bytes = new Uint8Array(memory.buffer);
 const zone = {name: 'same zone'}, other = {name: 'other zone'};
-const source = {levelInfo: zone, zoneActors: [zone, zone], model: {nodes: [
+const source = {levelInfo: zone, zoneActors: [zone, zone], model: modelFromObjects({nodes: [
   {plane: [1, 0, 0, 0], front: -1, back: -1, leaves: [17, 29], zones: [0, 1]},
-]}};
+], zones: []})};
 // A deliberately different layout from the original: image offsets must
 // come from the host's table. Bool fields share one word at offset 0.
 const offsets = [0, 0, 0, 0, 0, 0, 0, 4, 8, 24, 36, 48, 52, 56, 68];
