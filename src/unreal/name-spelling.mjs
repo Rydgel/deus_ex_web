@@ -1,3 +1,5 @@
+import { NameTable } from './package-tables.mjs';
+
 /** The spelling of a Name value across packages and levels: the process's FName table as far as spelling goes (docs/script-names.md "Spelling across levels").
  *
  * An FName is one GNames entry whatever the case a package spells it in. `FName(text, FNAME_Add)` (Core 0x1014b950) compares with `appStricmp` and returns an existing
@@ -29,38 +31,119 @@
 const LOAD_CONTEXT = 0x00030000;
 
 // appStricmp is _wcsicmp in the C locale: ASCII a-z fold, nothing else (docs/script-names.md "Interning and index reuse").
-const fold = text => text.replace(/[a-z]+/g, run => run.toUpperCase());
 // appStrlen stops at the first NUL.
 const terminated = text => { const at = text.indexOf('\0'); return at < 0 ? text : text.slice(0, at); };
 
+// The table below compares and hashes through this fold instead of making the folded string of every entry (the keys of the Map
+// it replaced: 77,000 strings on the Island).
+const foldCode = code => code >= 97 && code <= 122 ? code - 32 : code;
+const foldedHash = text => {
+  let hash = 0x811c9dc5 | 0;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ foldCode(text.charCodeAt(index)), 16777619);
+  return hash;
+};
+const foldedEqual = (a, b) => {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) if (foldCode(a.charCodeAt(index)) !== foldCode(b.charCodeAt(index))) return false;
+  return true;
+};
+
+const PERMANENT = 1, HELD = 2;
+
+/** The names of a package table, as (text, flags) calls: a NameTable's columns, or a fixture's `[{name, flags}]`. */
+function eachName(names, visit) {
+  if (names instanceof NameTable) {
+    const { texts, flagWords } = names;
+    for (let index = 0; index < texts.length; index += 1) visit(texts[index], flagWords[index]);
+  } else for (const entry of names) visit(entry.name, entry.flags >>> 0);
+}
+
 export class NameSpelling {
   constructor() {
-    this.entries = new Map();     // folded text -> the spelling of the live entry
-    this.permanent = new Set();   // folded names a startup package holds
+    // The live entries, in the order they were entered: the spelling, its folded hash and its marks (PERMANENT: a startup package holds the
+    // name; HELD: the map being entered holds it). `slots` is an open-addressing table of entry positions + 1.
+    this.spellings = [];
+    this.hashes = new Int32Array(64);
+    this.marks = new Uint8Array(64);
+    this.slots = new Int32Array(128);
+    this.mask = 127;
   }
 
-  #enter(pkg, held) {
-    for (const entry of pkg.names) {
-      if (!((entry.flags >>> 0) & LOAD_CONTEXT)) continue;   // the constructor maps it to NAME_None and enters nothing
-      const text = terminated(entry.name);
-      if (!text) continue;
-      const key = fold(text);
-      if (!this.entries.has(key)) this.entries.set(key, text);
-      held?.add(key);
+  /** The entry position of the name `text` spells (ASCII-folded), or -1. */
+  #find(text, hash) {
+    const slots = this.slots, mask = this.mask;
+    for (let slot = hash & mask; ; slot = (slot + 1) & mask) {
+      const held = slots[slot];
+      if (held === 0) return -1;
+      const entry = held - 1;
+      if (this.hashes[entry] === hash && foldedEqual(this.spellings[entry], text)) return entry;
     }
   }
 
+  #add(text, hash) {
+    const entry = this.spellings.length;
+    if (entry === this.hashes.length) {
+      const hashes = new Int32Array(entry * 2), marks = new Uint8Array(entry * 2);
+      hashes.set(this.hashes); marks.set(this.marks);
+      this.hashes = hashes; this.marks = marks;
+    }
+    if ((entry + 1) * 2 > this.slots.length) this.#rehash(this.slots.length * 2, entry);
+    this.spellings.push(text);
+    this.hashes[entry] = hash;
+    this.marks[entry] = 0;
+    this.#place(entry, hash);
+    return entry;
+  }
+
+  #place(entry, hash) {
+    const slots = this.slots, mask = this.mask;
+    let slot = hash & mask;
+    while (slots[slot] !== 0) slot = (slot + 1) & mask;
+    slots[slot] = entry + 1;
+  }
+
+  #rehash(capacity, count) {
+    this.slots = new Int32Array(capacity);
+    this.mask = capacity - 1;
+    for (let entry = 0; entry < count; entry += 1) this.#place(entry, this.hashes[entry]);
+  }
+
+  #enter(pkg, mark) {
+    eachName(pkg.names, (name, flags) => {
+      if (!(flags & LOAD_CONTEXT)) return;   // the constructor maps it to NAME_None and enters nothing
+      const text = terminated(name);
+      if (!text) return;
+      const hash = foldedHash(text);
+      let entry = this.#find(text, hash);
+      if (entry < 0) entry = this.#add(text, hash);
+      this.marks[entry] |= mark;
+    });
+  }
+
   /** A startup package's linker: its names are entered and never collected. */
-  addBoot(pkg) { this.#enter(pkg, this.permanent); }
+  addBoot(pkg) { this.#enter(pkg, PERMANENT); }
 
   /** A linker created during the level (the level start's DeusExConText): its names are entered, first spelling wins, and live until the next LoadMap collection. */
-  enterPackage(pkg) { this.#enter(pkg, null); }
+  enterPackage(pkg) { this.#enter(pkg, 0); }
 
   /** LoadMap: the map's names are entered while the previous level's are still in the table, then the collection keeps the startup packages' names and the map's. */
   beginLevel(pkg) {
-    const held = new Set();
-    this.#enter(pkg, held);
-    for (const key of this.entries.keys()) if (!this.permanent.has(key) && !held.has(key)) this.entries.delete(key);
+    for (let entry = 0; entry < this.spellings.length; entry += 1) this.marks[entry] &= ~HELD;
+    this.#enter(pkg, HELD);
+    const spellings = [];
+    let kept = 0;
+    for (let entry = 0; entry < this.spellings.length; entry += 1) {
+      if (!this.marks[entry]) continue;
+      spellings.push(this.spellings[entry]);
+      this.hashes[kept] = this.hashes[entry];
+      this.marks[kept] = this.marks[entry];
+      kept += 1;
+    }
+    this.spellings = spellings;
+    this.marks.fill(0, kept);
+    let capacity = 128;
+    while (capacity < kept * 4) capacity *= 2;
+    this.#rehash(capacity, kept);
   }
 
   /** `FName(text, FNAME_Add)` of a runtime string (StringToName, ImportText): the live entry's spelling, or the text, which becomes the entry until the next collection. */
@@ -68,16 +151,17 @@ export class NameSpelling {
     if (typeof text !== 'string') return text;
     text = terminated(text);
     if (!text) return text;
-    const key = fold(text), live = this.entries.get(key);
-    if (live !== undefined) return live;
-    this.entries.set(key, text);
+    const hash = foldedHash(text), live = this.#find(text, hash);
+    if (live >= 0) return this.spellings[live];
+    this.#add(text, hash);
     return text;
   }
 
   /** The live entry's spelling of a name a loaded package holds, else the text itself. */
   spell(text) {
     if (typeof text !== 'string') return text;
-    return this.entries.get(fold(terminated(text))) ?? text;
+    const key = terminated(text), entry = this.#find(key, foldedHash(key));
+    return entry < 0 ? text : this.spellings[entry];
   }
 }
 
