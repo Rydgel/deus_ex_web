@@ -7,7 +7,7 @@ import {access, readFile, readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {readClass} from '../src/unreal/classes.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {readFieldLinks, readPropertyMetadata} from '../src/unreal/script-metadata.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {CONVERSATION_BASE_BIND} from '../src/runtime/script-conversation-base-bind.mjs';
@@ -35,7 +35,7 @@ function sourceFor(index) {
 }
 
 function property(index, expectedPath) {
-  const entry = conSys.pkg.exports[index - 1];
+  const entry = exportAt(conSys.pkg, index);
   assert.equal(entry?.path, expectedPath);
   assert.equal(entry?.className, expectedPath.endsWith('Name') ? 'StrProperty' : 'ObjectProperty');
   return readPropertyMetadata(conSys, index);
@@ -105,7 +105,7 @@ assert.equal(native.addresses.body, CONVERSATION_ACTION_BIND.nativeBody);
 const prefix = [];
 for (let index = readClass(conSys, 30).children; index && prefix.length < 7;
     index = readFieldLinks(conSys, index).nextRef) {
-  const entry = conSys.pkg.exports[index - 1];
+  const entry = exportAt(conSys.pkg, index);
   if (!entry.className.endsWith('Property')) continue;
   const metadata = readPropertyMetadata(conSys, index);
   assert.equal(metadata.arrayDim, 1);

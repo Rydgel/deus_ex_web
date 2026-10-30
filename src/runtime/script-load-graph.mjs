@@ -911,13 +911,13 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     if (object.resourceConstructed === 'Engine.LodMesh') {
       serializeLodMesh(object, archive, meshServices);
       const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
-      object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports[index]});
+      object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports.at(index)});
       return;
     }
     if (object.resourceConstructed === 'Engine.Mesh') {
       serializeMesh(object, archive, meshServices);
       const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
-      object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports[index], classic: true});
+      object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports.at(index), classic: true});
       return;
     }
     if (isA(object, classStatic)) {

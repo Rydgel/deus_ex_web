@@ -7,6 +7,7 @@
  * See docs/script-sound-resource.md for the recovered contract.
  */
 import {Reader} from '../unreal/package.mjs';
+import {NameTable} from '../unreal/package-tables.mjs';
 
 export class ScriptSoundResourceError extends Error {
   constructor(message, code = 'sound-resource-error', offset = null) {
@@ -332,6 +333,11 @@ function asBytes(value) {
 }
 
 function resolveName(nameTable, index) {
+  if (nameTable instanceof NameTable) {
+    const text = nameTable.texts[index];
+    if (typeof text !== 'string') throw new ScriptSoundResourceError(`Invalid Sound package FName index ${index}`, 'invalid-format-name');
+    return text;
+  }
   if (!Array.isArray(nameTable)) return null;
   const entry = nameTable[index];
   if(typeof entry?.name!=='string')throw new ScriptSoundResourceError(`Invalid Sound package FName index ${index}`, 'invalid-format-name');

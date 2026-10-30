@@ -30,6 +30,7 @@ import { hashScriptName } from './script-names.mjs';
 import { parseTravelText, parsePropertyLine, parseObjectValue, TravelTextError } from './travel-text.mjs';
 import { isHostFlagBase } from './travel-export.mjs';
 import { constructHistoryObject } from './script-conplay-live.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 export class UnsupportedTravelImportError extends Error {
@@ -63,7 +64,7 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
     const dot = path.indexOf('.');
     if (dot > 0 && assets.files.has(lower(path.slice(0, dot)))) {
       const asset = await assets.get(path.slice(0, dot)), index = asset.exportsByPath.get(lower(path.slice(dot + 1)));
-      if (index && asset.pkg.exports[index - 1].className === 'Class') cls = await runtime.loadClass(asset, index);
+      if (index && exportAt(asset.pkg, index).className === 'Class') cls = await runtime.loadClass(asset, index);
     }
     classes.set(key, cls);
     return cls;

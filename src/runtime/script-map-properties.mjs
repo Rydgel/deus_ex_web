@@ -1,4 +1,4 @@
-import {readObject} from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import {readScriptArrayValue} from './script-struct-values.mjs';
 import {defaultsSnapshot} from './class-defaults-snapshot.mjs';
 
@@ -54,7 +54,7 @@ function authoredSet(authored, key, index, value) {
  * exactly like an authored zero reference.
  */
 export function mapExportAdmitted(pkg, ref) {
-  const entry = pkg.exports[ref - 1];
+  const entry = exportAt(pkg, ref);
   if (!entry) throw new Error(`Invalid map export reference: ${ref}`);
   return (entry.flags & STANDALONE_CONTEXT_FLAGS) !== 0 && entry.className !== 'Camera';
 }

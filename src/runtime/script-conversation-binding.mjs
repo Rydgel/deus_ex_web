@@ -1,4 +1,4 @@
-import { readObject } from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 
 /** Incomplete descriptor prototype for DeusEx conversation binding (native 2101 /
  * DeusExPlayer 2100). DeusExConText holds one conversation list per mission:
@@ -38,7 +38,7 @@ export function loadMissionConversations(asset, missionNumber) {
       const values = readObject(pkg, bytes, node.ConObject).values;
       conversations.push({
         ref: node.ConObject,
-        object: pkg.exports[node.ConObject - 1].name,
+        object: exportAt(pkg, node.ConObject).name,
         conName: values.conName ?? null,
         conOwnerName: values.conOwnerName ?? null,
         bInvokeFrob: Boolean(values.bInvokeFrob),

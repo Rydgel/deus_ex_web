@@ -1,5 +1,5 @@
 import { ClassDefaults } from './classes.mjs';
-import { readObject } from './objects.mjs';
+import { readObject, exportAt } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
 import { arrayTable } from './bsp-model.mjs';
 import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static-lighting.mjs';
@@ -188,7 +188,7 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
     // A light list can name an actor the level no longer lists (deleted in
     // the editor, still exported): the original loads it through that
     // reference, and AddLight does not test bDeleteMe.
-    if (ref && !sourceActors.has(ref) && asset.pkg.exports[ref - 1]?.serialSize)
+    if (ref && !sourceActors.has(ref) && exportAt(asset.pkg, ref)?.serialSize)
       sourceActors.set(ref, { index: ref, values: readObject(asset.pkg, asset.bytes, ref).values });
     if (!ref || !sourceActors.has(ref)) throw new Error(`Missing lighting actor ${ref}`);
     if (!pendingActors.has(ref)) {

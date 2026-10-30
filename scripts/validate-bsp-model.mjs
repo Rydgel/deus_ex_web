@@ -51,8 +51,8 @@ for (const name of files) {
   const bytes = await readFile(`${root}/Maps/${name}`), pkg = parsePackage(bytes);
   stats.maps++;
   for (let i = 0; i < pkg.exports.length; i++) {
-    if (pkg.exports[i].className !== 'Model') continue;
-    const label = `${name} ${pkg.exports[i].name}`;
+    if (pkg.exports.at(i).className !== 'Model') continue;
+    const label = `${name} ${pkg.exports.at(i).name}`;
     let reference = null, referenceError = null, typed = null, typedError = null;
     try { reference = referenceReadModel(pkg, bytes, i + 1); } catch (error) { referenceError = error; }
     try { typed = readModel(pkg, bytes, i + 1); } catch (error) { typedError = error; }

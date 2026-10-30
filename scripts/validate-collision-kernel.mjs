@@ -46,6 +46,7 @@ import {gameDirectory} from './game-directory.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {walkingSurfacePrelude, walkingSurfaceTextures, surfaceScanInputs, scanSurface} from '../src/runtime/walking-surface.mjs';
 import {x87add, x87double, x87load, x87mul, x87neg, x87store} from '../src/runtime/script-vm.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const kernel = await loadTraceKernel();
 assert.ok(kernel, 'the trace kernel loads (TRACE_KERNEL=js disables it)');
@@ -369,7 +370,7 @@ for (const name of only('levels') ? ['00_Training', '01_NYC_UNATCOIsland'] : [])
     const v = await defaults.forActor(asset, actor);
     if (!v.Location || !v.bCollideActors) continue;
     const host = {name: actor.name, index: actor.index, values: v};
-    host.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+    host.lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex);
     host.collisionBits = 1 | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
     host.flags = host.collisionBits | (v.bCollideWorld ? 2 : 0);
     host.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) | (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);

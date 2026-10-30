@@ -7,7 +7,7 @@
  */
 import {Reader} from '../unreal/package.mjs';
 import {readClass} from '../unreal/classes.mjs';
-import {readObject} from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
 
 const freeze=Object.freeze;
@@ -54,12 +54,12 @@ export async function loadInfoLinkPreviewContent(assets){
   const [context,deusEx]=await Promise.all([
     assets.get(reference.conversationPackage),assets.get(reference.uiPackage),
   ]);
-  requireValue(context.pkg.exports[reference.conversationExport-1]?.path===reference.conversationObject,
+  requireValue(exportAt(context.pkg, reference.conversationExport)?.path===reference.conversationObject,
     'DL_Start conversation export identity changed');
   const conversation=readObject(context.pkg,context.bytes,reference.conversationExport).values;
   requireValue(String(conversation.conName).toLowerCase()===reference.conversationName.toLowerCase()&&conversation.eventList===reference.eventExport,
     'DL_Start conversation metadata changed');
-  const eventEntry=context.pkg.exports[reference.eventExport-1];
+  const eventEntry=exportAt(context.pkg, reference.eventExport);
   requireValue(eventEntry?.path===reference.eventObject&&eventEntry.className==='ConEventSpeech',
     'DL_Start first event identity changed');
   const event=readObject(context.pkg,context.bytes,reference.eventExport).values;
@@ -68,7 +68,7 @@ export async function loadInfoLinkPreviewContent(assets){
   const speech=readObject(context.pkg,context.bytes,reference.speechExport).values;
   requireValue(speech.soundID===reference.soundId&&typeof speech.Speech==='string'&&speech.Speech.length,
     'DL_Start speech record changed');
-  const endEntry=context.pkg.exports[reference.endEventExport-1];
+  const endEntry=exportAt(context.pkg, reference.endEventExport);
   requireValue(endEntry?.path===reference.endEventObject&&endEntry.className==='ConEventEnd',
     'DL_Start end event identity changed');
 

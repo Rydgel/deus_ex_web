@@ -19,6 +19,7 @@
  */
 import {createScriptLoadGraph} from '../src/runtime/script-load-graph.mjs';
 import {loadConfigCache} from '../src/runtime/config-cache.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const lower = text => String(text).toLowerCase();
 
@@ -49,7 +50,7 @@ export function recordOriginalRequests(ScriptRuntime) {
 export async function levelImportRequests(assets, asset) {
   const out = [];
   for (let i = 0; i < asset.pkg.imports.length; i++) {
-    const entry = asset.pkg.imports[i];
+    const entry = asset.pkg.imports.at(i);
     if (entry.className === 'Package') continue;
     let resolved;
     try { resolved = await assets.resolve(asset, -i - 1); } catch { resolved = null; }
@@ -63,7 +64,7 @@ export async function pathRequest(assets, path, why) {
   const [packageName, ...rest] = String(path).split('.');
   const asset = await assets.get(packageName).catch(() => null);
   const index = asset?.exportsByPath.get(lower(rest.join('.')));
-  return index ? {asset, index, key: `${asset.name}.${asset.pkg.exports[index - 1].path}`, why} : null;
+  return index ? {asset, index, key: `${asset.name}.${exportAt(asset.pkg, index).path}`, why} : null;
 }
 
 /** A load graph that only the original's requests reach (each inside BeginLoad/EndLoad), kept across `add` calls as a process

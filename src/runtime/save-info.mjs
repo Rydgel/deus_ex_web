@@ -13,7 +13,7 @@
  * `{width, height, format, data, colors}` (P8 index bytes and the palette's RGBA colours), or null when the texture is in a form this reader does
  * not decode (it then draws nothing, as an unset Snapshot does). Only the package tables and the three exports are read; nothing is executed. */
 import { parsePackage } from '../unreal/package.mjs';
-import { readObject } from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import { readTexture, readPalette, decodePixels, TEXTURE_FORMAT } from '../unreal/textures.mjs';
 
 /** The properties of DeusExSaveInfo a loaded object is given (script-game-directory.mjs SAVE_INFO_PROPERTIES). */
@@ -32,12 +32,12 @@ export function parseSaveInfo(bytes) {
   for (const key of SAVE_INFO_KEYS) if (object.values[key] !== undefined) properties[key] = object.values[key];
   let snapshot = null;
   const ref = object.values.Snapshot;
-  if (Number.isInteger(ref) && ref > 0 && pkg.exports[ref - 1]) {
-    const entry = pkg.exports[ref - 1];
+  if (Number.isInteger(ref) && ref > 0 && exportAt(pkg, ref)) {
+    const entry = exportAt(pkg, ref);
     snapshot = { texture: entry.name, palette: null, image: null };
     try {
       const texture = readTexture(asset, ref);
-      const paletteEntry = texture.palette > 0 ? pkg.exports[texture.palette - 1] : null;
+      const paletteEntry = texture.palette > 0 ? exportAt(pkg, texture.palette) : null;
       snapshot.palette = paletteEntry?.name ?? null;
       const mip = texture.mips[0];
       if (texture.format === TEXTURE_FORMAT.P8 && paletteEntry?.className === 'Palette' && mip) {

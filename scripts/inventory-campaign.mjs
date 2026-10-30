@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gameDirectory } from './game-directory.mjs';
+import { exportAt, importAt } from '../src/unreal/objects.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -49,8 +50,8 @@ async function conversations() {
   const { readObject } = await import('../src/unreal/objects.mjs');
   const ctx = await assets.get('DeusExConText');
   const values = i => Object.fromEntries(Object.entries(readObject(ctx.pkg, ctx.bytes, i).values).map(([k, x]) => [k.toLowerCase(), x]));
-  const className = i => ctx.pkg.exports[i - 1].className.replace(/^ConEvent/, '');
-  const refName = i => { if (!i) return null; const e = i > 0 ? ctx.pkg.exports[i - 1] : ctx.pkg.imports[-i - 1]; return e?.name ?? null; };
+  const className = i => exportAt(ctx.pkg, i).className.replace(/^ConEvent/, '');
+  const refName = i => { if (!i) return null; const e = i > 0 ? exportAt(ctx.pkg, i) : importAt(ctx.pkg, i); return e?.name ?? null; };
   const flagChain = start => {
     const list = [];
     for (let ref = start, guard = 0; ref && guard < 64; guard++) {
@@ -146,8 +147,8 @@ async function maps() {
   for (const mapName of names) {
     const asset = await assets.get(mapName), map = decodeMap(asset.bytes);
     const lineageOf = async a => {
-      const idx = asset.pkg.exports[a.index - 1].classIndex;
-      const key = `${asset.pkg.exports[a.index - 1].className}`;
+      const idx = exportAt(asset.pkg, a.index).classIndex;
+      const key = `${exportAt(asset.pkg, a.index).className}`;
       if (!lineageCache.has(key)) lineageCache.set(key, defaults.lineage(asset, idx).catch(() => []));
       return lineageCache.get(key);
     };
@@ -168,7 +169,7 @@ async function maps() {
         record.level = { mapName: m.mapname, author: m.mapauthor, location: m.missionlocation, missionNumber: m.missionnumber ?? 0, script: nameOf(m.script) ? m.script : null,
           startup: [m.startupmessage, m['startupmessage[1]'], m['startupmessage[2]'], m['startupmessage[3]']].filter(Boolean), trueNorth: m.truenorth, multiplayer: !!m.bmultiplayermap };
         const scriptRef = a.values.Script;
-        if (scriptRef) { try { record.level.scriptClass = asset.pkg.imports[-scriptRef - 1]?.name ?? asset.pkg.exports[scriptRef - 1]?.name ?? null; } catch { /* leave */ } }
+        if (scriptRef) { try { record.level.scriptClass = importAt(asset.pkg, scriptRef)?.name ?? exportAt(asset.pkg, scriptRef)?.name ?? null; } catch { /* leave */ } }
       } else if (is('deusex.mapexit')) {
         const m = await merged();
         record.exits.push({ ...await base(), tag: tagOf(m), dest: m.destmap ?? '', transition: !!m.bplaytransition, cameraPath: nameOf(m.camerapathtag) || '', event: nameOf(m.event) || '' });
@@ -427,7 +428,7 @@ async function slots() {
         for (let h = 0; h < 64; h++) {
           for (let ref = fb[`hashtable[${h}]`] ?? 0, guard = 0; ref && guard < 64 && !seen.has(ref); guard++) {
             seen.add(ref);
-            const e = pkg.exports[ref - 1], f = lc(ref), key = FLAG_VALUE_KEYS[e.className];
+            const e = exportAt(pkg, ref), f = lc(ref), key = FLAG_VALUE_KEYS[e.className];
             let value = key ? f[key] : undefined;
             if (e.className === 'FlagBool') value = !!value;
             else if (value === undefined) value = e.className === 'FlagInt' || e.className === 'FlagByte' ? 0 : null;
@@ -439,7 +440,7 @@ async function slots() {
       }
       record.flags.sort((a, b) => a.flag.localeCompare(b.flag));
       for (let i = 0; i < pkg.exports.length; i++) {
-        const e = pkg.exports[i];
+        const e = pkg.exports.at(i);
         if (e.className === 'DeusExGoal') { const g = lc(i + 1); record.goals.push({ name: nameOf(g.goalname), text: String(g.text ?? '').replace(/\s+/g, ' ').slice(0, 120), primary: !!g.bprimarygoal, completed: !!g.bcompleted }); }
         else if (/^JCDentonMale/.test(e.className) && !record.player.health) {
           const p = lc(i + 1);

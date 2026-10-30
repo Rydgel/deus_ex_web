@@ -20,7 +20,7 @@ class Copy {
   u8() { const v = this.r.u8(); this.w.u8(v); return v; }
   u32() { const v = this.r.u32(); this.w.u32(v); return v; }
   object() { const v = this.r.compact(); this.w.compact(this.translate.objectRef(v)); return v; }
-  name() { const v = this.r.compact(); this.w.compact(this.translate.nameIndex(this.pkg.names[v].name)); return v; }
+  name() { const v = this.r.compact(); this.w.compact(this.translate.nameIndex(this.pkg.names.at(v).name)); return v; }
   /** An object saved with RF_HasStack (0x2000000) starts with its FStateFrame: Node, StateNode, ProbeMask, LatentAction and, with a Node, the
    * code offset. A Model and a Polys loaded from a .dx carry one; a saved level's do not (the original writes them without), so it is read past. */
   skipStack() {
@@ -29,7 +29,7 @@ class Copy {
   }
   /** The empty tagged property list of a native object (just the terminating None). */
   noProperties() {
-    const name = this.pkg.names[this.r.compact()].name;
+    const name = this.pkg.names.at(this.r.compact()).name;
     if (name !== 'None') throw new PackageError(`Expected an empty property list, found ${name}`, this.r.offset);
     this.w.compact(this.translate.nameIndex('None'));
   }
@@ -102,7 +102,7 @@ export function transcodeProperties(pkg, bytes, translate, { hasStack = false } 
   const r = new Reader(bytes), w = new ByteWriter(bytes.length + 16);
   if (hasStack) { const node = r.compact(); r.compact(); r.u32(); r.u32(); r.i32(); if (node) r.compact(); }
   for (;;) {
-    const name = pkg.names[r.compact()].name;
+    const name = pkg.names.at(r.compact()).name;
     w.compact(translate.nameIndex(name));
     if (name === 'None') break;
     const info = r.u8(), type = info & 15, code = (info >> 4) & 7;

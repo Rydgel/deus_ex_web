@@ -5,6 +5,7 @@ import {
 } from './script-static-load-object.mjs';
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
+import { importAt, exportAt } from '../unreal/objects.mjs';
 
 // The live DataLink capture reaches this package export before an
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
@@ -223,14 +224,14 @@ export class PreparedDynamicLoadGraph{
 
   exportClassIdentity(linker,classIndex){
     if(classIndex<0){
-      const entry=linker.asset.pkg.imports[-classIndex-1];
+      const entry=importAt(linker.asset.pkg, classIndex);
       if(!entry||entry.outer>=0)return null;
-      const outer=linker.asset.pkg.imports[-entry.outer-1];
+      const outer=importAt(linker.asset.pkg, entry.outer);
       if(!outer)return null;
       return {name:this.nameIndex(entry.name),outer:this.nameIndex(outer.name)};
     }
     if(classIndex>0){
-      const entry=linker.asset.pkg.exports[classIndex-1];
+      const entry=exportAt(linker.asset.pkg, classIndex);
       return entry?{name:this.nameIndex(entry.name),outer:this.nameIndex(linker.asset.name)}:null;
     }
     return {name:0x29b,outer:0x14};
@@ -284,7 +285,7 @@ export class PreparedDynamicLoadGraph{
 
   readImportWord(linker,byteOffset){
     const index=Math.floor(byteOffset/0x1c),field=byteOffset%0x1c;
-    const entry=linker.asset.pkg.imports[index];
+    const entry=linker.asset.pkg.imports.at(index);
     if(!entry)fail(`DynamicLoadObject linker import ${index} is absent`,
       'DYNAMIC_LOAD_OBJECT_IMPORT',{index,byteOffset});
     if(field===8)return entry.outer;

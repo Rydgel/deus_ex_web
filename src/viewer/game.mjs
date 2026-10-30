@@ -28,6 +28,7 @@ import { createTravelStep } from '../runtime/travel.mjs';
 import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS, levelUrlAfterLoad } from '../runtime/furl.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 /** The game left the level (UGameEngine::Tick's client travel to `url`): Browse and LoadMap are Stage 6, so Play stops here. */
@@ -80,7 +81,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // decides hash registration. A non-colliding export (a hidden pawn or
       // button a script later reveals with SetCollision) gets the same native
       // host surface, outside the hash.
-      actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+      actor.lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex);
       actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
         (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
       actor.movingBrush = false;
@@ -90,7 +91,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       nonColliding.push(actor);
       continue;
     }
-    actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+    actor.lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex);
     actor.collisionBits = (clearMover ? 0 : 1) | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
     actor.flags = actor.collisionBits | (v.bCollideWorld ? 2 : 0);
     actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
@@ -618,7 +619,7 @@ async function findSavedPlayer(map, actors, defaults, asset) {
     seen.add(ref);
     const pawn = actors.get(ref);
     if (!pawn) break;
-    const lineage = await defaults.lineage(asset, asset.pkg.exports[pawn.index - 1].classIndex);
+    const lineage = await defaults.lineage(asset, exportAt(asset.pkg, pawn.index).classIndex);
     const pri = pawn.values.PlayerReplicationInfo ? actors.get(pawn.values.PlayerReplicationInfo) : null;
     if (lineage.includes('engine.playerpawn') && !pawn.values.Player && pri && pawn.values.bIsPlayer !== false
         && (pri.values.PlayerName ?? priDefault.PlayerName) !== priDefault.PlayerName) return pawn;

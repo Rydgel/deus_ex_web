@@ -6,7 +6,7 @@ import {setTileWindow} from './script-window-tile.mjs';
 import {setWindowConfigurationNative} from './script-window-configuration.mjs';
 import { readClass } from '../unreal/classes.mjs';
 import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMetadata, readStructMetadata } from '../unreal/script-metadata.mjs';
-import { ScriptObjects } from './script-objects.mjs';
+import { ScriptObjects, exportAt } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { clientTravelNative } from './script-travel.mjs';
@@ -1721,11 +1721,11 @@ export class ScriptRuntime {
     for(const event of events??[]){
       if(event.op==='CreateLinkerLoad'){ if(original.loadPackage(event.root?.name))loadedHere.add(String(event.root?.name).toLowerCase()); }
       else if(event.op==='CreateExport'&&event.existing?.asset&&loadedHere.has(event.existing.asset.name.toLowerCase())){
-        const object=event.existing,asset=object.asset,cls=asset.pkg.exports[object.index-1]?.className;
+        const object=event.existing,asset=object.asset,cls=exportAt(asset.pkg, object.index)?.className;
         if(!original.loadExport(object,cls,object.name)||cls!=='Texture')continue;
         const palette=readObject(asset.pkg,asset.bytes,object.index).values.Palette;
         if(!(palette>0))continue;
-        const entry=asset.pkg.exports[palette-1],key=`${asset.name}.${entry.path}`.toLowerCase();
+        const entry=exportAt(asset.pkg, palette),key=`${asset.name}.${entry.path}`.toLowerCase();
         // the canonical object when it was resolved, else one stable holder per export (loadExport counts an object once)
         this.preparedExportHolders??=new Map();
         const holder=this.objects.lookup(key)??this.preparedExportHolders.get(key)??{key};
@@ -1754,7 +1754,7 @@ export class ScriptRuntime {
       if(!object)continue;
       const identity=this.classLoader.identity(object),asset=identity?.asset;
       if(!asset||!loadedHere.has(lower(asset.name)))continue;
-      const cls=asset.pkg.exports[identity.index-1]?.className;
+      const cls=exportAt(asset.pkg, identity.index)?.className;
       if(!cls||structural.test(cls))continue;
       original.loadExport(object,cls,identity.name);
     }

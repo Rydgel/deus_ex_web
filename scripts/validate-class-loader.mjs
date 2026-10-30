@@ -14,6 +14,7 @@ import {serializeTaggedProperty} from '../src/runtime/script-linker-preload.mjs'
 import {gameDirectory} from './game-directory.mjs';
 import {importText} from '../src/runtime/config-text.mjs';
 import {NativeSlots} from '../src/runtime/native-slots.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 const files = [];
@@ -92,7 +93,7 @@ for (const name of names) {
 }
 
 const dvi = await runtime.loadClass(deusEx, deusEx.exportsByPath.get('datavaultimage'));
-const dviImport = deusEx.pkg.exports[dvi.record.index - 1].superIndex;
+const dviImport = exportAt(deusEx.pkg, dvi.record.index).superIndex;
 assert.ok(dviImport < 0);
 const nativeInventory = graph.indexToObject(graph.linkers.get('deusex'), dviImport);
 assert.equal(loader.identity(nativeInventory), dvi.base.record, 'native imported super and VM share one handle');

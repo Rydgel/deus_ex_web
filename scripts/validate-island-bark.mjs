@@ -38,7 +38,7 @@ import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
@@ -61,7 +61,7 @@ const listIndex = conText.exportsByPath.get('conlist_mission01');
 const closure = new Set([listIndex]);
 for (const queue = [listIndex]; queue.length;) {
   const index = queue.pop();
-  assert.equal(pkg.exports[index - 1].outer, 0);
+  assert.equal(exportAt(pkg, index).outer, 0);
   for (const property of readObject(pkg, conText.bytes, index).properties)
     if (property.type === 5 && property.value > 0 && !closure.has(property.value)) { closure.add(property.value); queue.push(property.value); }
 }

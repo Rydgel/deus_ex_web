@@ -37,7 +37,7 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { AssetStore } from '../src/unreal/assets.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { refValue } from '../src/runtime/script-vm.mjs';
@@ -279,7 +279,7 @@ assert.equal(get(firstImage, 'nextImage'), null, 'duplicate rejection keeps the 
 // original body and require the same outcome.
 const shipped = [];
 for (let eventExport = 1; eventExport <= conText.pkg.exports.length; eventExport++) {
-  if (conText.pkg.exports[eventExport - 1].className !== 'ConEventTransferObject') continue;
+  if (exportAt(conText.pkg, eventExport).className !== 'ConEventTransferObject') continue;
   const values = readObject(conText.pkg, conText.bytes, eventExport).values;
   if (!Number.isInteger(values.Conversation) || values.Conversation <= 0) continue;
   const owner = readObject(conText.pkg, conText.bytes, values.Conversation).values;

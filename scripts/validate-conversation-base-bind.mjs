@@ -6,7 +6,7 @@ import {readFile, readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {readClass} from '../src/unreal/classes.mjs';
-import {objectAt, readObject} from '../src/unreal/objects.mjs';
+import { objectAt, readObject, exportAt } from '../src/unreal/objects.mjs';
 import {
   CONVERSATION_BASE_BIND,
   bindConversationBaseActor,
@@ -70,7 +70,7 @@ assert.deepEqual(sorted(CONVERSATION_BASE_BIND.classes.map(item => item.key)), s
 
 // The base class itself is abstract but establishes the inherited method and
 // its vtable.  Concrete dispatch below remains limited to EXPECTED_INHERITED.
-const baseEntry = conSys.pkg.exports[CONVERSATION_BASE_BIND.baseClass.classExport - 1];
+const baseEntry = exportAt(conSys.pkg, CONVERSATION_BASE_BIND.baseClass.classExport);
 assert.equal(baseEntry?.path, 'ConEvent');
 assert.equal(baseEntry?.className, 'Class');
 assert.equal(baseEntry?.superIndex, 6);
@@ -84,7 +84,7 @@ assert.equal(objectAt(conSys.pkg, baseSource.metadata.scriptText)?.path, 'ConEve
 
 for (const key of expectedKeys) {
   const record = classRecord(key);
-  const entry = conSys.pkg.exports[record.classExport - 1];
+  const entry = exportAt(conSys.pkg, record.classExport);
   assert.equal(entry?.path, key.split('.')[1], `${key} class export`);
   assert.equal(entry?.className, 'Class', `${key} class kind`);
   assert.equal(entry?.superIndex, 2, `${key} superclass`);

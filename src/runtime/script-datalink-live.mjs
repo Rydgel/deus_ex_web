@@ -13,6 +13,7 @@ import {
 } from './script-scripted-actor-construction.mjs';
 import {loadTrainingDataLinkCatalog} from './script-training-datalinks.mjs';
 import {prepareConversationGraph} from './script-conversation-face-live.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 const lower=value=>String(value??'').toLowerCase();
 
@@ -138,7 +139,7 @@ export async function createLiveDataLinkRuntime({
   // Both state label streams and their local Timer overrides must be linked.
   for(const [path,index] of deusEx.exportsByPath){
     if(!path.startsWith('datalinkplay.'))continue;
-    const kind=deusEx.pkg.exports[index-1].className;
+    const kind=exportAt(deusEx.pkg, index).className;
     if(kind==='Function')await runtime.prepareFunction(deusEx,index);
     else if(kind==='State')await runtime.prepareState(deusEx,index);
   }

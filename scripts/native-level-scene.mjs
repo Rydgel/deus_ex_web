@@ -1,5 +1,6 @@
 import { readModel } from '../src/unreal/model.mjs';
 import { nativeModel } from './native-model.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 // The native level-query scene of a decoded map: the level model plus every
 // actor with bCollideActors, in map order.  validate-native-level feeds it to
@@ -10,7 +11,7 @@ export async function nativeLevelScene(defaults, asset, map) {
   for (const actor of map.actors) {
     const values = await defaults.forActor(asset, actor);
     if (!values.bCollideActors) continue;
-    const lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+    const lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex);
     const kind = ['Pawn', 'Mover', 'ZoneInfo'].find(k => lineage.includes(`engine.${k.toLowerCase()}`)) ?? 'Actor';
     const model = values.Brush > 0 ? readModel(asset.pkg, asset.bytes, values.Brush) : null;
     actors.push({ id: actor.name, index: actor.index, kind, lineage, values,

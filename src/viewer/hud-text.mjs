@@ -1,7 +1,7 @@
 /** Original bitmap pages + recovered native GC.DrawText scan/clip/glyph path.
  * The heap and texture Lock/DrawTile services here are presentation-owned.
  */
-import {readObject} from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
 import {decodeFontExport,writeFontImage,UFONT,FONT_PAGE} from '../runtime/script-font-model.mjs';
 import {GC} from '../runtime/script-gc-state-model.mjs';
@@ -35,7 +35,7 @@ export async function createHudText(assets,names){
   for(const name of names){
     const [pkg,...path]=name.split('.'),asset=await assets.get(pkg),index=asset.exportsByPath.get(path.join('.').toLowerCase());
     if(!index)throw new Error(`Original font missing: ${name}`);
-    const e=asset.pkg.exports[index-1];
+    const e=exportAt(asset.pkg, index);
     const decoded=decodeFontExport(asset.bytes.subarray(e.serialOffset,e.serialOffset+e.serialSize),name);
     const r=readObject(asset.pkg,asset.bytes,index).reader;
     if(r.compact()!==decoded.pageCount)throw new Error('Original font page count mismatch');

@@ -1,3 +1,4 @@
+import { exportAt } from '../unreal/objects.mjs';
 /**
  * Decoded original LodMesh payloads (GOTY), limited to what script behavior
  * needs today: the AnimSeq table consumed by native PlayAnim (259).
@@ -18,7 +19,7 @@ export class LodMeshError extends Error {}
  * Returns {entry, boundingBox, boundingSphere, sequences, eagerEnd}.
  */
 export function decodeLodMesh(pkg, bytes, exportIndex) {
-  const entry = pkg.exports[exportIndex - 1];
+  const entry = exportAt(pkg, exportIndex);
   if (!entry || !entry.serialSize) throw new LodMeshError(`Invalid LodMesh export ${exportIndex}`);
   const r = new Reader(bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize));
   skipTaggedProperties(r);
@@ -66,7 +67,7 @@ export function findSequence(mesh, name) {
 }
 
 function nameAt(pkg, index) {
-  const name = pkg.names[index];
+  const name = pkg.names.at(index);
   if (!name) throw new LodMeshError(`Invalid mesh name reference ${index}`);
   return name.name;
 }

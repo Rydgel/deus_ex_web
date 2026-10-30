@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt, importAt } from '../src/unreal/objects.mjs';
 import { loadMissionConversations, matchConversations } from '../src/runtime/script-conversation-binding.mjs';
 import {
   STATIC_LOAD_OBJECT_CONTRACT,
@@ -84,7 +84,7 @@ const canonicalOuter=runtime.namedReference(canonicalList,'Outer').get();
 // and import metadata rather than accepting a path-only canonical-list hit.
 const contextAsset=canonicalList.asset;
 const listExportIndex=canonicalList.index;
-const listEntry=contextAsset.pkg.exports[listExportIndex-1];
+const listEntry=exportAt(contextAsset.pkg, listExportIndex);
 assert.ok(listEntry, 'ConversationList export metadata is present');
 assert.equal(listEntry.name, 'ConList_Mission00');
 assert.equal(listEntry.path, 'ConList_Mission00');
@@ -103,12 +103,12 @@ const packageNameIndex=text=>{
 const listNameIndex=packageNameIndex(listEntry.name);
 const classNameIndex=packageNameIndex('ConversationList');
 const classOuterNameIndex=packageNameIndex('ConSys');
-const classImport=contextAsset.pkg.imports[-listEntry.classIndex-1];
+const classImport=importAt(contextAsset.pkg, listEntry.classIndex);
 assert.deepEqual(classImport, {
   classPackage:'Core', className:'Class', outer:-1, name:'ConversationList',
   path:'ConSys.ConversationList',
 });
-const classOuterImport=contextAsset.pkg.imports[-classImport.outer-1];
+const classOuterImport=importAt(contextAsset.pkg, classImport.outer);
 assert.deepEqual(classOuterImport, {
   classPackage:'Core', className:'Package', outer:0, name:'ConSys', path:'ConSys',
 });
@@ -259,7 +259,7 @@ const staticServices={
     assert.ok(fieldOffset===8||fieldOffset===12,
       `unexpected original import-table field offset 0x${fieldOffset.toString(16)}`);
     const importIndex=Math.floor(byteOffset/stride);
-    const entry=contextAsset.pkg.imports[importIndex];
+    const entry=contextAsset.pkg.imports.at(importIndex);
     assert.ok(entry,`missing original import record ${importIndex+1}`);
     const value=fieldOffset===8 ? entry.outer : packageNameIndex(entry.name);
     staticImportReads.push({byteOffset,importIndex,fieldOffset,value});

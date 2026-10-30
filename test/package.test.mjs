@@ -70,11 +70,11 @@ test('reads tables, dependencies, object paths, and export payload spans', () =>
   const p = parsePackage(fixture());
   assert.equal(p.version, 69);
   assert.deepEqual(p.dependencies, ['Core']);
-  assert.equal(p.imports[1].path, 'Core.TestActor');
-  assert.equal(p.exports[0].className, 'TestActor');
-  assert.equal(p.exports[0].serialOffset, 160);
-  assert.equal(p.exports[0].serialSize, 4);
-  assert.equal(p.exports[0].path, 'TestActor0');
+  assert.equal(p.imports.at(1).path, 'Core.TestActor');
+  assert.equal(p.exports.at(0).className, 'TestActor');
+  assert.equal(p.exports.at(0).serialOffset, 160);
+  assert.equal(p.exports.at(0).serialSize, 4);
+  assert.equal(p.exports.at(0).path, 'TestActor0');
   assert.deepEqual(summarizePackage(p).exportClasses, { TestActor: 1 });
 });
 
@@ -98,8 +98,8 @@ test('version 61 uses a heritage header and null-terminated names', () => {
   assert.equal(p.guid, null);
   assert.deepEqual(p.heritage, { count: 0, offset: 0 });
   assert.deepEqual(p.dependencies, ['Core']);
-  assert.equal(p.exports[0].serialOffset, 142);
-  assert.equal(p.exports[0].name, 'TestActor0');
+  assert.equal(p.exports.at(0).serialOffset, 142);
+  assert.equal(p.exports.at(0).name, 'TestActor0');
   view.setInt32(40, 147, true);
   assert.throws(() => parsePackage(bytes), /Invalid heritage/);
   assert.throws(() => new Reader(Uint8Array.of(65, 66)).string(61), /Truncated/);

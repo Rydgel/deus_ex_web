@@ -77,7 +77,7 @@ function walk(node, ctx, parent = null) {
 for (const name of packages) {
   const asset = await assets.get(name), {pkg, bytes} = asset;
   for (let i = 0; i < pkg.exports.length; i++) {
-    const entry = pkg.exports[i];
+    const entry = pkg.exports.at(i);
     if ((entry.className !== 'Function' && entry.className !== 'State') || !entry.serialSize) continue;
     try {
       const object = readObject(pkg, bytes, i + 1), r = object.reader;
@@ -111,12 +111,12 @@ let classCount = 0;
 for (const name of packages) {
   const asset = await assets.get(name);
   for (let i = 0; i < asset.pkg.exports.length; i++) {
-    if (asset.pkg.exports[i].className !== 'Class' || !asset.pkg.exports[i].serialSize) continue;
+    if (asset.pkg.exports.at(i).className !== 'Class' || !asset.pkg.exports.at(i).serialSize) continue;
     classCount++;
     let values;
-    try { values = await defaults.get(asset, i + 1); } catch (error) { console.log(`  defaults ${name}.${asset.pkg.exports[i].path}: ${error.message}`); continue; }
+    try { values = await defaults.get(asset, i + 1); } catch (error) { console.log(`  defaults ${name}.${asset.pkg.exports.at(i).path}: ${error.message}`); continue; }
     if (values.bParticles || (values.RendMap !== undefined && values.RendMap !== 5))
-      classDefaults.push({class: `${name}.${asset.pkg.exports[i].path}`, bParticles: values.bParticles ?? false, RendMap: values.RendMap, DrawType: values.DrawType});
+      classDefaults.push({class: `${name}.${asset.pkg.exports.at(i).path}`, bParticles: values.bParticles ?? false, RendMap: values.RendMap, DrawType: values.DrawType});
   }
 }
 console.log(`\nClass defaults: ${classCount} classes; with bParticles or RendMap != 5: ${classDefaults.length}`, classDefaults);
@@ -128,7 +128,7 @@ const drawTypes = new Map();
 for (const name of maps) {
   const asset = await assets.get(name), {pkg, bytes} = asset;
   for (let i = 0; i < pkg.exports.length; i++) {
-    const entry = pkg.exports[i];
+    const entry = pkg.exports.at(i);
     if (!entry.serialSize || ['Class', 'Function', 'State', 'Model', 'Polys', 'Texture', 'Sound', 'Music', 'TextBuffer', 'Level', 'Palette', 'Font', 'LodMesh', 'Mesh', 'Struct', 'Enum', 'Const', 'Package', 'Script', 'ScriptedTexture', 'FireTexture', 'WaterTexture', 'WaveTexture', 'FractalTexture', 'IceTexture', 'WetTexture', 'Skin'].includes(entry.className)) continue;
     let props;
     try { props = readObject(pkg, bytes, i + 1).properties; } catch { continue; }

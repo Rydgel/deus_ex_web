@@ -22,6 +22,7 @@ import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { movingLightLeaves, worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
 import { surfaceTextureFlags, renderPassTangent } from './occlusion-request.mjs';
 import { createPlayerInputFixture } from './player-input-fixture.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const views = Number(process.argv[2] ?? 8);
 const root = gameDirectory(), files = [];
@@ -39,7 +40,7 @@ async function census(mapName, seed) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (actor, name) => { try { return runtime.readNamed(actor, name); } catch { return undefined; } };
   const exportIndexByName = new Map(asset.pkg.exports.map((entry, i) => [entry.name, i + 1]));
-  const options = { exportName: ref => asset.pkg.exports[ref - 1]?.name, exportIndex: name => exportIndexByName.get(name) };
+  const options = { exportName: ref => exportAt(asset.pkg, ref)?.name, exportIndex: name => exportIndexByName.get(name) };
   const occlusion = createBspOcclusion(kernel, map.model, { surfaceTextureFlags: await surfaceTextureFlags(assets, asset, map.model),
     zoneActors: map.model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
   const before = createMeshLightingView(runtime, () => runtime.levelFor(player), options);

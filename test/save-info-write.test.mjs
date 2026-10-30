@@ -27,7 +27,7 @@ test('the package has the measured layout: 33 names, 5 imports, 3 exports with n
   assert.equal(pkg.names.length, 33);
   assert.deepEqual(pkg.names.slice(0, 8).map(entry => entry.name), ['None', 'InternalTime', 'VBits', 'VClamp', 'UBits', 'UClamp', 'Palette', 'Description']);
   assert.deepEqual(pkg.names.slice(-3).map(entry => entry.name), ['Texture0', 'Palette0', 'MyDeusExSaveInfo']);
-  assert.equal(pkg.names[0].flags, 0x4070410); assert.equal(pkg.names[1].flags, 0x70010); assert.equal(pkg.names[25].flags, 0x4070010);
+  assert.equal(pkg.names.at(0).flags, 0x4070410); assert.equal(pkg.names.at(1).flags, 0x70010); assert.equal(pkg.names.at(25).flags, 0x4070010);
   assert.deepEqual(pkg.imports.map(entry => entry.path), ['Engine', 'Engine.Texture', 'DeusEx', 'DeusEx.DeusExSaveInfo', 'Engine.Palette']);
   assert.deepEqual(pkg.exports.map(entry => [entry.className, entry.name, entry.outer, entry.flags]),
     [['Texture', 'Texture0', 0, 0x70000], ['Palette', 'Palette0', 0, 0x70000], ['DeusExSaveInfo', 'MyDeusExSaveInfo', 0, 0x70004]]);

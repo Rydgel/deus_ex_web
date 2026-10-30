@@ -1,6 +1,7 @@
 import {serializeGcScriptExpression} from './script-bytecode-serialization.mjs';
 import {decodeScript} from '../unreal/bytecode.mjs';
 import {METADATA_KINDS} from './original-loaded.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 // Resource objects: loaded with the package that holds them and collected like a class (docs/class-graph-design.md "The collection over
 // classes"), so they are the process's.
@@ -59,7 +60,7 @@ export class ScriptObjects {
   /** Bind an already resolved positive export without repeating import lookup.
    * The native loader supplies the owning linker/index after VerifyImport. */
   exportIdentity(asset, index) {
-    const entry = asset.pkg.exports[index - 1];
+    const entry = exportAt(asset.pkg, index);
     if (!Number.isInteger(index) || index <= 0 || !entry)
       throw new Error(`Invalid canonical export ${asset.name}:${index}`);
     // A small integer (it indexes the export table), kept as a Smi: a heap number stored here would make V8 box `index` in

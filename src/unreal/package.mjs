@@ -1,4 +1,5 @@
 /** Read UE1 package tables without executing game code. Browser and Node compatible. */
+import { NameTable, ImportTable, ExportTable, PackageLinks } from './package-tables.mjs';
 export class PackageError extends Error {
   constructor(message, offset) {
     super(`${message} at byte ${offset}`);
@@ -132,77 +133,93 @@ export function parsePackage(input) {
   const headerSize = r.offset;
   const tableRanges = [];
 
-  function table(kind, minimumBytes, parse) {
+  // `build(count)` makes the table's columns and reads its entries; an empty table is built without a seek.
+  function table(kind, minimumBytes, build) {
     const { offset, count } = tables[kind];
-    if (count === 0) return [];
+    if (count === 0) return build(0);
     if (offset < headerSize || count > Math.floor((r.bytes.length - offset) / minimumBytes)) {
       throw new PackageError(`Invalid ${kind} table extent`, offset);
     }
     r.seek(offset);
-    const values = Array.from({ length: count }, parse);
+    const result = build(count);
     tableRanges.push([offset, r.offset, kind]);
-    return values;
+    return result;
   }
 
-  const names = table('names', 5, () => ({ name: r.string(version), flags: r.u32() }));
-  function nameAt(index) {
+  const names = table('names', 5, count => {
+    const texts = [], flagWords = new Uint32Array(count);
+    for (let i = 0; i < count; i++) { texts.push(r.string(version)); flagWords[i] = r.u32(); }
+    return new NameTable(texts, flagWords);
+  });
+  function nameIndex(index) {
     if (!Number.isInteger(index) || index < 0 || index >= names.length) {
       throw new PackageError(`Invalid name reference ${index}`, r.offset);
     }
-    return names[index].name;
+    return index;
   }
-  // Every field is declared in the literal, so an entry has no out-of-line property array (`path` and `className` are filled
-  // below).
-  const imports = table('imports', 7, () => ({
-    classPackage: nameAt(r.compact()),
-    className: nameAt(r.compact()),
-    outer: r.i32(),
-    name: nameAt(r.compact()),
-    path: '',
-  }));
-  const exports = table('exports', 12, () => {
-    const classIndex = r.compact(), superIndex = r.compact(), outer = r.i32();
-    const name = nameAt(r.compact()), flags = r.u32(), serialSize = r.compact();
-    const serialOffset = serialSize > 0 ? r.compact() : null;
-    if (serialSize < 0 || (serialSize > 0 && (
-      serialOffset < headerSize || serialSize > r.bytes.length - serialOffset
-    ))) throw new PackageError(`Invalid export payload for ${name}`, r.offset);
-    return { classIndex, superIndex, outer, name, flags, serialSize, serialOffset, className: '', path: '' };
+  // The columns hold the entries' fields (package-tables.mjs); a name is a position in `names`.
+  const imports = table('imports', 7, count => {
+    const classPackages = new Int32Array(count), classNames = new Int32Array(count), outers = new Int32Array(count), nameIndexes = new Int32Array(count);
+    for (let i = 0; i < count; i++) {
+      classPackages[i] = nameIndex(r.compact());
+      classNames[i] = nameIndex(r.compact());
+      outers[i] = r.i32();
+      nameIndexes[i] = nameIndex(r.compact());
+    }
+    return new ImportTable(names, classPackages, classNames, outers, nameIndexes);
+  });
+  const exports = table('exports', 12, count => {
+    const columns = { classIndexes: new Int32Array(count), superIndexes: new Int32Array(count), outers: new Int32Array(count),
+      nameIndexes: new Int32Array(count), flagWords: new Uint32Array(count), serialSizes: new Int32Array(count), serialOffsets: new Int32Array(count) };
+    for (let i = 0; i < count; i++) {
+      columns.classIndexes[i] = r.compact();
+      columns.superIndexes[i] = r.compact();
+      columns.outers[i] = r.i32();
+      const name = nameIndex(r.compact());
+      columns.nameIndexes[i] = name;
+      columns.flagWords[i] = r.u32();
+      const serialSize = r.compact();
+      const serialOffset = serialSize > 0 ? r.compact() : -1;
+      if (serialSize < 0 || (serialSize > 0 && (
+        serialOffset < headerSize || serialSize > r.bytes.length - serialOffset
+      ))) throw new PackageError(`Invalid export payload for ${names.texts[name]}`, r.offset);
+      columns.serialSizes[i] = serialSize;
+      columns.serialOffsets[i] = serialOffset;
+    }
+    return new ExportTable(names, columns);
   });
   tableRanges.sort((a, b) => a[0] - b[0]);
   for (let i = 1; i < tableRanges.length; i++) {
     if (tableRanges[i][0] < tableRanges[i - 1][1]) throw new PackageError('Overlapping package tables', tableRanges[i][0]);
   }
 
-  function objectAt(index) {
-    if (index === 0) return null;
-    const entry = index > 0 ? exports[index - 1] : imports[-index - 1];
-    if (!entry) throw new PackageError(`Invalid object reference ${index}`, r.offset);
-    return entry;
+  // Every reference and every outer chain is checked once here, as building each entry's path did; the paths are made when asked for.
+  const links = imports.links = exports.links = new PackageLinks(names, imports, exports);
+  function checkReference(index) {
+    if (index === 0) return;
+    if (index > 0 ? index > exports.length : -index > imports.length) throw new PackageError(`Invalid object reference ${index}`, r.offset);
   }
-  function objectPath(index) {
-    const seen = new Set();
-    const parts = [];
-    while (index !== 0) {
-      if (seen.has(index)) throw new PackageError('Cyclic object outer reference', r.offset);
-      seen.add(index);
-      const entry = objectAt(index);
-      parts.push(entry.name);
-      index = entry.outer;
+  // A chain longer than the entries it can name repeats one: the cycle objectPath's seen-set caught.
+  const chainLimit = imports.length + exports.length;
+  function checkChain(index) {
+    for (let steps = 0; index !== 0; steps++) {
+      if (steps > chainLimit) throw new PackageError('Cyclic object outer reference', r.offset);
+      checkReference(index);
+      index = links.outerOf(index);
     }
-    return parts.reverse().join('.');
   }
-  imports.forEach((entry, i) => { entry.path = objectPath(-i - 1); });
-  exports.forEach((entry, i) => {
-    objectAt(entry.superIndex);
-    entry.className = objectAt(entry.classIndex)?.name ?? 'Class';
-    entry.path = objectPath(i + 1);
-  });
-  const dependencies = [...new Set(imports
-    .filter(entry => entry.outer === 0 && entry.className === 'Package')
-    .map(entry => entry.name))].sort();
+  for (let i = 0; i < imports.length; i++) checkChain(-i - 1);
+  for (let i = 0; i < exports.length; i++) {
+    checkReference(exports.superIndexes[i]);
+    checkReference(exports.classIndexes[i]);
+    checkChain(i + 1);
+  }
+  const dependencyNames = new Set();
+  for (let i = 0; i < imports.length; i++) if (imports.outers[i] === 0 && imports.className(i) === 'Package') dependencyNames.add(imports.text(i));
+  const dependencies = [...dependencyNames].sort();
   return { version, licenseeVersion, flags, guid, heritage, generations, tables, names, imports, exports, dependencies };
 }
+
 
 export function summarizePackage(pkg) {
   const classes = Object.create(null);

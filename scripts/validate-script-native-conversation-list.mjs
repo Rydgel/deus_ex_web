@@ -14,7 +14,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { readClass } from '../src/unreal/classes.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { ScriptRuntime } from '../src/runtime/script-runtime.mjs';
 import {
   CONVERSATION_LIST_FIELDS,
@@ -47,7 +47,7 @@ function sourceFor(asset, classPath) {
   const reader = readObject(asset.pkg, asset.bytes, metadata.scriptText).reader;
   reader.u32();
   reader.u32();
-  return { index, entry: asset.pkg.exports[index - 1], metadata, source: reader.string(asset.pkg.version) };
+  return { index, entry: exportAt(asset.pkg, index), metadata, source: reader.string(asset.pkg.version) };
 }
 
 function bytesAt(bytes, offset, length) {
@@ -149,7 +149,7 @@ const missionListRaw = readObject(conText.pkg, conText.bytes, missionListIndex).
 assert.ok(Number.isInteger(missionListRaw.conversations) && missionListRaw.conversations > 0,
   'Mission00 conversations head');
 const missionItemIndex = missionListRaw.conversations;
-const missionItemEntry = conText.pkg.exports[missionItemIndex - 1];
+const missionItemEntry = exportAt(conText.pkg, missionItemIndex);
 assert.equal(missionItemEntry.className, 'ConItem');
 const missionItemRaw = readObject(conText.pkg, conText.bytes, missionItemIndex).values;
 assert.ok(Number.isInteger(missionItemRaw.ConObject) && missionItemRaw.ConObject > 0,

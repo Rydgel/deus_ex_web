@@ -5,12 +5,12 @@ import {auditAssert,auditControlWord} from './precision-audit.mjs';
 const assert=auditAssert(),controlWord=auditControlWord();
 import {readFile,writeFile} from 'node:fs/promises';
 import {parsePackage} from '../src/unreal/package.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {gameDirectory} from './game-directory.mjs';
 const root=gameDirectory(),rows=[];
 for(const [pack,index] of [['DeusExDeco',606],['DeusExCharacters',669]]) {
-  const bytes=await readFile(`${root}/System/${pack}.u`),pkg=parsePackage(bytes),entry=pkg.exports[index-1];
+  const bytes=await readFile(`${root}/System/${pack}.u`),pkg=parsePackage(bytes),entry=exportAt(pkg, index);
   const names=Object.fromEntries(pkg.names.map((n,i)=>[n.name,i]));names.UnknownSequence=0xffffff;
   const steps=[],add=(name,actors={},extra={})=>steps.push({name,actors,...extra});
   const pose=(sequence,frame,fields={})=>({actor:{AnimSequence:sequence,AnimFrame:frame,...fields}});

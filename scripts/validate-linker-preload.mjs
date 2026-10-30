@@ -64,7 +64,7 @@ import {
   readPropertyMetadata,
   readStructMetadata,
 } from '../src/unreal/script-metadata.mjs';
-import {nameAt} from '../src/unreal/objects.mjs';
+import { nameAt, exportAt, importAt } from '../src/unreal/objects.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 
 import {createScriptLoadGraph} from '../src/runtime/script-load-graph.mjs';
@@ -117,8 +117,8 @@ const f32u32 = new Uint32Array(f32.buffer);
 function oraclePathForRef(ref, linker) {
   if (typeof ref === 'string') return ref;
   if (ref === 0 || ref === null || ref === undefined) return null;
-  if (ref > 0) return `${linker.packageName}.${linker.pkg.exports[ref - 1].path}`;
-  return linker.pkg.imports[-ref - 1].path;
+  if (ref > 0) return `${linker.packageName}.${exportAt(linker.pkg, ref).path}`;
+  return importAt(linker.pkg, ref).path;
 }
 
 // Member kinds this comparator does not decode inside an undecoded struct
@@ -163,7 +163,7 @@ function verifyClassExport(className, {linker = deusExLinker} = {}) {
     while (ref) {
       assert.ok(!seen.has(ref), `${className} oracle children chain is acyclic`);
       seen.add(ref);
-      const entry = linker.pkg.exports[ref - 1];
+      const entry = exportAt(linker.pkg, ref);
       const links = readFieldLinks(asset, ref);
       oracleFields.push({ref, entry, links});
       ref = links.nextRef;
@@ -438,13 +438,13 @@ const dviExport = exportRecord(deusExLinker.exports, dviIndex);
 
 // DataVaultImage's SuperField reference is an import that must resolve
 // through Engine's own ULinkerLoad.
-const superImportRef = deusExLinker.pkg.exports[dviIndex].superIndex;
+const superImportRef = deusExLinker.pkg.exports.at(dviIndex).superIndex;
 assert.ok(superImportRef < 0, 'DataVaultImage Super is an import reference');
-const superImport = deusExLinker.pkg.imports[-superImportRef - 1];
+const superImport = importAt(deusExLinker.pkg, superImportRef);
 assert.equal(superImport.path, 'Engine.Inventory');
 const verifiedInventoryImport = deusExLinker.imports[-superImportRef - 1];
 assert.equal(verifiedInventoryImport.sourceLinker, engineLinker, 'VerifyImport selects Engine linker');
-assert.equal(engineLinker.pkg.exports[verifiedInventoryImport.sourceIndex].path, 'Inventory',
+assert.equal(engineLinker.pkg.exports.at(verifiedInventoryImport.sourceIndex).path, 'Inventory',
   'VerifyImport selects Inventory by class/name/outer hash lookup');
 assert.equal(verifiedInventoryImport.object, null, 'Inventory import stays unconstructed until first use');
 

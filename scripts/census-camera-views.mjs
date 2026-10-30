@@ -72,7 +72,7 @@ import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { ClassDefaults } from '../src/unreal/classes.mjs';
-import { readObject, nameAt } from '../src/unreal/objects.mjs';
+import { readObject, nameAt, exportAt } from '../src/unreal/objects.mjs';
 import { Reader } from '../src/unreal/package.mjs';
 import { readTexture } from '../src/unreal/textures.mjs';
 import { pointZone } from '../src/unreal/lighting.mjs';
@@ -157,7 +157,7 @@ async function census(mapName, probe = null) {
   const actors = [];
   for (const a of map.actors) {
     let values, lineage;
-    try { values = await defaults.forActor(asset, a); lineage = await defaults.lineage(asset, asset.pkg.exports[a.index - 1].classIndex); }
+    try { values = await defaults.forActor(asset, a); lineage = await defaults.lineage(asset, exportAt(asset.pkg, a.index).classIndex); }
     catch { continue; }
     actors.push({ ...a, values, lineage, location: values.Location ?? [0, 0, 0] });
   }
@@ -208,10 +208,10 @@ async function census(mapName, probe = null) {
       if (!textureKind.has(ref)) {
         let kind = null;
         try {
-          const object = await assets.resolve(asset, ref), cls = object.asset.pkg.exports[object.index - 1].className;
+          const object = await assets.resolve(asset, ref), cls = exportAt(object.asset.pkg, object.index).className;
           const values = readTexture(object.asset, object.index).values;
-          kind = ANIMATED_TEXTURE_CLASSES.test(cls) ? cls : values.AnimNext ? `AnimNext ${object.asset.pkg.exports[object.index - 1].name}` : null;
-          if (kind && kind === cls) kind = `${cls} ${object.asset.pkg.exports[object.index - 1].name}`;
+          kind = ANIMATED_TEXTURE_CLASSES.test(cls) ? cls : values.AnimNext ? `AnimNext ${exportAt(object.asset.pkg, object.index).name}` : null;
+          if (kind && kind === cls) kind = `${cls} ${exportAt(object.asset.pkg, object.index).name}`;
         } catch { kind = null; }
         textureKind.set(ref, kind);
       }

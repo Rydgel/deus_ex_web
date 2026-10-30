@@ -23,6 +23,7 @@ import { parseAiWords, encodeAiEvents } from './ai-events-payload.mjs';
 import { identityOfHandle } from './script-object-handles.mjs';
 import { isHostFlagBase, FLAG_CLASSES, FLAG_VALUE_PROPERTY } from './travel-export.mjs';
 import { hashScriptName } from './script-names.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 const ACTOR_FLAGS = 0x2070001, OBJECT_FLAGS = 0x70000;
 const NATIVE_SOURCE = new Set(['Model', 'Polys', 'LevelSummary']);
@@ -90,7 +91,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
   // found DeusExGoal0 twice (scripts/validate-travel-restore-objects.mjs).
   const levelSource = source.exports.findIndex(entry => entry.className === 'Level') + 1;
   if (!levelSource) throw new UnsupportedSaveObject('the source package has no Level export');
-  const levelPosition = add({ levelObject: true }, { kind: 'level', name: source.exports[levelSource - 1].name, flags: source.exports[levelSource - 1].flags,
+  const levelPosition = add({ levelObject: true }, { kind: 'level', name: exportAt(source, levelSource).name, flags: exportAt(source, levelSource).flags,
     sourceIndex: levelSource, outerExport: 0 });
 
   // --- the AI event manager: its objects are known from the snapshot ------------------------------------------------------------------
@@ -162,7 +163,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
       // an export of the source package that is not an actor: the brush's Model, the Summary, the EventManager
       const found = sourceExport.get(value.index);
       if (found) return found;
-      const entry = source.exports[value.index - 1];
+      const entry = exportAt(source, value.index);
       if (NATIVE_SOURCE.has(entry.className)) return addNative(value.index);
       if (entry.className === 'EventManager') return events ? events.positions.manager : 0;
       return 0;
@@ -176,13 +177,13 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
   function importKeyOfSource(i) {
     let key = sourceImportKeys.get(i);
     if (key) return key;
-    const entry = source.imports[i];
+    const entry = source.imports.at(i);
     const outerKey = entry.outer ? importKeyOfSource(-entry.outer - 1) : '';
     sourceImportKeys.set(i, key = tables.importEntry({ classPackage: entry.classPackage, className: entry.className, outerKey, name: entry.name }));
     return key;
   }
   function addNative(sourceIndex) {
-    const entry = source.exports[sourceIndex - 1];
+    const entry = exportAt(source, sourceIndex);
     if (sourceExport.has(sourceIndex)) return sourceExport.get(sourceIndex);
     // (a saved level's native objects carry no FStateFrame: RF_HasStack is dropped with the header)
     return add({ nativeSource: sourceIndex }, { kind: 'native', name: entry.name, flags: entry.flags & ~0x2000000, sourceIndex, outerExport: 0 });
@@ -195,7 +196,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
       if (ref < 0) return tables.importIndex(importKeyOfSource(-ref - 1));
       const found = sourceExport.get(ref);
       if (found) return found;
-      const entry = source.exports[ref - 1];
+      const entry = exportAt(source, ref);
       return NATIVE_SOURCE.has(entry.className) ? addNative(ref) : 0;
     },
     nameIndex,
@@ -293,7 +294,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
       case 'level': writeLevel(w); break;
       case 'events': aiWriter(entry.identity)(w); break;
       case 'native': {
-        const src = source.exports[entry.sourceIndex - 1];
+        const src = exportAt(source, entry.sourceIndex);
         const raw = sourceBytes.subarray(src.serialOffset, src.serialOffset + src.serialSize);
         const transcode = src.className === 'Model' ? transcodeModel : src.className === 'Polys' ? transcodePolys : transcodeProperties;
         try { w.raw(transcode(source, raw, translate, { hasStack: Boolean(src.flags & 0x2000000) })); }
@@ -316,7 +317,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
         return key;
       }
       case 'flagbase': case 'flag': return resourceKey(entry.cls.record);
-      case 'level': case 'native': return importKeyOfSource(-source.exports[entry.sourceIndex - 1].classIndex - 1);
+      case 'level': case 'native': return importKeyOfSource(-exportAt(source, entry.sourceIndex).classIndex - 1);
       default: return tables.importEntry({ classPackage: 'Core', className: 'Class', outerKey: tables.packageKey({ name: 'Engine' }), name: entry.className });
     }
   };

@@ -20,7 +20,7 @@
  *   DConversation::BindActorEvents RVA 0x101d0).
  */
 
-import { readObject } from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import { readFunctionMetadata } from '../unreal/script-metadata.mjs';
 import { refValue } from './script-vm.mjs';
 
@@ -222,7 +222,7 @@ function decodeFlagRefs(asset, head) {
       throw new Error('Original ConFlagRef ' + index + ' is missing FlagName');
     return {
       ref: index,
-      object: asset.pkg.exports[index - 1]?.name ?? null,
+      object: exportAt(asset.pkg, index)?.name ?? null,
       flagName: value.FlagName,
       value: value.Value,
       nextRef: value.nextFlagRef,
@@ -256,7 +256,7 @@ export function loadDataLinkMissionDescriptors(asset, missionNumber = 0) {
     const values = readObject(asset.pkg, asset.bytes, ref).values;
     const descriptor = {
       ref,
-      object: asset.pkg.exports[ref - 1]?.name ?? null,
+      object: exportAt(asset.pkg, ref)?.name ?? null,
       conName: values.conName,
       conOwnerName: values.conOwnerName,
       bDataLinkCon: values.bDataLinkCon,

@@ -12,7 +12,7 @@ import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {createScriptLoadGraph} from '../src/runtime/script-load-graph.mjs';
 import {MUSIC_NATIVE} from '../src/runtime/script-music-load.mjs';
 
@@ -45,10 +45,10 @@ assert.ok(graph.superOf(musicClass) === graph.staticRecords.get('Core.Object'), 
  * array (version > 61: an end offset, a compact count, the bytes). */
 function parse(asset, index) {
   const object = readObject(asset.pkg, asset.bytes, index), reader = object.reader;
-  const fileType = asset.pkg.names[reader.compact()].name;
+  const fileType = asset.pkg.names.at(reader.compact()).name;
   assert.ok(asset.pkg.version > 61, 'lazy arrays carry their end offset');
   // The reader is relative to the export; the stored end offset is the file's.
-  const end = reader.u32(), count = reader.compact(), start = asset.pkg.exports[index - 1].serialOffset + reader.offset;
+  const end = reader.u32(), count = reader.compact(), start = exportAt(asset.pkg, index).serialOffset + reader.offset;
   assert.equal(start + count, end, 'the end offset follows the bytes');
   return {fileType, bytes: asset.bytes.subarray(start, end)};
 }
@@ -60,7 +60,7 @@ for (const name of PACKAGES) {
   const linker = graph.buildLinker(name);
   const objects = [];
   for (const [exportPath, index] of asset.exportsByPath) {
-    if (asset.pkg.exports[index - 1].className !== 'Music') continue;
+    if (exportAt(asset.pkg, index).className !== 'Music') continue;
     objects.push({exportPath, index, object: graph.indexToObject(linker, index)});
   }
   graph.endLoad();

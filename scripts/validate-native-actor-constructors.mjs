@@ -19,6 +19,7 @@ import {fileURLToPath} from 'node:url';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {findNativeClassConstructor} from '../src/runtime/script-native-class-registry.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt, importAt } from '../src/unreal/objects.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PACKAGES = Object.freeze({Engine: 'Engine.dll', DeusEx: 'DeusEx.dll', Extension: 'Extension.dll', ConSys: 'ConSys.dll'});
@@ -35,13 +36,13 @@ for (const name of ['Core', ...Object.keys(PACKAGES)]) packages.set(name, await 
 // through the outer chain.
 const reference = (pkgName, index) => {
   const asset = packages.get(pkgName);
-  if (index > 0) return {pkg: pkgName, name: asset.pkg.exports[index - 1].name};
+  if (index > 0) return {pkg: pkgName, name: exportAt(asset.pkg, index).name};
   if (index < 0) {
-    const entry = asset.pkg.imports[-index - 1];
+    const entry = importAt(asset.pkg, index);
     let outer = entry;
     while (outer.packageIndex ?? outer.outer) {
       const next = outer.packageIndex ?? outer.outer;
-      outer = next < 0 ? asset.pkg.imports[-next - 1] : asset.pkg.exports[next - 1];
+      outer = next < 0 ? importAt(asset.pkg, next) : exportAt(asset.pkg, next);
     }
     return {pkg: outer.objectName ?? outer.name, name: entry.objectName ?? entry.name};
   }
@@ -50,7 +51,7 @@ const reference = (pkgName, index) => {
 const exportOf = ({pkg, name}) => {
   const asset = packages.get(pkg);
   const index = asset?.exportsByPath.get(name.toLowerCase()) ?? asset?.exportsByPath.get(name);
-  return index ? {asset, entry: asset.pkg.exports[index - 1]} : null;
+  return index ? {asset, entry: exportAt(asset.pkg, index)} : null;
 };
 const lineage = start => {
   const chain = [];

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { readClass } from '../src/unreal/classes.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { ScriptRuntime } from '../src/runtime/script-runtime.mjs';
 import { refValue } from '../src/runtime/script-vm.mjs';
 import {
@@ -25,7 +25,7 @@ const conSys = await assets.get('ConSys');
 assert.equal(createHash('sha256').update(conSys.bytes).digest('hex'), contract.packageSha256,
   'ConSys.u hash');
 
-const entry = conSys.pkg.exports[contract.classExport - 1];
+const entry = exportAt(conSys.pkg, contract.classExport);
 assert.equal(entry?.path, 'ConEventCheckObject');
 assert.equal(entry?.className, 'Class');
 assert.equal(entry?.superIndex, 2);

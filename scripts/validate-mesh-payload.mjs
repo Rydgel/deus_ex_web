@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {parsePackage} from '../src/unreal/package.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeLodMesh} from '../src/runtime/lodmesh.mjs';
 import {decodeLodMeshPayload, readLodMeshFrame} from '../src/runtime/lodmesh-payload.mjs';
 import {gameDirectory} from './game-directory.mjs';
@@ -22,7 +22,7 @@ for (const [packageName, index, modes, frames] of [
   ['DeusExCharacters', 723, [false, true], null],
 ]) {
   const bytes = await readFile(`${root}/System/${packageName}.u`), pkg = parsePackage(bytes);
-  const entry = pkg.exports[index - 1];
+  const entry = exportAt(pkg, index);
   for (const lazy of modes) rows.push({pkg, bytes, index, lazy, frames: frames ?? [],
     spec: {name: `${packageName}.${entry.name}:${lazy}`, version: pkg.version,
       start: entry.serialOffset, prefixSize: readObject(pkg, bytes, index).reader.offset,
@@ -33,7 +33,7 @@ for (const [packageName, index, modes, frames] of [
 // Original serializer processes the modified payload too; this is not an
 // authored game asset and is never written back to the source package.
 for (const expanded of [false, true]) {
-  const source = rows[0], original = source.pkg.exports[source.index - 1];
+  const source = rows[0], original = exportAt(source.pkg, source.index);
   const vertexCount = expanded ? 44 : 22;
   const old = Buffer.from(source.spec.payload, 'base64'), remap = Buffer.alloc(1 + vertexCount * 2);
   remap[0] = vertexCount;
@@ -42,7 +42,7 @@ for (const expanded of [false, true]) {
   const payload = Buffer.concat([old.subarray(0, -5), remap, old.subarray(-4)]);
   const entry = {...original, serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + entry.serialSize);
   payload.copy(bytes, entry.serialOffset);
-  const pkg = {...source.pkg, exports: source.pkg.exports.slice()}; pkg.exports[source.index - 1] = entry;
+  const pkg = {...source.pkg, exports: source.pkg.exports.slice()}; exportAt(pkg, source.index) = entry;
   rows.push({...source, pkg, bytes, lazy: true, spec: {...source.spec,
     name: expanded ? 'LightSwitch-expanded-remap' : 'LightSwitch-remap',
     payload: payload.toString('base64'), lazy: 1, loadDeferred: true}});

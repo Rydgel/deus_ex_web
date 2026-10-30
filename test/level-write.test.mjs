@@ -42,10 +42,10 @@ test('buildPackage writes a version-68 package that parsePackage reads back: nam
   assert.equal(pkg.imports.length, 2);
   assert.deepEqual(pkg.exports.map(entry => entry.name), ['LevelInfo0', 'Mine']);
   assert.deepEqual(pkg.exports.map(entry => entry.flags), [0x70004, 0x70001]);
-  assert.equal(pkg.exports[1].outer, 1);
-  assert.equal(pkg.exports[0].className, 'LevelInfo');
+  assert.equal(pkg.exports.at(1).outer, 1);
+  assert.equal(pkg.exports.at(0).className, 'LevelInfo');
   const data = entry => bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize);
-  assert.equal(data(pkg.exports[1]).length, 5);
+  assert.equal(data(pkg.exports.at(1)).length, 5);
   assert.deepEqual([...bytes.subarray(36, 52)], [...guid], 'the GUID follows the three table offsets');
 });
 
