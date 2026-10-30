@@ -137,6 +137,8 @@ export const NATIVE_SITES = [
     indices: idx('1212 1230 1284 1289'), when: 'only while the HUD paints (the draw natives of the HUD background)'},
   {id: 'weapon-overlay', layer: 'play-host', file: V + 'weapon-overlay-sim.mjs', anchor: /runtime\.native=call=>\{/,
     indices: idx('467'), when: 'only while the first-person overlay is recorded'},
+  {id: 'console-level-action', layer: 'play-host', file: R + 'script-console-level-action.mjs', anchor: /runtime\.native = call => \{/,
+    indices: idx('464 465'), when: 'only while the loading frame runs Console.DrawLevelAction (LoadMap\'s PaintProgress frame, docs/loading-frame.md)'},
 ];
 
 /** The Rust interpreter's kinds (native/script-vm, lowered by script-vm-lower.mjs): each native here also has a JavaScript

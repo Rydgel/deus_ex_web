@@ -272,9 +272,10 @@ was left half done, and the HUD snapshot then read a destroyed window.
 
 ## Not modeled or unverified
 
-* LoadMap's presentation steps are not run: PaintProgress/LevelAction, the
-  audio refresh, and the `+0x69c` bit on the old player (which is destroyed
-  immediately after).
+* LoadMap's presentation steps: PaintProgress's frame (LevelAction, Pauser,
+  the `+0x69c` bit, which is `bShowMenu`, and the flash swap) is drawn at a
+  travel's frame since 2026-10-30 ([loading frame](loading-frame.md)); the
+  audio refresh is not run.
 * The mark is a projection. Play's registry has no records for map exports
   (their slots are unmeasured), classes, resources, windows or XFlag nodes,
   so none of these is collectable in Play. XFlag::Destroy (`0x10023870`)

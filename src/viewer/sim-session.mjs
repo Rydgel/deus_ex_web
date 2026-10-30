@@ -13,6 +13,7 @@ import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projection
   setProjectionState } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { viewportFlash } from '../runtime/screen-flash.mjs';
+import { LEVEL_ACTION } from '../runtime/script-console-level-action.mjs';
 import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_DETAIL, OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS, SETUP_STATUS, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
@@ -91,6 +92,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The corona scan (corona-scan.mjs) and the view model's simulation half
   // (weapon-overlay-sim.mjs), the frame's last world steps.
   let coronaScan = null, weaponSim = null, size = null;
+  // The console's canvas for LoadMap's PaintProgress frame (script-console-level-action.mjs, docs/loading-frame.md).
+  let levelAction = null;
   // The original BSP occlusion (bsp-occlusion.mjs) and DrawWorld's frame
   // counter (0x10b5a700), which schedules its bound tests. Unless
   // ?actorOcclusion=frustum, the main frame's OccludeBsp waits for
@@ -980,21 +983,27 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     /** The textures the HUD's construction already reached, for the page to
      * decode before the first frame (createPlayHud did the same). */
     hudTextures() {
-      return [...game.hud.host.resourceImages.values()].filter(resource => resource.kind === 'texture')
+      const textures = [...game.hud.host.resourceImages.values()].filter(resource => resource.kind === 'texture')
         .map(resource => plainTexture(resource.ref));
+      // (the console's LargeFont pages: the loading frame is drawn once and kept, so its glyphs cannot wait for a later frame's decode)
+      for (const texture of levelAction?.textures() ?? []) if (!textures.some(other => other.key === texture.key)) textures.push(texture);
+      return textures;
     },
     /** The HUD frame after the world's: the window tree's paint
      * (DrawWindow/PostDrawWindow and the GC natives) as plain GC commands,
      * Galaxy's update after it (game.mjs: UGameEngine::Draw updates audio
      * after the frame), then the InfoLink text the page mirrors for
      * accessibility. An error stops the simulation like the frame's other
-     * steps. */
-    hud({ width, height, view, stream = false }) {
+     * steps. `progress` (a LEVEL_ACTION): the frame is LoadMap's
+     * PaintProgress draw of the level a travel leaves (docs/loading-frame.md):
+     * the paint and its flash read PaintProgress's state, and `console` holds
+     * the console's DrawLevelAction tiles, drawn after EndFlash. */
+    hud({ width, height, view, stream = false, progress = LEVEL_ACTION.none }) {
       // (a live replay's frame after a window scene's typed command that the original's held frames did not draw after: live-probe.mjs `noPaint`)
-      if (game.liveReplay?.noPaint) return { errors: [], commands: [], stream: null, infoLink: null, flash: null };
+      if (game.liveReplay?.noPaint) return { errors: [], commands: [], stream: null, infoLink: null, flash: null, console: null };
       const errors = [];
-      let commands = [], hudStream = null, infoLink = null, flash = null;
-      try {
+      let commands = [], hudStream = null, infoLink = null, flash = null, consoleTiles = null;
+      const paint = () => {
         game.hud.host?.setViewportPlanner?.(planViewportPass);
         game.hud.host?.setActorDrawPlanner?.(planHudActor);
         viewportFrames = 0; lastViewportPlans = [];
@@ -1011,8 +1020,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // original reads them: the viewport actor's FlashScale and FlashFog after the tick, at the HUD draw.
         const viewer = game.player.collisionActor;
         flash = viewportFlash({ flashScale: runtime.readNamed(viewer, 'FlashScale'), flashFog: runtime.readNamed(viewer, 'FlashFog') });
+      };
+      try {
+        if (progress !== LEVEL_ACTION.none && levelAction) {
+          const viewer = game.player.collisionActor;
+          consoleTiles = levelAction.paint({ player: viewer, levelInfo: runtime.readNamed(viewer, 'Level'), width, height, action: progress, hudPaint: paint }).console;
+        } else paint();
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, commands, stream: hudStream, infoLink, flash };
+      return { errors, commands, stream: hudStream, infoLink, flash, console: consoleTiles };
     },
     /** SetupDynamics' sprite scan with the render iterators (sprite-scan.mjs):
      * the sprite records in draw order. The laser DT_Mesh items stay in
@@ -1258,10 +1273,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       time('weapon');
       if (input.play && game.hud && view) {
-        const hud = this.hud({ width, height, view, stream: true });
+        // The frame whose tick travelled is the one LoadMap's PaintProgress draws before the load (docs/loading-frame.md).
+        const hud = this.hud({ width, height, view, stream: true, progress: begun?.travel ? LEVEL_ACTION.loading : LEVEL_ACTION.none });
         collect(hud.errors);
         // `stream` (the tiles as numbers) or, after an error, `commands`: the page draws the list `expandHudStream` makes of the stream
-        snapshot.hud = { commands: hud.commands ?? (hud.stream ? null : []), stream: hud.stream, infoLink: hud.infoLink, flash: hud.flash };
+        snapshot.hud = { commands: hud.commands ?? (hud.stream ? null : []), stream: hud.stream, infoLink: hud.infoLink, flash: hud.flash, console: hud.console };
       }
       // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
       snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;
@@ -1293,6 +1309,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * records before the first frame). */
     takeEvents() { return events.splice(0); },
     setWeapon(overlay) { weaponSim = overlay; },
+    /** The console's canvas (script-console-level-action.mjs createConsoleLevelAction) for the loading frame. */
+    setLevelAction(value) { levelAction = value; },
     /** URender's per-frame mesh lighting setup for the main viewport
      * (mesh-lighting-view.mjs beginFrame) with this frame's moving lights;
      * `seconds` is the viewport clock (the page's frame time). */

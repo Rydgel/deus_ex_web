@@ -31,6 +31,7 @@ import { createSimSession } from './sim-session.mjs';
 import { createActorMeshSim } from './actor-mesh-sim.mjs';
 import { createGpuMeshLayout } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlaySim } from './weapon-overlay-sim.mjs';
+import { createConsoleLevelAction } from '../runtime/script-console-level-action.mjs';
 import { createCoronaScan } from './corona-scan.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { createLipSyncAnalysis } from '../runtime/galaxy-lipsync-channels.mjs';
@@ -97,6 +98,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   const session = createSimSession(game, { assets, events, exportName });
   session.setScene(stampScene, actorSim);
   if (meshLighting) session.setMeshLighting(meshLighting);
+  // The console's canvas: LoadMap's PaintProgress frame, when a travel leaves this level, prints its DrawLevelAction message (docs/loading-frame.md).
+  if (game.hud) session.setLevelAction(await createConsoleLevelAction({ runtime, assets }));
   const hudTextures = game.hud ? session.hudTextures() : null;
   // The player's view model, with the layout of the page's own GPU mesh
   // instance for it.

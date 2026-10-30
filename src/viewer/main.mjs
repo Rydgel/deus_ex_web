@@ -346,6 +346,10 @@ const preTickParam=new URLSearchParams(location.search).get('preTick')!=='off';
 // The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
 // tick receives the load, as the original's does (docs/travel.md "The first tick after the load"; game.mjs `loadingFrameSeconds`).
 let travelFrameTime=null;
+// A travel's loading frame is on the canvas (travelTo): nothing is drawn until the next level's first frame.
+let travelHeld=false;
+// The last loading frame's console tiles and flash (deusExViewer.loadingFrame).
+let lastLoadingFrame=null;
 let infoLinkAudioContext=null;
 // Galaxy's music (docs/galaxy-music.md "Phase 5: Output"): an AudioWorklet
 // owns the library (galaxy-music-output.mjs); the simulation talks to it on
@@ -868,8 +872,12 @@ function travelTo(request) {
   // (the level left has stopped ticking: sim-session.mjs `travelled`). The loading frame starts here: the inline frame that ticked
   // the travel, or the worker's latest post (a display frame or two after the travel's, and those posts reach a level that no longer ticks)
   travelFrameTime = simClient ? simLastPost : lastTime;
+  // The snapshot that brought the request is LoadMap's PaintProgress frame (docs/loading-frame.md): no later frame of the level left is
+  // drawn over it, from here (a loaded game's files are read first) to the next level's first frame.
+  travelHeld = true;
   loadSavedFiles(request).then(currentFiles => loadMap(request.map, { travel: request, currentFiles }))
-    .catch(error => { toast(error.message); pauseForRuntimeError(error); });
+    .catch(error => { toast(error.message); pauseForRuntimeError(error); })
+    .finally(() => { travelHeld = false; });
 }
 /** A loaded game (`?loadgame=N`, docs/travel.md order step 4): the simulation's Save directory lists the slot without its bytes, which the page keeps in its storage
  * (the browser's, or the picked folder): the files Browse copied into `Current` are read here, awaited, and travel with the level's load. */
@@ -934,7 +942,12 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   // The original start keeps the mouse through a travel, as the original's viewport does across a level load.
   if (!originalStart || !travel) releasePointer();
   keys.clear();
-  busy('Loading original map', `Reading ${name}…`);
+  // A travel (New Game, a level's exit, a loaded game) leaves LoadMap's PaintProgress frame of the level it leaves on the canvas
+  // (travelTo, docs/loading-frame.md) for the whole load, the page's own build included. The page's gate is for a load with no level
+  // frame behind it (the first map, a map from the list) and for a load error; with the tools (?debug=1) the steps show in the status line.
+  const heldFrame = Boolean(travel && world);
+  const progress = message => { $(heldFrame ? 'state' : 'gate-message').textContent = message; };
+  if (heldFrame) progress(`Loading ${name}…`); else busy('Loading original map', `Reading ${name}…`);
   loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null, warming = null;
   // A travel arrival attaches to the script process of the level left (script-process.mjs): inline here, in the worker there (sim-worker.mjs).
@@ -978,7 +991,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       weaponOrder: params.get('weaponOrder'), shareProcess };
     if (simClient) { overlapped = simClient.loadOverlapped(name, baseOptions, currentFiles); overlapped.reply.catch(() => {}); }
     nextWorld = await createWorld(nextMap, asset, assets, (message, done, total) => {
-      $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
+      progress(message); $('progress').max = total; $('progress').value = done;
     });
     loadMark('world');
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
@@ -1010,7 +1023,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary, process: keepProcess, restore: Boolean(filed),
       onAudioVoice: event => { void galaxyVoice(event); },
-      onProgress: message => { $('gate-message').textContent = message; } });
+      onProgress: progress });
     loadMark('host');
     // The level's first tick (about 200 ms on the Island: every pawn's first state code) would be the first frame's, and the page would wait for
     // it after the load. The worker is done with the level and idle while the page builds its meshes and swaps its world in: it makes the tick
@@ -1142,8 +1155,10 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
     if (warming) {
       const mark = performance.now();
-      $('gate-message').textContent = 'Compiling shaders';
+      const summary = $('state').textContent;
+      progress('Compiling shaders');
       const result = await warming.finish().catch(error => { console.warn('shader warm-up failed', error); return null; });
+      if (heldFrame) $('state').textContent = summary;
       shaderWarmupResult = result && { ...result, waitMs: Math.round(performance.now() - mark) };
     }
     // A travel's level: its first frame's dt runs from the last frame before the load (DeusEx.exe's main loop does not reset OldTime
@@ -2028,6 +2043,8 @@ function status() {
 window.deusExViewer = { status,
 /** The last map load's steps (loadTimeline above): null before the first load. */
 loadTimings: () => loadTimeline && structuredClone(loadTimeline),
+/** The last loading frame drawn (docs/loading-frame.md): the level it was drawn in, the buffer size, the console's tiles and the flash. */
+loadingFrame: () => lastLoadingFrame && structuredClone(lastLoadingFrame),
 /** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
 saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true),
   /** The stored directories and their files ({dir, files: [{name, size}]}) and one file's bytes (an array): what the specs read back of a save. */
@@ -2360,7 +2377,7 @@ function animate(time) {
   // after the restore carries the whole wait in its dt. A snapshot simulated before the loss is applied as it arrives (its draws reach the
   // lost context, where they do nothing).
   if (graphics.lost || graphics.pending || graphics.restoring) {
-    if (graphics.lost && simClient && !lockstep && world && !loading) { const snap = simClient.take(); if (snap) drawFrame(snap, time); }
+    if (graphics.lost && simClient && !lockstep && world && !loading && !travelHeld) { const snap = simClient.take(); if (snap) drawFrame(snap, time); }
     if (graphics.pending && !loading) {
       if (world) void restoreGraphics();
       else { graphics.pending = false; if ($('toast').textContent === GRAPHICS_LOST) $('toast').textContent = ''; }
@@ -2369,7 +2386,7 @@ function animate(time) {
   }
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
-  if (world && !loading) {
+  if (world && !loading && !travelHeld) {
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     const playing = mode === 'play' && Boolean(game);
@@ -2681,6 +2698,12 @@ function drawFrame(snap, time) {
   if (playing && !runtimeError && snap?.hud?.flash) {
     try { flashPass.render(renderer, snap.hud.flash); } catch (error) { pauseForRuntimeError(error); }
   }
+  // The console's PostRender event follows EndFlash (Draw 0x1038f772): on LoadMap's PaintProgress frame, DrawLevelAction's LOADING
+  // (sim-session.mjs hud `progress`, docs/loading-frame.md).
+  if (playing && !runtimeError && snap?.hud?.console?.length && hudRenderer) {
+    try { hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.console); } catch (error) { pauseForRuntimeError(error); }
+    lastLoadingFrame = { map: currentMap, width: renderer.domElement.width, height: renderer.domElement.height, tiles: snap.hud.console, flash: snap.hud.flash };
+  }
   framePhases.hudCalls += drawCalls() - calls;
   phase('hud');
   if (displayRamp) displayRamp.apply(renderer, world.displayGamma.value, crtEnabled, crtShader, crtCompare);
@@ -2704,7 +2727,7 @@ function drawFrame(snap, time) {
 }
 /** ?sim=worker in lockstep: a snapshot drawn as it arrives. */
 function drawLockstep(snapshot) {
-  if (!world || loading) return;
+  if (!world || loading || travelHeld) return;
   // (between a context restore and its rebuild a snapshot waits for restoreGraphics)
   if (graphics.pending || graphics.restoring) { graphics.held.push(snapshot); return; }
   const frameStart = phaseMark = performance.now();
