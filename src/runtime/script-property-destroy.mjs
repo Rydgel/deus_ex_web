@@ -134,7 +134,7 @@ function readSlot(property, offset, aliases, services = {}, context = {}) {
   }
   const slots = property?.nativeSlots;
   if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
-  if (slots && typeof slots === 'object' && own(slots, offset)) return nativeSlotValue(slots[offset]);
+  if (slots && typeof slots === 'object' && !(slots instanceof NativeSlots) && own(slots, offset)) return nativeSlotValue(slots[offset]);
   for (const source of [property, metadataOf(property)]) {
     const value = first(source, aliases, UNRESOLVED);
     if (value !== UNRESOLVED) return value;

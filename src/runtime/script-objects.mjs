@@ -65,11 +65,15 @@ export class ScriptObjects {
       throw new Error(`Invalid canonical export ${asset.name}:${index}`);
     // A small integer (it indexes the export table), kept as a Smi: a heap number stored here would make V8 box `index` in
     // every identity (docs/live-heap.md "Steps 2 and 3's results").
-    const resolved = {asset, index: index | 0, entry, key: `${asset.name}.${entry.path}`};
-    const key = resolved.key.toLowerCase(), table = this.tableOf(asset, entry);
+    const key = `${asset.name}.${entry.path}`.toLowerCase(), table = this.tableOf(asset, entry);
     let identity = table.get(key);
     if (!identity) {
-      table.set(key, identity = {...resolved, key, kind: resolved.entry.className, name: resolved.entry.name});
+      // One literal with the keys the process adds later (the load record, the prepared function, the property's metadata and its link in
+      // progress): each added after the literal was an out-of-line property array on every identity, 31,600 objects on the Island
+      // (docs/live-heap.md "Load records and functions"). It stays a plain object (bench-sim's digest hashes by prototype).
+      // `fieldPending` is the link's promise while it runs and `true` once it has finished (ScriptRuntime.field).
+      table.set(key, identity = {asset, index: index | 0, entry, key, kind: entry.className, name: entry.name,
+        loadRecord: undefined, function: undefined, metadata: undefined, fieldPending: undefined});
       if (table === this.packageObjects) this.process?.hold(identity);
     }
     return identity;

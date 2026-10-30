@@ -87,6 +87,19 @@ function makePropertyDescriptor(record, metadata, node = null) {
   };
 }
 
+// The descriptor a body keeps: the same keys in the same order as `{...descriptor, contextOffset, encodedSize}`, written as one literal
+// so that every key is in the object itself (the spread made the two last keys an out-of-line property array on each of the 11,600
+// descriptors of the Island: docs/live-heap.md "Load records and functions").
+function finishDescriptor(d, contextOffset, encodedSize) {
+  if (d.source === 'property')
+    return { source: d.source, key: d.key, field: d.field, metadata: d.metadata, type: d.type, structKey: d.structKey, width: d.width,
+      offset: d.offset, zero: d.zero, contextOffset, encodedSize };
+  if (d.source === 'function')
+    return { source: d.source, key: d.key, field: d.field, metadata: d.metadata, type: d.type, structKey: d.structKey, width: d.width,
+      offset: d.offset, zero: d.zero, function: d.function, returnField: d.returnField, contextOffset, encodedSize };
+  return { ...d, contextOffset, encodedSize };
+}
+
 // The typed zero of a descriptor (shared by all of them, and by their copies: a closure per descriptor was two more objects each).
 function zeroOfDescriptor() {
   return zeroValue({ key: this.key, metadata: this.metadata });
@@ -316,7 +329,7 @@ export async function prepareContextResults(runtime, script, decoded) {
     try {
       const descriptor = await contextNode(runtime, script, node, new Set());
       if (!descriptor) continue;
-      result.set(node.value.offset, { ...descriptor, contextOffset: node.offset, encodedSize: node.valueSize });
+      result.set(node.value.offset, finishDescriptor(descriptor, node.offset, node.valueSize));
     } catch {
       // A single unresolved cross-package/native/opaque result must not make
       // every other prepared script context unusable.

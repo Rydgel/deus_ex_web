@@ -190,7 +190,7 @@ function readNativeField(target, offset, names, services, {
   }
   const slots = target.nativeSlots;
   if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
-  if (slots && typeof slots === 'object' && own(slots, offset)) return fieldValue(slots[offset]);
+  if (slots && typeof slots === 'object' && !(slots instanceof NativeSlots) && own(slots, offset)) return fieldValue(slots[offset]);
   for (const name of names) if (own(target, name)) return fieldValue(target[name]);
   if (required) fail(`${label} (+0x${offset.toString(16)}) is unresolved`, {
     operation, slot: `+0x${offset.toString(16)}`, ...context,
@@ -222,7 +222,7 @@ function writeNativeField(target, offset, names, value, services, {
     slots.assign(offset, value);
     return value;
   }
-  if (slots && typeof slots === 'object' && own(slots, offset)) {
+  if (slots && typeof slots === 'object' && !(slots instanceof NativeSlots) && own(slots, offset)) {
     const current = slots[offset];
     if (current && typeof current === 'object' && own(current, 'value')) current.value = value;
     else slots[offset] = value;
@@ -301,7 +301,7 @@ function readArchiveWord(archive, offset, names, services, {
   }
   const slots = archive?.nativeSlots;
   if (slots instanceof NativeSlots && slots.has(offset)) return slots.value(offset);
-  if (slots && typeof slots === 'object' && own(slots, offset)) return fieldValue(slots[offset]);
+  if (slots && typeof slots === 'object' && !(slots instanceof NativeSlots) && own(slots, offset)) return fieldValue(slots[offset]);
   for (const name of names) if (own(archive, name)) return fieldValue(archive[name]);
   for (const source of [archive?.state, archive?.flags]) {
     for (const name of names) if (own(source, name)) return fieldValue(source[name]);

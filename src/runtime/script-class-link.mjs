@@ -840,8 +840,13 @@ export function linkScriptClass(record, options = {}) {
     const sourceData = source.getData();
     for (let index = 0; index < sourceCount; index += 1) {
       const pair = sourceData[index];
+      // A {field, index} entry the super's list holds is shared, not copied: nothing writes an entry in place (the list is only appended
+      // to, sorted and read), and a subclass's copy of its base's thousand entries was 53,000 objects on the Island
+      // (docs/live-heap.md "Load records and functions").
       const normalized = Array.isArray(pair)
         ? [pair[0], pair[1]]
+        : pair !== null && typeof pair === 'object' && pair.constructor === Object && pair.field != null && pair.index != null &&
+          Object.keys(pair).length === 2 ? pair
         : { field: pair?.field ?? pair?.property ?? pair?.Field ?? pair?.[0],
           index: pair?.index ?? pair?.arrayIndex ?? pair?.Index ?? pair?.[1] };
       farrayAppend(reps, normalized, 8, trace,

@@ -3,6 +3,7 @@
  */
 import {Reader} from '../unreal/package.mjs';
 import {NativeSlots} from './native-slots.mjs';
+import {LoadRecord} from './load-record.mjs';
 import {LoadEdges} from './script-load-edges.mjs';
 import {expandScriptExpression, skipExpandedScriptExpression} from '../unreal/classes.mjs';
 import {
@@ -205,7 +206,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   let deferPreload = null;
   const deferredPreloads = new WeakSet();
 
-  const slotOf = (record, offset) => record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
+  const slotOf = (record, offset) => record instanceof NativeSlots ? record.value(offset)
+    : record?.nativeSlots instanceof NativeSlots ? record.nativeSlots.value(offset) : undefined;
   const readSlot = (record, offset) => slotOf(record, offset);
   const writeSlot = (record, offset, value, width = 4) => {
     const slots = record.nativeSlots, prior = slots.width(offset);
@@ -252,25 +254,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     // The numeric fields start as null and take their values below: V8 keeps a field tagged when its first value is not a number. The
     // addresses (0x70000000 and up) and the flag words (high bits set) are not small integers in the browser, and a field that ever
     // held one boxes every record's value as a heap number of its own (docs/live-heap.md, steps 2 and 3).
-    const record = {
-      nativeAddress: null,
-      address: null,
-      // `key`/`name`-family slots the item serializer reads for member keys
-      // carry the name text; the numeric +0x20 index lives in nativeSlots.
-      key: nameText(name),
-      name: nameText(name),
-      nativeSlots: new NativeSlots(),
-      loadOrdinal: -1, // its place in the load edges (script-load-edges.mjs)
-      nativeConstructor: null,
-      objectFlags: null,
-      base: null,
-      kind,
-      instanceValues: null, // a resource's instance memory above +0x28 (a Map), made where one is constructed or first written
-      hashBuckets: null,
-      farrays: null,
-      script: null,
-      defaults: null,
-    };
+    // `key`/`name`-family slots the item serializer reads for member keys carry the name text; the numeric +0x20 index lives in the
+    // record's native slots (a record is its own slot store, load-record.mjs).
+    const record = new LoadRecord(nameText(name), kind);
     record.nativeAddress = syntheticAddress;
     record.address = syntheticAddress;
     record.objectFlags = flags >>> 0;
