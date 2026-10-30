@@ -125,13 +125,13 @@ class MirrorField {
     return this.codec.copy(name ? values[name] ?? zero : zero);
   }
 }
-// The MirrorField of a cell (and codec): one for every class that has the cell.
+// The MirrorField of a codec (and cell): one for every class that has the field. keyed by the codec, which belongs to the field (a level's class graph) and goes with it: a leaf cell is shared by every level, so a cache keyed by the cell kept the first level's fields alive through the codec.
 const mirrorFields = new WeakMap();
 function mirrorFieldOf(item, cell, field) {
   const codec = propertyCodec(field);
-  let list = mirrorFields.get(cell);
-  if (list === undefined) mirrorFields.set(cell, list = []);
-  for (const shared of list) if (shared.codec === codec && shared.spec === item) return shared;
+  let list = mirrorFields.get(codec);
+  if (list === undefined) mirrorFields.set(codec, list = []);
+  for (const shared of list) if (shared.cell === cell && shared.spec === item) return shared;
   const shared = new MirrorField(item, cell, codec);
   list.push(shared);
   return shared;

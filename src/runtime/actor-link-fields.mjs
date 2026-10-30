@@ -118,12 +118,12 @@ class TouchingField {
     for (let index = 0; index < 4; index++) array[index] = value[index];
   }
 }
-// The BaseField of a cell (and codec) and the TouchingField of a cell: one for every class that has the cell.
+// The BaseField of a codec (and cell), keyed by the codec, which belongs to the field (a level's class graph) and goes with it: a leaf cell is shared by every level, so a cache keyed by the cell kept the first level's fields alive through the codec, and the TouchingField of a cell (it holds no codec).
 const baseFields = new WeakMap(), touchingFields = new WeakMap();
 function baseFieldOf(item, cell, codec) {
-  let list = baseFields.get(cell);
-  if (list === undefined) baseFields.set(cell, list = []);
-  for (const shared of list) if (shared.codec === codec) return shared;
+  let list = baseFields.get(codec);
+  if (list === undefined) baseFields.set(codec, list = []);
+  for (const shared of list) if (shared.cell === cell) return shared;
   const shared = new BaseField(item, cell, codec);
   list.push(shared);
   return shared;

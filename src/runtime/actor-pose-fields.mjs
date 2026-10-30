@@ -108,13 +108,13 @@ class PoseField {
     return this.codec.copy(interpolation ?? values[name] ?? zero);
   }
 }
-// The PoseField of a cell (and codec): one for every class that has the cell.
+// The PoseField of a codec (and cell): one for every class that has the field. keyed by the codec, which belongs to the field (a level's class graph) and goes with it: a leaf cell is shared by every level, so a cache keyed by the cell kept the first level's fields alive through the codec.
 const poseFields = new WeakMap();
 function poseFieldOf(item, cell, field) {
   const codec = propertyCodec(field);
-  let list = poseFields.get(cell);
-  if (list === undefined) poseFields.set(cell, list = []);
-  for (const shared of list) if (shared.codec === codec && shared.spec === item) return shared;
+  let list = poseFields.get(codec);
+  if (list === undefined) poseFields.set(codec, list = []);
+  for (const shared of list) if (shared.cell === cell && shared.spec === item) return shared;
   const shared = new PoseField(item, cell, codec);
   list.push(shared);
   return shared;
