@@ -26,6 +26,7 @@ import v8 from 'node:v8';
 import vm from 'node:vm';
 import { gameDirectory } from './game-directory.mjs';
 import { METADATA_KINDS } from '../src/runtime/original-loaded.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const NAME = 'validate-script-process';
 try { gameDirectory(); } catch { console.log(`SKIP ${NAME}: no installed game data`); process.exit(0); }
@@ -114,7 +115,7 @@ await (async () => {
   {
     const misplaced = [], unheld = [];
     for (const [key, identity] of shared.packageObjects) {
-      if (levelPackage(identity) || !(METADATA_KINDS.has(identity.kind) || objects.tableOf(identity.asset, identity.entry) === shared.packageObjects)) misplaced.push(key);
+      if (levelPackage(identity) || !(METADATA_KINDS.has(identity.kind) || objects.tableOf(identity.asset, entryOf(identity)) === shared.packageObjects)) misplaced.push(key);
       if (!shared.owns(identity)) unheld.push(key);
     }
     check(!misplaced.length, `the process table holds level identities: ${misplaced.slice(0, 8).join(' ')}`);
@@ -126,7 +127,7 @@ await (async () => {
     let fromLevel = 0, attached = 0;
     for (const [key, identity] of objects.objects) {
       if (levelPackage(identity)) fromLevel++;
-      else if (objects.tableOf(identity.asset, identity.entry) === objects.objects && !METADATA_KINDS.has(identity.kind)) attached++;
+      else if (objects.tableOf(identity.asset, entryOf(identity)) === objects.objects && !METADATA_KINDS.has(identity.kind)) attached++;
       else misplaced.push(key);
       if (shared.owns(identity)) misplaced.push(`${key} (held by the process)`);
     }

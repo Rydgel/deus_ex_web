@@ -7,6 +7,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {modifyScriptObject} from '../src/runtime/script-object-lifecycle.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const root=gameDirectory(),files=[];
 for(const name of await readdir(`${root}/System`))files.push({path:name,read:()=>readFile(`${root}/System/${name}`)});
@@ -45,8 +46,8 @@ runtime.callFunction(setOwner,child,1,()=>parent);
 assert.equal(ref(parent,'Owner').get(),owner);assert.equal(ref(child,'Owner').get(),parent);
 const region=runtime.lookupMember(runtime.instance(owner).cls,'fields','Region');
 assert(region,'CameraPoint must inherit Actor.Region');
-assert.equal(region.entry.path,'Actor.Region');
-assert.equal(region.entry.outer,engine.exportsByPath.get('actor'));
+assert.equal(entryOf(region).path,'Actor.Region');
+assert.equal(entryOf(region).outer,engine.exportsByPath.get('actor'));
 await runtime.field(region);
 assert.equal(region.metadata.structKey,'engine.actor.pointregion');
 assert.deepEqual(region.metadata.structFields.map(field=>field.metadata.name),['Zone','iLeaf','ZoneNumber']);

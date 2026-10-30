@@ -99,10 +99,9 @@ export async function syntheticMeshCase(root, {frames = 8, sequences, seed = 1} 
   const floats = m.arrays.get(0xe4);
   push(compact(floats.num), Buffer.from(floats.data));
   const payload = Buffer.concat(parts);
-  const entry = {...base.entry, serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + payload.length);
+  const entry = {...base.entry.toObject(), serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + payload.length);
   payload.copy(bytes, entry.serialOffset);
-  const pkg = {...base.pkg, exports: base.pkg.exports.slice()};
-  exportAt(pkg, base.index) = entry;
+  const pkg = {...base.pkg, exports: base.pkg.exports.with(base.index - 1, {serialSize: payload.length})};
   // readObject parses the tagged-property prefix from the package bytes, so the synthetic entry reads its own.
   return {pkg, bytes, index: base.index, entry, names, synthetic: true,
     spec: {...meshSpec(pkg, bytes, base.index, entry, payload), name: `Synthetic${frames}`}};

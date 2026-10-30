@@ -4,6 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 import {AssetStore} from '../src/unreal/assets.mjs';
+import {entryOf} from '../src/unreal/objects.mjs';
 import {ScriptResourceRegistry} from '../src/runtime/script-resources.mjs';
 import {loadOriginalGObjects} from './original-gobjects.mjs';
 import {gameDirectory} from './game-directory.mjs';
@@ -53,7 +54,7 @@ for (const soundPath of ['Special.Switch4ClickOn', 'Special.Switch4ClickOff']) {
   assert.equal(record.payload.formatName.name,'wav');
   assert.equal(record.payload.wave.fmt.sampleRate,22050);
   assert.deepEqual(registry.collectReferences(record).nameReferences.map(ref=>ref.name),['wav']);
-  soundRecords.push({path: soundPath, serialSize: record.entry.serialSize, status: record.payloadStatus});
+  soundRecords.push({path: soundPath, serialSize: entryOf(record).serialSize, status: record.payloadStatus});
 }
 
 const references = registry.references(light).map(reference => ({slot: reference.slot, target: reference.target.key}));
@@ -65,7 +66,7 @@ const report = {
     outer: light.outer.key,
     class: light.nativeClass.key,
     globalIndex: light.globalIndex,
-    serialSize: light.entry.serialSize,
+    serialSize: entryOf(light).serialSize,
     sequences: light.payload.sequences.map(sequence => sequence.name),
     references,
     unsupported: light.unsupported,

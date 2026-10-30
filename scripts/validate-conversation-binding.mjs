@@ -104,12 +104,12 @@ const listNameIndex=packageNameIndex(listEntry.name);
 const classNameIndex=packageNameIndex('ConversationList');
 const classOuterNameIndex=packageNameIndex('ConSys');
 const classImport=importAt(contextAsset.pkg, listEntry.classIndex);
-assert.deepEqual(classImport, {
+assert.deepEqual(classImport.toObject(), {
   classPackage:'Core', className:'Class', outer:-1, name:'ConversationList',
   path:'ConSys.ConversationList',
 });
 const classOuterImport=importAt(contextAsset.pkg, classImport.outer);
-assert.deepEqual(classOuterImport, {
+assert.deepEqual(classOuterImport.toObject(), {
   classPackage:'Core', className:'Package', outer:0, name:'ConSys', path:'ConSys',
 });
 

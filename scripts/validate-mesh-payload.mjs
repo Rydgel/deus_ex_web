@@ -33,7 +33,7 @@ for (const [packageName, index, modes, frames] of [
 // Original serializer processes the modified payload too; this is not an
 // authored game asset and is never written back to the source package.
 for (const expanded of [false, true]) {
-  const source = rows[0], original = exportAt(source.pkg, source.index);
+  const source = rows[0], original = exportAt(source.pkg, source.index).toObject();
   const vertexCount = expanded ? 44 : 22;
   const old = Buffer.from(source.spec.payload, 'base64'), remap = Buffer.alloc(1 + vertexCount * 2);
   remap[0] = vertexCount;
@@ -42,7 +42,7 @@ for (const expanded of [false, true]) {
   const payload = Buffer.concat([old.subarray(0, -5), remap, old.subarray(-4)]);
   const entry = {...original, serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + entry.serialSize);
   payload.copy(bytes, entry.serialOffset);
-  const pkg = {...source.pkg, exports: source.pkg.exports.slice()}; exportAt(pkg, source.index) = entry;
+  const pkg = {...source.pkg, exports: source.pkg.exports.with(source.index - 1, {serialSize: payload.length})};
   rows.push({...source, pkg, bytes, lazy: true, spec: {...source.spec,
     name: expanded ? 'LightSwitch-expanded-remap' : 'LightSwitch-remap',
     payload: payload.toString('base64'), lazy: 1, loadDeferred: true}});

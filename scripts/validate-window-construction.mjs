@@ -18,6 +18,7 @@ import {
   setWindowGcFontsNative,
 } from '../src/runtime/script-window-construction.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 const files = (await readdir(path.join(root, 'System'))).map(name => ({
@@ -66,24 +67,24 @@ for (const classPath of ['ExtensionObject', 'Window', 'GC']) {
 }
 
 assert.equal(extObjectClass.index, WINDOW_CONSTRUCTION_NATIVE.classes.extensionObject.packageExport);
-assert.equal(extObjectClass.entry.flags, WINDOW_CONSTRUCTION_NATIVE.classes.extensionObject.exportFlags);
-assert.equal(extObjectClass.entry.superIndex, -8);
+assert.equal(entryOf(extObjectClass).flags, WINDOW_CONSTRUCTION_NATIVE.classes.extensionObject.exportFlags);
+assert.equal(entryOf(extObjectClass).superIndex, -8);
 assert.equal(extObjectClass.metadata.classFlags, 0x112);
 assert.equal(windowClass.index, WINDOW_CONSTRUCTION_NATIVE.classes.window.packageExport);
-assert.equal(windowClass.entry.flags, WINDOW_CONSTRUCTION_NATIVE.classes.window.exportFlags);
-assert.equal(windowClass.entry.superIndex, extObjectClass.index);
+assert.equal(entryOf(windowClass).flags, WINDOW_CONSTRUCTION_NATIVE.classes.window.exportFlags);
+assert.equal(entryOf(windowClass).superIndex, extObjectClass.index);
 assert.equal(windowClass.metadata.classFlags, 0x112);
 assert.equal(gcClass.index, WINDOW_CONSTRUCTION_NATIVE.classes.gc.packageExport);
-assert.equal(gcClass.entry.flags, WINDOW_CONSTRUCTION_NATIVE.classes.gc.exportFlags);
-assert.equal(gcClass.entry.superIndex, extObjectClass.index);
+assert.equal(entryOf(gcClass).flags, WINDOW_CONSTRUCTION_NATIVE.classes.gc.exportFlags);
+assert.equal(entryOf(gcClass).superIndex, extObjectClass.index);
 assert.equal(gcClass.metadata.classFlags, 0x112);
 assert.equal(hudBaseClass.index, 301);
-assert.equal(hudBaseClass.entry.flags, 0x000f0004);
-assert.equal(hudBaseClass.entry.superIndex, -12);
+assert.equal(entryOf(hudBaseClass).flags, 0x000f0004);
+assert.equal(entryOf(hudBaseClass).superIndex, -12);
 assert.equal(hudBaseClass.metadata.classFlags, 0x12);
 assert.equal(hudInfoClass.index, 305);
-assert.equal(hudInfoClass.entry.flags, 0x000f0004);
-assert.equal(hudInfoClass.entry.superIndex, hudBaseClass.index);
+assert.equal(entryOf(hudInfoClass).flags, 0x000f0004);
+assert.equal(entryOf(hudInfoClass).superIndex, hudBaseClass.index);
 assert.equal(hudInfoClass.metadata.classFlags, 0x3a);
 assert.equal(coreObjectClass.index, 3);
 assert.equal(coreObjectClass.metadata.classFlags, 0x112);
@@ -95,17 +96,17 @@ const coreObject = {key: 'core.object', base: null, nativeConstructor: null, obj
 const extensionObject = {
   key: 'extension.extensionobject', base: coreObject,
   nativeConstructor: WINDOW_CONSTRUCTION_NATIVE_ADDRESSES.extensionObjectInternal,
-  objectFlags: extObjectClass.entry.flags,
+  objectFlags: entryOf(extObjectClass).flags,
 };
 const window = {
   key: 'extension.window', base: extensionObject,
   nativeConstructor: WINDOW_CONSTRUCTION_NATIVE_ADDRESSES.windowInternal,
-  objectFlags: windowClass.entry.flags,
+  objectFlags: entryOf(windowClass).flags,
 };
 const hudBase = {key: 'deusex.hudbasewindow', base: window, nativeConstructor: null,
-  objectFlags: hudBaseClass.entry.flags};
+  objectFlags: entryOf(hudBaseClass).flags};
 const hudInfo = {key: 'deusex.hudinfolinkdisplay', base: hudBase, nativeConstructor: null,
-  objectFlags: hudInfoClass.entry.flags};
+  objectFlags: entryOf(hudInfoClass).flags};
 const visits = [];
 const binding = new Set();
 function bind(record) {

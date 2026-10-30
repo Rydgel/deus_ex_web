@@ -5,6 +5,7 @@ import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {readObject} from '../src/unreal/objects.mjs';
 import {readClass} from '../src/unreal/classes.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const root=`${gameDirectory()}/System`;
 const assets=new AssetStore((await readdir(root)).map(path=>({path,read:()=>readFile(`${root}/${path}`)})));
@@ -12,7 +13,7 @@ const runtime=new ScriptRuntime(assets),asset=await assets.get('DeusExConText');
 const conversation=await runtime.objects.resolve(asset,1926),raw=readObject(asset.pkg,asset.bytes,1926);
 const prepared=await Promise.all([runtime.prepareObject(conversation),runtime.prepareObject(conversation)]);
 assert.equal(prepared[0],conversation);assert.equal(prepared[1],conversation);
-assert.equal(raw.reader.offset,conversation.entry.serialSize);
+assert.equal(raw.reader.offset,entryOf(conversation).serialSize);
 const value=(object,name)=>runtime.namedReference(object,name).get();
 for(const [field,expected] of [['conName','DL_Start'],['conOwnerName','JCDenton'],['bDataLinkCon',true],['bDisplayOnce',true]]){
   assert.equal(raw.values[field],expected);assert.equal(value(conversation,field),expected);

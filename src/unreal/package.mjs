@@ -8,6 +8,19 @@ export class PackageError extends Error {
   }
 }
 
+// A name or a string is ASCII almost always. `String.fromCharCode` makes a plain heap string of it; TextDecoder's result is an external string (a
+// native copy of the text beside the heap object: 76,000 of them on the Island, a TextDecoder made for each) and is used for the rest.
+const strict = new TextDecoder('windows-1252', { fatal: true }), lenient = new TextDecoder('windows-1252');
+function latin1(bytes, fatal) {
+  const length = bytes.length;
+  if (length <= 1024) {
+    let ascii = true;
+    for (let index = 0; index < length; index += 1) if (bytes[index] > 0x7f) { ascii = false; break; }
+    if (ascii) return length === 0 ? '' : String.fromCharCode.apply(null, bytes);
+  }
+  return (fatal ? strict : lenient).decode(bytes);
+}
+
 export class Reader {
   constructor(input) {
     this.bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
@@ -75,7 +88,7 @@ export class Reader {
     if (version < 64) {
       const start = this.offset;
       while (this.u8() !== 0) { /* Older packages store null-terminated names. */ }
-      return new TextDecoder('windows-1252').decode(this.bytes.subarray(start, this.offset - 1));
+      return latin1(this.bytes.subarray(start, this.offset - 1), false);
     }
     const count = this.compact();
     if (count === 0) return '';
@@ -93,7 +106,7 @@ export class Reader {
         value += String.fromCharCode(bytes[index] | bytes[index + 1] << 8);
       return value;
     }
-    return new TextDecoder('windows-1252', { fatal: true }).decode(bytes.subarray(0, end));
+    return latin1(bytes.subarray(0, end), true);
   }
 }
 

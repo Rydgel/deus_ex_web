@@ -16,6 +16,9 @@
  * (`export-paths.mjs`) is the lowercase path index `exportsByPath` was.
  */
 
+// util.inspect (an assertion's diff, a console.log) shows an entry as the object it was and a table as its size: the columns are megabytes.
+const INSPECT = Symbol.for('nodejs.util.inspect.custom');
+
 export class PackageTable {
   constructor(length) { this.length = length; }
 
@@ -62,6 +65,7 @@ export class PackageTable {
   toArray() { return this.map(entry => entry); }
   /** The old plain-object form of every entry (validators and one-off tools). */
   objects() { return this.map((entry, index) => this.toObject(index)); }
+  [INSPECT]() { return `${this.constructor.name}(${this.length})`; }
   /** `JSON.stringify(pkg)` writes the old arrays of objects (scripts/inspect-package.mjs --tables). */
   toJSON() { return this.objects(); }
 }
@@ -88,6 +92,8 @@ class NameEntry {
   get name() { return this.table.texts[this.index]; }
   get flags() { return this.table.flagWords[this.index]; }
   toObject() { return this.table.toObject(this.index); }
+  toJSON() { return this.toObject(); }
+  [INSPECT]() { return this.toObject(); }
 }
 
 /** The tables of one package, for the entries' paths and class names: `{names, imports, exports}`. */
@@ -158,6 +164,8 @@ class ImportEntry {
   get name() { return this.table.text(this.index); }
   get path() { return this.table.path(this.index); }
   toObject() { return this.table.toObject(this.index); }
+  toJSON() { return this.toObject(); }
+  [INSPECT]() { return this.toObject(); }
 }
 
 /** The exports. `classNames` and `paths` are null for a parsed package (derived from the tables); a fixture may carry them. */
@@ -200,6 +208,12 @@ export class ExportTable extends PackageTable {
       flags: this.flagWords[index], serialSize: this.serialSizes[index], serialOffset: this.serialOffset(index),
       className: this.className(index), path: this.path(index) };
   }
+  /** A copy of the table with export `index` changed (fixtures: a synthetic payload size). The copy keeps the entries' class names and paths as they read. */
+  with(index, changes) {
+    const list = this.objects();
+    list[index] = { ...list[index], ...changes };
+    return ExportTable.fromObjects(list);
+  }
   /** A table from the old form (fixtures); a field the entry lacks reads as 0 (null for the offset). */
   static fromObjects(list) {
     const texts = [], at = text => { const found = texts.indexOf(text); if (found >= 0) return found; texts.push(text); return texts.length - 1; };
@@ -226,4 +240,6 @@ class ExportEntry {
   get className() { return this.table.className(this.index); }
   get path() { return this.table.path(this.index); }
   toObject() { return this.table.toObject(this.index); }
+  toJSON() { return this.toObject(); }
+  [INSPECT]() { return this.toObject(); }
 }

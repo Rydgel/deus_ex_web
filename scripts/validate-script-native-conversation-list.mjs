@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { entryOf } from '../src/unreal/objects.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -65,9 +66,10 @@ assert.equal(listClass.index, 393);
 assert.equal(conItemClass.index, 87);
 assert.equal(listItemClass.index, 83);
 for (const record of [listClass, conItemClass, listItemClass]) {
-  assert.equal(record.entry.flags, 0x040f0004, `${record.entry.name} export flags`);
-  assert.equal(record.entry.superIndex, 6, `${record.entry.name} superclass`);
-  assert.equal(record.metadata.classFlags, 0x112, `${record.entry.name} class flags`);
+  const entry = entryOf(record);
+  assert.equal(entry.flags, 0x040f0004, `${entry.name} export flags`);
+  assert.equal(entry.superIndex, 6, `${entry.name} superclass`);
+  assert.equal(record.metadata.classFlags, 0x112, `${entry.name} class flags`);
   assert.match(record.source, /class\s+\w+\s+extends\s+ConObject\s+native\s+noexport\s*;/i);
 }
 assert.match(listClass.source, /var\s+ConItem\s+conversations\s*;/i);

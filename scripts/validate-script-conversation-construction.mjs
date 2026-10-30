@@ -16,6 +16,7 @@ import {
   conSysNativeConstruction,
 } from '../src/runtime/script-conversation-construction.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 const files = [];
@@ -68,8 +69,8 @@ function hash(bytes) {
 const dataLink = sourceFor(deusEx, 'datalinkplay');
 const conPlayBase = sourceFor(deusEx, 'conplaybase');
 assert.equal(dataLink.index, DATALINK_PLAY_CONSTRUCTION.packageExport);
-assert.equal(dataLink.entry.flags, DATALINK_PLAY_CONSTRUCTION.exportFlags);
-assert.equal(dataLink.entry.superIndex, DATALINK_PLAY_CONSTRUCTION.superPackageExport);
+assert.equal(entryOf(dataLink).flags, DATALINK_PLAY_CONSTRUCTION.exportFlags);
+assert.equal(entryOf(dataLink).superIndex, DATALINK_PLAY_CONSTRUCTION.superPackageExport);
 assert.equal(dataLink.metadata.classFlags, DATALINK_PLAY_CONSTRUCTION.serializedClassFlags);
 assert.equal(declaration(dataLink.source).replace(/\s+/g, ' ').trim(),
   DATALINK_PLAY_CONSTRUCTION.scriptDeclaration);
@@ -85,12 +86,12 @@ const conListItem = sourceFor(conSys, 'conlistitem');
 assert.equal(conObject.index, 6);
 assert.equal(conversation.index, 30);
 assert.equal(conListItem.index, 83);
-assert.equal(conObject.entry.flags, 0x040f0004);
-assert.equal(conversation.entry.flags, 0x040f0004);
-assert.equal(conListItem.entry.flags, 0x040f0004);
-assert.equal(conObject.entry.superIndex, -4);
-assert.equal(conversation.entry.superIndex, 6);
-assert.equal(conListItem.entry.superIndex, 6);
+assert.equal(entryOf(conObject).flags, 0x040f0004);
+assert.equal(entryOf(conversation).flags, 0x040f0004);
+assert.equal(entryOf(conListItem).flags, 0x040f0004);
+assert.equal(entryOf(conObject).superIndex, -4);
+assert.equal(entryOf(conversation).superIndex, 6);
+assert.equal(entryOf(conListItem).superIndex, 6);
 assert.equal(conObject.metadata.within, -4);
 assert.equal(conversation.metadata.within, -4);
 assert.equal(conListItem.metadata.within, -4);

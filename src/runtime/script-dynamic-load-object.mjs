@@ -7,6 +7,7 @@ import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
 import { importAt, exportAt, entryOf } from '../unreal/objects.mjs';
 import { ExportTable } from '../unreal/package-tables.mjs';
+import { LowerNameTable } from './lower-name-table.mjs';
 
 // The live DataLink capture reaches this package export before an
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
@@ -95,7 +96,8 @@ export class PreparedDynamicLoadGraph{
     if(onEvent!==null&&typeof onEvent!=='function')
       throw new TypeError('Prepared DynamicLoadObject onEvent must be a function');
     this.objects=objects;this.resources=resources;this.onEvent=onEvent;
-    this.names=new Map();this.nextName=0x400;
+    // the process's FName numbers this graph hands out, from 0x400, one for each name up to its case (lower-name-table.mjs)
+    this.names=new LowerNameTable(0x400);
     this.linkers=[];this.linkerByPackage=new Map();this.firstLoadPackages=new Map();
     this.prepared=new Map();
     this.loadState={nest:0,registrationQueueHead:null,loadedMax:0,loaderCleanupState:0};
@@ -103,12 +105,11 @@ export class PreparedDynamicLoadGraph{
   }
 
   nameIndex(value,{find=false}={}){
-    const text=String(value??''),key=text.toLowerCase();
-    if(!this.names.has(key)){
-      if(find)fail(`StaticLoadObject FName is absent: ${text}`,'DYNAMIC_LOAD_OBJECT_FNAME',{value:text});
-      this.names.set(key,this.nextName++);
-    }
-    return this.names.get(key);
+    const text=String(value??'');
+    const found=this.names.find(text);
+    if(found>=0)return found;
+    if(find)fail(`StaticLoadObject FName is absent: ${text}`,'DYNAMIC_LOAD_OBJECT_FNAME',{value:text});
+    return this.names.add(text);
   }
 
   async prepare(object,resource){
