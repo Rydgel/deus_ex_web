@@ -1,4 +1,5 @@
 import {msvcrtSprintf} from './script-text-format.mjs';
+import { entryOf } from '../unreal/objects.mjs';
 /** Logical string operations recovered in docs/script-string-operations.md. */
 export function scriptStringText(value) {
   if(typeof value!=='string')throw new TypeError('Original string operation requires typed string text');
@@ -148,8 +149,9 @@ export function scriptObjectToString(value,recordFor=object=>object) {
     if(seen.has(object))throw new Error('ObjectToString encountered a cyclic Outer chain');
     seen.add(object);
     const exported=object.record??object;
-    if(exported.asset?.name&&exported.entry?.path){
-      parts.unshift(`${exported.asset.name}.${exported.entry.path}`);break;
+    const exportedEntry=exported.asset?.name?entryOf(exported):undefined;
+    if(exportedEntry?.path){
+      parts.unshift(`${exported.asset.name}.${exportedEntry.path}`);break;
     }
     const nativeRecord=recordFor(object),record=nativeRecord?.record??nativeRecord;
     if(typeof record?.name!=='string'||!record.name)

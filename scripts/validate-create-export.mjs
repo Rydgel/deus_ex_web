@@ -42,6 +42,7 @@ import {bindScriptClassConstructor} from '../src/runtime/script-class-bind.mjs';
 import {INVENTORY_CONSTRUCTION} from '../src/runtime/script-inventory-construction.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from '../src/runtime/script-scripted-actor-construction.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt, importAt } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 
@@ -175,7 +176,7 @@ const vaultExport = INVENTORY_CONSTRUCTION.dataVaultImage.packageExport;
 for (const name of SHIPPED_IMAGE_CLASSES) {
   const index = deusEx.exportsByPath.get(name.toLowerCase());
   assert.ok(index !== undefined, `${name} is a DeusEx.u export`);
-  const entry = deusEx.pkg.exports[index - 1];
+  const entry = exportAt(deusEx.pkg, index);
   assert.equal(entry.classIndex, 0, `${name} is a class export, so ClassIndex selects the metaclass`);
   assert.equal(entry.superIndex, vaultExport, `${name} derives from the DataVaultImage export`);
   assert.equal(entry.outer, 0, `${name} has no Outer, so CreateExport uses LinkerRoot`);
@@ -238,7 +239,7 @@ const linker = {name: 'DeusEx linker', root: linkerRoot, contextFlags: 0x000f000
 const services = {
   readExport(target, index) {
     assert.equal(target, linker);
-    const entry = deusEx.pkg.exports[index - 1];
+    const entry = exportAt(deusEx.pkg, index);
     assert.ok(entry, `export[${index}] exists`);
     return {
       classIndex: entry.classIndex, superIndex: entry.superIndex,
@@ -260,7 +261,7 @@ const services = {
     assert.equal(target, linker);
     if (reference === 0) return null;
     if (reference > 0) return createLinkerExport({linker: target, index: reference}, services).object;
-    const entry = deusEx.pkg.imports[-reference - 1];
+    const entry = importAt(deusEx.pkg, reference);
     if (entry.path === 'Engine.Inventory') return engineInventoryIdentity;
     throw new Error(`CreateExport import resolution is not implemented: ${entry.path}`);
   },

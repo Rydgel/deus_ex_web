@@ -8,6 +8,7 @@ import {
   decodeSoundResource,
 } from '../src/runtime/script-sound-resource.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = path.resolve(process.argv[2] ?? gameDirectory());
 const file = path.join(root, 'System', 'DeusExSounds.u');
@@ -35,7 +36,7 @@ const sounds = [];
 for (const [soundPath, facts] of Object.entries(expected)) {
   const index = asset.exportsByPath.get(soundPath.toLowerCase());
   assert.ok(index, `Missing ${soundPath}`);
-  const entry = asset.pkg.exports[index - 1];
+  const entry = exportAt(asset.pkg, index);
   assert.equal(entry.className, 'Sound');
   assert.equal(entry.serialOffset, facts.serialOffset);
   assert.equal(entry.serialSize, facts.serialSize);

@@ -18,7 +18,7 @@
 import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {parsePackage} from '../src/unreal/package.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../src/runtime/lodmesh-frame.mjs';
 import {lodMeshTopology} from '../src/runtime/lodmesh-lod.mjs';
@@ -72,7 +72,7 @@ export async function buildCameraChainSamples(root,{assert,kernel=null,python}) 
     if(!index)throw new Error(`${pack}.${name} is not an installed LodMesh`);
     const mesh=decodeLodMeshPayload(pkg,bytes,index),steps=poses(mesh),frameVerts=mesh.frameVertexCount;
     const names=Object.fromEntries(pkg.names.map((n,i)=>[n.name,i]));
-    const exported=pkg.exports[index-1];
+    const exported=exportAt(pkg, index);
     const seeded=steps.map((step,k)=>({...step,stride:88,pattern:Buffer.from(pattern(frameVerts*88,0x5eed2000+rows.length*16+k)).toString('base64'),
       actors:{actor:fields(step.actor)}}));
     rows.push({pack,name,index,pkg,bytes,mesh,steps:seeded,spec:{name:`${pack}.${name}`,names,steps:seeded.map(({name:stepName,coords,stride,pattern:bytes,actors})=>

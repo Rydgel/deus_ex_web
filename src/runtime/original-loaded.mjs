@@ -128,7 +128,7 @@ export function createOriginalLoadTracker(graph) {
       packageFiles = assets.files ?? packageFiles;
       packagesChanged = true;
       for (let i = 0; i < asset.pkg.imports.length; i++) {
-        if (asset.pkg.imports[i].className === 'Package') continue;
+        if (asset.pkg.imports.at(i).className === 'Package') continue;
         let target = null;
         try { target = assets.resolveLoaded(asset, -i - 1); } catch { target = null; }
         if (!target?.asset || !graph.packageAssets.has(target.asset.name.toLowerCase())) { skipped++; continue; }

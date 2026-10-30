@@ -1,16 +1,34 @@
 import { PackageError, Reader } from './package.mjs';
+import { NameTable } from './package-tables.mjs';
 
 export function nameAt(pkg, index) {
-  if (!pkg.names[index]) throw new PackageError(`Invalid name reference ${index}`, 0);
-  return pkg.names[index].name;
+  const names = pkg.names;
+  // A parsed package's names are a NameTable (package-tables.mjs); fixtures hand `[{name}]`.
+  if (names instanceof NameTable) {
+    const text = names.texts[index];
+    if (text === undefined) throw new PackageError(`Invalid name reference ${index}`, 0);
+    return text;
+  }
+  if (!names[index]) throw new PackageError(`Invalid name reference ${index}`, 0);
+  return names[index].name;
 }
+
+/** The export a 1-based reference names, or undefined (reference 0, a negative one and one past the end included). */
+export function exportAt(pkg, ref) { return ref > 0 ? pkg?.exports.at(ref - 1) : undefined; }
+/** The import a negative reference names, or undefined. */
+export function importAt(pkg, ref) { return ref < 0 ? pkg?.imports.at(-ref - 1) : undefined; }
+
+/** The package entry of a thing that carries `asset` and `index`: a package identity (script-objects.mjs, which keeps no entry of its own: 40,000 views
+ * on the Island) or a copy of one, or a holder that has its own `entry` (a decoded export, a resource record). */
+export function entryOf(holder) { return holder.entry ?? exportAt(holder.asset?.pkg, holder.index); }
 
 export function objectAt(pkg, index) {
   if (index === 0) return null;
-  const entry = index > 0 ? pkg.exports[index - 1] : pkg.imports[-index - 1];
+  const entry = Number.isInteger(index) ? (index > 0 ? pkg.exports.at(index - 1) : pkg.imports.at(-index - 1)) : undefined;
   if (!entry) throw new PackageError(`Invalid object reference ${index}`, 0);
   return entry;
 }
+
 
 export function vector(r) { return [r.f32(), r.f32(), r.f32()]; }
 

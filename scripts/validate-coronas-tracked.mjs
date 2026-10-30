@@ -47,6 +47,7 @@ import { traceRayFast } from '../src/runtime/ray.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { createCoronaScan } from '../src/viewer/corona-scan.mjs';
 import { buildMap, bits } from './brush-tracker-request.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) { console.log('SKIP validate-coronas-tracked: no native probe environment'); process.exit(0); }
@@ -143,7 +144,7 @@ try {
   // 2. The corona scan: the helper's visit list and what it passes.
   const asset = await assets.get(MAP);
   const game = await createGame(built.map, asset, assets, { randomSeed: 1 });
-  const exportName = ref => asset.pkg.exports[ref - 1]?.name;
+  const exportName = ref => exportAt(asset.pkg, ref)?.name;
   const view = { location: EYE, rotation: [-1850, 25298, 0], fov: 75 }, rect = { width: 1280, height: 720 };
   const scan = lineModel => createCoronaScan(game.doors.scriptRuntime.runtime, { model, exportName, player: () => game.player.collisionActor, lineModel })
     .update(view, rect, null, [], 0);

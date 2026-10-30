@@ -51,7 +51,7 @@ import {setVisibilityNative, setChildVisibilityNative} from './script-window-vis
 import {cleanUpWindowNative, preDestroyWindowNative, safeDestroyWindowNative} from './script-window-destroy.mjs';
 import {updatePolyFlagsFromFlags, gcMemory, GC} from './script-gc-state-model.mjs';
 import {decodeFontExport, writeFontImage, UFONT, FONT_PAGE} from './script-font-model.mjs';
-import {readObject} from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import {readTexture} from '../unreal/textures.mjs';
 import {refValue, assign} from './script-vm.mjs';
 import {dispatchWindowHostNative} from './script-window-host-natives.mjs';
@@ -293,7 +293,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const prefixes = paths.map(path => `${path}.`);
     for (const [path, index] of asset.exportsByPath) {
       if (!prefixes.some(prefix => path.startsWith(prefix))) continue;
-      const kind = asset.pkg.exports[index - 1].className;
+      const kind = exportAt(asset.pkg, index).className;
       if (kind === 'Function') await runtime.prepareFunction(asset, index);
       else if (kind === 'State') await runtime.prepareState(asset, index);
     }
@@ -301,7 +301,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // Every ColorTheme subclass reachable through the theme manager.
   for (const [path, index] of deusEx.exportsByPath) {
     if (!path.startsWith('colortheme') || path.includes('.')) continue;
-    if (deusEx.pkg.exports[index - 1].className !== 'Class') continue;
+    if (exportAt(deusEx.pkg, index).className !== 'Class') continue;
     classes.set(`deusex.${path}`, await runtime.loadClass(deusEx, index));
   }
   // RootWindow.GenerateSnapshot returns an Engine.Texture (the exec's UTexture subclass, vtable 0x100613e8).
@@ -378,7 +378,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const record = runtime.classLoader?.nativeRecords.get(ref);
     if (record?.resourceConstructed === 'Engine.Font' &&
         !(runtime.classLoader.graph.slotOf(record, 0x1c) & 0x01000200)) return nativeFontImage(ref, record);
-    const asset = ref.asset, entry = asset.pkg.exports[ref.index - 1];
+    const asset = ref.asset, entry = exportAt(asset.pkg, ref.index);
     const decoded = decodeFontExport(asset.bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize), ref.key);
     const font = writeFontImage(heap.mem, decoded), table = heap.mem.read(font + UFONT.pages, 'u32');
     const reader = readObject(asset.pkg, asset.bytes, ref.index).reader;

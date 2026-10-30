@@ -4,7 +4,7 @@
  * decoding is a presentation transport and does not claim the original audio
  * mixer or ClientHearSound path.
  */
-import {readObject} from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
 import {conversationSoundLength} from './script-conversation-sound-length.mjs';
 
@@ -32,7 +32,7 @@ export async function loadInfoLinkPreviewAudio(assets){
   const startIndex=sounds.exportsByPath.get(reference.startSoundPath);
   if(startIndex!==reference.startSoundExport)throw new Error('InfoLink audio DataLinkStart identity changed');
   const startDecoded=decodeSoundResource({pkg:sounds.pkg,bytes:sounds.bytes,
-    entry:sounds.pkg.exports[startIndex-1]});
+    entry:exportAt(sounds.pkg, startIndex)});
   if(startDecoded.lazy.formatName?.toLowerCase()!==reference.startSoundFormat||
     startDecoded.bytes?.byteLength!==reference.startSoundByteCount)
     throw new Error('InfoLink audio DataLinkStart WAV payload changed');
@@ -42,7 +42,7 @@ export async function loadInfoLinkPreviewAudio(assets){
     log:()=>{throw new Error('InfoLink audio DataLinkStart failed original RIFF timing recognition');}});
   if(startSeconds!==reference.startSoundSeconds)throw new Error('InfoLink audio DataLinkStart duration changed');
   const context=await assets.get(reference.conversationPackage);
-  const conversationEntry=context.pkg.exports[reference.conversationExport-1];
+  const conversationEntry=exportAt(context.pkg, reference.conversationExport);
   if(conversationEntry?.name!==reference.conversationObject)
     throw new Error('InfoLink audio Conversation57 identity changed');
   const conversation=readObject(context.pkg,context.bytes,reference.conversationExport).values;
@@ -61,7 +61,7 @@ export async function loadInfoLinkPreviewAudio(assets){
   const audio=await assets.get(reference.soundPackage);
   const soundIndex=audio.exportsByPath.get(reference.soundObject.toLowerCase());
   if(soundIndex!==reference.soundExport)throw new Error('InfoLink audio sound export identity changed');
-  const entry=audio.pkg.exports[soundIndex-1];
+  const entry=exportAt(audio.pkg, soundIndex);
   const decoded=decodeSoundResource({pkg:audio.pkg,bytes:audio.bytes,entry});
   if(decoded.lazy.formatName?.toLowerCase()!==reference.format||
     decoded.lazy.byteCount!==reference.byteCount)

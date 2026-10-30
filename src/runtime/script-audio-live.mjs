@@ -1,7 +1,8 @@
 import {createGalaxyAudio} from './galaxy-audio.mjs';
 import {createGalaxyMusic} from './galaxy-music.mjs';
 import {createMirrorMusicLibrary} from './galaxy-music-library.mjs';
-import {createMusicObjects} from './galaxy-music-objects.mjs';
+import { createMusicObjects } from './galaxy-music-objects.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 import {createGalaxyVolumes} from './galaxy-volumes.mjs';
 import {hostNow} from './host-clock.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';
@@ -160,8 +161,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     if (modded) return hostSample(sound, modded);
     const {asset, index} = sound;
     if (!asset?.bytes || !Number.isInteger(index)) return null;
-    const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: asset.pkg.exports[index - 1]});
-    const start = asset.pkg.exports[index - 1].serialOffset + decoded.lazy.inlineOffset;
+    const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: exportAt(asset.pkg, index)});
+    const start = exportAt(asset.pkg, index).serialOffset + decoded.lazy.inlineOffset;
     const bytes = decoded.bytes ?? asset.bytes.slice(start, start + decoded.lazy.byteCount);
     if (decoded.lazy.formatName.toLowerCase() === 'mp3') return hostSample(sound, bytes);
     if (galaxyVoices) {

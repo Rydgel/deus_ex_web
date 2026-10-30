@@ -96,7 +96,7 @@ const playResources = () => {
   for (const record of loader.originalLoads.held()) {
     const kind = kindOf(record);
     if (!RESOURCE_KINDS.has(kind)) continue;
-    const linker = graph.slotOf(record, 0x10), entry = linker?.asset?.pkg.exports[graph.slotOf(record, 0x14)];
+    const linker = graph.slotOf(record, 0x10), entry = linker?.asset?.pkg.exports.at(graph.slotOf(record, 0x14));
     if (!entry) continue;
     const path = entry.path.split('.');
     const key = keyOf(linker.asset.name, kind, path.length > 1 ? path.at(-2) : '', path.at(-1));

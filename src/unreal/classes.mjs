@@ -1,5 +1,5 @@
 import { Reader, PackageError } from './package.mjs';
-import { counted, nameAt, objectAt, readProperties } from './objects.mjs';
+import { counted, nameAt, objectAt, readProperties, exportAt } from './objects.mjs';
 
 /** One serialized UE1 expression, shared by the whole-script skipper and the
  * linker-Preload SerializeExpr boundary.  Returns the expanded byte count the
@@ -265,6 +265,6 @@ export class ClassDefaults {
     return cls.base ? this.objectDefault(object.asset, cls.base, name) : null;
   }
   async forActor(asset, actor) {
-    return { ...await this.get(asset, asset.pkg.exports[actor.index - 1].classIndex), ...actor.values };
+    return { ...await this.get(asset, exportAt(asset.pkg, actor.index).classIndex), ...actor.values };
   }
 }

@@ -15,6 +15,7 @@ import { readModel } from '../unreal/model.mjs';
 import { BspNodes, Vec3s, Vertices, TrackedSurfaces, SURF } from '../unreal/bsp-model.mjs';
 import { readPolys } from '../unreal/polys.mjs';
 import { ClassDefaults } from '../unreal/classes.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 /** MOVER_TRACKER=off (Node) or ?moverTracker=off keeps movers out of the
  * BSP: drawn whole, frustum-stamped (the earlier Play behaviour). */
@@ -35,7 +36,7 @@ export async function collectTrackerMovers(assets, asset, map) {
   const defaults = new ClassDefaults(assets), movers = [];
   for (const a of map.actors) {
     if (!(a.values.Brush > 0)) continue;
-    const classes = await defaults.lineage(asset, asset.pkg.exports[a.index - 1].classIndex);
+    const classes = await defaults.lineage(asset, exportAt(asset.pkg, a.index).classIndex);
     if (!classes.includes('engine.brush')) continue;
     const values = await defaults.forActor(asset, a);
     if (values.bStatic) continue;

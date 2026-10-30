@@ -46,6 +46,7 @@ import {bindScriptClassConstructor} from '../src/runtime/script-class-bind.mjs';
 import {INVENTORY_CONSTRUCTION} from '../src/runtime/script-inventory-construction.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from '../src/runtime/script-scripted-actor-construction.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { importAt, exportAt } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 
@@ -175,14 +176,14 @@ for (const entry of deusEx.pkg.exports) {
 // same construction the prepared-linker graph performs.
 const exportClassIdentity = record => {
   if (record.classIndex < 0) {
-    const entry = deusEx.pkg.imports[-record.classIndex - 1];
+    const entry = importAt(deusEx.pkg, record.classIndex);
     if (!entry || entry.outer >= 0) return null;
-    const outer = deusEx.pkg.imports[-entry.outer - 1];
+    const outer = importAt(deusEx.pkg, entry.outer);
     if (!outer) return null;
     return {name: nameIndex(entry.name), outer: nameIndex(outer.name)};
   }
   if (record.classIndex > 0) {
-    const entry = deusEx.pkg.exports[record.classIndex - 1];
+    const entry = exportAt(deusEx.pkg, record.classIndex);
     return entry ? {name: nameIndex(entry.name), outer: nameIndex('DeusEx')} : null;
   }
   return {name: 0x29b, outer: 0x14};
@@ -269,7 +270,7 @@ const createServices = {
       nestedEvents.push(...nested.events);
       return nested.object;
     }
-    const entry = deusEx.pkg.imports[-reference - 1];
+    const entry = importAt(deusEx.pkg, reference);
     if (entry.path === 'Engine.Inventory') return engineInventoryIdentity;
     throw new Error(`CreateExport import resolution is not implemented: ${entry.path}`);
   },
@@ -343,7 +344,7 @@ const sloServices = {
   },
   readImportWord: (candidate, byteOffset) => {
     assert.equal(candidate, linker);
-    const entry = deusEx.pkg.imports[Math.floor(byteOffset / 0x1c)];
+    const entry = deusEx.pkg.imports.at(Math.floor(byteOffset / 0x1c));
     assert.ok(entry, `import word +0x${byteOffset.toString(16)} exists`);
     const field = byteOffset % 0x1c;
     if (field === 8) return entry.outer;
@@ -359,7 +360,7 @@ const sloServices = {
 // ---------------------------------------------------------------------------
 
 const image02Index = deusEx.exportsByPath.get('image02_nyc_warehouse') - 1;
-const image02Entry = deusEx.pkg.exports[image02Index];
+const image02Entry = deusEx.pkg.exports.at(image02Index);
 assert.equal(image02Index + 1, INVENTORY_CONSTRUCTION.image02NycWarehouse.packageExport,
   'the fixture exercises the shipped Image02_NYC_Warehouse export');
 assert.equal(image02Entry.classIndex, 0, 'a class export selects the metaclass');

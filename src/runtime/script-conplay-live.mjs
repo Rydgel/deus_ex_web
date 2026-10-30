@@ -8,6 +8,7 @@ import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
 import {createGalaxyVolumes} from './galaxy-volumes.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
+import { exportAt, entryOf } from '../unreal/objects.mjs';
 
 /** A loaded package (DeusEx.u, loaded since boot) as the registered Core.Package
  * object StaticFindObject finds: the same record the DeusExConText package has
@@ -101,7 +102,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     'deusexplayer.createhistoryevent','deusexplayer.getdisplayname','conhistory.addevent',
     'conlistitem.findconversationbyname']);
   for(const asset of [deus,conSys,engine])for(const [path,index] of asset.exportsByPath){
-    const kind=asset.pkg.exports[index-1].className;
+    const kind=exportAt(asset.pkg, index).className;
     if(!(path.startsWith('conplay.')||path.startsWith('conplaybase.')||path.startsWith('conversation.')||
       path.startsWith('concamera.')||path.startsWith('conlight.')||paths.has(path)))continue;
     if(kind==='Function')await runtime.prepareFunction(asset,index);
@@ -131,9 +132,9 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     await runtime.classLoader.prepare(asset);
     const resource=await runtime.prepareResource(sound);
     await runtime.dynamicLoadGraph.prepare(sound,resource);
-    const decoded=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry:asset.pkg.exports[index-1]});
+    const decoded=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry:exportAt(asset.pkg, index)});
     const format=decoded.lazy.formatName.toLowerCase();
-    const start=asset.pkg.exports[index-1].serialOffset+decoded.lazy.inlineOffset;
+    const start=exportAt(asset.pkg, index).serialOffset+decoded.lazy.inlineOffset;
     const bytes=decoded.bytes??asset.bytes.slice(start,start+decoded.lazy.byteCount);
     if(bytes.length!==decoded.lazy.byteCount)throw new Error('Truncated original speech payload');
     sounds.set(sound,{sound,bytes,format,mimeType:format==='mp3'?'audio/mpeg':'audio/wav',
@@ -296,7 +297,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   // Galaxy (docs/galaxy-audio.md "Speech through Galaxy's voices").
   const soundRequests=[];
   function handleNative(call){
-    const scriptPath=String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase();
+    const scriptPath=String(call.script?.entry?.path??(call.record?entryOf(call.record)?.path:undefined)??'').toLowerCase();
     if(call.index===3002||call.index===3003){
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};

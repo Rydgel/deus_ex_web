@@ -21,6 +21,7 @@ import { createFogPass } from './fog-pass.mjs';
 import { createWorldVisibility } from './world-visibility.mjs';
 import { configureSampler } from './original-sampling.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 /** Whether a light map record's texels meet a frustum, or any of a list of
  * frustums (the main frame's and a ViewportWindow frame's). */
@@ -144,7 +145,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     if (defaultTexture === undefined) {
       const levelInfo = map.actors.find(actor => actor.className === 'LevelInfo');
       defaultTexture = levelInfo?.values.DefaultTexture ? { asset, ref: levelInfo.values.DefaultTexture }
-        : levelInfo ? await classDefaults.objectDefault(asset, asset.pkg.exports[levelInfo.index - 1].classIndex, 'DefaultTexture') : null;
+        : levelInfo ? await classDefaults.objectDefault(asset, exportAt(asset.pkg, levelInfo.index).classIndex, 'DefaultTexture') : null;
     }
     if (!defaultTexture) throw new Error('Surface without a texture and no Level.DefaultTexture');
     return defaultTexture;
@@ -352,7 +353,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   for (const actor of map.actors) {
     if (!(actor.values.Brush > 0)) continue;
     try {
-      const lineage = await classDefaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+      const lineage = await classDefaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex);
       if (lineage.includes('engine.mover')) moverActors.push(actor);
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }

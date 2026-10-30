@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { captureDirectory, loadChain } from './chain-lib.mjs';
 import { UNITS, FAMILIES, FLAGS, unitChain } from './stage6-flag-census.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const CENSUS = `${ROOT}/.work/chains/census`;
@@ -53,7 +54,7 @@ async function conversationsOf(mission) {
   if (conText.lists.has(mission)) return conText.lists.get(mission);
   const { ctx, values } = conText;
   const nameOf = v => (v && typeof v === 'object' && 'name' in v) ? v.name : v;
-  const className = i => ctx.pkg.exports[i - 1].className.replace(/^ConEvent/, '');
+  const className = i => exportAt(ctx.pkg, i).className.replace(/^ConEvent/, '');
   const flagChain = start => { const out = []; for (let ref = start, g = 0; ref && g < 64; g++) { const f = values(ref); out.push(String(nameOf(f.flagname))); ref = f.nextflagref; } return out; };
   const byName = new Map(), byObject = new Map();
   const listRef = ctx.exportsByPath.get(`conlist_mission${mission}`);

@@ -20,6 +20,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {mapExportAdmitted} from '../src/runtime/script-map-properties.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
@@ -50,7 +51,7 @@ for (const ref of map.level.actors) {
   if (ref === 0) { serializedNull++; continue; }
   if (mapExportAdmitted(map.pkg, ref)) serializedLive++;
   else {
-    const cls = map.pkg.exports[ref - 1].className;
+    const cls = exportAt(map.pkg, ref).className;
     refusedClasses.set(cls, (refusedClasses.get(cls) ?? 0) + 1);
   }
 }
@@ -83,11 +84,11 @@ function assertAdmission(label) {
     const ref = map.level.actors[slot];
     if (ref === 0 || !mapExportAdmitted(map.pkg, ref)) {
       assert.equal(byIndex.has(ref), false,
-        `${label}: slot ${slot} (${map.pkg.exports[ref - 1]?.name ?? 'zero'}) never joins the live array`);
-    } else if (map.pkg.exports[ref - 1].className === 'PickupDistributor') {
+        `${label}: slot ${slot} (${exportAt(map.pkg, ref)?.name ?? 'zero'}) never joins the live array`);
+    } else if (exportAt(map.pkg, ref).className === 'PickupDistributor') {
       // Original PickupDistributor.PostPostBeginPlay distributes keys then Destroy().
       assert.equal(byIndex.has(ref),false,`${label}: distributor destroyed after startup`);
-    } else if (map.pkg.exports[ref - 1].name === 'UNATCOTroop2' && !byIndex.has(ref)) {
+    } else if (exportAt(map.pkg, ref).name === 'UNATCOTroop2' && !byIndex.has(ref)) {
       // UNATCOTroop2 is Training's Test_Subject. On fresh mission entry the
       // first Mission00 timer (about 1 s) runs FirstFrame, which knocks it
       // out; ScriptedPawn.Dying then spawns its carcass and destroys the pawn
@@ -96,7 +97,7 @@ function assertAdmission(label) {
       assert.equal(level.actors.filter(a => a && clsKey(a) === 'deusex.unatcotroopcarcass').length, 1,
         `${label}: retired Test_Subject left exactly one original carcass`);
     } else {
-      assert.equal(byIndex.get(ref)?.index, ref, `${label}: slot ${slot} (${map.pkg.exports[ref - 1].name}) keeps its actor`);
+      assert.equal(byIndex.get(ref)?.index, ref, `${label}: slot ${slot} (${exportAt(map.pkg, ref).name}) keeps its actor`);
     }
   }
   // Head: slots 0 and 1 are copied verbatim (slot 1 keeps its null).

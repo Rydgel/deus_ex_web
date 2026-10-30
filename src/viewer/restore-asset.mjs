@@ -3,6 +3,7 @@
  * `restore` is the request's `{file, name}` (travel.mjs). */
 import { parsePackage } from '../unreal/package.mjs';
 import { decodeMap } from '../unreal/map.mjs';
+import { ExportPaths } from '../unreal/export-paths.mjs';
 
 export function restoredLevel(directory, restore, options) {
   const bytes = directory.readFile('Current', restore.file);
@@ -14,6 +15,6 @@ export function restoredLevel(directory, restore, options) {
 export function filedLevel(bytes, restore, options) {
   const pkg = parsePackage(bytes);
   const stem = restore.package ?? restore.file.replace(/\.dxs$/i, '');   // a live package of the same name keeps its spelling (travel.mjs loadGame)
-  const asset = { name: stem, path: `Save/Current/${restore.file}`, bytes, pkg, exportsByPath: new Map(pkg.exports.map((entry, i) => [entry.path.toLowerCase(), i + 1])) };
+  const asset = { name: stem, path: `Save/Current/${restore.file}`, bytes, pkg, exportsByPath: new ExportPaths(pkg.exports) };
   return { asset, map: decodeMap(bytes, options) };
 }

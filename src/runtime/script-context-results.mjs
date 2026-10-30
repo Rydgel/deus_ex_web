@@ -1,5 +1,6 @@
 import { readFunctionMetadata, readPropertyMetadata } from '../unreal/script-metadata.mjs';
 import { zeroValue } from './script-values.mjs';
+import { entryOf } from '../unreal/objects.mjs';
 
 const PROPERTY_OPS = new Set([0x00, 0x01, 0x02, 0x29]);
 const FUNCTION_OPS = new Set([0x1b, 0x1c, 0x38]);
@@ -181,7 +182,7 @@ async function staticObjectClass(runtime, descriptor) {
   // A DynamicCast receiver (`cast<Pawn>(x).FindInventoryType(...)`): the compiler resolved the call through the cast's class
   if (descriptor.source === 'cast') {
     const classRecord = descriptor.classRecord;
-    if (!classRecord || classRecord.kind !== 'Class' || !classRecord.entry?.serialSize) return null;
+    if (!classRecord || classRecord.kind !== 'Class' || !entryOf(classRecord)?.serialSize) return null;
     if (typeof runtime?.loadClass !== 'function') return null;
     try { return { record: classRecord, loaded: await runtime.loadClass(classRecord.asset, classRecord.index) }; } catch { return null; }
   }
@@ -189,7 +190,7 @@ async function staticObjectClass(runtime, descriptor) {
   const classRef = metadata?.propertyClassRef;
   if (!Number.isInteger(classRef) || classRef === 0) return null;
   const classRecord = await resolveObject(runtime, record?.asset, classRef);
-  if (!classRecord || classRecord.kind !== 'Class' || !classRecord.entry?.serialSize) return null;
+  if (!classRecord || classRecord.kind !== 'Class' || !entryOf(classRecord)?.serialSize) return null;
   if (typeof runtime?.loadClass !== 'function') return null;
   try {
     const loaded = await runtime.loadClass(classRecord.asset, classRecord.index);

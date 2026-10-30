@@ -13,6 +13,7 @@ import {
   readWaveInfo,
 } from '../src/runtime/script-sound-period.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = path.resolve(process.argv[2] ?? gameDirectory());
 const soundFile = path.join(root, 'System', 'DeusExSounds.u');
@@ -41,7 +42,7 @@ const expected = new Map();
 for (const [soundPath, facts] of Object.entries(originalFacts)) {
   const index = asset.exportsByPath.get(soundPath.toLowerCase());
   assert.ok(index, `Missing ${soundPath}`);
-  const entry = asset.pkg.exports[index - 1];
+  const entry = exportAt(asset.pkg, index);
   const sound = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
   assert.equal(entry.serialOffset, facts.serialOffset);
   assert.equal(entry.serialSize, facts.serialSize);

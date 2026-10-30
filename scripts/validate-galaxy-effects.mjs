@@ -34,6 +34,7 @@ import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
 import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 // PlaySound and Update's arithmetic runs in the Rust core, as in Play (galaxy.rs; GALAXY_AUDIO_BODY=js is the BigInt reference).
 if (process.env.GALAXY_AUDIO_BODY !== 'js') await loadScriptVmKernel();
@@ -70,7 +71,7 @@ async function shippedWaves() {
       const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
       if (decoded.lazy.formatName.toLowerCase() !== 'wav') continue;
       const start = entry.serialOffset + decoded.lazy.inlineOffset;
-      const key = [...asset.exportsByPath].find(([, i]) => asset.pkg.exports[i - 1] === entry)?.[0];
+      const key = [...asset.exportsByPath].find(([, i]) => exportAt(asset.pkg, i) === entry)?.[0];
       out.set(`${name}.${key ?? entry.objectName}`, asset.bytes.slice(start, start + decoded.lazy.byteCount));
     }
   }

@@ -53,6 +53,7 @@ import {
   inventorySelection,
 } from '../src/runtime/script-spawn.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { importAt } from '../src/unreal/objects.mjs';
 // This validator records original call order by replacing the runtime's
 // callFunction/executeScript/invokeNative hooks. The Rust interpreter
 // (the default engine) runs calls and natives such as IsA without those
@@ -184,7 +185,7 @@ function expectClass(asset, classPath, {index: expectedIndex, flags, classFlags,
   if (superRef != null) assert.equal(metadata.base, superRef, `${asset.name}.${classPath} Super`);
   if (superPath != null) {
     assert.ok(metadata.base < 0, `${asset.name}.${classPath} Super is an import reference`);
-    assert.equal(asset.pkg.imports[-metadata.base - 1].path, superPath,
+    assert.equal(importAt(asset.pkg, metadata.base).path, superPath,
       `${asset.name}.${classPath} Super import resolves to ${superPath}`);
   }
   return {index, metadata};

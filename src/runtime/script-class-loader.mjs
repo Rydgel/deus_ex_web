@@ -122,7 +122,7 @@ export class ScriptClassLoader {
     let identity, level = false;
     if (linker?.asset && Number.isInteger(index) && index >= 0) {
       identity = this.objects.exportIdentity(linker.asset, index + 1);
-      level = this.objects.process && this.objects.tableOf(linker.asset, linker.asset.pkg.exports[index]) === this.objects.objects;
+      level = this.objects.process && this.objects.tableOf(linker.asset, linker.asset.pkg.exports.at(index)) === this.objects.objects;
     } else {
       const name = fullName(record);
       const resources = this.resources?.();

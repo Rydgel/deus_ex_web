@@ -12,7 +12,7 @@ import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
 import { createExtStringSource } from './script-text-parser-natives.mjs';
-import { readObject } from '../unreal/objects.mjs';
+import { readObject, exportAt, entryOf } from '../unreal/objects.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
@@ -681,7 +681,7 @@ export async function createScriptDoors({
   const triggerState = await runtime.prepareState(deusEx, deusExIndex('deusexmover.triggertoggle', 'DeusExMover.TriggerToggle state'));
 
   function nativePath(call) {
-    return lower(call.script?.entry?.path ?? call.record?.entry?.path ?? '');
+    return lower(call.script?.entry?.path ?? (call.record ? entryOf(call.record)?.path : undefined) ?? '');
   }
 
   function callbackView(receiver) {
@@ -1079,7 +1079,7 @@ export async function createScriptDoors({
     // ConditionalDestroy -> AActor::Destroy -> UObject::Destroy chain reads this
     // record, and the export table supplies its measured Name/ObjectFlags
     // (docs/script-world-destroy.md).
-    const entry = Number.isInteger(identity.index) ? asset?.pkg.exports[identity.index - 1] : null;
+    const entry = Number.isInteger(identity.index) ? exportAt(asset?.pkg, identity.index) : null;
     if (entry && entry.name === identity.name) {
       const object = mapActorNativeObject(identity, entry, {
         index: runtime.resolveOriginalObjectIndex?.(identity, runtime.instance(identity)) ?? null,
@@ -1130,7 +1130,7 @@ export async function createScriptDoors({
     for (let pawn = level.pawnList; pawn && !seen.has(pawn); pawn = pawn.nextPawn) {
       seen.add(pawn);
       if (pawn === playerActor) continue;
-      const entry=asset?.pkg.exports[pawn.index-1];
+      const entry=exportAt(asset?.pkg, pawn.index);
       if(!entry)throw new Error(`Original pawn class is unavailable: ${pawn.name}`);
       await attach(pawn, await runtime.loadClass(asset,entry.classIndex), 'pawn');
     }
@@ -1141,7 +1141,7 @@ export async function createScriptDoors({
   // therefore needs an identity even when no selected behavior runs on it yet.
   for (const actor of level.actors ?? []) {
     if (!actor || identities.has(actor)) continue;
-    const entry = asset?.pkg.exports[actor.index - 1];
+    const entry = exportAt(asset?.pkg, actor.index);
     if (!entry) throw new Error(`Original scene actor class is unavailable: ${actor.name}`);
     await attach(actor, await runtime.loadClass(asset, entry.classIndex), 'scene');
   }
@@ -1936,7 +1936,7 @@ export async function createScriptDoors({
     const resolve = async ref => {
       if (!ref) return null;
       const object = await runtime.objects.resolve(asset, ref);
-      if (object.entry.className !== 'State') return null;   // the class itself: the actor has no state
+      if (entryOf(object).className !== 'State') return null;   // the class itself: the actor has no state
       await runtime.prepareState(object.asset, object.index);
       return runtime.states.get(object.key) ?? null;
     };
@@ -1958,7 +1958,7 @@ export async function createScriptDoors({
   async function restoreScriptObjects() {
     const flagObjects = [];
     for (const identity of restoredObjects) {
-      const entry = asset.pkg.exports[identity.index - 1];
+      const entry = exportAt(asset.pkg, identity.index);
       const cls = await runtime.loadClass(asset, entry.classIndex);
       const key = cls.record.key, history = key === 'consys.conhistory' || key === 'consys.conhistoryevent';
       if (!history && !isSavedFlag(key) && !PLAIN_SAVED_OBJECTS.has(key) && !(key in NATIVE_SAVED_OBJECTS))
@@ -2026,7 +2026,7 @@ export async function createScriptDoors({
     if (!selectedMover(mover,level)) throw new Error(`Mover is marked supported outside the selected TriggerToggle subset: ${mover?.name ?? '<unnamed>'}`);
     const state = mover.interpolation;
     if (!state) throw new Error(`Doors.reset() must create interpolation state before attaching ${mover.name}`);
-    const entry=asset?.pkg.exports[mover.index-1];
+    const entry=exportAt(asset?.pkg, mover.index);
     const moverClass=entry?await runtime.loadClass(asset,entry.classIndex):null;
     let descends=false;
     for(let cls=moverClass;cls;cls=cls.base)if(cls.record===deusExMoverClass.record){descends=true;break;}

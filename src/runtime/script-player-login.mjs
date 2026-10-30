@@ -1,3 +1,4 @@
+import { exportAt } from '../unreal/objects.mjs';
 /** Standalone ULevel::SpawnPlayActor (Engine.dll 0x10396bd0).
  * A cold direct entry has empty URL.Op/Portal and no travel data. A map entered by travel passes the `arrival` of the
  * travel step (travel.mjs: the URL's portal and options, TravelInfo), and `importer` (travel-import.mjs) applies the
@@ -19,7 +20,7 @@ export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewpor
     const packageName=path.slice(0,dot);
     if(!assets.files.has(packageName.toLowerCase()))continue;
     const asset=await assets.get(packageName),index=asset.exportsByPath.get(path.slice(dot+1).toLowerCase());
-    if(!index||asset.pkg.exports[index-1].className!=='Class')continue;
+    if(!index||exportAt(asset.pkg, index).className!=='Class')continue;
     const cls=await runtime.loadClass(asset,index);
     for(let ancestor=cls;ancestor;ancestor=ancestor.base)
       if(ancestor.record.key==='engine.playerpawn'){spawnClass=cls;break;}

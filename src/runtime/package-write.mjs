@@ -14,6 +14,7 @@
  * The exports are serialized twice. The first pass (`collect`) only learns which names and imports the payloads use; the second writes the bytes with
  * the final indices. A payload writer is therefore a pure function of the context `{nameIndex, objectRef}` it is given. */
 import { ByteWriter } from './byte-writer.mjs';
+import { exportAt, importAt } from '../unreal/objects.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 export const PACKAGE_VERSION = 68;
@@ -66,12 +67,12 @@ export class PackageTables {
   }
   /** The import key of export `index` of `asset` (a package asset: name, pkg), with its outer chain. */
   resourceKey(asset, index) {
-    const entry = asset.pkg.exports[index - 1];
+    const entry = exportAt(asset.pkg, index);
     if (!entry) throw new Error(`No export ${index} in ${asset.name}`);
     const outerKey = entry.outer === 0 ? this.packageKey(asset) : this.resourceKey(asset, entry.outer);
     // class index 0 is Core.Class itself (a class export: the package writer leaves its class implicit)
     if (entry.classIndex === 0) return this.importEntry({ classPackage: 'Core', className: 'Class', outerKey, name: entry.name });
-    const classEntry = entry.classIndex < 0 ? asset.pkg.imports[-entry.classIndex - 1] : asset.pkg.exports[entry.classIndex - 1];
+    const classEntry = entry.classIndex < 0 ? importAt(asset.pkg, entry.classIndex) : exportAt(asset.pkg, entry.classIndex);
     if (!classEntry) throw new Error(`${asset.name}.${entry.path}: no class entry`);
     const classPackage = entry.classIndex < 0 ? classEntry.path.split('.')[0] : asset.name;
     return this.importEntry({ classPackage, className: classEntry.name, outerKey, name: entry.name });
@@ -90,7 +91,7 @@ export class PackageTables {
 
 const importKey = (classPackage, className, outerKey, name) => lower(`${classPackage}.${className}:${outerKey}:${name}`);
 function importKeyOfIndex(pkg, ref) {
-  const entry = pkg.imports[-ref - 1];
+  const entry = importAt(pkg, ref);
   return importKey(entry.classPackage, entry.className, entry.outer ? importKeyOfIndex(pkg, entry.outer) : '', entry.name);
 }
 

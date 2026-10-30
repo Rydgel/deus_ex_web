@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {readClass} from '../src/unreal/classes.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {Reader} from '../src/unreal/package.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
@@ -53,7 +53,7 @@ console.log(`Original DeusEx defaults: ${defaults} formerly opaque struct entrie
 
 const mapAsset=await assets.get('00_Training'),map=decodeMap(mapAsset.bytes);
 const actor=map.actors.find(a=>a.name==='UNATCOTroop2'),actors=new Map(map.actors.map(a=>[a.index,a]));
-const cls=await runtime.loadClass(mapAsset,mapAsset.pkg.exports[actor.index-1].classIndex);
+const cls=await runtime.loadClass(mapAsset,exportAt(mapAsset.pkg, actor.index).classIndex);
 const initial=await prepareMapProperties(runtime,mapAsset,actor,cls,actors);
 const inventoryField=runtime.lookupMember(cls,'fields','InitialInventory'),values=initial(inventoryField);
 const raw=readObject(mapAsset.pkg,mapAsset.bytes,actor.index).properties.find(p=>p.name==='InitialInventory'&&p.arrayIndex===0);

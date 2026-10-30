@@ -5,6 +5,9 @@ import {
 } from './script-static-load-object.mjs';
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
+import { importAt, exportAt, entryOf } from '../unreal/objects.mjs';
+import { ExportTable } from '../unreal/package-tables.mjs';
+import { LowerNameTable } from './lower-name-table.mjs';
 
 // The live DataLink capture reaches this package export before an
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
@@ -93,7 +96,8 @@ export class PreparedDynamicLoadGraph{
     if(onEvent!==null&&typeof onEvent!=='function')
       throw new TypeError('Prepared DynamicLoadObject onEvent must be a function');
     this.objects=objects;this.resources=resources;this.onEvent=onEvent;
-    this.names=new Map();this.nextName=0x400;
+    // the process's FName numbers this graph hands out, from 0x400, one for each name up to its case (lower-name-table.mjs)
+    this.names=new LowerNameTable(0x400);
     this.linkers=[];this.linkerByPackage=new Map();this.firstLoadPackages=new Map();
     this.prepared=new Map();
     this.loadState={nest:0,registrationQueueHead:null,loadedMax:0,loaderCleanupState:0};
@@ -101,12 +105,11 @@ export class PreparedDynamicLoadGraph{
   }
 
   nameIndex(value,{find=false}={}){
-    const text=String(value??''),key=text.toLowerCase();
-    if(!this.names.has(key)){
-      if(find)fail(`StaticLoadObject FName is absent: ${text}`,'DYNAMIC_LOAD_OBJECT_FNAME',{value:text});
-      this.names.set(key,this.nextName++);
-    }
-    return this.names.get(key);
+    const text=String(value??'');
+    const found=this.names.find(text);
+    if(found>=0)return found;
+    if(find)fail(`StaticLoadObject FName is absent: ${text}`,'DYNAMIC_LOAD_OBJECT_FNAME',{value:text});
+    return this.names.add(text);
   }
 
   async prepare(object,resource){
@@ -187,18 +190,18 @@ export class PreparedDynamicLoadGraph{
     // so the export hash and later FName(text,1) share one identity.
     this.nameIndex(asset.name);
     for(const entry of asset.pkg.imports)this.nameIndex(entry.name);
-    const entries=asset.pkg.exports,names=new Int32Array(entries.length);
-    for(let index=0;index<entries.length;index++)names[index]=this.nameIndex(entries[index].name);
+    const entries=Array.isArray(asset.pkg.exports)?ExportTable.fromObjects(asset.pkg.exports):asset.pkg.exports,names=new Int32Array(entries.length);
+    for(let index=0;index<entries.length;index++)names[index]=this.nameIndex(entries.text(index));
 
     // The package's own export entries stay the package's; the table keeps this linker's names, objects and hash chain
     // (docs/live-heap.md "Steps 2 and 3's results").
     const table=linker.exports=new LinkerExports(entries,names,DynamicExportRecord);
     for(let index=0;index<entries.length;index++)
-      table.objects[index]=this.objects.lookup(`${asset.name}.${entries[index].path}`.toLowerCase())??null;
+      table.objects[index]=this.objects.lookup(`${asset.name}.${entries.path(index)}`.toLowerCase())??null;
     // FindExportIndex's recovered hash depends on the referenced class FName
     // pair and object FName. Link each serialized export into that exact bucket.
     for(let index=0;index<entries.length;index++){
-      const identity=this.exportClassIdentity(linker,entries[index].classIndex);
+      const identity=this.exportClassIdentity(linker,entries.classIndexes[index]);
       if(identity===null)continue;
       const normalizedOuter=identity.outer===0x18?0x17:identity.outer;
       const bucket=(identity.name*7+normalizedOuter*31+names[index])&0xff;
@@ -223,14 +226,14 @@ export class PreparedDynamicLoadGraph{
 
   exportClassIdentity(linker,classIndex){
     if(classIndex<0){
-      const entry=linker.asset.pkg.imports[-classIndex-1];
+      const entry=importAt(linker.asset.pkg, classIndex);
       if(!entry||entry.outer>=0)return null;
-      const outer=linker.asset.pkg.imports[-entry.outer-1];
+      const outer=importAt(linker.asset.pkg, entry.outer);
       if(!outer)return null;
       return {name:this.nameIndex(entry.name),outer:this.nameIndex(outer.name)};
     }
     if(classIndex>0){
-      const entry=linker.asset.pkg.exports[classIndex-1];
+      const entry=exportAt(linker.asset.pkg, classIndex);
       return entry?{name:this.nameIndex(entry.name),outer:this.nameIndex(linker.asset.name)}:null;
     }
     return {name:0x29b,outer:0x14};
@@ -248,7 +251,7 @@ export class PreparedDynamicLoadGraph{
     if(field==='outer'){
       const resource=this.resourceFor(object);
       if(resource)return resource.outer;
-      if(object?.asset&&object?.entry?.outer===0)
+      if(object?.asset&&entryOf(object)?.outer===0)
         return this.resources.packages.get(object.asset.name.toLowerCase())??undefined;
     }
     return undefined;
@@ -284,7 +287,7 @@ export class PreparedDynamicLoadGraph{
 
   readImportWord(linker,byteOffset){
     const index=Math.floor(byteOffset/0x1c),field=byteOffset%0x1c;
-    const entry=linker.asset.pkg.imports[index];
+    const entry=linker.asset.pkg.imports.at(index);
     if(!entry)fail(`DynamicLoadObject linker import ${index} is absent`,
       'DYNAMIC_LOAD_OBJECT_IMPORT',{index,byteOffset});
     if(field===8)return entry.outer;

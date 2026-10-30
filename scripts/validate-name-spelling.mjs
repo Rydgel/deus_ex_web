@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { prepareMapProperties } from '../src/runtime/script-map-properties.mjs';
 import { BOOT_SCRIPT_PACKAGES } from '../src/unreal/name-spelling.mjs';
@@ -51,7 +51,7 @@ function conName(conText, conversation) {
 /** The DataLinkTrigger whose datalinkTag is the conversation's. */
 function dataLinkTag(asset, conversation) {
   for (const [path, index] of asset.exportsByPath) {
-    if (asset.pkg.exports[index - 1].className !== 'DataLinkTrigger') continue;
+    if (exportAt(asset.pkg, index).className !== 'DataLinkTrigger') continue;
     const tag = readObject(asset.pkg, asset.bytes, index).properties.find(p => p.name.toLowerCase() === 'datalinktag')?.value;
     if (typeof tag === 'string' && tag.toLowerCase() === conversation.toLowerCase()) return tag;
   }

@@ -12,6 +12,7 @@ import {parsePackage} from '../src/unreal/package.mjs';
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../src/runtime/lodmesh-frame.mjs';
 import {floatBits,lodMeshTanArgument,lodMeshTanFactor,lodMeshTopology,selectLodMesh,RENDER_LOD_SETTINGS} from '../src/runtime/lodmesh-lod.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 export const LOD_MESHES=[
   ['DeusExCharacters','GM_Trench'],['DeusExCharacters','GFM_Trench'],['DeusExCharacters','GM_Jumpsuit'],
@@ -117,7 +118,7 @@ export async function meshOracleSpec(root,pack,exportIndex,cases,{seed=0x5eed100
   }
   const scalars={};
   for(let offset=0x180;offset<=0x19c;offset+=4)scalars[offset]=mesh.scalarBits.get(offset)>>>0;
-  return {mesh,topology,spec:{name:`${pack}.${pkg.exports[exportIndex-1].name}`,arrays,scalars,frameVerts:mesh.frameVertexCount,
+  return {mesh,topology,spec:{name:`${pack}.${exportAt(pkg, exportIndex).name}`,arrays,scalars,frameVerts:mesh.frameVertexCount,
     vertices:Buffer.from(frameBuffer(mesh,seed)).toString('base64'),cases}};
 }
 

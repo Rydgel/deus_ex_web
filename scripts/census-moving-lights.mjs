@@ -28,6 +28,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { ClassDefaults, readClass } from '../src/unreal/classes.mjs';
 import { isMovingLightCandidate, surfaceLightClass } from '../src/runtime/dynamic-lighting.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const argv = process.argv.slice(2);
 const option = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
@@ -62,7 +63,7 @@ for (const name of packages) {
   // the text as an FString (compact length with its terminator, Latin-1).
   for (const entry of asset.pkg.exports) {
     if (entry.className !== 'TextBuffer' || entry.name !== 'ScriptText' || !entry.serialSize) continue;
-    const outer = entry.outer > 0 ? asset.pkg.exports[entry.outer - 1]?.name : null;
+    const outer = entry.outer > 0 ? exportAt(asset.pkg, entry.outer)?.name : null;
     if (!outer) continue;
     const bytes = asset.bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize);
     let at = 0;
@@ -71,7 +72,7 @@ for (const name of packages) {
       if (b0 & 0x40) for (let shift = 6, b; ; shift += 7) { b = bytes[at++]; value |= (b & 0x7f) << shift; if (!(b & 0x80)) break; }
       return b0 & 0x80 ? -value : value;
     };
-    if (asset.pkg.names[compact()]?.name !== 'None') continue;
+    if (asset.pkg.names.at(compact())?.name !== 'None') continue;
     at += 8;
     const length = compact();
     if (length <= 0) continue;
@@ -137,7 +138,7 @@ for (const map of maps) {
   }
   for (const actor of decoded.actors) {
     let values, lineage;
-    try { values = await defaults.forActor(asset, actor); lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex); }
+    try { values = await defaults.forActor(asset, actor); lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex); }
     catch { continue; }
     const className = lineage[0], scripted = writers.some(w => w.class === className && w.target === 'self');
     if (!values.LightType && !scripted) continue;

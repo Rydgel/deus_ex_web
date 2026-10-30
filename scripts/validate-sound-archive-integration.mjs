@@ -9,14 +9,15 @@ import {createLinkerLoadArchive,attachLinkerLazyLoader,detachLinkerLazyLoader} f
 import {loadLazyByteArray} from '../src/runtime/script-lazy-byte-array.mjs';
 import {loadSoundDataNative} from '../src/runtime/script-sound-load.mjs';
 import {getPeriod} from '../src/runtime/script-sound-period.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root=gameDirectory(),filename=root+'/System/DeusExSounds.u';
 const assets=new AssetStore([{path:filename,read:()=>readFile(filename)}]);
 const asset=await assets.get('DeusExSounds');
-const entry=asset.pkg.exports[asset.exportsByPath.get('special.switch4clickon')-1];
+const entry=exportAt(asset.pkg, asset.exportsByPath.get('special.switch4clickon'));
 const reader=new Reader(asset.bytes);reader.offset=entry.serialOffset;
-assert.equal(asset.pkg.names[reader.compact()].name,'None');
-assert.equal(asset.pkg.names[reader.compact()].name,'wav');
+assert.equal(asset.pkg.names.at(reader.compact()).name,'None');
+assert.equal(asset.pkg.names.at(reader.compact()).name,'wav');
 const helperStart=reader.offset;
 const freed=[];
 const realloc=(array,size)=>{

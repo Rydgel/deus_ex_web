@@ -15,6 +15,7 @@ import {serializeSoundHelperLifecycle,serializeSoundByteArray,destroySoundDataLi
 import {createLinkerLoadArchive,attachLinkerLazyLoader,detachLinkerLazyLoader} from '../src/runtime/script-linker-lazy-loader.mjs';
 import {loadSoundDataSpecial} from '../src/runtime/script-sound-load.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root=gameDirectory();
 const assets=new AssetStore((await readdir(path.join(root,'System'))).map(name=>({
@@ -24,7 +25,7 @@ const runtime=new ScriptRuntime(assets);
 const context=await assets.get('DeusExConText'),audio=await assets.get('DeusExConAudioMission00');
 const conversation=await runtime.prepareObject(await runtime.objects.resolve(context,1926));
 assert.equal(runtime.namedReference(conversation,'conName').get(),'DL_Start');
-const index=audio.exportsByPath.get('conaudiomission00_79'),entry=audio.pkg.exports[index-1];
+const index=audio.exportsByPath.get('conaudiomission00_79'),entry=exportAt(audio.pkg, index);
 assert.equal(index,81);
 // USound is a native-only class, so use the canonical resource graph rather
 // than asking the script-class loader to invent an Engine.u Sound export.
@@ -36,8 +37,8 @@ const classOuter=await runtime.resources.package(soundClass.packageName);
 const read=(object,key)=>runtime.instances.has(object)?runtime.namedReference(object,key).get():object[key];
 const write=(object,key,value)=>{object[key]=value;};
 const reader=new Reader(audio.bytes);reader.offset=entry.serialOffset;
-assert.equal(audio.pkg.names[reader.compact()].name,'None');
-assert.equal(audio.pkg.names[reader.compact()].name,'mp3');
+assert.equal(audio.pkg.names.at(reader.compact()).name,'None');
+assert.equal(audio.pkg.names.at(reader.compact()).name,'mp3');
 const freed=[];
 const realloc=(array,size)=>{
   if(array.max===0){if(array.data)freed.push(array.data);array.data=null;return;}
@@ -97,7 +98,7 @@ const loadServices={loadState,loadedObjects,loaders:[linker],
   readExport:(candidate,number)=>{assert.equal(candidate,linker);assert.equal(number,index-1);return exportRecord;},
   readImportWord:(candidate,offset)=>{
     assert.equal(candidate,linker);
-    const record=audio.pkg.imports[Math.floor(offset/0x1c)];assert.ok(record);
+    const record=audio.pkg.imports.at(Math.floor(offset/0x1c));assert.ok(record);
     if(offset%0x1c===8)return record.outer;
     assert.equal(offset%0x1c,12);return nameIndex(record.name);
   },

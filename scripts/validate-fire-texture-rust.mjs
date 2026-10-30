@@ -223,8 +223,8 @@ if (option('no-all', null) === null && !process.argv.includes('--no-all')) {
   for (const name of ['Effects', 'BobPage', 'OceanLab']) {
     const asset = await assets.get(name);
     for (let i = 0; i < asset.pkg.exports.length; i++)
-      if (['FireTexture', 'WetTexture'].includes(asset.pkg.exports[i].className))
-        entries.push({key: `${asset.name}.${asset.pkg.exports[i].path}`, data: await textures.get(asset, i + 1, false)});
+      if (['FireTexture', 'WetTexture'].includes(asset.pkg.exports.at(i).className))
+        entries.push({key: `${asset.name}.${asset.pkg.exports.at(i).path}`, data: await textures.get(asset, i + 1, false)});
   }
   differential('all packages', entries);
   if (bench) benchmark('all packages', entries.filter(e => !allKeys.has(e.key)));

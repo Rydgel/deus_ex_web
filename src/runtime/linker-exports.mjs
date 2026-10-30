@@ -9,18 +9,20 @@
  *
  * Fixtures and validators hand the same functions plain arrays of records; the `export*` helpers read both.
  */
+import { ExportTable } from '../unreal/package-tables.mjs';
+
 class ExportRecord {
   constructor(table, index) {
     this.table = table;
     this.index = index;
   }
-  get classIndex() { return this.table.entries[this.index].classIndex; }
-  get superIndex() { return this.table.entries[this.index].superIndex; }
-  get packageIndex() { return this.table.entries[this.index].outer; }
+  get classIndex() { return this.table.entries.classIndexes[this.index]; }
+  get superIndex() { return this.table.entries.superIndexes[this.index]; }
+  get packageIndex() { return this.table.entries.outers[this.index]; }
   get objectName() { return this.table.names[this.index]; }
-  get objectFlags() { return this.table.entries[this.index].flags; }
-  get serialSize() { return this.table.entries[this.index].serialSize; }
-  get serialOffset() { return this.table.entries[this.index].serialOffset; }
+  get objectFlags() { return this.table.entries.flagWords[this.index]; }
+  get serialSize() { return this.table.entries.serialSizes[this.index]; }
+  get serialOffset() { return this.table.entries.serialOffset(this.index); }
   get object() { return this.table.objects[this.index]; }
   set object(value) { this.table.objects[this.index] = value; }
   get hashNext() { return this.table.hashNexts[this.index]; }
@@ -33,8 +35,8 @@ export class DynamicExportRecord {
     this.table = table;
     this.index = index;
   }
-  get classIndex() { return this.table.entries[this.index].classIndex; }
-  get outerIndex() { return this.table.entries[this.index].outer; }
+  get classIndex() { return this.table.entries.classIndexes[this.index]; }
+  get outerIndex() { return this.table.entries.outers[this.index]; }
   get nameIndex() { return this.table.names[this.index]; }
   get object() { return this.table.objects[this.index]; }
   set object(value) { this.table.objects[this.index] = value; }
@@ -43,9 +45,11 @@ export class DynamicExportRecord {
 }
 
 export class LinkerExports {
-  /** `entries`: the package's parsed exports; `names`: an Int32Array of each export's process-wide FName index. */
+  /** `entries`: the package's parsed exports (an ExportTable; a fixture's plain array of records becomes one); `names`: an Int32Array of
+   * each export's process-wide FName index. */
   constructor(entries, names, View = ExportRecord) {
-    this.entries = entries;
+    this.entries = Array.isArray(entries) ? ExportTable.fromObjects(entries) : entries;
+    entries = this.entries;
     this.names = names;
     this.View = View;
     this.objects = new Array(entries.length).fill(null);
@@ -53,10 +57,10 @@ export class LinkerExports {
     this.length = entries.length;
   }
 
-  classIndex(index) { return this.entries[index].classIndex; }
-  packageIndex(index) { return this.entries[index].outer; }
+  classIndex(index) { return this.entries.classIndexes[index]; }
+  packageIndex(index) { return this.entries.outers[index]; }
   objectName(index) { return this.names[index]; }
-  objectFlags(index) { return this.entries[index].flags; }
+  objectFlags(index) { return this.entries.flagWords[index]; }
   object(index) { return this.objects[index]; }
   setObject(index, value) { this.objects[index] = value; }
   hashNext(index) { return this.hashNexts[index]; }

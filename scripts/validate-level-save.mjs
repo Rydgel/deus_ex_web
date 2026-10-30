@@ -18,6 +18,7 @@ import { transcodeModel, transcodePolys, transcodeProperties } from '../src/runt
 import { decodeAiEvents, parseAiWords, encodeAiEvents } from '../src/runtime/ai-events-payload.mjs';
 import { PackageTables, buildPackage } from '../src/runtime/package-write.mjs';
 import { ByteWriter } from '../src/runtime/byte-writer.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const work = new URL('../.work/', import.meta.url).pathname;
 const captures = `${work}travel/`;
@@ -79,8 +80,8 @@ for (const path of candidates) {
     // positions: each object's export index, in the order decodeAiEvents lists them
     const positions = { manager: managerIndex, types: types.map(t => t.index), senders: senders.map(s => s.index), receivers: receivers.map(r => r.index) };
     const levelPosition = pkg.exports.findIndex(entry => entry.className === 'Level') + 1;
-    const writers = encodeAiEvents(parsed, positions, levelPosition, { nameIndex, spelling: id => pkg.names[id].name, actorRef: word => word });
-    const written = (index, write) => { const w = new ByteWriter(256); write(w); check(equal(w.finish(), data(pkg.exports[index - 1])), `${label}: ${pkg.exports[index - 1].className} ${pkg.exports[index - 1].name} (${index}) does not write back to its bytes`); aiObjects++; };
+    const writers = encodeAiEvents(parsed, positions, levelPosition, { nameIndex, spelling: id => pkg.names.at(id).name, actorRef: word => word });
+    const written = (index, write) => { const w = new ByteWriter(256); write(w); check(equal(w.finish(), data(exportAt(pkg, index))), `${label}: ${exportAt(pkg, index).className} ${exportAt(pkg, index).name} (${index}) does not write back to its bytes`); aiObjects++; };
     written(managerIndex, writers.manager);
     types.forEach((t, i) => written(t.index, writers.types[i]));
     senders.forEach((s, i) => written(s.index, writers.senders[i]));

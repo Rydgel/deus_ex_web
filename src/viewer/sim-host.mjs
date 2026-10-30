@@ -42,6 +42,7 @@ import { readTexture } from '../unreal/textures.mjs';
 import { detailTable, detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
 import { createDetailDraw } from '../runtime/detail-draw.mjs';
 import { warmAllocationSites } from '../runtime/allocation-site-warmup.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 // The handle limit when each host started (script-object-handles.mjs): a
 // host's identities are the handles from its start to the next host's.
@@ -71,7 +72,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     loadMark('scene');
   }
   const runtime = game.doors.scriptRuntime.runtime, player = () => game.player.collisionActor;
-  const exportName = ref => asset.pkg.exports[ref - 1]?.name;
+  const exportName = ref => exportAt(asset.pkg, ref)?.name;
   let meshLighting = null, actorSim = null;
   // The BSP occlusion and brush tracker of the current level (buildOcclusion).
   let occlusionNow = null;

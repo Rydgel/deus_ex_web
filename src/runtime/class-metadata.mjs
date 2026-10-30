@@ -1,4 +1,5 @@
 import {readClass} from '../unreal/classes.mjs';
+import {exportAt} from '../unreal/objects.mjs';
 
 /** A linked class's `metadata`: the fields the simulation reads, and the rest of the class export's source on demand.
  *
@@ -15,7 +16,6 @@ const SOURCE_KEYS = ['base', 'next', 'scriptText', 'children', 'friendlyName', '
 
 export class ClassMetadata {
   constructor(asset, index, source, overrides) {
-    this.entry = source.entry;
     this.classFlags = overrides.classFlags;
     this.probeMask = overrides.probeMask;
     this.ignoreMask = overrides.ignoreMask;
@@ -26,9 +26,18 @@ export class ClassMetadata {
     this.sourceIndex = index;
     this.sourceDecoded = null;
   }
+  /** The class export's entry in the package tables, made when read (package-tables.mjs). */
+  get entry() { return exportAt(this.sourceAsset.pkg, this.sourceIndex); }
   /** What `readClass` returns for this export, decoded on the first use of a key held back. */
   source() { return this.sourceDecoded ??= readClass(this.sourceAsset, this.sourceIndex); }
 }
+
+// a write to `entry` makes it an own property, as an assignment to the old plain object did
+Object.defineProperty(ClassMetadata.prototype, 'entry', {
+  get: Object.getOwnPropertyDescriptor(ClassMetadata.prototype, 'entry').get,
+  set(value) { Object.defineProperty(this, 'entry', {value, writable: true, enumerable: true, configurable: true}); },
+  enumerable: false, configurable: true,
+});
 
 for (const key of SOURCE_KEYS) {
   Object.defineProperty(ClassMetadata.prototype, key, {

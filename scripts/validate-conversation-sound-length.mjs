@@ -4,7 +4,7 @@ import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
 import {loadSoundDataSpecial} from '../src/runtime/script-sound-load.mjs';
 import {CONVERSATION_BITRATES, conversationSoundLength, conversationSpeechLength}
@@ -17,7 +17,7 @@ const assets=new AssetStore((await readdir(path.join(root,'System'))).map(name=>
   path:`System/${name}`,read:()=>readFile(path.join(root,'System',name)),
 })));
 const asset=await assets.get('DeusExSounds');
-const entry=asset.pkg.exports[asset.exportsByPath.get('special.switch4clickon')-1];
+const entry=exportAt(asset.pkg, asset.exportsByPath.get('special.switch4clickon'));
 const wave=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry}).bytes;
 // DL_Start's first speech selects this original Mission00 audio export. Its
 // compressed bytes go to native timing directly; no WAV decoder is substituted.
@@ -30,7 +30,7 @@ const originalEvent=readObject(conversationAsset.pkg,conversationAsset.bytes,ori
 assert.equal(originalEvent.ConSpeech,32839);
 assert.equal(readObject(conversationAsset.pkg,conversationAsset.bytes,originalEvent.ConSpeech).values.soundID,79);
 const speechAsset=await assets.get('DeusExConAudioMission00');
-const speechEntry=speechAsset.pkg.exports[speechAsset.exportsByPath.get('conaudiomission00_79')-1];
+const speechEntry=exportAt(speechAsset.pkg, speechAsset.exportsByPath.get('conaudiomission00_79'));
 assert.equal(speechEntry.serialOffset,4109855);
 assert.equal(speechEntry.serialSize,43065);
 const speechHeader=decodeSoundResource({pkg:speechAsset.pkg,bytes:speechAsset.bytes,entry:speechEntry});

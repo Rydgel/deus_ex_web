@@ -20,6 +20,7 @@ import {existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync} 
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import { debugUrl } from './page-url.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, '.work/acceptance');
@@ -53,7 +54,7 @@ async function mapPawns(mapName) {
   for (const d of ['Maps', 'System']) for (const n of await readdir(path.join(game, d))) files.push({path: `${d}/${n}`, read: () => readFile(path.join(game, d, n))});
   const assets = new AssetStore(files), defaults = new ClassDefaults(assets), asset = await assets.get(mapName), out = [];
   for (const actor of decodeMap(asset.bytes).actors) {
-    let lineage; try { lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex); } catch { continue; }
+    let lineage; try { lineage = await defaults.lineage(asset, exportAt(asset.pkg, actor.index).classIndex); } catch { continue; }
     if ((lineage.includes('engine.pawn') && !lineage.includes('engine.playerpawn')) || lineage.includes('engine.carcass'))
       out.push({name: actor.name, className: actor.className});
   }

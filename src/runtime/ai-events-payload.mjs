@@ -18,6 +18,7 @@
  * AIProcess stores the sender's Actor, so the file's `bestSender` object is an actor export). This module converts between the
  * two. Every layout above was recovered from the instructions and confirmed against the 296 + 54 + 9 event objects of a saved Island. */
 import { Reader } from '../unreal/package.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 
 const SETTINGS_WORDS = 16 * 4 + 4;
 
@@ -31,13 +32,13 @@ const SETTINGS_WORDS = 16 * 4 + 4;
  */
 export function decodeAiEvents(pkg, bytes, managerIndex, { nameId, actorWord }) {
   const reader = index => {
-    const entry = pkg.exports[index - 1];
+    const entry = exportAt(pkg, index);
     if (!entry) throw new Error(`Saved AI event reference ${index} is not an export`);
     const r = new Reader(bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize));
-    if (pkg.names[r.compact()].name !== 'None') throw new Error(`${entry.name}: expected an empty property list`);
+    if (pkg.names.at(r.compact()).name !== 'None') throw new Error(`${entry.name}: expected an empty property list`);
     return { r, entry };
   };
-  const nameText = r => pkg.names[r.compact()].name;
+  const nameText = r => pkg.names.at(r.compact()).name;
   const float = r => r.u32();
   // the manager
   const { r: m } = reader(managerIndex);

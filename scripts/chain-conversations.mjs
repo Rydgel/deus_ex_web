@@ -6,6 +6,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { normalizeTravelText } from '../src/runtime/travel-text.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 let cached = null;
 const squash = text => String(text).replace(/\s+/g, ' ').trim();
@@ -18,7 +19,7 @@ export async function randomSpeechSets() {
   const { readObject } = await import('../src/unreal/objects.mjs');
   const ctx = await assets.get('DeusExConText');
   const values = i => Object.fromEntries(Object.entries(readObject(ctx.pkg, ctx.bytes, i).values).map(([k, x]) => [k.toLowerCase(), x]));
-  const className = i => ctx.pkg.exports[i - 1].className.replace(/^ConEvent/, '');
+  const className = i => exportAt(ctx.pkg, i).className.replace(/^ConEvent/, '');
   const sets = [];
   for (const [path, ref] of ctx.exportsByPath) {
     if (!/^conlist_mission/.test(path)) continue;

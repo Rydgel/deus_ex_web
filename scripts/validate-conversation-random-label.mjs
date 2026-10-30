@@ -32,7 +32,7 @@ assert.ok(rlIndex >= 0, 'ConEventRandomLabel3 export present');
 const stored = readObject(conP, conText.bytes, rlIndex + 1);
 const labels = decodeRandomLabelLabels(stored.reader, conP.version);
 assert.deepEqual(labels, ['A1', 'A2', 'A3', 'A4', 'A5'], 'MunitionsTrooperFrob random labels decode');
-assert.equal(stored.reader.offset, conP.exports[rlIndex].serialSize, 'labels payload consumes the whole export');
+assert.equal(stored.reader.offset, conP.exports.at(rlIndex).serialSize, 'labels payload consumes the whole export');
 
 // --- 2. GetLabelCount / GetLabel edges --------------------------------------
 assert.equal(getLabelCount(labels), 5);

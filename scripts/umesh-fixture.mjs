@@ -7,7 +7,7 @@
  * ones. */
 import {readFile} from 'node:fs/promises';
 import {parsePackage} from '../src/unreal/package.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 
 /** The five classic meshes: [package, export (1-based), name]. */
@@ -31,7 +31,7 @@ export function compact(value) {
 
 /** One classic mesh as a native-oracle case: its package, bytes, export index, decoded payload and `spec.mesh`. */
 export async function classicMeshCase(root, packageName, index) {
-  const bytes = await readFile(`${root}/System/${packageName}.u`), pkg = parsePackage(bytes), entry = pkg.exports[index - 1];
+  const bytes = await readFile(`${root}/System/${packageName}.u`), pkg = parsePackage(bytes), entry = exportAt(pkg, index);
   return {pkg, bytes, index, entry, spec: meshSpec(pkg, bytes, index, entry)};
 }
 function meshSpec(pkg, bytes, index, entry, payload = bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize)) {
@@ -99,10 +99,9 @@ export async function syntheticMeshCase(root, {frames = 8, sequences, seed = 1} 
   const floats = m.arrays.get(0xe4);
   push(compact(floats.num), Buffer.from(floats.data));
   const payload = Buffer.concat(parts);
-  const entry = {...base.entry, serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + payload.length);
+  const entry = {...base.entry.toObject(), serialSize: payload.length}, bytes = Buffer.alloc(entry.serialOffset + payload.length);
   payload.copy(bytes, entry.serialOffset);
-  const pkg = {...base.pkg, exports: base.pkg.exports.slice()};
-  pkg.exports[base.index - 1] = entry;
+  const pkg = {...base.pkg, exports: base.pkg.exports.with(base.index - 1, {serialSize: payload.length})};
   // readObject parses the tagged-property prefix from the package bytes, so the synthetic entry reads its own.
   return {pkg, bytes, index: base.index, entry, names, synthetic: true,
     spec: {...meshSpec(pkg, bytes, base.index, entry, payload), name: `Synthetic${frames}`}};

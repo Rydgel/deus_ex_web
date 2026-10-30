@@ -1,5 +1,5 @@
 import { PackageError, Reader } from './package.mjs';
-import { nameAt, objectAt } from './objects.mjs';
+import { nameAt, objectAt, exportAt } from './objects.mjs';
 import { skipBytecode } from './classes.mjs';
 
 /**
@@ -366,16 +366,15 @@ function readPropertyMetadataFull(asset, index) {
  * values the object had; a key a reader assigns (`arrayDim`, `flags`, `elementSize`, the struct and inner links...) is an own field,
  * and so is `unsupported` when the export has a reason. A copy with other values is `cloneMetadata`, since a spread does not take a
  * prototype's getters. */
-const PROPERTY_OWN_KEYS = ['asset', 'index', 'entry', 'superFieldRef', 'nextRef', 'arrayDim', 'arrayDimension', 'propertyFlags', 'flags',
+const PROPERTY_OWN_KEYS = ['asset', 'index', 'superFieldRef', 'nextRef', 'arrayDim', 'arrayDimension', 'propertyFlags', 'flags',
   'categoryIndex', 'replication', 'repOffset', 'type', 'elementSize'];
-const PROPERTY_DERIVED = ['pkg', 'className', 'path', 'name', 'flagBits', 'category', 'valueType', 'supported', 'defaultValue',
+const PROPERTY_DERIVED = ['pkg', 'entry', 'className', 'path', 'name', 'flagBits', 'category', 'valueType', 'supported', 'defaultValue',
   'defaultValueSupported', 'unsupported', 'parameter', 'out', 'return', 'optional', 'coerce', 'skip'];
 
 export class PropertyMetadata {
   constructor(full) {
     this.asset = full.asset;
     this.index = full.index;
-    this.entry = full.entry;
     this.superFieldRef = full.superFieldRef;
     this.nextRef = full.nextRef;
     this.arrayDim = full.arrayDim;
@@ -392,6 +391,8 @@ export class PropertyMetadata {
     if (full.unsupported !== null) this.unsupported = full.unsupported;
   }
   get pkg() { return this.asset.pkg; }
+  /** The export's entry in the package tables, made when read (package-tables.mjs): nothing keeps one for each property. */
+  get entry() { return exportAt(this.asset.pkg, this.index); }
   get className() { return this.entry.className; }
   get path() { return this.entry.path; }
   get name() { return this.entry.name; }
@@ -591,7 +592,6 @@ export class FunctionMetadata {
   constructor(full) {
     this.asset = full.asset;
     this.index = full.index;
-    this.entry = full.entry;
     this.name = full.name;
     this.size = full.size;
     this.functionFlags = full.functionFlags;
@@ -609,6 +609,7 @@ export class FunctionMetadata {
   /** Let go of the decoded full metadata (a prepared function keeps the fields above only). */
   compact() { this.sourceDecoded = null; }
   get pkg() { return this.asset.pkg; }
+  get entry() { return exportAt(this.asset.pkg, this.index); }
   get bytes() { return this.sourceDecoded !== null ? this.sourceDecoded.bytes : this.base.subarray(this.start, this.end); }
   get scriptBytes() { return this.sourceDecoded !== null ? this.sourceDecoded.scriptBytes : this.bytes; }
 }
@@ -621,7 +622,7 @@ for (const key of FUNCTION_SOURCE_KEYS) {
     enumerable: false, configurable: true,
   });
 }
-for (const key of ['pkg', 'bytes', 'scriptBytes']) {
+for (const key of ['pkg', 'entry', 'bytes', 'scriptBytes']) {
   const { get } = Object.getOwnPropertyDescriptor(FunctionMetadata.prototype, key);
   Object.defineProperty(FunctionMetadata.prototype, key, {
     get,

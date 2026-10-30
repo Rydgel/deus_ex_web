@@ -17,6 +17,7 @@ import {
   enableComputerWordWrapNative,
 } from '../src/runtime/script-window-computer.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { entryOf } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory();
 const system = path.join(root, 'System');
@@ -28,7 +29,7 @@ const computerClassIndex = extension.exportsByPath.get('computerwindow');
 assert.equal(computerClassIndex, COMPUTER_WINDOW_NATIVE.classPackageExport);
 const computerClass = readClass(extension, computerClassIndex);
 assert.equal(computerClass.classFlags, 0x112);
-assert.equal(computerClass.entry.superIndex, extension.exportsByPath.get('window'));
+assert.equal(entryOf(computerClass).superIndex, extension.exportsByPath.get('window'));
 
 const functions = [
   ['settextsize', COMPUTER_WINDOW_NATIVE.setTextSize, ['int', 'int']],
@@ -47,7 +48,7 @@ for (const [name, evidence, types] of functions) {
   assert.equal(index, evidence.packageExport, `${name} package export`);
   assert.equal(metadata.nativeIndex, evidence.nativeIndex, `${name} native index`);
   assert.equal(metadata.functionFlags, evidence.functionFlags, `${name} flags`);
-  assert.equal(metadata.entry.serialSize, evidence.serialSize, `${name} serial size`);
+  assert.equal(entryOf(metadata).serialSize, evidence.serialSize, `${name} serial size`);
   assert.deepEqual(metadata.parameters.map(parameter => parameter.type), types, `${name} parameters`);
 }
 

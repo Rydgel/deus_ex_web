@@ -13,7 +13,7 @@
  * recorded in docs/script-training-datalinks.md.
  */
 import { decodeMap } from '../unreal/map.mjs';
-import { readObject, objectAt } from '../unreal/objects.mjs';
+import { readObject, objectAt, exportAt } from '../unreal/objects.mjs';
 import { ClassDefaults } from '../unreal/classes.mjs';
 import { decodeSoundResource } from './script-sound-resource.mjs';
 import { conversationSoundLength } from './script-conversation-sound-length.mjs';
@@ -169,7 +169,7 @@ async function readSpeechAudio(audioAsset, speech, conversationName) {
   const soundName = `ConAudioMission00_${speech.soundId}`;
   const soundIndex = audioAsset.exportsByPath.get(lower(soundName));
   integer(soundIndex, `${conversationName} ${soundName} export`);
-  const entry = audioAsset.pkg.exports[soundIndex - 1];
+  const entry = exportAt(audioAsset.pkg, soundIndex);
   requireValue(entry?.className === 'Sound',
     `${conversationName} audio export ${soundIndex} is ${entry?.className ?? 'missing'}`);
   const decoded = decodeSoundResource({ pkg: audioAsset.pkg, bytes: audioAsset.bytes, entry });
@@ -370,7 +370,7 @@ async function readTrainingDataLinkCatalog(assets, { mapAsset, map }) {
       mapPackage: mapAsset.name,
       mapPath: mapAsset.path,
       conversationPackage: context.name,
-      conversationList: freeze({ exportIndex: listIndex, objectName: context.pkg.exports[listIndex - 1].path }),
+      conversationList: freeze({ exportIndex: listIndex, objectName: exportAt(context.pkg, listIndex).path }),
       audioPackage: audioAsset.name,
     }),
     counts: freeze({ missionConItems: dataLinks.length, trainingTriggers: routeList.length }),

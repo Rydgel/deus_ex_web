@@ -1,7 +1,8 @@
 import { parsePackage } from './package.mjs';
-import { objectAt } from './objects.mjs';
+import { objectAt, exportAt } from './objects.mjs';
 import { layerConfigFiles } from '../runtime/config-store.mjs';
 import { NameSpelling, BOOT_SCRIPT_PACKAGES } from './name-spelling.mjs';
+import { ExportPaths } from './export-paths.mjs';
 
 /** Lazy package loading shared by browser File objects and local Node tools. */
 export class AssetStore {
@@ -76,7 +77,7 @@ export class AssetStore {
         // a startup package's names are entered once, for the life of the store; a map's enter when its level begins (createGame: LoadMap) and DeusExConText's when a
         // level's start loads it (prepareConversations), not when this cache first parses them (name-spelling.mjs)
         if (BOOT_SCRIPT_PACKAGES.some(boot => boot.toLowerCase() === key)) this.nameSpelling.addBoot(pkg);
-        const exportsByPath = new Map(pkg.exports.map((e, i) => [e.path.toLowerCase(), i + 1]));
+        const exportsByPath = new ExportPaths(pkg.exports);
         return { name: file.name, path: file.path, bytes, pkg, exportsByPath };
       })();
       this.packages.set(key, pending);
@@ -129,5 +130,6 @@ export class AssetStore {
 function importedObject(target, entry) {
   const index = target.exportsByPath.get(entry.path.split('.').slice(1).join('.').toLowerCase());
   if (!index) throw new Error(`Missing object: ${entry.path}`);
-  return { asset: target, index: index | 0, entry: target.pkg.exports[index - 1], key: `${target.name}.${target.pkg.exports[index - 1].path}` };
+  const found = exportAt(target.pkg, index);
+  return { asset: target, index: index | 0, entry: found, key: `${target.name}.${found.path}` };
 }

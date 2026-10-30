@@ -22,7 +22,7 @@ import { openSession } from './census-stage5-session.mjs';
 import { createMenuDriver } from '../src/viewer/menu-driver.mjs';
 import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
 import { parsePackage } from '../src/unreal/package.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { parseSaveInfo } from '../src/runtime/save-info.mjs';
 import { hashScriptName } from '../src/runtime/script-names.mjs';
 
@@ -64,7 +64,7 @@ function readFlags(bytes) {
     if (!match) continue;
     const chain = [];
     for (let next = ref, guard = 0; next > 0 && guard < 1000; guard++) {
-      const entry = pkg.exports[next - 1], values = readObject(pkg, bytes, next).values;
+      const entry = exportAt(pkg, next), values = readObject(pkg, bytes, next).values;
       const valueKey = { FlagBool: 'bValue', FlagByte: 'byteValue', FlagInt: 'intValue', FlagFloat: 'floatValue', FlagName: 'nameValue' }[entry.className];
       chain.push({ class: entry.className, name: values.FlagName ?? values.flagName, hash: values.flagHash | 0, expiration: values.expiration | 0, value: valueKey ? values[valueKey] ?? null : null,
         outerIsBase: entry.outer === at + 1 });

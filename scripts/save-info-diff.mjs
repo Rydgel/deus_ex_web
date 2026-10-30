@@ -22,7 +22,7 @@ export function walkTags(bytes, start, names) {
   r.seek(start);
   const tags = [];
   for (;;) {
-    const name = names[r.compact()]?.name;
+    const name = names.at(r.compact())?.name;
     if (name === undefined || name === 'None') return { tags, end: r.offset };
     const info = r.u8(), type = info & 15, code = (info >> 4) & 7;
     if (type === 10) r.compact();

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { readClass } from '../src/unreal/classes.mjs';
-import { readObject } from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import { readFieldLinks, readPropertyMetadata } from '../src/unreal/script-metadata.mjs';
 import { ScriptRuntime } from '../src/runtime/script-runtime.mjs';
 import {
@@ -26,7 +26,7 @@ const [conSys, deusEx, conText] = await Promise.all([
 ]);
 
 assert.equal(createHash('sha256').update(conSys.bytes).digest('hex'), contract.packageSha256);
-const entry = conSys.pkg.exports[contract.classExport - 1];
+const entry = exportAt(conSys.pkg, contract.classExport);
 assert.equal(entry.path, 'ConEventTransferObject');
 assert.equal(entry.className, 'Class');
 assert.equal(entry.superIndex, 2);
@@ -52,7 +52,7 @@ for (const declaration of [
 
 const properties = [];
 for (let index = metadata.children; index; index = readFieldLinks(conSys, index).nextRef) {
-  const propertyEntry = conSys.pkg.exports[index - 1];
+  const propertyEntry = exportAt(conSys.pkg, index);
   if (!propertyEntry.className.endsWith('Property')) continue;
   const property = readPropertyMetadata(conSys, index);
   properties.push([index, propertyEntry.name, propertyEntry.className, property.arrayDim]);
@@ -176,7 +176,7 @@ assert.equal(utf16At(0x1001d360), contract.packageName);
 // are all DataVaultImage deliveries to JCDenton and have no fail label.
 const authored = [];
 for (let eventExport = 1; eventExport <= conText.pkg.exports.length; eventExport++) {
-  if (conText.pkg.exports[eventExport - 1].className !== 'ConEventTransferObject') continue;
+  if (exportAt(conText.pkg, eventExport).className !== 'ConEventTransferObject') continue;
   const event = readObject(conText.pkg, conText.bytes, eventExport).values;
   if (!Number.isInteger(event.Conversation) || event.Conversation <= 0) continue;
   const conversation = readObject(conText.pkg, conText.bytes, event.Conversation).values;

@@ -19,6 +19,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
@@ -45,7 +46,7 @@ const ref = (actor, name) => runtime.namedReference(actor, name);
 const distributorExport = mapAsset.pkg.exports.findIndex(entry =>
   entry.name === 'PickupDistributor0' && entry.className === 'PickupDistributor') + 1;
 assert.ok(distributorExport > 0, 'Training contains its original PickupDistributor0');
-const serializedMapActor = actor => Number.isInteger(actor.index) && mapAsset.pkg.exports[actor.index - 1]?.name === actor.name;
+const serializedMapActor = actor => Number.isInteger(actor.index) && exportAt(mapAsset.pkg, actor.index)?.name === actor.name;
 function startupDeletedChain({login}) {
   const seen = new Set(), signature = [];
   let distributors = 0;
@@ -90,7 +91,7 @@ assert.ok(slot > 0, 'the trigger occupies a live Level.Actors slot');
 
 // The map export supplies the Core UObject record this destruction walks.
 const nativeObject = runtime.instance(trigger).nativeObject;
-const exportEntry = mapAsset.pkg.exports[trigger.index - 1];
+const exportEntry = exportAt(mapAsset.pkg, trigger.index);
 assert.equal(nativeObject.name, exportEntry.name);
 assert.equal(nativeObject.flags >>> 0, exportEntry.flags >>> 0, 'ObjectFlags come from the original export table');
 assert.equal(nativeObject.identity, trigger);

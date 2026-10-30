@@ -1,3 +1,4 @@
+import { exportAt } from '../unreal/objects.mjs';
 /** Script and mesh preparation for the hit-effect, fragment and contents
  * classes a crate reaches, before synchronous Play events spawn them through
  * the general SpawnActor. docs/script-crate-destruction.md. */
@@ -20,7 +21,7 @@ export async function prepareCrateLifecycle({runtime,assets,decorations,prepareC
   }
   const dx=await assets.get('DeusEx');
   for(const [path,index] of dx.exportsByPath)
-    if(path.startsWith('tracehit')&&dx.pkg.exports[index-1].className==='Class')
+    if(path.startsWith('tracehit')&&exportAt(dx.pkg, index).className==='Class')
       await prepare(await runtime.loadClass(dx,index));
   for(const actor of decorations){
     const cls=runtime.instance(actor).cls;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 import {AssetStore} from '../src/unreal/assets.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 import {
   SOUND_NATIVE_CONTRACT,
   ScriptSoundResourceError,
@@ -61,7 +62,7 @@ test('Switch4ClickOn and Switch4ClickOff decode the original lazy header and RIF
   };
   for (const [path, facts] of Object.entries(expected)) {
     const index = asset.exportsByPath.get(path.toLowerCase());
-    const entry = asset.pkg.exports[index - 1];
+    const entry = exportAt(asset.pkg, index);
     const sound = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
     assert.equal(sound.kind, 'Sound');
     assert.equal(sound.packageVersion, 68);
@@ -123,7 +124,7 @@ test('Switch4ClickOn and Switch4ClickOff decode the original lazy header and RIF
 test('decoded Sound bytes are an owned host copy and preserve collector boundaries', async () => {
   const asset = await fixture();
   const index = asset.exportsByPath.get('special.switch4clickon');
-  const entry = asset.pkg.exports[index - 1];
+  const entry = exportAt(asset.pkg, index);
   const sound = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
   const original = sound.bytes[0];
   sound.bytes[0] ^= 0xff;
@@ -137,7 +138,7 @@ test('decoded Sound bytes are an owned host copy and preserve collector boundari
 test('Sound decoder rejects non-None properties, count mismatches, malformed RIFF and lazy extent drift', async () => {
   const asset = await fixture();
   const index = asset.exportsByPath.get('special.switch4clickon');
-  const entry = asset.pkg.exports[index - 1];
+  const entry = exportAt(asset.pkg, index);
   const source = Uint8Array.from(asset.bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize));
 
   const badProperties = source.slice();

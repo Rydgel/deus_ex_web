@@ -39,7 +39,7 @@ for(const path of files){
   const bytes=await readFile(path),pkg=parsePackage(bytes);
   stats.packages++;
   for(let i=0;i<pkg.exports.length;i++){
-    const entry=pkg.exports[i];
+    const entry=pkg.exports.at(i);
     if(entry.className!=='LodMesh'&&entry.className!=='Mesh')continue;
     let mesh;
     try{mesh=decodeLodMeshPayload(pkg,bytes,i+1);}catch(error){stats.skipped.push(`${path.split('/').pop()}:${entry.name}: ${error.message}`);continue;}

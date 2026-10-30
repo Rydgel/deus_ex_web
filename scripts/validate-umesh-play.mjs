@@ -20,6 +20,7 @@ import {createMeshLightingView} from '../src/viewer/mesh-lighting-view.mjs';
 import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import { exportAt } from '../src/unreal/objects.mjs';
 
 const root=gameDirectory(),files=[];
 for(const directory of ['Maps','System','Textures','Sounds','Music'])
@@ -33,7 +34,7 @@ async function open(mapName,seed) {
   const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
   const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
   const lighting=createMeshLightingView(runtime,()=>runtime.levelFor(player),
-    {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
+    {exportName:ref=>exportAt(asset.pkg, ref)?.name,exportIndex:name=>exportIndexByName.get(name)});
   return {asset,game,runtime,player,level,lighting,input:createPlayerInputFixture(game,{tickSeconds:1/60})};
 }
 const checkRecord=(record,binding,label)=>{

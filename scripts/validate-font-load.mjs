@@ -9,7 +9,7 @@ import {readFile, readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
 import {parsePackage, Reader} from '../src/unreal/package.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {FONT_NATIVE, FONT_PER_PAGE_ASSERT, FontLoadBoundaryError, constructFont, serializeFont}
   from '../src/runtime/script-font-load.mjs';
 import {removeResourceArray} from '../src/runtime/script-texture-load.mjs';
@@ -42,7 +42,7 @@ async function realCase(file, name, extra = {}) {
   const bytes = new Uint8Array(await readFile(path.join(gameDirectory(), file)));
   const pkg = parsePackage(bytes), index = pkg.exports.findIndex(e => e.name === name) + 1;
   assert.ok(index > 0, `${file} ${name}`);
-  const entry = pkg.exports[index - 1], decoded = readObject(pkg, bytes, index);
+  const entry = exportAt(pkg, index), decoded = readObject(pkg, bytes, index);
   assert.equal(entry.className, 'Font');
   return {name, start: entry.serialOffset, prefixSize: decoded.reader.offset, version: pkg.version,
     payload: Buffer.from(bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize)).toString('base64'),

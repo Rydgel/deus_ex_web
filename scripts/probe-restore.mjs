@@ -10,7 +10,7 @@ import { createSimSession } from '../src/viewer/sim-session.mjs';
 import { ByteWriter } from '../src/runtime/byte-writer.mjs';
 import { writeTaggedProperties, TaggedWriteError } from '../src/runtime/tagged-write.mjs';
 import { Reader } from '../src/unreal/package.mjs';
-import { readObject, readProperties } from '../src/unreal/objects.mjs';
+import { readObject, readProperties, exportAt } from '../src/unreal/objects.mjs';
 
 const file = process.argv[2], stem = process.argv[3], ticks = Number(process.argv[4] ?? 10);
 const root = gameDirectory();
@@ -96,9 +96,9 @@ if (process.env.WRITE) {
     const cls = runtime.instance(live).cls;
     const seen = new Set(), fields = [];
     for (let node = cls; node; node = node.base) for (const field of node.fields?.values() ?? []) if (!seen.has(field.key)) { seen.add(field.key); fields.push(field); }
-    const entry = pkg.exports[actor.index - 1];
+    const entry = exportAt(pkg, actor.index);
     const raw = bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize);
-    const r = new Reader(raw); const head = (() => { r.compact(); r.compact(); r.u32(); r.u32(); r.i32(); const node = pkg.exports[actor.index - 1] && null; return r.offset; })();
+    const r = new Reader(raw); const head = (() => { r.compact(); r.compact(); r.u32(); r.u32(); r.i32(); const node = exportAt(pkg, actor.index) && null; return r.offset; })();
     // the stack header's offset field exists only when Node is non-null
     const stack = actor.stack; const headerLength = (() => { const q = new Reader(raw); q.compact(); q.compact(); q.u32(); q.u32(); q.i32(); if (stack.node) q.compact(); return q.offset; })();
     const w = new ByteWriter();

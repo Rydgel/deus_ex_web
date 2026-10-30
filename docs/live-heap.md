@@ -213,8 +213,9 @@ Firefox GC markers, not only by heap size.
    package's export entries through a `LinkerExports` table (`linker-exports.mjs`) that owns only the interned names, the created
    objects and the hash chain; a record the native services read is a view.
    * Measured with step 2's and the integer fixes: see "Steps 2 and 3's results".
-   * Left: `pkg.exports` and `pkg.names` themselves as columns behind accessors (about 130 reads of `entry.*` and about 45 of
-     `names[i].name`).
+   * Done 2026-10-30: `pkg.names`, `pkg.imports` and `pkg.exports` as columns behind accessors, `exportsByPath` as a hash over them, the spelling and
+     the dynamic-load name tables as hash tables, and no entry held by an identity, a metadata or a resource record: the worker (240 s roam) from
+     3.17 M objects and 24.1 M edges to 2.60 M and 20.6 M. See "Package tables".
 4. **Mesh faces once per mesh: done 2026-10-29.** A per-mesh typed face block (the existing
    `faceWords`, plus UVs and material indices) shared by every binding of a mesh,
    cached per mesh. See "Step 4's results".
@@ -2327,6 +2328,126 @@ show it). The frames of a 30 s walk in a browser worker: 2,789 before, 2,813 aft
 * Not measured: the marking time per major GC on two cores, Firefox and the Mac. By the ratios of steps 7 and 8 (7.6% and 12% fewer pointer references for
   13% and 10% shorter marking) 7% fewer pointer references would be expected to shorten the worker's marking by about 6 to 8%, which is a prediction.
 
+## Package tables (2026-10-30)
+
+Host representation only: every reader sees the values it saw. Branch `worktree-agent-a63b83a645cb49cc8`, from master c9888d16, merged with
+d0079340 (the load records); six code commits and the merge, each checked as listed below. This is the "Left" item of "Steps 2 and 3's results" (`pkg.names`
+and `pkg.exports` as columns behind accessors) and of "Load records and functions" (the entries that identities and metadata held).
+
+**What the Island held.** The Island's 55 parsed packages have 96,869 names (86,175 of them distinct), 4,901 imports and 105,453 exports;
+DeusExConText alone has 53,650 names and 50,335 exports. Per family (`heap-families.mjs`, depth 2, the worker after a 240 s roam on d0079340,
+objects / edges; a first-reach attribution, so a string held by two owners counts once):
+
+| Family | Objects / edges | What it was |
+| --- | ---: | --- |
+| `AssetStore.ready.pkg` | 230 k / 1.53 M | an object a name (`{name, flags}`), an import and an export (nine fields), 57 k heap numbers (a field of a shape that once stored a number outside the Smi range holds a heap number in every object of the shape), the 96,869 name strings and a path string for every import and export |
+| `NameSpelling.entries` | 155 k / 0.54 M | a `Map` from the ASCII-folded text to the spelling: a folded copy of each name that has a lowercase letter, and a native copy of the text for 76,247 of its strings (see "Strings" below) |
+| `ScriptProcess.packageObjects.entry`, `identities.entry` | 92 k + 21 k / 0.44 M + 0.13 M | the export entry, held by each package identity (`{asset, index, entry, key, ...}`), by the property, function and class metadata (`this.entry`), by the resource records and by the map actors' hosts |
+| `PreparedDynamicLoadGraph.names` | 63 k / 0.19 M | a `Map` from `text.toLowerCase()` to the graph's name number: a lowercase copy of every distinct name of the packages it links |
+| `AssetStore.ready.exportsByPath` | 42 k / 0.18 M | a `Map` from each export's lowercase path to its position: a string a key |
+| Together | 603 k / 3.01 M | |
+
+**What they are.**
+
+| Structure | Is |
+| --- | --- |
+| `pkg.names`, `pkg.imports`, `pkg.exports` | `NameTable`, `ImportTable`, `ExportTable` (`src/unreal/package-tables.mjs`): the entries' fields as typed arrays (an import's three names and an export's name are positions in the name table; the flag words a `Uint32Array`, so a high bit is no heap number; an absent payload offset is -1) and the name texts in one array. `at(i)` makes a view whose getters answer what the object held (the strings, the signed integers, the flag words as unsigned numbers, `null` for an absent offset); nothing keeps a view. `toObject(i)` makes the old plain object (key order included), `objects()` all of them, and `JSON.stringify(pkg)` writes the old arrays (`inspect-package --tables`). The array methods the readers used (`length`, iteration, `forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `flatMap`, `entries`, `slice`) are there, so a reader changed only where it indexed: `pkg.exports[i - 1]` is `exportAt(pkg, i)` (undefined for a reference of 0 or below, which `Array.prototype.at` would not give), `pkg.imports[-i - 1]` is `importAt(pkg, i)`, the 0-based `pkg.exports[i]` is `pkg.exports.at(i)`. A view prints as the object it was in `util.inspect` (an assertion that fails on an entry no longer dumps the columns) |
+| `entry.path`, `entry.className` | built when asked for from the outer chain and the class reference, as the strings made at parse time were; `parsePackage` still checks every reference and every outer chain once, with the same errors at the same offsets |
+| `asset.exportsByPath` | `ExportPaths` (`export-paths.mjs`): the Map's interface (`get`, `has`, `size`, iteration in the Map's order, `forEach`) over an open-addressing table of export positions and one hash a position, built at the first query; it keeps no string, and a lookup builds the candidate's path to compare it. Two exports with the same lowercase path give the later one, as the Map did (23 repeated paths in the game's packages) |
+| `NameSpelling` | a case-folding hash table over the spellings (ASCII fold, as `_wcsicmp` in the C locale), with a mark byte for each (held by a startup package, held by the map being entered); no folded copy of any name. A name table that is a fixture's `[{name, flags}]` still enters |
+| `PreparedDynamicLoadGraph.names` | `LowerNameTable` (`lower-name-table.mjs`): the first text added for each number, compared through the fold. ASCII texts (every package's names) fold as `toLowerCase` does; a text with another character takes its `toLowerCase()` first (the Kelvin sign lowercases to `k`, the final sigma depends on its neighbour), and a result that is not ASCII is a key of a small side Map |
+| `identity.entry` | gone: `{asset, index, key, kind, name, ...}` stays a plain literal (bench-sim's and `state-digest.mjs`'s digests hash an object with another prototype as `<ClassName>`, which a class identity would change), and `entryOf(holder)` makes the entry from `asset` and `index`; it answers an `entry` the holder has (a decoded export, the resource record of an import) first, and so it answers a spread copy of an identity too (`singleField` copies one) |
+| `entry` of property, function and class metadata | a prototype getter over `asset` and `index` (a write makes it an own property, as the other derived keys do); a resource record of a package export keeps none |
+| `LinkerExports`, `PreparedDynamicLoadGraph.buildLinker` | read the columns (`classIndexes`, `outers`, `flagWords`, `text(i)`, `path(i)`); a fixture's plain array of records becomes an `ExportTable` (`ExportTable.fromObjects`) |
+| Strings | `Reader.string` builds an ASCII string (up to 1,024 bytes) with `String.fromCharCode` and keeps `TextDecoder` for the rest, one shared decoder of each kind. A `TextDecoder` result is an external string: the heap object and a native copy of the text beside it, which the snapshot counts as a second object (76,247 of the 77,300 spelling strings had one), and a decoder was made for each string |
+
+**What was not done, and why.** The 79 k spelling strings stay: they are the entries of the original's
+name table that `NameSpelling` models (the boot packages' names, the map's, DeusExConText's at each level start, the names scripts make), and the
+FName table and the linkers hold the same objects. Decoding names lazily from the package bytes would make a second copy in each holder. A
+`NameSpelling` that kept a position in a name table instead of the string would take its 79 k element edges and no object.
+
+**Checks.**
+* Fidelity at every verified commit and on the final tree (`fid/c`): `frame-alloc-meter --compare` identical on the Island (600 frames, warm 900,
+  `c8cf5fff928609c1`), the 747 (400, `f6337bff0cf741fc`) and Training (400, `e4b017e7b1bc0439`); `hud-stream-digest --stream --compare` identical
+  (1500 frames, `16bfe2bd08ed1653`); bench-sim digests (300 ticks) Island `15e3720088490242`, Training `148077479825af78`, 747 `ad8e591a01434df5`.
+* Differentials, old reader against new (ad hoc scripts, outside Git; the old reader is d0079340's `package.mjs`):
+  * `parsePackage` on all 219 packages of Maps, System, Textures, Sounds and Music: 424,582 names, 26,929 imports and 391,089 exports, every field
+    `Object.is` equal through `at(i)` and through `toObject(i)` (key order of the object included), the header, heritage, generations, table
+    extents and dependencies; iteration, `findIndex` and `map`; and 2,000 byte-mutated packages (header words, table bytes): 670 raise the same
+    error (message and offset: invalid table counts, extents, name and object references, unterminated strings, compact overflow, payload
+    extents), 1,330 parse and compare equal. A hand-built cyclic outer is `test/package.test.mjs`'s.
+  * `ExportPaths` against `new Map(exports.map(e => [e.path.toLowerCase(), i + 1]))` on the same 219 packages: 391,066 keys (23 paths repeat), the
+    iteration order, `size`, `get` and `has` of every key, the upper-case form of each (absent in both), and non-strings.
+  * `NameSpelling` against the Map form: 60 random sequences of `addBoot`, `beginLevel`, `enterPackage`, `intern` and `spell` over ten real
+    packages (Core, Engine, DeusEx, Extension, ConSys, DeusExConText, four maps) and fixtures with case changes, NULs, non-ASCII letters and
+    empty names: 243,136 answers equal.
+  * The tracers (`node --import`, outside Git): one wrapped the `entry` of every identity in a logging Proxy and listed the 15 reading sites the Island's benchmark reaches (the
+    resource records, `staticObjectClass`, `functionReturn`, `prepareObject`, `singleField`'s spread, `loadScriptStructLayout`, `scriptObjectToString`,
+    `defaultStringValues`); all use `entryOf` now. The other put an accessor on `Object.prototype` that logs a read of a missing `entry` on an object that
+    has an `asset` and an `index`: zero sites on the three benchmarks and on every validator listed below after eight validators that read
+    `identity.entry` were changed (`validate-script-process`, `-script-loaded-objects`, `-script-resources`, `-script-native-conversation-list`,
+    `-script-conversation-construction`, `-script-lifecycle`, `-window-construction`, `-window-computer`).
+* 200 unit test files pass, one at a time, each in a 6 GB scope with no swap (new: `package-tables.test.mjs`, `lower-name-table.test.mjs`, and the
+  spelling table against a Map model in `name-spelling.test.mjs`).
+* Validators, one at a time (NATIVE_PROBE_PYTHON set, a 12 GB scope each), all exit 0 (the ones that touch the last commit's code, the strings and the DLO name table, were run again on the final tree: dynamic-load-object, font-load-graph, sound-load-graph, music-load-graph, static-load-object, create-export, end-load, conversation-binding, instructor-conversation, island-conversation, name-spelling, save-load-play, script-process, script-resources, script-conversation-events, datalink-transfer-object, sound-archive-integration, conversation-audio-integration, class-loader, linker-preload, process-collection, original-loaded, texture-load, mesh-load-graph, font-load): class-loader, class-loader-struct-bools, linker-preload, linker-imports,
+  process-collection, script-process, script-vm-interp, script-vm-x87, dynamic-load-object, font-load-graph, mesh-load-graph, sound-load-graph,
+  music-load-graph, static-load-object, create-export, end-load, script-serialization, property-serialize-item, class-default-travel, config-persistence,
+  native-config, script-linker-lazy-loader, script-loaded-objects, original-loaded, texture-load, mesh-payload, name-spelling, save-game, save-load-play,
+  travel, level-save, island-conversation, play-hud, gpu-mesh (worker mode, `--angle gl`, twice, the second against a server restarted on the final tree),
+  script-resources, script-native-conversation-list, script-conversation-events, script-struct-values, script-struct-layout, script-string-operations,
+  script-state-queries, native-actor-constructors, conversation-binding, sound-archive-integration, instructor-conversation, inventory-spawn, font-load,
+  save-info-corpus, map-actor-admission, world-destroy, conversation-audio-integration, datalink-transfer-object, script-datalink-transmission,
+  script-sound-admission, trigger-actions, property-copy, property-destroy, script-construction, object-layout, object-image, weapon-construction,
+  travel-restore, travel-restore-objects, save-directory, load-game, load-saves (41 of 41 desktop slots load) and travel-endings (16 of 16, 1,017 s;
+  its captures are `.work/travel`, linked into the worktree). `validate-master-frame-play` was skipped as asked. No full sweep was run.
+* No Rust changed. A 60 s worker-mode Island roam (`hitch-run.mjs --mode roam`): 4,522 worker frames, 0 errors.
+* The mistakes the checks found: a regular expression of the conversion put `exportAt` into the import of `script-objects.mjs` and of
+  `galaxy-music-objects.mjs`; two fixture builders (`validate-mesh-payload.mjs`, `umesh-fixture.mjs`) assigned into an array of entries
+  and spread an entry (an `ExportTable.with` makes the copy now); `validate-conversation-binding.mjs` compared an entry to a plain object with
+  `assert.deepEqual`, which failed and was killed by its 12 GB scope after 11 s (the failure's diff dumped the DeusExConText columns; a view prints as its object now, and the
+  validator compares `toObject()`).
+
+**Heap**, the Island's worker after a 240 s roam and forced GCs (`profile-live-heap.mjs --mode roam`), before is d0079340 served from an export
+of the commit. "Pointer references" as before (strong edges that do not go to a Smi node).
+
+| | Objects | References (snapshot edges) | Pointer references | Snapshot JS heap | Heap used / total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Worker, before (d0079340) | 3.17 M | 24.1 M | 19.83 M | 201 MB | 198 / 206 MB |
+| Worker, after | 2.60 M (-18.0%) | 20.6 M (-14.5%) | 17.51 M (-11.7%) | 179 MB (-11%) | 178 / 185 MB (-10%) |
+| Page, before | 1.65 M | 7.9 M | 6.40 M | 92 MB | 91 / 94 MB |
+| Page, after | 1.43 M (-13.3%) | 6.6 M (-16.5%) | 5.57 M (-13.0%) | 83 MB | 82 / 86 MB |
+
+Per family (worker, objects / edges):
+
+| Family | Before | After |
+| --- | ---: | ---: |
+| `AssetStore.ready.pkg` | 230 k / 1.53 M | 8 k / 0.20 M |
+| `NameSpelling.entries` (now `.spellings`) | 155 k / 0.54 M | 79 k / 0.31 M |
+| `ScriptProcess.packageObjects.entry`, `identities.entry` | 113 k / 0.57 M | gone |
+| `PreparedDynamicLoadGraph.names` | 63 k / 0.19 M | gone |
+| `AssetStore.ready.exportsByPath` | 42 k / 0.18 M | gone |
+| Together | 603 k / 3.01 M | 87 k / 0.51 M |
+
+The aim was under 50 k objects and 0.4 M edges; 79 k of the 87 k are the spelling strings (above), which are the name table's entries. Without them the
+package tables, the path index and the entries are 8 k objects and 0.2 M edges (the texts arrays of the packages the snapshot reaches first by that path, and
+the columns of 55 packages: seven typed arrays and their buffers each). The page: `AssetStore.ready.pkg` 174 k / 1.00 M, `exportsByPath` 44 k / 0.13 M and
+`NameSpelling.entries` 33 k / 0.12 M (251 k / 1.25 M) are 21 k / 0.12 M and 17 k / 0.07 M (38 k / 0.19 M).
+
+A 30 s walk's snapshot after the commit that removed the entries (0b8f7c06; before the strings and the DLO table) read 2.39 M objects and 19.3 M edges (a walk, so not comparable with the roams above).
+
+**Load time.** The headless Island boot (`bench-sim --ticks 3`, three interleaved pairs on a host with other agents running; the base arm an export of d0079340):
+8,057, 7,478 and 8,319 ms before, 7,979, 7,920 and 7,154 ms after (medians 8,057 and 7,920); both give the 3-tick digest `c449c4831f1804dd`. Parsing no
+longer builds a path, a lowercase key or an object a name, import and export, and the path of an entry is built where it is read (an identity's key, the
+dynamic-load graph's link of DeusExConText's 50,335 exports, the first query of a package's `exportsByPath`): not slower, within the spread.
+
+**What is left.**
+* The spelling strings (79 k) and the name table of the original they model; resource records' `path` and `fullPath` (20 k strings); the views
+  that remain (705 sound payload records, 250 state metadata, 235 decoded LOD meshes and the models keep their `entry`: about 1,200).
+* An identity still carries `key` (a lowercase string a Map also keys on), `kind` and `name`.
+* The marking per major GC on two cores is not measured for this branch (the method of "Steps 2, 3 and 4 on two cores"): the worker's pointer references fell
+  by 11.7% and its objects by 18%, so by step 7's and 8's ratios a few percent of the marking would be expected, which is a prediction. Firefox and the Mac
+  are not measured.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -2361,7 +2482,9 @@ show it). The frames of a 30 s walk in a browser worker: 2,789 before, 2,813 aft
   and Firefox inline are not measured against these cuts. "Load records and functions" took a further 7% of the objects, and
   "Actor hosts and mesh bindings (2026-10-30)" 270 k objects and 1.5 M pointer references (-6.7% and -7.3% on the same 30 s walk; the
   hosts stop being dictionary-mode objects, the header bindings, the property tags and the pawn views follow); their marking on two
-  cores is not measured yet.
+  cores is not measured yet. "Package tables" then took the package tables, their path index, the spelling and dynamic-load
+  name tables and the entries that identities and metadata held (603 k objects and 3.0 M edges) down to 87 k and 0.5 M: the worker
+  3.17 M objects, 24.1 M edges and 19.83 M pointer references to 2.60 M, 20.6 M and 17.51 M on its branch (marking not measured).
 * **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
   churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the

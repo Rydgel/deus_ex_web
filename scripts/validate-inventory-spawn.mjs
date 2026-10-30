@@ -36,7 +36,7 @@ import path from 'node:path';
 
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {readClass} from '../src/unreal/classes.mjs';
-import {readObject} from '../src/unreal/objects.mjs';
+import { readObject, importAt } from '../src/unreal/objects.mjs';
 import {readFieldLinks} from '../src/unreal/script-metadata.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
@@ -201,7 +201,7 @@ assert.equal(image02NycWarehouse.superPackageExport, dataVaultImage.packageExpor
   'Image02_NYC_Warehouse Super is the DataVaultImage export');
 // DataVaultImage's Super crosses packages, so it is a negative import reference.
 assert.ok(dataVaultImage.superPackageReference < 0, 'DataVaultImage Super is an import reference');
-assert.equal(deusExAsset.pkg.imports[-dataVaultImage.superPackageReference - 1].path, 'Engine.Inventory',
+assert.equal(importAt(deusExAsset.pkg, dataVaultImage.superPackageReference).path, 'Engine.Inventory',
   'the DataVaultImage Super import resolves to Engine.Inventory');
 
 assert.equal(declaration(deusExAsset, vault).declaration, dataVaultImage.scriptDeclaration);
