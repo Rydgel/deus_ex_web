@@ -16,6 +16,7 @@ import { gameDirectory } from './game-directory.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { movingLightLeafLists, movingLightLeafList, lazyLeafLists } from '../src/runtime/dynamic-lighting.mjs';
+import { modelFromObjects } from '../src/unreal/bsp-model.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : Number(process.argv[i + 1]); };
 const cases = option('cases', 40), f = Math.fround;
@@ -72,7 +73,7 @@ const synthetic = {
   fragmentLeaf: [node([1, 0, 0, 0], 1, -1, [15, 16]), node([0, 1, 0, 0], -1, -1, [16, 17])],      // a child that repeats its parent's side leaf
 };
 for (const [name, nodes] of Object.entries(synthetic)) {
-  const model = { nodes };
+  const model = modelFromObjects({ nodes });   // the typed node table the readers take
   for (let c = 0; c < 200; c++) {
     const lights = Array.from({ length: 1 + int(8) }, () => ({ location: [0, 1, 2].map(() => f((random() - 0.5) * 400)), radius: 1 + int(300) }));
     compare(model, lights, `${name} case ${c}`);

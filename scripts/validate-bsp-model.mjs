@@ -70,8 +70,10 @@ for (const name of files) {
       if (reference[field].length !== typed[field].length) { fail(label, `${field}: ${reference[field].length} against ${typed[field].length}`); continue; }
       same(reference[field], objects[field], field, label);
     }
+    // `entry` is a package table's export view (package-tables.mjs), linked to the whole package: compared as its plain object
+    const plain = value => typeof value?.toObject === 'function' ? value.toObject() : value;
     for (const field of ['entry', 'bounds', 'sphere', 'sharedSides', 'polygons', 'lightBits', 'rootOutside', 'linked', 'diagnostics'])
-      same(reference[field], typed[field], field, label);
+      same(plain(reference[field]), plain(typed[field]), field, label);
     for (const includeInvisible of [false, true]) {
       const expected = referenceTriangulate(reference, { includeInvisible }), actual = triangulateModel(typed, { includeInvisible });
       stats.triangles += expected.length;

@@ -3,6 +3,7 @@ import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {createTraceTextureIterator} from '../src/runtime/script-iterators.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {modelFromObjects} from '../src/unreal/bsp-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
 const directory='.cache/trace-texture';await mkdir(directory,{recursive:true});
 // Surface records pair a texture name dword with a group name dword; entries
@@ -32,7 +33,7 @@ for(const [index,c] of cases.entries()){
  for(const a of c.actors??[])actors[a.id]={id:a.id,lineage:[`engine.${(a.super??'actor').toLowerCase()}`]};
  const queries={levelInfo:world,multiLineCheck(q){query={end:q.end,start:q.start,extent:q.extent,checkActors:q.checkActors,world:q.worldActor===world,extra:q.extra};
   return c.hits.map((h,i)=>({actor:actors[h.actor],location:h.location??[i,2,3],normal:h.normal??[0,0,1],item:h.item??-1}));}};
- const level={hash:queries,model:{nodes:c.nodes.map(surface=>({surface})),surfaces:c.surfs.map(s=>({flags:s.flags}))},
+ const level={hash:queries,model:modelFromObjects({nodes:c.nodes.map(surface=>({surface})),surfaces:c.surfs.map(s=>({flags:s.flags}))}),
   surfaceTexture:c.surfs.map(s=>s.texture===undefined?null:{name:nameOf(s.texture),outerName:groupOf(s.group??0)})};
  const slot=initial=>{const s={reference:true,value:initial,get(){return s.value},set(v){s.value=v}};return s;};
  // Zero-hit sweeps leave every out untouched: seed name/group/flags with the

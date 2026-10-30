@@ -156,7 +156,7 @@ assert.equal(level.actors.includes(trigger), false, 'the trigger left Level.Acto
 assert.equal(ref(trigger, 'bDeleteMe').get(), true);
 assert.equal(inCollisionHash(trigger), false, 'FCollisionHash::RemoveActor ran before the array removal');
 assert.equal(player.touching.includes(trigger), false, 'EndTouch(other, 1) cleared the toucher side');
-assert.deepEqual(trigger.touching, [null, null, null, null]);
+assert.deepEqual([...trigger.touching], [null, null, null, null]);   // a SlotArray: the slots are accessors over the object image
 // Core ConditionalDestroy sets 0x00800000, UObject::Destroy then sets 0x80000000.
 assert.equal(nativeObject.flags >>> 0, ((exportEntry.flags | 0x00800000 | 0x80000000) >>> 0));
 assert.equal(nativeObject.linker, null);

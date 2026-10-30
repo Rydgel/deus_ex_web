@@ -425,18 +425,12 @@ impl Actor {
             None => (unsafe { js_tick_get(self.ctx, F_BLENDSEQUENCE as u32, i as i32) }) != 0.0,
         }
     }
-    /// `arrayReference(index, ref).set(value)`: the whole float array is
-    /// read, the element replaced and the array written back, so each other
-    /// element's bits go through getFloat32 and setFloat32 (quieted).
+    /// `arrayReference(index, ref).set(value)` on an image cell: the element
+    /// is stored alone (CellStorage.writeElement), as the original's one
+    /// float store does; the other elements keep their bits.
     fn set_blend(&mut self, f: usize, i: u32, v: f64) {
         match self.at(f) {
-            Some(a) => {
-                let stride = field(f)[1];
-                for j in 0..4u32 {
-                    let e = a.wrapping_add(j.wrapping_mul(stride));
-                    store32(e, if j == i { narrow(v) } else { quiet(load32(e)) });
-                }
-            }
+            Some(a) => store32(a.wrapping_add(i.wrapping_mul(field(f)[1])), narrow(v)),
             None => {
                 unsafe { js_tick_set(self.ctx, f as u32, i as i32, v) };
                 self.refresh();

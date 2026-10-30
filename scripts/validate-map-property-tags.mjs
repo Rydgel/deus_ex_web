@@ -30,9 +30,12 @@ for (const actor of map.actors) if (!seen.has(actor.className)) { seen.add(actor
 for (const actor of map.actors) if (chosen.length < limit && !chosen.includes(actor)) chosen.push(actor);
 chosen.length = Math.min(chosen.length, Math.max(limit, seen.size));
 
-const named = (key, value) => value && typeof value === 'object' && 'className' in value && 'index' in value ? `actor:${value.name}` : value;
+// A reference prints as what it names: an actor by its name, an object identity by its key (its asset holds the package, whose tables serialize whole)
+const named = (key, value) => !value || typeof value !== 'object' ? value
+  : 'className' in value && 'index' in value ? `actor:${value.name}`
+  : 'asset' in value && 'index' in value && 'key' in value ? `object:${value.key}` : value;
 async function result(actor) {
-  const cls = await runtime.loadClass(asset, asset.pkg.exports[actor.index - 1].classIndex);
+  const cls = await runtime.loadClass(asset, asset.pkg.exports.at(actor.index - 1).classIndex);
   const initial = await prepareMapProperties(runtime, asset, actor, cls, actors);
   const out = new Map(), fields = [];
   for (let node = cls; node; node = node.base) for (const field of node.fields?.values() ?? []) fields.push(field);

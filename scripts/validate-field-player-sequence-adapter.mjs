@@ -23,8 +23,10 @@ for(const folder of folders){
   values.Player={};
   const world=collision.queries.levelInfo;world.values={...scene.zoneValues};
   const zoneActors=scene.zones.map(name=>name?collision.actors.find(a=>a.id===name)??null:null);
-  const level={hash:collision.queries,model:scene.model,netMode:0,surfaceTexture:scene.textures,
-    pointRegion:p=>pointRegion(scene.model,p,world,zoneActors)};
+  // The fixture's typed model (scene.json holds the object form)
+  const model=collision.bsp.model;
+  const level={hash:collision.queries,model,netMode:0,surfaceTexture:scene.textures,
+    pointRegion:p=>pointRegion(model,p,world,zoneActors)};
   const aliases={
    Location:['position',v=>v],Rotation:['rotation',v=>v],Velocity:['velocity',v=>v],
    Physics:['physics',v=>Number(v)],Base:['base',v=>v],OldLocation:['oldLocation',v=>v],

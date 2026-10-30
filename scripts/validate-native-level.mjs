@@ -8,6 +8,7 @@ import { ClassDefaults } from '../src/unreal/classes.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { brushCollisionBounds, primitiveCollisionBounds } from '../src/runtime/brush-bounds.mjs';
 import { nativeLevelScene } from './native-level-scene.mjs';
+import { typedSceneModels } from './native-model.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { createHash } from 'node:crypto';
 import { BspCollider } from '../src/runtime/collision.mjs';
@@ -80,6 +81,7 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   }
   const runtimeActors = actors.map(actor => ({ ...actor }));
   for (const actor of runtimeActors) actor.owner = runtimeActors.find(a => a.id === actor.owner) ?? null;
+  typedSceneModels({}, runtimeActors);   // the brushes as the typed tables the queries read; the scene keeps the JSON objects
   const world = new BspCollider(map.model);
   const queries = createLevelQueries(map.model, runtimeActors, { extentCheck: traceExtent, pointCheck(position, extent, flags, checkActors) {
     assert.equal(flags, 0); assert.equal(checkActors, 0);

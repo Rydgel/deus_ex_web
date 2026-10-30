@@ -11,7 +11,6 @@ import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
 import {gameDirectory} from './game-directory.mjs';
-import { exportAt } from '../src/unreal/objects.mjs';
 
 export const SIZE = 176400, STEP = 3528, LATENCY_BYTES = 7056, VOICE = 0xa0, NULL_REGION = 0xffffffff;
 export const DS_OK = 0, DSERR_BUFFERLOST = 0x88780096, DSERR_INVALIDPARAM = 0x80070057, E_FAIL = 0x80004005;
@@ -26,9 +25,9 @@ export async function waves(names) {
   const assets = new AssetStore(files);
   for (const name of ['DeusExSounds', 'Ambient', 'MoverSFX']) {
     const asset = await assets.get(name);
-    for (const entry of asset.pkg.exports) {
+    for (const [index, entry] of asset.pkg.exports.entries()) {
       if (entry.className !== 'Sound') continue;
-      const key = [...asset.exportsByPath].find(([, i]) => exportAt(asset.pkg, i) === entry)?.[0];
+      const key = [...asset.exportsByPath].find(([, ref]) => ref === index + 1)?.[0];   // an export view is made per read: match the reference
       const full = `${name}.${key ?? entry.objectName}`.toLowerCase();
       if (!want.has(full)) continue;
       const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});

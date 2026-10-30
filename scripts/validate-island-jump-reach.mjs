@@ -181,8 +181,10 @@ runtime.invokeNative = call => {
       if (i !== 5) return value;
       record.outKind = typeof value?.set === 'function' ? 'lvalue' : typeof value;
       if (record.outKind !== 'lvalue') return value;
-      const observed = Object.create(value);
-      observed.set = v => { record.out = Array.from(v, x => +x.toFixed(3)); return value.set(v); };
+      // `set` is a getter of PropertyReference that makes the function, and the VM's own writes use setValue: both are shadowed
+      const observed = Object.create(value), seen = v => { record.out = Array.from(v, x => +x.toFixed(3)); };
+      Object.defineProperty(observed, 'set', { value: v => { seen(v); return value.set(v); } });
+      if (typeof value.setValue === 'function') Object.defineProperty(observed, 'setValue', { value: v => { seen(v); return value.setValue(v); } });
       return observed;
     } };
   }

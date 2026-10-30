@@ -34,7 +34,6 @@ import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
 import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {gameDirectory} from './game-directory.mjs';
-import { exportAt } from '../src/unreal/objects.mjs';
 
 // PlaySound and Update's arithmetic runs in the Rust core, as in Play (galaxy.rs; GALAXY_AUDIO_BODY=js is the BigInt reference).
 if (process.env.GALAXY_AUDIO_BODY !== 'js') await loadScriptVmKernel();
@@ -66,12 +65,12 @@ async function shippedWaves() {
   const assets = new AssetStore(files), out = new Map();
   for (const name of ['DeusExSounds', 'Ambient', 'MoverSFX']) {
     const asset = await assets.get(name);
-    for (const entry of asset.pkg.exports) {
+    for (const [index, entry] of asset.pkg.exports.entries()) {
       if (entry.className !== 'Sound') continue;
       const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
       if (decoded.lazy.formatName.toLowerCase() !== 'wav') continue;
       const start = entry.serialOffset + decoded.lazy.inlineOffset;
-      const key = [...asset.exportsByPath].find(([, i]) => exportAt(asset.pkg, i) === entry)?.[0];
+      const key = [...asset.exportsByPath].find(([, ref]) => ref === index + 1)?.[0];   // an export view is made per read: match the reference
       out.set(`${name}.${key ?? entry.objectName}`, asset.bytes.slice(start, start + decoded.lazy.byteCount));
     }
   }

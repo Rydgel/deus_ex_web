@@ -24,6 +24,7 @@ import { gameDirectory } from './game-directory.mjs';
 import { loadAssets, typeLine } from './chain-play.mjs';
 import { openSession } from './census-stage5-session.mjs';
 import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
+import { readObject } from '../src/unreal/objects.mjs';
 
 try { gameDirectory(); } catch { console.log('SKIP validate-class-default-travel: no installed game data'); process.exit(0); }
 const failures = [];
@@ -79,13 +80,17 @@ check(session.process === dxProcess, 'the arrival attaches to the process of the
 for (const key of WRITTEN) check(dxClasses.get(key) && linked(key) === dxClasses.get(key), `Training's ${key} is not the class DX's SET wrote`);
 const trainingStart = c.actor('PlayerStart1');
 const pathNode = c.byClass('PathNode')[0];
+// The map's serialized tags: the decoded copies are released once the map actors are attached (releaseMapPropertyTags), so they are
+// read again from the package, as prepareMapProperties reads them after the release
+const trainingAsset = await assets.get('00_Training');
+const serialized = actor => actor.properties ?? readObject(trainingAsset.pkg, trainingAsset.bytes, actor.index).properties;
 const training = {
   player: c.read(c.player(), 'ReducedDamageType'),
   startExtraCost: c.read(trainingStart, 'ExtraCost'), startVisitedWeight: c.read(trainingStart, 'visitedWeight'),
   startDefaultVisitedWeight: classDefault('engine.playerstart', 'visitedWeight'), startDefaultExtraCost: classDefault('engine.playerstart', 'ExtraCost'),
   navDefault: classDefault('engine.navigationpoint', 'ExtraCost'), pathNode: pathNode ? c.read(pathNode, 'ExtraCost') : null,
-  pathNodeSerializesExtraCost: pathNode ? (pathNode.properties ?? []).some(p => p.name.toLowerCase() === 'extracost') : null,
-  startSerializes: (trainingStart.properties ?? []).map(p => p.name),
+  pathNodeSerializesExtraCost: pathNode ? serialized(pathNode).some(p => p.name.toLowerCase() === 'extracost') : null,
+  startSerializes: serialized(trainingStart).map(p => p.name),
 };
 console.log('00_Training arrival', JSON.stringify(training));
 check(training.player === 'All', `Login's player in 00_Training has ReducedDamageType ${training.player} (expected All)`);

@@ -50,7 +50,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { ClassDefaults } from '../src/unreal/classes.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { nativeLevelScene } from './native-level-scene.mjs';
-import { nativeModel } from './native-model.mjs';
+import { nativeModel, typedSceneModels } from './native-model.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { createLevelQueries } from '../src/runtime/level-queries.mjs';
@@ -98,6 +98,7 @@ const rawNodes = Array.from(new Uint32Array(nodeBlock.memory.buffer, nodeBlock.a
 Object.defineProperty(map.model, 'trackedCollision', { configurable: true, value: () => collision });
 const runtimeActors = scene.actors.map(actor => ({ ...actor }));
 for (const actor of runtimeActors) actor.owner = runtimeActors.find(a => a.id === actor.owner) ?? null;
+typedSceneModels({}, runtimeActors);   // the movers' brushes as the typed tables the queries read; scene.actors keeps the JSON objects
 const queries = createLevelQueries(map.model, runtimeActors, { extentCheck: traceExtent });
 const model = nativeModel(map.model); delete model.nodes;
 const sceneFile = path.join(directory, 'scene.json');
