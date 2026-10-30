@@ -3,7 +3,7 @@
 // (the Stage 7 frame-time and hitch rows, docs/stage-7-exit-criteria.md; scripts/hitch-summary.mjs reads the file).
 //
 //   node scripts/hitch-run.mjs --map 01_NYC_UNATCOIsland --seconds 120 --mode roam [--browser chromium|firefox] [--out PREFIX]
-//     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do)
+//     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do; --vite-port N gives it that port)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
 //     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--headed] [--no-hitchlog] [--worker-patch FILE]
 //     [--screenshot FILE] (a PNG of the page at the end of the run)
@@ -14,7 +14,8 @@
 //     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
 //     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--heap-steps 8] [--heap-leaves 25] [--heap-depth 5] (frames per site) (<out>.heap.json: the totals by site, leaf, sim-session step and
 //     file, and `byStep`: each of the N largest steps' top M leaves and top 5-frame sites; the KB a frame is printed) [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
-//     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
+//     scripts/hitch-frame-profile.mjs) [--load-profile [FRAMES]] (the same profile taken from the end of the --map load to the worker's FRAMES-th frame,
+//     60 by default: the first frames of Play, which --worker-profile starts too late for; the dump also keeps the page's `loadTimings`) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
@@ -43,13 +44,13 @@ if(!url){
   const deny=base.server.fs.deny.filter(pattern=>!(pattern.includes('.work')&&root.includes('/.work/'))
     &&!(pattern.includes('.claude/worktrees')&&root.includes('/.claude/worktrees/')));
   server=await createServer({...base,configFile:false,root,logLevel:'error',
-    server:{...base.server,port:0,strictPort:false,host:'127.0.0.1',fs:{...base.server.fs,deny},watch:null}});
+    server:{...base.server,port:Number(option('vite-port',0)),strictPort:Boolean(option('vite-port',0)),host:'127.0.0.1',fs:{...base.server.fs,deny},watch:null}});
   await server.listen();url=server.resolvedUrls.local[0].replace(/\/$/,'');
 }
 
 const profOut=option('profile',null);
 const browser=isChromium
-  ?await chromium.launch({args:[`--use-angle=${option('angle',process.platform==='darwin'?'metal':'gl')}`,'--enable-precise-memory-info',
+  ?await chromium.launch({args:[`--use-angle=${option('angle',process.platform==='darwin'?'metal':'gl')}`,'--enable-precise-memory-info','--mute-audio',
     `--remote-debugging-port=${cdpPort}`,...(option('js-flags',null)?[`--js-flags=${option('js-flags',null)}`]:[])],headless:!flag('headed'),executablePath:option('exe',undefined)})
   :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:flag('gclog')?{'javascript.options.mem.log':true}:{},
     env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:'js,threads,markers',
@@ -61,8 +62,50 @@ const page=await context.newPage();
 const errors=[],gclog=[];page.on('pageerror',e=>errors.push(e.message));
 page.on('console',m=>{const t=m.text();if(m.type()==='error'&&!/vite|Failed to load resource/.test(t))errors.push('console: '+t);if(/^GC\(/.test(t))gclog.push(t);});
 // --worker-patch FILE: a script prepended to the simulation worker's module (an allocation counter, a probe).
-if(option('worker-patch',null)){const patch=await readFile(option('worker-patch',null),'utf8');
-  await context.route(/\/sim-worker\.mjs/,async route=>{const r=await route.fetch();const body=await r.text();await route.fulfill({response:r,body:patch+'\n'+body});});}
+// --load-profile [FRAMES] (Chromium): a CPU profile of the simulation worker from the end of the --map load to its FRAMES-th frame (default 60),
+// saved as <out>.worker.cpuprofile with the clock join scripts/hitch-frame-profile.mjs reads (the first frames of Play, which --worker-profile
+// starts too late to see). The harness attaches to the worker when it is created; a patch of the worker's module starts and stops the profile
+// with console.profile at the `loaded` and the FRAMES-th `frame` messages, after a 20 ms marker function at a known epoch time.
+const loadProfile=isChromium&&flag('load-profile')?(Number(option('load-profile',60))||60):0;
+let patchText=option('worker-patch',null)?await readFile(option('worker-patch',null),'utf8'):'';
+if(loadProfile)patchText=`(()=>{const MAP=${JSON.stringify(map)},FRAMES=${loadProfile};let lastMap=null,seen=-1;
+  self.addEventListener('message',e=>{if(e.data?.type==='load')lastMap=e.data.map;});
+  const post=self.postMessage.bind(self);
+  self.postMessage=(message,transfer)=>{
+    if(message?.type==='loaded'&&lastMap===MAP){
+      console.profile('load');
+      console.info('LOADPROFILE '+JSON.stringify({workerEpochMs:__hitchSync()}));seen=0;
+    }else if(message?.type==='frame'&&seen>=0&&++seen>=FRAMES){seen=-1;console.profileEnd('load');}
+    return post(message,transfer);
+  };
+  // (a named function the marker's samples are found by)
+  function __hitchSync(){const t=performance.timeOrigin+performance.now(),e=performance.now()+20;while(performance.now()<e);return t;}})();\n`+patchText;
+if(patchText)await context.route(/\/sim-worker\.mjs/,async route=>{const r=await route.fetch();const body=await r.text();await route.fulfill({response:r,body:patchText+'\n'+body});});
+// The browser's CDP socket, opened before the page when the load profile needs the worker as it is created.
+let send=null,workerSession=null,cdp=null,loadProfileResult=null,loadSync=null;const attachedWorkers=new Set();
+async function openBrowserCdp(){
+  if(send)return;
+  const {webSocketDebuggerUrl}=await (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).json();
+  const ws=new WebSocket(webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));
+  let next=1;const waiting=new Map();
+  ws.addEventListener('message',({data})=>{const m=JSON.parse(data);if(m.id&&waiting.has(m.id)){waiting.get(m.id)(m);waiting.delete(m.id);}else if(m.method)onCdpEvent(m);});
+  send=(method,params={},sessionId)=>new Promise(r=>{const id=next++;waiting.set(id,r);ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});
+}
+function onCdpEvent(m){
+  if(process.env.HITCH_CDP_DEBUG)console.error('cdp event',m.method,m.sessionId??'',JSON.stringify(m.params).slice(0,160));
+  // (a worker's target is created with an empty url, which targetInfoChanged fills in)
+  if((m.method==='Target.targetCreated'||m.method==='Target.targetInfoChanged')&&m.params.targetInfo.type==='worker'&&m.params.targetInfo.url.includes('sim-worker')
+    &&!attachedWorkers.has(m.params.targetInfo.targetId)){attachedWorkers.add(m.params.targetInfo.targetId);attachWorker(m.params.targetInfo.targetId);}
+  else if(m.method==='Profiler.consoleProfileFinished'&&m.sessionId===workerSession)loadProfileResult=m.params.profile;
+  else if(m.method==='Runtime.consoleAPICalled'&&m.sessionId===workerSession){
+    const text=m.params.args?.[0]?.value;if(typeof text==='string'&&text.startsWith('LOADPROFILE '))loadSync=JSON.parse(text.slice(12));}
+}
+async function attachWorker(targetId){
+  workerSession=(await send('Target.attachToTarget',{targetId,flatten:true})).result.sessionId;
+  if(loadProfile){await send('Profiler.enable',{},workerSession);await send('Profiler.setSamplingInterval',{interval:Number(option('sample-us',500))},workerSession);
+    await send('Runtime.enable',{},workerSession);}
+}
+if(loadProfile){await openBrowserCdp();await send('Target.setDiscoverTargets',{discover:true});}
 const target=new URL(url);target.searchParams.set('debug','1');if(!flag('no-hitchlog'))target.searchParams.set('hitchlog','1');
 for(const [k,v] of new URLSearchParams(option('query','')))target.searchParams.set(k,v);
 await page.goto(target.href);
@@ -82,18 +125,15 @@ await page.waitForTimeout(settle);
 await mkdir(dirname(out),{recursive:true});
 
 // ---- Chromium: CDP for CPU throttling, the worker's heap and profiles; Linux: the process tree's RSS
-let send=null,workerSession=null,cdp=null;
 if(isChromium){
   cdp=await context.newCDPSession(page);
   if(throttle>1)await cdp.send('Emulation.setCPUThrottlingRate',{rate:throttle});
-  const {webSocketDebuggerUrl}=await (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).json();
-  const ws=new WebSocket(webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));
-  let next=1;const waiting=new Map();
-  ws.addEventListener('message',({data})=>{const m=JSON.parse(data);if(m.id&&waiting.has(m.id)){waiting.get(m.id)(m);waiting.delete(m.id);}});
-  send=(method,params={},sessionId)=>new Promise(r=>{const id=next++;waiting.set(id,r);ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});
-  const {result:{targetInfos}}=await send('Target.getTargets');
-  const worker=targetInfos.find(t=>t.type==='worker'&&t.url.includes('sim-worker'));
-  if(worker)workerSession=(await send('Target.attachToTarget',{targetId:worker.targetId,flatten:true})).result.sessionId;
+  await openBrowserCdp();
+  if(!workerSession){
+    const {result:{targetInfos}}=await send('Target.getTargets');
+    const worker=targetInfos.find(t=>t.type==='worker'&&t.url.includes('sim-worker'));
+    if(worker)workerSession=(await send('Target.attachToTarget',{targetId:worker.targetId,flatten:true})).result.sessionId;
+  }
 }
 let browserPid=0;
 if(process.platform==='linux')for(const d of await readdir('/proc')){if(!/^\d+$/.test(d))continue;
@@ -192,6 +232,8 @@ const status=await page.evaluate(()=>{const s=window.deusExViewer.status(),c=doc
 // --screenshot FILE: the page as it is at the end of the run (the HUD drawn from the worker's snapshot)
 if(option('screenshot',null))await page.screenshot({path:option('screenshot',null)});
 const dump=await page.evaluate(()=>window.deusExHitch?window.deusExHitch.dump({full:true}):null);
+// the map load's steps (main.mjs loadTimeline): the page's marks in ms from the load's start and the simulation worker's
+const loadTimings=await page.evaluate(()=>window.deusExViewer.loadTimings?.()??null).catch(()=>null);
 let gc=null;
 if(traced){
   const buf=await browser.stopTracing();await writeFile(`${out}.trace.json`,buf);
@@ -237,7 +279,12 @@ if(heapSampling&&workerSession){
   }
 }
 if(workerProfiled){const {result}=await send('Profiler.stop',{},workerSession);await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(result.profile));}
-await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));
+if(loadProfile){
+  if(!loadProfileResult)console.log('load profile: the worker did not reach its frame count (no profile)');
+  else{await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(loadProfileResult));
+    profileSync={workerEpochMs:loadSync.workerEpochMs,pageTimeOrigin:await page.evaluate(()=>performance.timeOrigin)};}
+}
+await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));
 await browser.close();await server?.close();
 console.log(`saved ${out}.json ${engine} ${status.sim} frames ${dump?.summary?.frames} drawn ${dump?.summary?.drawn} rows ${dump?.rows?.length} map ${status.map} ended ${ended} errors ${errors.length}`);
 if(errors.length)console.log(errors.slice(0,5).join('\n'));

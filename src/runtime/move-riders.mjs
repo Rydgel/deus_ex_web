@@ -23,7 +23,9 @@
 import {rotatorSin} from './coords.mjs';
 import {x87load, x87add, x87neg, x87mul, x87store} from './script-vm.mjs';
 import {baseEpoch, riderEpochOf} from './base-epoch.mjs';
+import {existingHandle} from './script-object-handles.mjs';
 import {scriptVmKernel} from './script-vm-kernel.mjs';
+import {BASE_KEY} from './actor-link-fields.mjs';
 
 const ld = x87load;
 const st = x87store;
@@ -123,6 +125,48 @@ function scanRiders(actor, actors, baseOf) {
   return riders;
 }
 
+// The full scan's Base reads, straight from the object image (docs/first-frames.md "Riders"): `baseOf(other)` was a chain of
+// host accessor, link state, released check, cell read and handle lookup for each of the level's ~2,500 actors, and an actor's
+// first move scans them all (45 movers, 112,000 reads, about 35 ms in the Island's first tick). A slot that qualifies
+// (services.baseInstance(other): `other.base` is a plain read of one image cell) is compared as the cell's handle word with the
+// mover's handle: the identity a handle names is the one object that has it, so the word equals the mover's handle exactly when
+// the read would give the mover. Every other slot takes the reads it took. A slot is filled for the actor in it (checked at each
+// read) and the table is dropped when baseEpoch() changes: a Base binding, an installer, any move of the array, and each point
+// where an instance gets poison or is released (copyStorage, poisonField and the freeObject sites bump it), the two states in
+// which a read of the cell would not be the plain read.
+const baseTables = new WeakMap();
+const disableDirectBase = typeof process !== 'undefined' && process.env?.RIDER_NODIRECT === '1';
+function baseTableFor(actors) {
+  let table = baseTables.get(actors);
+  if (table === undefined) baseTables.set(actors, table = {epoch: -1, arena: null, hosts: [], ats: []});
+  const epoch = baseEpoch();
+  if (table.epoch !== epoch) { table.epoch = epoch; table.hosts.length = 0; table.ats.length = 0; }
+  return table;
+}
+/** Fill slot `i` for the actor in it: the arena address of its Base word, or 0 for a slot that takes the plain reads. */
+function fillSlot(table, i, other, services) {
+  const instance = services.baseInstance(other);
+  table.hosts[i] = other;
+  if (instance === null || instance.imageToken?.released === true || instance.nativeObject?.released === true) { table.ats[i] = 0; return; }
+  table.arena ??= instance.arena;
+  table.ats[i] = instance.arena === table.arena ? instance.base + instance.cells.get(BASE_KEY).offset : 0;
+}
+
+/** The first index at or after `from` (the actors' length when there is none) whose slot is filled for its actor and either reads a Base
+ * word equal to `handle` or takes the plain reads; null slots and slots whose Base word differs are passed. A function of its own, small
+ * and hot, so it is compiled early and runs at the speed of the loop. `handle` is -1 when no image can name the mover. */
+function nextCandidate(hosts, ats, actors, from, handle, view) {
+  const length = actors.length;
+  for (let i = from; i < length; i++) {
+    const other = actors[i];
+    if (!other) continue;
+    if (hosts[i] !== other) return i;
+    const at = ats[i];
+    if (at === 0 || view.getUint32(at, true) === handle) return i;
+  }
+  return length;
+}
+
 const entryCurrent = (entry, actor) => entry.epoch === baseEpoch() && entry.riderEpoch === riderEpochOf(actor);
 const NO_MOTION = [0, 0, 0];
 
@@ -217,16 +261,46 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
   const epoch = baseEpoch(), riderEpoch = riderEpochOf(actor), found = [];
   if (riderStats) { riderStats.scans++; riderStats.scanned += actors.length - start; }
   const tScan = riderStats ? now() : 0;
+  // The table of direct Base reads, while the scan is undisturbed (it is left for the plain reads once the epoch changes).
+  let table = typeof services.baseInstance === 'function' && !disableDirectBase ? baseTableFor(actors) : null;
+  let handle = table === null ? 0 : existingHandle(actor);
+  let view = table?.arena?.view;
   for (let i = start; i < actors.length; i++) {
+    // The table's tight loop runs to the next slot that is a rider by its Base word or that it cannot decide (not filled for the actor in
+    // it, or one that takes the plain reads); the rest of the body is that slot's.
+    if (table !== null && view !== undefined) { i = nextCandidate(table.hosts, table.ats, actors, i, handle === 0 ? -1 : handle, view); if (i >= actors.length) break; }
     const other = actors[i];
-    if (!other || baseOf(other) !== actor) continue;
+    if (!other) continue;
+    let based;
+    if (table !== null) {
+      if (table.hosts[i] !== other) { fillSlot(table, i, other, services); view = table.arena?.view; }
+      const at = table.ats[i];
+      based = at !== 0 ? handle !== 0 && view.getUint32(at, true) === handle : baseOf(other) === actor;
+    } else based = baseOf(other) === actor;
+    if (!based) continue;
     found.push(i);
     if (riderStats) { riderStats.visited++; riderStats.scanMs += now() - tScan; }
     visitRider(pass, other);
+    if (table !== null) {
+      // (a rider's move runs events: the mover may have been given a handle, or lost it, by a pointer stored since, and the arena
+      // may have grown)
+      if (table.epoch !== baseEpoch()) table = null;
+      else { handle = existingHandle(actor); view = table.arena?.view; }
+    }
     if (riderStats) riderStats.scanMs -= now() - tScan;
   }
   if (riderStats) riderStats.scanMs += now() - tScan;
   // Record a complete, undisturbed scan only.
-  if (byMover && start === 0 && epoch === baseEpoch() && riderEpoch === riderEpochOf(actor))
+  if (byMover && start === 0 && epoch === baseEpoch() && riderEpoch === riderEpochOf(actor)) {
+    if (verifyRiders) {
+      // (the plain reads' list for the same state)
+      const expected = scanRiders(actor, actors, baseOf);
+      if (expected.join() !== found.join()) {
+        const verify = globalThis.__riderVerify ??= {mismatches: 0, first: []};
+        verify.mismatches++;
+        if (verify.first.length < 5) verify.first.push(`${actor?.name} [${cacheKey}] direct ${found} plain ${expected}`);
+      }
+    }
     byMover.set(actor, {epoch, riderEpoch, actors, riders: found});
+  }
 }

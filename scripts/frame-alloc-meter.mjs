@@ -7,7 +7,7 @@
  * fixed roam as hud-stream-digest.mjs (a forward hold, a turn every 90 ticks, a jump every 150) through the installed input bindings.
  *
  *   node scripts/frame-alloc-meter.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
+ *     [--pre-tick] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
  *
  * Without --sites: the heap-space size of V8's new space around each step (begin, lightFrame, sprites, actors, stamps, coronas, weapon,
  * hud) and around the whole call, as KB a frame (mean, median, p90). A frame a scavenge ran in is left out of that step's numbers;
@@ -37,6 +37,7 @@ const argv = process.argv.slice(2);
 const flag = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
 const map = flag('map', '01_NYC_UNATCOIsland'), frames = Number(flag('frames', 600)), warm = Number(flag('warm', 60));
 const [width, height] = flag('size', '1440x960').split('x').map(Number);
+const preTick = argv.includes('--pre-tick');
 const seriesPath = flag('series', null), outPath = flag('out', null), comparePath = flag('compare', null), siteCount = Number(flag('sites', 0));
 const wantSteps = flag('steps', 'begin,actors').split(',');
 const siteDepth = Number(flag('depth', 5));
@@ -135,10 +136,13 @@ function step() {
   if (tick > 0 && tick % TURN_EVERY === 0) fixture.axis('MouseX', (tick / TURN_EVERY) % 3 === 0 ? -40 : 40);
   if (tick > 0 && tick % JUMP_EVERY === 0) fixture.key('Space', true);
   else if (tick > 0 && tick % JUMP_EVERY === 1) fixture.key('Space', false);
+  // --pre-tick: the first frame's tick runs ahead of it (sim-session.mjs preTick, as the page asks for it while it waits for its shaders);
+  // the frame is posted as the page posts it, `preTicked` with no dt. Every frame's hash must equal the run without it.
+  const ahead = preTick && tick === 0 ? session.preTick({ dt: 1 / 60, width, height, aspect: width / height, resizes: 1 }) : false;
   tick++;
   current.clear();
   const before = measuring && !siteCount ? newSpaceUsed() : 0;
-  const snapshot = session.frame({ play: true, dt: 1 / 60, run: true, halted: false, size: [width, height], aspect: width / height,
+  const snapshot = session.frame({ play: true, dt: ahead ? 0 : 1 / 60, preTicked: ahead, run: true, halted: false, size: [width, height], aspect: width / height,
     resizes: 1, seconds, mirrors: true, pixelRatio: 1, now: seconds, inspect: null });
   const after = measuring && !siteCount ? newSpaceUsed() : 0;
   if (snapshot.errors.length) throw new Error(snapshot.errors.map(e => e.message).join('; '));

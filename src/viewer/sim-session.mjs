@@ -62,6 +62,9 @@ const floatWords = (words, from, count) => {
 };
 const wordFloat = word => (bitWords[63] = word, bitFloats[63]);
 
+/** The dt of a level's first frame: the page posts it with no earlier post to measure from (main.mjs postSimFrame). */
+export const FIRST_FRAME_DT = 1000 / 60 / 1000;
+
 /** `assets` is the simulation side's asset store (sprite texture sizes).
  * `events` is the ordered queue of what the simulation hands the page
  * between frames (the actor mesh layer's and the view model's creation and
@@ -71,6 +74,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   let failed = false, panZones = [], lastViewLocation = null, current = null;
   // The travel step's request (travel.mjs) for the next level, handed to the page once; the level it left does not tick again.
   let travelled = false;
+  // The first tick, run ahead of the first frame (preTick): its errors and travel request, which that frame takes.
+  let preTicked = null;
   // Inspect's free camera, from the page's plain camera state.
   const inspectCamera = createPlayCamera();
   // Play's camera, pointed as the page points its own (play-camera.mjs); the
@@ -1185,7 +1190,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height,
-          aspect: input.aspect, resizes: input.resizes });
+          aspect: input.aspect, resizes: input.resizes, preTicked: input.preTicked === true });
         collect(begun.errors);
         const { errors: _, ...frame } = begun;
         snapshot.begin = frame;
@@ -1534,7 +1539,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     movers,
     // LoadMap deletes the moving brush tracker before it loads the level (docs/brush-tracker.md "Lifetime"), so the reset's
     // actor start-up traces the static BSP; GNewBrushTracker follows the start-up (the rebuild).
-    reset() { dropOcclusion?.(); game.reset(); failed = false; travelled = false; rebuildOcclusion?.(); },
+    reset() { dropOcclusion?.(); game.reset(); failed = false; travelled = false; preTicked = null; rebuildOcclusion?.(); },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
     /** A pack buffer back from the page, for a later frame. */
@@ -1542,13 +1547,33 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (buffer instanceof ArrayBuffer && buffer.byteLength >= PACK_WORDS * 4 && packSpares.length < 4) packSpares.push(buffer);
     },
     dispose() { weaponSim?.dispose(); decalDraw?.dispose(); detailDraw?.dispose(); },
+    /** The level's first tick, run ahead of the first frame (docs/first-frames.md "Ahead of the first frame"): the tick that frame would
+     * make with `dt`, while the page still builds its draw side and the worker would idle. The viewport's size is set first, as begin
+     * sets it, because the level's first tick reads it (UViewport SizeX, SizeY). The first frame then takes the tick's errors and
+     * travel request (begin's `preTicked`). Returns whether the tick ran; a session that failed, travelled or follows a live replay
+     * keeps the frame's own tick. */
+    preTick({ dt, width, height, aspect = null, resizes = 0 }) {
+      if (preTicked || failed || travelled || game.liveReplay) return false;
+      if (aspect !== null && resizes !== resizesSeen) {
+        camera.aspect = aspect; camera.fov = verticalFov(75, aspect); camera.updateProjectionMatrix(); resizesSeen = resizes;
+      }
+      size = [width, height];
+      const ahead = { errors: [], travel: null };
+      try {
+        game.tick(dt);
+        ahead.travel = game.clientTravel();
+        if (ahead.travel) travelled = true;
+      } catch (error) { failed = true; ahead.errors.push(plainError(error)); }
+      preTicked = ahead;
+      return true;
+    },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
      * render viewport, SetupDynamics' moving-light scan, the sky frame, the
      * frob target and the surface pan inputs. `run` is false while the page
      * pauses the simulation; `halted` while it stopped on an error of its
      * own. A step that throws stops the later gated steps, as
      * pauseForRuntimeError did. */
-    begin({ dt, run, halted, width, height, aspect = null, resizes = 0 }) {
+    begin({ dt, run, halted, width, height, aspect = null, resizes = 0, preTicked: ahead = false }) {
       // The page's resize() since the last frame: the canvas aspect and the
       // default FOV, before PlayerCalcView points the camera.
       if (aspect !== null && resizes !== resizesSeen) {
@@ -1561,7 +1586,15 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const errors = [], stopped = () => halted || failed;
       const fail = error => { failed = true; errors.push(plainError(error)); };
       let travel = null;
-      if (run && !stopped() && !travelled) {
+      // The tick this frame's first post asked for ran ahead of it (preTick): its errors and travel request are this frame's, and the
+      // frame ticks only for the posts merged into it after that one (their dt; none: no tick).
+      const done = ahead ? preTicked : null;
+      if (ahead) {
+        preTicked = null;
+        if (done) { errors.push(...done.errors); travel = done.travel; }
+        else if (!(dt > 0)) dt = FIRST_FRAME_DT;   // (no tick ran ahead: the frame makes the first tick the post stood for)
+      }
+      if (run && !stopped() && !travelled && !(done && !(dt > 0))) {
         try {
           // Validation: liveProbe's replay of an original trace sets this tick's delta and
           // stream state, or holds the level (live-probe.mjs).

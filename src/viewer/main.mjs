@@ -334,6 +334,10 @@ let meshLighting=null;
 let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0;
 // The worker's last frame post (the page clock, ms).
 let simLastPost=null;
+// The level's first tick was asked of the worker ahead of the first frame (loadMap, sim-session.mjs preTick): the next post, the first, carries
+// `preTicked` and no dt of its own. FIRST_FRAME_DT is sim-session.mjs's: the dt that first post would have measured.
+let preTickPending=false;
+const FIRST_FRAME_DT=1000/60/1000;
 // The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
 // tick receives the load, as the original's does (docs/travel.md "The first tick after the load"; game.mjs `loadingFrameSeconds`).
 let travelFrameTime=null;
@@ -1003,6 +1007,16 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
     loadMark('host');
+    // The level's first tick (about 200 ms on the Island: every pawn's first state code) would be the first frame's, and the page would wait for
+    // it after the load. The worker is done with the level and idle while the page builds its meshes and swaps its world in: it makes the tick
+    // now, with the dt the first post would carry (sim-session.mjs preTick). Not for a travel's arrival, whose first frame measures its dt from
+    // the frame before the load, nor a loaded game's level, nor when a start cheat, the loadout or the easter egg act on the level first.
+    preTickPending = false;
+    if (simClient && nextHost.game && mode === 'play' && !travel && !filed && !easterParam && !loadoutParam && !startCheats.length) {
+      preTickPending = true;
+      simClient.call('preTick', { dt: FIRST_FRAME_DT, width: renderer.domElement.width, height: renderer.domElement.height, aspect: canvasAspect, resizes: resizeCount })
+        .catch(() => {});
+    }
     loadTimeline.simMarks = simClient ? nextHost.loadMarks : nextHost.loadMarks?.map(([step, at]) => [step, Math.round(at - loadTimeline.start)]) ?? null;
     // the new session's snapshot requests number from 1 again (script-window-host.mjs display.snapshotSerial)
     snapshotServed = 0; saveDeliveries.length = 0;
@@ -1132,6 +1146,8 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     travelFrameTime = null;
     loadMark('ready');
   } catch (error) {
+    // (the level left goes on: its next post is an ordinary one)
+    preTickPending = false;
     // a load the worker started waits for the world's part: none comes
     overlapped?.scene?.(null);
     warming?.dispose();
@@ -2240,8 +2256,9 @@ function simFrameInput(time) {
  * (the worker sums the dts of the posts it merges). */
 function postSimFrame(time) {
   if (!simClient || !sim || !world || loading || held) return false;
-  const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);
-  simClient.post({ ...simFrameInput(time), dt }, { status: !simStatus || simPosts % 15 === 0 });
+  const first = preTickPending; preTickPending = false;
+  const dt = first ? 0 : Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);
+  simClient.post({ ...simFrameInput(time), dt, ...(first ? { preTicked: true } : {}) }, { status: !simStatus || simPosts % 15 === 0 });
   simLastPost = time; simPosts++;
   return true;
 }
