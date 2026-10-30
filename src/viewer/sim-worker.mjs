@@ -211,6 +211,8 @@ async function handle(data) {
       else if (game) {
         if (data.clock) setHostClock(data.clock);
         if (data.method === 'view') value = host.session.view();
+        // the level's first tick ahead of its first frame (sim-session.mjs preTick): the page asks for it while it waits for its shader warm-up
+        else if (data.method === 'preTick') value = host.session.preTick(data.args);
         else if (data.method === 'reset') { host.session.reset(); value = { movers: host.session.movers(), view: host.session.view() }; }
         // a saved level the load restored keeps its state: the page reads its movers and view without a Player start
         else if (data.method === 'restoreView') value = { movers: host.session.movers(), view: host.session.view() };
@@ -254,7 +256,7 @@ async function handle(data) {
 let pending = null, runScheduled = false;
 function mergeFrame(data) {
   pending = !pending ? { ...data, commands: [...data.commands], posts: 1, firstSent: data.clock.now } : { ...data, firstSent: pending.firstSent,
-    input: { ...data.input, dt: pending.input.dt + data.input.dt }, commands: [...pending.commands, ...data.commands],
+    input: { ...data.input, dt: pending.input.dt + data.input.dt, preTicked: pending.input.preTicked === true || data.input.preTicked === true }, commands: [...pending.commands, ...data.commands],
     returned: [...(pending.returned ?? []), ...(data.returned ?? [])],
     status: pending.status || data.status, posts: pending.posts + 1 };
 }
