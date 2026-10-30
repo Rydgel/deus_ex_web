@@ -30,7 +30,7 @@ import {readCell, writeCell, readFixedElement, writeFixedElement, isFixedCell, s
   from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
-import {defineEntryAccessor, internEntries, slotArrayClass} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries, slotArrayClass, defineBackedMember, isBackedHost, peekPending, dropPending, hostDelete} from './host-accessors.mjs';
 
 export const BASE_KEY = 'engine.actor.base';
 export const TOUCHING_KEY = 'engine.actor.touching';
@@ -42,6 +42,10 @@ const SPECS = Object.freeze({
 // The state of a host (non-enumerable, so no host walk sees it): the host's accessors find it through this symbol
 // (host-accessors.mjs) and ask it for the member at the spec's index.
 const LINKS = Symbol('actorLinkFields');
+// A MapActorHost's base and touching (host-accessors.mjs): the pending value until the installer takes the member into the image, then the state's.
+for (const item of Object.values(SPECS))
+  defineBackedMember(item.prop, host => host[LINKS]?.fields[item.index] !== undefined, host => host[LINKS].get(item.index),
+    (host, value) => host[LINKS].set(item.index, value));
 
 // Cells (one per class and field) checked against the retail layout.
 const checkedCells = new WeakSet();
@@ -152,7 +156,7 @@ class LinkSet {
  * of splitting the storage again. Returns the installed props. */
 export function installLinkFields(host, instance, fields) {
   let set = host[LINKS] ?? null;
-  const installed = set ? set.fields.slice() : [];
+  const installed = set ? set.fields.slice() : [], backed = isBackedHost(host);
   const added = [];
   for (const field of fields) {
     const item = SPECS[field.key];
@@ -160,16 +164,17 @@ export function installLinkFields(host, instance, fields) {
     const cell = linkCell(instance, field.key);
     if (!cell) continue;
     if (installed[item.index] !== undefined) throw new Error(`Link ${item.prop} is already installed: ${host.name}`);
-    const existing = Object.getOwnPropertyDescriptor(host, item.prop);
+    const existing = backed ? undefined : Object.getOwnPropertyDescriptor(host, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
+    const current = backed ? peekPending(host, item.prop) : existing?.value;
     const codec = propertyCodec(field);
     let entry;
     if (item.kind === 'object') {
-      writeCell(cell, instance.arena.view, instance.refs, codec.copy(pointer(existing?.value)), instance.base);
+      writeCell(cell, instance.arena.view, instance.refs, codec.copy(pointer(current)), instance.base);
       bumpBaseEpoch();
       entry = baseFieldOf(item, cell, codec);
     } else {
-      if (!Array.isArray(existing?.value) || existing.value.length !== 4) continue;
+      if (!Array.isArray(current) || current.length !== 4) continue;
       const array = new TouchingSlots(4);
       entry = touchingFieldOf(item, cell);
       if (!set) set = new LinkSet(instance);
@@ -177,9 +182,9 @@ export function installLinkFields(host, instance, fields) {
       set.fields = installed;
       installed[item.index] = entry;
       Object.defineProperty(array, TOUCH_LINK, {value: set});
-      for (let index = 0; index < 4; index++) array[index] = existing.value[index];
+      for (let index = 0; index < 4; index++) array[index] = current[index];
     }
-    defineEntryAccessor(host, item.prop, LINKS, item.index);
+    if (backed) dropPending(host, item.prop); else defineEntryAccessor(host, item.prop, LINKS, item.index);
     installed[item.index] = entry;
     added.push(item.prop);
     if (!set) set = new LinkSet(instance);
@@ -202,6 +207,6 @@ export const isLinkProp = prop => prop === 'base' || prop === 'touching';
  * member that is not installed is deleted, as the other resets do. */
 export function resetLinkField(host, prop) {
   const entry = host?.[LINKS]?.fields.find(item => item?.spec.prop === prop);
-  if (!entry) { delete host[prop]; return; }
+  if (!entry) { hostDelete(host, prop); return; }
   if (prop === 'base') host.base = null;
 }

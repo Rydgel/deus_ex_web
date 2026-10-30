@@ -27,7 +27,7 @@
  */
 import {readCell, writeCell, scalarCell, vectorCell} from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
-import {defineEntryAccessor, internEntries} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries, defineBackedMember, isBackedHost, peekPending, dropPending, hostDelete} from './host-accessors.mjs';
 
 const ZERO = Object.freeze([0, 0, 0]);
 // `name`: the host `values` slot makeBinding fell back to while the host
@@ -50,6 +50,10 @@ const LIVE_ACROSS_RESET = new Set(['position', 'rotation', 'radius', 'height']);
 // The state of a host (non-enumerable, so no host walk sees it): the host's accessors find it through this symbol
 // (host-accessors.mjs) and ask it for the member at the spec's index.
 const POSES = Symbol('actorPoseFields');
+// A MapActorHost's pose members (host-accessors.mjs): its pending value until the installer takes the member into the image, then the state's.
+for (const item of POSE_FIELDS)
+  defineBackedMember(item.prop, host => host[POSES]?.fields[item.index] !== undefined, host => host[POSES].get(item.index),
+    (host, value) => host[POSES].set(item.index, value));
 
 const checkedCells = new WeakSet();
 /** The cell `key` of an attached instance when it holds a pose field: linked
@@ -138,7 +142,7 @@ class PoseSet {
  * storage again. Returns the installed props. */
 export function installPoseFields(host, instance, fields, {values = {}, oldLocation = false} = {}) {
   let set = host[POSES] ?? null;
-  const installed = set ? set.fields.slice() : [];
+  const installed = set ? set.fields.slice() : [], backed = isBackedHost(host);
   const added = [];
   for (const field of fields) {
     const item = BY_KEY.get(field.key);
@@ -146,13 +150,14 @@ export function installPoseFields(host, instance, fields, {values = {}, oldLocat
     const cell = poseCell(instance, field.key);
     if (!cell) continue;
     if (installed[item.index] !== undefined) throw new Error(`Pose ${item.prop} is already installed: ${host.name}`);
-    const existing = Object.getOwnPropertyDescriptor(host, item.prop);
+    const existing = backed ? undefined : Object.getOwnPropertyDescriptor(host, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
+    const current = backed ? peekPending(host, item.prop) : existing?.value;
     const entry = poseFieldOf(item, cell, field);
     let stored = null;
     if (!item.name) stored = entry.read(instance);   // only OldLocation's fallback reads it
-    entry.write(instance, existing?.value === undefined ? entry.fallback(host, values, stored) : existing.value);
-    defineEntryAccessor(host, item.prop, POSES, item.index);
+    entry.write(instance, current === undefined ? entry.fallback(host, values, stored) : current);
+    if (backed) dropPending(host, item.prop); else defineEntryAccessor(host, item.prop, POSES, item.index);
     installed[item.index] = entry; added.push(item.prop);
     if (!set) set = new PoseSet(host, instance, values);
     if (!item.name) set.stored = stored;
@@ -166,7 +171,7 @@ export function installPoseFields(host, instance, fields, {values = {}, oldLocat
  * binding's fallback. A member that is not installed is deleted. */
 export function resetPoseField(host, prop) {
   const set = host?.[POSES], index = BY_PROP.get(prop)?.index;
-  if (!set?.fields[index]) { delete host[prop]; return; }
+  if (!set?.fields[index]) { hostDelete(host, prop); return; }
   set.set(index, set.fallback(index));
 }
 

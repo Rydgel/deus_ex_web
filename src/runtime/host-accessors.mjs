@@ -67,3 +67,80 @@ export function slotArrayClass(slots) {
   for (let index = 0; index < 4; index++) Object.defineProperty(SlotArray.prototype, index, {enumerable: true, ...slots[index]});
   return SlotArray;
 }
+
+/**
+ * Map actor hosts as instances of a class, whose image-backed members are accessors on the prototype
+ * (docs/live-heap.md, "Actor hosts and mesh bindings").
+ *
+ * A host that the installers turned from data properties into own accessors was a dictionary-mode object: V8 normalizes an object
+ * when a data property of it is redefined as an accessor, and a dictionary-mode host holds a table slot for each of its forty-odd
+ * members and an AccessorPair for each of its twenty-two accessors (2,237 hosts and 49,000 pairs on the Island). A MapActorHost
+ * has the members as accessors of its prototype from the start, so it stays a fast-mode object whose own properties are its
+ * data. Until an installer takes a member into the object image, the accessor stores the member's value in the host's pending
+ * table, which is what the data property held; the installer moves that value into the image and the accessor then reads and
+ * writes the image through the host's state (`this[slot]`, as the own accessors did). A member no installer takes keeps its
+ * pending value for good.
+ *
+ * Own-ness is the one difference with a plain host: the members are not own properties of a MapActorHost (Object.keys and a spread
+ * do not list them; `in` and every read and write see them), and `delete` of one is a no-op that `hostDelete` does properly. The
+ * installers still install on plain hosts (the player's identity, fixtures) as they did.
+ */
+export const PENDING = Symbol('hostPending');
+const BACKED = Symbol('mapActorHost');
+
+export class MapActorHost {
+  /** The decoded actor's fields in their order, and `values`. */
+  constructor(actor, values) {
+    this.index = actor.index; this.name = actor.name; this.className = actor.className; this.properties = actor.properties;
+    this.values = values; this.nativeBytes = actor.nativeBytes; this.stack = actor.stack;
+  }
+}
+Object.defineProperty(MapActorHost.prototype, BACKED, {value: true});
+
+/** Whether `host`'s image-backed members are accessors of its prototype (a MapActorHost). */
+export const isBackedHost = host => host?.[BACKED] === true;
+
+function pendingOf(host) {
+  let table = host[PENDING];
+  if (table === undefined) { table = Object.create(null); Object.defineProperty(host, PENDING, {value: table, writable: true}); }
+  return table;
+}
+
+/** A member `prop` of a MapActorHost: `taken(host)` says whether the host's state has taken it (then `read(host)` and `write(host,
+ * value)` are the state's, the functions the own accessors had), else the pending value. `write` is null for a member the state
+ * only reads: a store to it after it was taken throws as the own getter-only accessor did. */
+export function defineBackedMember(prop, taken, read, write) {
+  Object.defineProperty(MapActorHost.prototype, prop, {
+    enumerable: true, configurable: false,
+    get() { return taken(this) ? read(this) : this[PENDING]?.[prop]; },
+    set(value) {
+      if (taken(this)) {
+        if (write === null) throw new TypeError(`Cannot set property ${prop} of #<MapActorHost> which has only a getter`);
+        write(this, value);
+      } else pendingOf(this)[prop] = value;
+    },
+  });
+}
+
+/** The value `host` holds for `prop` before an installer takes it (a plain host's data property, a MapActorHost's pending value). */
+export const peekPending = (host, prop) => host[PENDING]?.[prop];
+
+/** An installer has moved `prop`'s value into the image: a MapActorHost forgets its pending value (a plain host's data property
+ * became the accessor). */
+export function dropPending(host, prop) {
+  const table = host[PENDING];
+  if (table !== undefined) delete table[prop];
+}
+
+/** After the map actors are attached: a host whose pending table is empty lets it go (a later store makes it again). */
+export function releasePendingTables(hosts) {
+  for (const host of hosts) {
+    const table = host[PENDING];
+    if (table !== undefined && Object.keys(table).length === 0) host[PENDING] = undefined;
+  }
+}
+
+/** `delete host[prop]` for a member the installers did not take: a plain host loses the property, a MapActorHost its pending value. */
+export function hostDelete(host, prop) {
+  if (isBackedHost(host)) { const table = host[PENDING]; if (table !== undefined) delete table[prop]; } else delete host[prop];
+}

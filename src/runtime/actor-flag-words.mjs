@@ -33,6 +33,7 @@
  * the arena's current view, so no view outlives a memory growth.
  */
 import {scalarCell} from './script-object-image.mjs';
+import {defineBackedMember, isBackedHost, dropPending} from './host-accessors.mjs';
 
 export const COLLISION_WORD = Object.freeze({name: 'collision', offset: 0x1dc, mask: 0x1f,
   bits: Object.freeze({bcollideactors: 0x1, bcollideworld: 0x2, bblockactors: 0x4, bblockplayers: 0x8, bprojtarget: 0x10})});
@@ -136,6 +137,13 @@ const SHARED = Object.freeze({
   actorFlags: wordMember(ACTOR_WORD), static: bitMember(ACTOR_WORD, 0x1), movable: bitMember(ACTOR_WORD, 0x80000),
   motionFlags: wordMember(MOTION_WORD),
 });
+// A MapActorHost's flag members (host-accessors.mjs): the pending value until the installer takes the word's group into the image, then
+// the word's. The bit members only read, as the own accessors did.
+const GROUPS = {collision: ['flags', 'collisionBits', 'collideActors', 'collideWorld', 'blockActors', 'blockPlayers', 'blocking'],
+  actor: ['actorFlags', 'static', 'movable'], motion: ['motionFlags']};
+for (const [group, props] of Object.entries(GROUPS)) for (const prop of props)
+  defineBackedMember(prop, host => Boolean(host[FLAG_WORDS]?.[group]), host => SHARED[prop].get.call(host),
+    SHARED[prop].set ? (host, value) => SHARED[prop].set.call(host, value) : null);
 const member = (prop, {get, set}) => ({get, set, enumerable: true, configurable: false});
 const shared = props => Object.fromEntries(props.map(prop => [prop, member(prop, SHARED[prop])]));
 
@@ -146,6 +154,9 @@ const shared = props => Object.fromEntries(props.map(prop => [prop, member(prop,
 export function installActorFlagWords(host, instance, {collision = false, actor = false, motion = false}) {
   checkLayout(instance);
   if (host[FLAG_WORDS]) throw new Error(`Actor flag words are already installed: ${host.name}`);
+  // A plain host turns its data properties into accessors; a MapActorHost already has them on its prototype and only forgets the pending values.
+  const backed = isBackedHost(host);
+  const adopt = props => { if (backed) for (const prop of props) dropPending(host, prop); else Object.defineProperties(host, shared(props)); };
   const expect = (prop, word, value) => {
     const stored = readWord(instance, word);
     if ((value >>> 0) !== stored)
@@ -153,13 +164,13 @@ export function installActorFlagWords(host, instance, {collision = false, actor 
   };
   if (collision) {
     expect('flags', COLLISION_WORD, host.flags);
-    Object.defineProperties(host, shared(['flags', 'collisionBits', 'collideActors', 'collideWorld', 'blockActors', 'blockPlayers', 'blocking']));
+    adopt(['flags', 'collisionBits', 'collideActors', 'collideWorld', 'blockActors', 'blockPlayers', 'blocking']);
   }
   if (actor) {
     expect('actorFlags', ACTOR_WORD, host.actorFlags);
     if (host.static !== undefined && host.static !== Boolean(readWord(instance, ACTOR_WORD) & 0x1)) throw new Error(`${host.name}.static differs from bStatic`);
     if (host.movable !== undefined && host.movable !== Boolean(readWord(instance, ACTOR_WORD) & 0x80000)) throw new Error(`${host.name}.movable differs from bMovable`);
-    Object.defineProperties(host, shared(['actorFlags', 'static', 'movable']));
+    adopt(['actorFlags', 'static', 'movable']);
   }
   if (motion) {
     if (host.motionFlags !== undefined) expect('motionFlags', MOTION_WORD, host.motionFlags);
@@ -167,7 +178,7 @@ export function installActorFlagWords(host, instance, {collision = false, actor 
     // (player-scene.mjs prepareActor), which is where the image starts.
     if (Boolean(readWord(instance, MOTION_WORD) & 0x100) !== Boolean(host.values?.bJustTeleported))
       throw new Error(`${host.name}.bJustTeleported image differs from its serialized value`);
-    Object.defineProperty(host, 'motionFlags', member('motionFlags', SHARED.motionFlags));
+    adopt(['motionFlags']);
   }
   const words = Object.freeze(new ActorWords(instance, collision ? COLLISION_WORD : null, actor ? ACTOR_WORD : null, motion ? MOTION_WORD : null));
   Object.defineProperty(host, FLAG_WORDS, {value: words});

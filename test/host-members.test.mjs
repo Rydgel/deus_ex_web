@@ -8,6 +8,7 @@ import * as NEW_POSE from '../src/runtime/actor-pose-fields.mjs';
 import * as NEW_MIRROR from '../src/runtime/actor-mirror-fields.mjs';
 import * as NEW_LINK from '../src/runtime/actor-link-fields.mjs';
 import * as NEW_FLAGS from '../src/runtime/actor-flag-words.mjs';
+import {MapActorHost, hostDelete} from '../src/runtime/host-accessors.mjs';
 import * as OLD_POSE from './helpers/actor-pose-fields-reference.mjs';
 import * as OLD_MIRROR from './helpers/actor-mirror-fields-reference.mjs';
 import * as OLD_LINK from './helpers/actor-link-fields-reference.mjs';
@@ -23,7 +24,15 @@ const ROOT = 'Deus Ex GOTY Edition';
 const VARIANTS = {
   old: {pose: OLD_POSE, mirror: OLD_MIRROR, link: OLD_LINK, flags: OLD_FLAGS},
   new: {pose: NEW_POSE, mirror: NEW_MIRROR, link: NEW_LINK, flags: NEW_FLAGS},
+  // the same modules on a MapActorHost: its image-backed members are accessors of its prototype (docs/live-heap.md, "Actor hosts and mesh bindings")
+  backed: {pose: NEW_POSE, mirror: NEW_MIRROR, link: NEW_LINK, flags: NEW_FLAGS},
 };
+let hostKind = 'plain';
+const MEMBER = key => typeof key === 'string' && key in MapActorHost.prototype;
+// the decoded actor's fields that a MapActorHost's constructor sets and the plain fixtures do not have
+const CONSTRUCTED = new Set(['index', 'className', 'properties', 'nativeBytes', 'stack']);
+const ignored = key => MEMBER(key) || CONSTRUCTED.has(key);
+const dataKeys = host => Object.keys(host).filter(key => !ignored(key));
 
 async function fixture() {
   const files = [];
@@ -41,7 +50,8 @@ async function fixture() {
     return {cls, fields: [...fields.values()]};
   };
   const attach = (name, {cls}, members = {}) => {
-    const host = {name, values: {}, ...members};
+    const host = hostKind === 'backed' ? Object.assign(new MapActorHost({index: 1, name, className: 'Probe', properties: null, nativeBytes: 0, stack: null}, {}), members)
+      : {name, values: {}, ...members};
     runtime.attach(host, cls);
     return host;
   };
@@ -63,7 +73,7 @@ function logImage(instance, log) {
 }
 
 const describe = value => {
-  if (value instanceof Error) return {error: `${value.constructor.name}: ${value.message}`};
+  if (value instanceof Error) return {error: `${value.constructor.name}: ${value.message}`.replace('#<MapActorHost>', '#<Object>')};
   if (Array.isArray(value)) return value.map(describe);
   if (value && typeof value === 'object') return {object: value.name ?? '?'};
   if (typeof value === 'function') return 'function';
@@ -71,15 +81,16 @@ const describe = value => {
 };
 /** What enumerating a host shows: names in order, attributes, and the symbol count. */
 function shape(host) {
-  const out = {keys: Object.keys(host), names: Object.getOwnPropertyNames(host), symbols: Object.getOwnPropertySymbols(host).length,
-    forIn: [], descriptors: {}};
-  for (const key in host) out.forIn.push(key);
+  const out = {keys: dataKeys(host), names: Object.getOwnPropertyNames(host).filter(key => !ignored(key)),
+    symbols: Object.getOwnPropertySymbols(host).filter(symbol => symbol.description !== 'hostPending').length, forIn: [], descriptors: {}};
+  for (const key in host) if (!ignored(key)) out.forIn.push(key);
   for (const name of out.names) {
     const d = Object.getOwnPropertyDescriptor(host, name);
     out.descriptors[name] = 'value' in d ? {data: true, enumerable: d.enumerable, configurable: d.configurable, writable: d.writable}
       : {accessor: true, enumerable: d.enumerable, configurable: d.configurable, get: typeof d.get, set: typeof d.set};
   }
   for (const symbol of Object.getOwnPropertySymbols(host)) {
+    if (symbol.description === 'hostPending') continue;
     const d = Object.getOwnPropertyDescriptor(host, symbol);
     out.descriptors[String(symbol)] = {symbol: true, enumerable: d.enumerable, configurable: d.configurable, writable: d.writable};
   }
@@ -90,9 +101,11 @@ const attempt = (transcript, label, action) => {
 };
 
 /** Run `script(modules, host, instance, transcript)` for the old and the new modules on twin hosts and compare. */
-async function differential(make, script, {calls = 1} = {}) {
+async function differential(make, script, {calls = 1, backed = true} = {}) {
   const results = {};
   for (const [variant, modules] of Object.entries(VARIANTS)) {
+    if (variant === 'backed' && !backed) continue;
+    hostKind = variant === 'backed' ? 'backed' : 'plain';
     const {host, instance, ctx} = make(variant);
     const log = [], transcript = [];
     logImage(instance, log);
@@ -101,7 +114,20 @@ async function differential(make, script, {calls = 1} = {}) {
     transcript.push(['shape', shape(host)]);
     transcript.push(['epoch', baseEpoch() - epoch]);
     const base = instance.base;
-    results[variant] = {transcript, log, image: [...new Uint8Array(instance.arena.bytes.slice(base, base + instance.size))], refs: instance.refs ? [...instance.refs] : null};
+    results[variant] = {transcript, log, image: [...new Uint8Array(instance.arena.bytes.slice(base, base + instance.size))], refs: instance.refs ? [...instance.refs] : null,
+      memberKeys: Object.keys(host).filter(MEMBER)};
+  }
+  hostKind = 'plain';
+  assert.deepEqual(results.new.memberKeys, results.old.memberKeys, 'the members a plain host lists');
+  if (results.backed) {
+    assert.deepEqual(results.backed.memberKeys, [], 'a MapActorHost lists none of the image-backed members');
+    // The one behavior that differs by design: `delete host.member` of an installed member throws on a plain host (a non-configurable own
+    // accessor) and is a no-op on a MapActorHost (the member is on its prototype).
+    const noDelete = list => list.filter(entry => entry[0] !== 'delete');
+    assert.deepEqual(noDelete(results.backed.transcript), noDelete(results.old.transcript), 'transcript of the MapActorHost');
+    assert.deepEqual(results.backed.log, results.old.log, 'image calls of the MapActorHost');
+    assert.deepEqual(results.backed.image, results.old.image, 'image bytes of the MapActorHost');
+    assert.deepEqual(results.backed.refs, results.old.refs, 'refs of the MapActorHost');
   }
   assert.deepEqual(results.new.transcript, results.old.transcript, 'transcript');
   assert.deepEqual(results.new.log, results.old.log, 'image calls');
@@ -157,7 +183,7 @@ test('pose members: install, reads, writes, resets, live pose, release and error
     return {host, instance: runtime.instance(host)};
   }, ({pose}, host, instance, t) => {
     attempt(t, 'accessor host', () => pose.installPoseFields(host, instance, actor.fields, {values: host.values}));
-  }, {calls: 1});
+  }, {calls: 1, backed: false});
 });
 
 test('mirror members: install, reads, writes, resets, live vectors, the level target, release and errors match the old module', async () => {
@@ -202,7 +228,7 @@ test('mirror members: install, reads, writes, resets, live vectors, the level ta
     return {host, instance: runtime.instance(host)};
   }, ({mirror}, host, instance, t) => {
     mirror.installMirrorFields(host, instance, pawn.fields, {values: host.values, exclude: mirror.PLAYER_PORT});
-    t.push(['names', Object.keys(host)]);
+    t.push(['names', dataKeys(host)]);
     host.standingCount = 2;
     t.push(['standing', host.standingCount]);
   });
@@ -237,7 +263,7 @@ test('mirror members: install, reads, writes, resets, live vectors, the level ta
     return {host, instance: runtime.instance(host)};
   }, ({mirror}, host, instance, t) => {
     mirror.installMirrorFields(host, instance, levelInfo.fields, {target: host});
-    t.push(['host names', Object.keys(host)]);
+    t.push(['host names', dataKeys(host)]);
     const level = host.level;
     mirror.installMirrorFields(host, instance, levelInfo.fields, {target: level});
     t.push(['level names', Object.keys(level), describe(level.pawnList)]);
@@ -343,7 +369,7 @@ test('flag words: install, reads, writes, bit members, release and errors match 
       t.push(['flagWord', external.get()]);
       external.set(0x140);
       t.push(['flagWord set', external.get(), flags.motion ? host.motionFlags : null]);
-      attempt(t, 'delete', () => { 'use strict'; delete host.flags; });
+      attempt(t, 'delete', () => { 'use strict'; if (hostKind === 'backed') hostDelete(host, 'flags'); else delete host.flags; });
       instance.imageToken.released = true;
       for (const prop of props) attempt(t, `released ${prop}`, () => host[prop]);
       attempt(t, 'released write', () => { host.actorFlags = 1; });
@@ -361,7 +387,7 @@ test('flag words: install, reads, writes, bit members, release and errors match 
       return {host, instance: runtime.instance(host)};
     }, ({flags: modules}, host, instance, t) => {
       attempt(t, label, () => modules.installActorFlagWords(host, instance, {collision: true, actor: true, motion: true}));
-      t.push(['names', Object.keys(host)]);
+      t.push(['names', dataKeys(host)]);
     });
   }
 });
