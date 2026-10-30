@@ -14,6 +14,7 @@ import { setBase as setActorBase } from './walking-callbacks.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
 import { flagWordsOf } from './actor-flag-words.mjs';
+import { hostDelete } from './host-accessors.mjs';
 import { resetPoseField } from './actor-pose-fields.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
@@ -219,7 +220,7 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       // serialized value (actor-flag-words.mjs checks at attach that the
       // image started there); a host copy is dropped.
       if(words?.motion)actor.motionFlags=((actor.motionFlags&~0x100)|(v.bJustTeleported?0x100:0))>>>0;
-      else delete actor.motionFlags;
+      else hostDelete(actor,'motionFlags');
       // A map move host's OldLocation member is its image cell
       // (actor-pose-fields.mjs): it returns to the serialized value the
       // binding showed once the host copy was gone.

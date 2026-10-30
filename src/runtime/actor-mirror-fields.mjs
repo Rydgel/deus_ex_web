@@ -28,13 +28,13 @@
  */
 import {readCell, writeCell, scalarCell, vectorCell} from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
-import {defineEntryAccessor} from './host-accessors.mjs';
+import {defineEntryAccessor, internEntries, defineBackedMember, isBackedHost, peekPending, dropPending, hostDelete} from './host-accessors.mjs';
 
 const ZERO = Object.freeze([0, 0, 0]);
 // `name`: the host `values` slot makeBinding fell back to while the host
 // member was absent (none for pointers, which fell back to None).
 const spec = (prop, key, offset, kind, name, zero) => Object.freeze({prop, key, offset, kind, name, zero, index: 0});
-// Each spec keeps its position in the table: the index of its entry under MIRRORS (host-accessors.mjs).
+// Each spec keeps its position in the table: the index of its member in a host's MirrorSet (host-accessors.mjs).
 const indexed = list => Object.freeze(list.map((item, index) => Object.freeze({...item, index})));
 export const MIRROR_FIELDS = indexed([
   spec('physics', 'engine.actor.physics', 0x30, 'byte', 'Physics', 0),
@@ -67,8 +67,18 @@ const BY_KEY = new Map([...MIRROR_FIELDS, PAWN_LIST].map(item => [item.key, item
 export const PLAYER_BOUND = Object.freeze(new Set(['engine.actor.physics']));
 export const PLAYER_PORT = Object.freeze(new Set(['engine.actor.physics', 'engine.actor.velocity']));
 
-// Installed entries of a host (non-enumerable, so no host walk sees them).
+
+// The state of a host (non-enumerable, so no host walk sees it): the host's accessors find it through this symbol
+// (host-accessors.mjs) and ask it for the member at the spec's index.
 const MIRRORS = Symbol('actorMirrorFields');
+// A MapActorHost's mirrored members (host-accessors.mjs): the pending value until the installer takes the member into the image, then
+// the state's. Mover's and Inventory's MyMarker are both `marker`: the member is the one the state holds.
+{
+  const indexOf = (host, prop) => host[MIRRORS]?.indexOf(prop) ?? -1;
+  for (const prop of new Set(MIRROR_FIELDS.map(item => item.prop)))
+    defineBackedMember(prop, host => indexOf(host, prop) >= 0, host => { const set = host[MIRRORS]; return set.get(set.indexOf(prop)); },
+      (host, value) => { const set = host[MIRRORS]; set.set(set.indexOf(prop), value); });
+}
 
 // Cells (one per class and field) checked against the retail layout.
 const checkedCells = new WeakSet();
@@ -97,25 +107,48 @@ export function mirrorsField(host, instance, field, {exclude = null} = {}) {
 }
 
 const released = instance => Boolean(instance.imageToken?.released);
-class Mirror {
-  constructor(instance, item, cell, field, values) {
-    this.instance = instance; this.spec = item; this.cell = cell;
-    this.codec = propertyCodec(field); this.values = values;
-  }
-  get() {
-    const instance = this.instance;
+/** One mirrored member of a class: its spec, cell and codec, shared by every host that installs it. The instance and the
+ * `values` are the host's (the caller passes them). */
+class MirrorField {
+  constructor(item, cell, codec) { this.spec = item; this.cell = cell; this.codec = codec; }
+  get(instance) {
     if (released(instance)) throw new Error('Script object allocation has been released');
     return readCell(this.cell, instance.arena.view, instance.refs, instance.base);
   }
-  set(value) {
-    const instance = this.instance;
+  set(instance, value) {
     if (released(instance)) throw new Error('Script object allocation has been released');
     writeCell(this.cell, instance.arena.view, instance.refs, this.codec.copy(value), instance.base);
   }
   /** The value makeBinding's getter gave while the host member was absent. */
-  fallback() {
+  fallback(values) {
     const {name, zero} = this.spec;
-    return this.codec.copy(name ? this.values[name] ?? zero : zero);
+    return this.codec.copy(name ? values[name] ?? zero : zero);
+  }
+}
+// The MirrorField of a codec (and cell): one for every class that has the field. keyed by the codec, which belongs to the field (a level's class graph) and goes with it: a leaf cell is shared by every level, so a cache keyed by the cell kept the first level's fields alive through the codec.
+const mirrorFields = new WeakMap();
+function mirrorFieldOf(item, cell, field) {
+  const codec = propertyCodec(field);
+  let list = mirrorFields.get(codec);
+  if (list === undefined) mirrorFields.set(codec, list = []);
+  for (const shared of list) if (shared.cell === cell && shared.spec === item) return shared;
+  const shared = new MirrorField(item, cell, codec);
+  list.push(shared);
+  return shared;
+}
+
+/** What a host (or the level a mirrored member lives on) keeps of its mirrored members: its instance, its `values` and the
+ * class's MirrorFields at the spec's indices (an interned array, holes for the members it does not have). */
+class MirrorSet {
+  constructor(instance, values) { this.instance = instance; this.values = values; this.fields = []; }
+  get(index) { return this.fields[index].get(this.instance); }
+  set(index, value) { this.fields[index].set(this.instance, value); }
+  fallback(index) { return this.fields[index].fallback(this.values); }
+  /** The index of the installed member named `prop` (two specs, Mover's and Inventory's MyMarker, share `marker`), or -1. */
+  indexOf(prop) {
+    const fields = this.fields;
+    for (let index = 0; index < fields.length; index++) if (fields[index]?.spec.prop === prop) return index;
+    return -1;
   }
 }
 
@@ -127,36 +160,33 @@ class Mirror {
  * accessors are non-configurable, so a leftover `delete` throws instead of
  * splitting the storage again. */
 export function installMirrorFields(host, instance, fields, {values = {}, exclude = null, target = host} = {}) {
-  const installed = target[MIRRORS] ?? [];
+  let set = target[MIRRORS] ?? null;
+  const installed = set ? set.fields.slice() : [], backed = isBackedHost(target);
   for (const field of fields) {
     const item = BY_KEY.get(field.key);
     if (!item || exclude?.has(field.key) || (item === PAWN_LIST) !== (target !== host)) continue;
     const cell = mirrorCell(instance, field.key);
     if (!cell) continue;
     if (installed[item.index] !== undefined) throw new Error(`Mirror ${item.prop} is already installed: ${host.name}`);
-    const existing = Object.getOwnPropertyDescriptor(target, item.prop);
+    const existing = backed ? undefined : Object.getOwnPropertyDescriptor(target, item.prop);
     if (existing && !('value' in existing)) throw new Error(`${host.name}.${item.prop} is not a host data member`);
-    const entry = new Mirror(instance, item, cell, field, values);
-    entry.set(existing?.value === undefined ? entry.fallback() : existing.value);
-    defineEntryAccessor(target, item.prop, MIRRORS, item.index);
+    const current = backed ? peekPending(target, item.prop) : existing?.value;
+    const entry = mirrorFieldOf(item, cell, field);
+    entry.set(instance, current === undefined ? entry.fallback(values) : current);
+    if (backed) dropPending(target, item.prop); else defineEntryAccessor(target, item.prop, MIRRORS, item.index);
     installed[item.index] = entry;
+    if (!set) set = new MirrorSet(instance, values);
+    set.fields = installed;
   }
-  if (!target[MIRRORS] && installed.length) Object.defineProperty(target, MIRRORS, {value: installed});
-}
-
-/** The installed entry of the host member `prop` (two specs, Mover's and Inventory's MyMarker, share `marker`). */
-function mirrorEntry(host, prop) {
-  const list = host?.[MIRRORS];
-  if (list) for (const entry of list) if (entry?.spec.prop === prop) return entry;
-  return undefined;
+  if (set) { set.fields = internEntries(installed); if (!target[MIRRORS]) Object.defineProperty(target, MIRRORS, {value: set}); }
 }
 
 /** Return a host member to the value makeBinding showed after `delete`: the
  * binding's fallback. A member that is no mirror is deleted. */
 export function resetMirrorField(host, prop) {
-  const entry = mirrorEntry(host, prop);
-  if (entry) entry.set(entry.fallback());
-  else delete host[prop];
+  const set = host?.[MIRRORS], index = set ? set.indexOf(prop) : -1;
+  if (index >= 0) set.set(index, set.fallback(index));
+  else hostDelete(host, prop);
 }
 
 /** One mirrored field of an attached instance as a {get, set} pair over its
@@ -165,19 +195,19 @@ export function resetMirrorField(host, prop) {
 export function imageField(instance, field) {
   const item = BY_KEY.get(field.key), cell = item && mirrorCell(instance, field.key);
   if (!cell) return null;
-  const entry = new Mirror(instance, item, cell, field, {});
-  return {get: () => entry.get(), set: value => entry.set(value)};
+  const entry = mirrorFieldOf(item, cell, field);
+  return {get: () => entry.get(instance), set: value => entry.set(instance, value)};
 }
 
 /** A host's mirrored vector as an array whose element writes store into the
  * field (the native reach workers restore Velocity component by component,
  * script-pawn-nav.mjs). Null when `prop` is no vector mirror of `host`. */
 export function liveVector(host, prop) {
-  const entry = mirrorEntry(host, prop);
-  if (entry?.spec.kind !== 'vector') return null;
+  const set = host?.[MIRRORS], index = set ? set.indexOf(prop) : -1;
+  if (index < 0 || set.fields[index].spec.kind !== 'vector') return null;
   const vector = new Array(3);
-  for (let index = 0; index < 3; index++) Object.defineProperty(vector, index, {enumerable: true,
-    get: () => entry.get()[index],
-    set: value => { const next = entry.get(); next[index] = value; entry.set(next); }});
+  for (let element = 0; element < 3; element++) Object.defineProperty(vector, element, {enumerable: true,
+    get: () => set.get(index)[element],
+    set: value => { const next = set.get(index); next[element] = value; set.set(index, next); }});
   return vector;
 }

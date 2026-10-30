@@ -100,23 +100,28 @@ const regionMember = prop => cachedMember(regionMembers, prop, () => ({
   get() { return this[ACCESS][prop].get(); }, set(v) { this[ACCESS][prop].set(v); } }));
 const SHARED = Object.freeze({
   controlledPlayer: Object.freeze({ get() { const a = this[ACCESS]; return Boolean(a.services.isA(a.actor, 'engine.playerpawn') && a.get('Player') != null); } }),
-  deleted: Object.freeze({ get() { return Boolean(this[ACCESS].actor.actorFlags & 0x80); } }),
-  collideWorld: Object.freeze({ get() { return Boolean(this[ACCESS].actor.flags & 0x2); } }),
+  // The members whose source depends on whether the pawn's flag words are its image's (`access.imaged`: a map pawn) or composed from its
+  // bool fields are one function pair for every view, branching on it. V8 keeps a hidden class only while every object that adds a name at
+  // a position adds the same accessor pair there: a view whose `deleted` had another pair than the first view's was turned into a
+  // dictionary-mode object (an AccessorPair and a table slot for each of its hundred members; docs/live-heap.md, "Actor hosts and mesh bindings").
+  deleted: Object.freeze({ get() { const a = this[ACCESS]; return Boolean(a.imaged ? a.actor.actorFlags & 0x80 : a.get('bDeleteMe')); } }),
+  collideWorld: Object.freeze({ get() { const a = this[ACCESS]; return Boolean(a.imaged ? a.actor.flags & 0x2 : a.get('bCollideWorld')); } }),
   isPlayerPawn: Object.freeze({ get() { return this[ACCESS].isPlayerPawn; } }),
   netMode: Object.freeze({ get() { return this[ACCESS].level.netMode ?? 0; } }),
   zoneNumber: Object.freeze({ get() { return this.region.zoneNumber; } }),
-  imagedCollisionBits: Object.freeze({ get() { return this[ACCESS].actor.collisionBits; } }),
-  imagedFlags: Object.freeze({ get() { return this[ACCESS].actor.flags; },
-    set(v) { const actor = this[ACCESS].actor; actor.flags = ((actor.flags & ~0xd) | (v & 0xd)) >>> 0; } }),
-  imagedActorFlags: Object.freeze({ get() { return this[ACCESS].actor.actorFlags; } }),
-  composedCollisionBits: Object.freeze({ get() {
+  collisionBits: Object.freeze({ get() {
     const a = this[ACCESS];
-    return (a.get('bCollideActors') ? 1 : 0) | (a.get('bBlockActors') ? 4 : 0) | (a.get('bBlockPlayers') ? 8 : 0) | (a.get('bProjTarget') ? 0x10 : 0); } }),
-  composedFlags: Object.freeze({ get() { return this.collisionBits | (this[ACCESS].get('bCollideWorld') ? 2 : 0); },
-    set(v) { const a = this[ACCESS]; a.set('bCollideActors', Boolean(v & 1)); a.set('bBlockActors', Boolean(v & 4)); a.set('bBlockPlayers', Boolean(v & 8)); } }),
-  composedActorFlags: Object.freeze({ get() {
+    return a.imaged ? a.actor.collisionBits
+      : (a.get('bCollideActors') ? 1 : 0) | (a.get('bBlockActors') ? 4 : 0) | (a.get('bBlockPlayers') ? 8 : 0) | (a.get('bProjTarget') ? 0x10 : 0); } }),
+  flags: Object.freeze({ get() { const a = this[ACCESS]; return a.imaged ? a.actor.flags : this.collisionBits | (a.get('bCollideWorld') ? 2 : 0); },
+    set(v) {
+      const a = this[ACCESS];
+      if (a.imaged) { const actor = a.actor; actor.flags = ((actor.flags & ~0xd) | (v & 0xd)) >>> 0; return; }
+      a.set('bCollideActors', Boolean(v & 1)); a.set('bBlockActors', Boolean(v & 4)); a.set('bBlockPlayers', Boolean(v & 8)); } }),
+  actorFlags: Object.freeze({ get() {
     const a = this[ACCESS];
-    return (a.get('bStatic') ? 1 : 0) | (a.get('bDeleteMe') ? 0x80 : 0) | (a.get('bCollideWhenPlacing') ? 0x20000 : 0) | (a.get('bMovable') ? 0x80000 : 0); } }),
+    return a.imaged ? a.actor.actorFlags
+      : (a.get('bStatic') ? 1 : 0) | (a.get('bDeleteMe') ? 0x80 : 0) | (a.get('bCollideWhenPlacing') ? 0x20000 : 0) | (a.get('bMovable') ? 0x80000 : 0); } }),
   static: Object.freeze({ get() { return Boolean(this.actorFlags & 1); } }),
   movable: Object.freeze({ get() { return Boolean(this.actorFlags & 0x80000); } }),
   pawnFlags: Object.freeze({ get() { return this[ACCESS].actor.pawnFlags ?? 0; }, set(v) { this[ACCESS].actor.pawnFlags = v; } }),
@@ -154,13 +159,15 @@ export function pawnPhysicsView(actor, services) {
     : (name, value) => field(actor, name).set(value);
   const zone = () => services.zoneFields(pawn.region.zone ?? level.pointRegion(pawn.position).zone);
   if (typeof services.isA !== 'function') unsupported('Pawn physics requires original class ancestry');
-  const pawn = { self: actor, worldActor, isPawn: true, pawn: true,
-    controlledPlayer: false,
-    decoration: false, movingBrush: false,
-    projectile: false, model: actor.model ?? null };
-  // `controlledPlayer` was a getter of the literal: the same property, in the same place, over a shared function.
+  const pawn = { self: actor, worldActor, isPawn: true, pawn: true };
+  // `controlledPlayer` was a getter of the literal: the same property, in the same place, over a shared function. It is defined here,
+  // between the literal's fourth and fifth members, not turned from the literal's data property into an accessor: that conversion made
+  // the view a dictionary-mode object (an AccessorPair and a table slot for each of its hundred members); a view whose accessors are
+  // all new properties keeps its hidden class, whose descriptors hold the pairs once for every view (docs/live-heap.md, "Actor hosts
+  // and mesh bindings").
   Object.defineProperty(pawn, 'controlledPlayer', { ...SHARED.controlledPlayer, enumerable: true, configurable: true });
-  const access = { actor, services, level, get, set, zone, water: null, isPlayerPawn: false, region: null, footRegion: null, headRegion: null };
+  pawn.decoration = false; pawn.movingBrush = false; pawn.projectile = false; pawn.model = actor.model ?? null;
+  const access = { actor, services, level, get, set, zone, water: null, isPlayerPawn: false, imaged: false, region: null, footRegion: null, headRegion: null };
   Object.defineProperty(pawn, ACCESS, { value: access });
   // The view stands for `actor` in the IsBasedOn/SetBase walks, and
   // BeginTouch/EndTouch refuse it (actor-touch.mjs). A symbol key: not one of
@@ -186,11 +193,11 @@ export function pawnPhysicsView(actor, services) {
   // A map pawn's flag members read its image's flag words
   // (actor-flag-words.mjs), the storage of the bool fields themselves.
   const words = flagWordsOf(actor), imaged = Boolean(words?.collision && words.actor);
+  access.imaged = imaged;
   if (words && !words.motion) throw new Error(`Map pawn ${actor.name} has no +0x1ec image word (actor-flag-words.mjs)`);
   for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
     ['collideWorld', 'bCollideWorld'], ['bounce', 'bBounce']])
-    Object.defineProperty(pawn, prop, visible(imaged && prop === 'deleted' ? SHARED.deleted
-      : imaged && prop === 'collideWorld' ? SHARED.collideWorld : boolMember(name)));
+    Object.defineProperty(pawn, prop, visible(prop === 'deleted' ? SHARED.deleted : prop === 'collideWorld' ? SHARED.collideWorld : boolMember(name)));
   // The ladder branch (0x103cc5ed) sets bIsWalking before physFlying.
   bind('isWalking', 'bIsWalking', 'bool');
   // calcVelocity/physFlying test the class chain for PlayerPawn (0x1058c160).
@@ -208,15 +215,9 @@ export function pawnPhysicsView(actor, services) {
   // installActorCollisionView encodes them (evidence: AActor::SetCollision
   // 0x10369200 flag writes, native 262/283). The `flags` setter writes
   // bCollideActors, bBlockActors and bBlockPlayers.
-  if (imaged) {
-    Object.defineProperty(pawn, 'collisionBits', visible(SHARED.imagedCollisionBits));
-    Object.defineProperty(pawn, 'flags', visible(SHARED.imagedFlags));
-    Object.defineProperty(pawn, 'actorFlags', visible(SHARED.imagedActorFlags));
-  } else {
-    Object.defineProperty(pawn, 'collisionBits', visible(SHARED.composedCollisionBits));
-    Object.defineProperty(pawn, 'flags', visible(SHARED.composedFlags));
-    Object.defineProperty(pawn, 'actorFlags', visible(SHARED.composedActorFlags));
-  }
+  Object.defineProperty(pawn, 'collisionBits', visible(SHARED.collisionBits));
+  Object.defineProperty(pawn, 'flags', visible(SHARED.flags));
+  Object.defineProperty(pawn, 'actorFlags', visible(SHARED.actorFlags));
   Object.defineProperty(pawn, 'static', visible(SHARED.static));
   Object.defineProperty(pawn, 'movable', visible(SHARED.movable));
   // Host collision/identity props (registration entries are values-keyed).
