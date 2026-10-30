@@ -89,8 +89,8 @@ add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bind
     weak: 'passes in Chromium and Firefox on Linux (2026-10-28): Keyboard Lock where the browser has it, and in Firefox Alt+Enter takes the fullscreen and the pointer without it (the pointer asked again at fullscreenchange, which Firefox needs); a held Escape and F11 in a real browser are not exercised; WebKit and the Mac not run'});
 add('7.6.3', 'resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error', 'H', 'MISSING',
   {machine: `${LINUX}, ${MAC}`, proof: ['a new spec: resizes during Play, pixels against a fresh load at the final size'], need: 'the spec; nothing tests a resize during Play'});
-add('7.6.4', 'a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'a hidden-tab spec'], weak: 'blur is tested; `visibilitychange` is not'});
+add('7.6.4', 'a hidden tab or system sleep stops Play (no frame, no tick); it comes back by itself with no catch-up (no click: the user\'s choice, 2026-10-30) and the audio follows', 'H', 'PARTIAL',
+  {machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'a hidden-tab spec'], weak: 'blur is tested (the game goes on, held input let go); `visibilitychange` and its resume step are not'});
 
 // 7.7 Graphics capability and failures --------------------------------------------------------------------------------------------------
 add('7.7.1', 'a lost WebGL context freezes Play and restores it as D3DDrv\'s `Lock` does; the frames after equal a run with no loss', 'O', 'PASS',
