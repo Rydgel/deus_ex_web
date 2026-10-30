@@ -275,6 +275,7 @@ export function familyKey(result) {
   if (/state Idle/.test(f)) return 'refused: owner authored with Orders Idle';
   if (/the owner cannot converse \(state /.test(f)) return 'refused: owner in an AI state that cannot converse';
   if (/the player cannot start a conversation/.test(f)) return 'refused: the player cannot start a conversation';
+  if (/will not converse with the player/.test(f)) return 'refused: the owner will not converse with the player (CanConverseWithPlayer)';
   if (/no conversation of the owner's chain is valid/.test(f)) return 'refused: no conversation of the owner is valid';
   return f.replace(/:.*$/, '').slice(0, 60);
 }

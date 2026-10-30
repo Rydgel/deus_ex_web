@@ -49,6 +49,12 @@ export const FAMILIES = {
     reason: 'DeusExPlayer.CanStartConversation is false at that moment (another conversation on the screen, the player swimming or falling)',
     evidence: 'DeusExPlayer.uc CanStartConversation',
   },
+  'refused: the owner will not converse with the player (CanConverseWithPlayer)': {
+    kind: 'state',
+    reason: 'the player has a speaking part and the conversation\'s bCanBeInterrupted is unset, so StartConversation asks ScriptedPawn.CanConverseWithPlayer, which is false '
+      + 'for a pawn hostile to the player, Fleeing from a valid enemy other than the player (the Battery Park hostages fleeing the terrorists), or one that cares about the corpse in the player\'s hands (GetCarcassData)',
+    evidence: 'DeusExPlayer.uc StartConversation (IsSpeakingActor, bCanBeInterrupted, CanConverseWithPlayer); ScriptedPawn.uc CanConverseWithPlayer; Conversation.uc IsSpeakingActor',
+  },
   'refused: no conversation of the owner is valid': {
     kind: 'state',
     reason: 'GetActiveConversation finds no valid conversation of the owner for the invocation (its flags, the one-second and ten-second gaps, the height check)',
@@ -69,12 +75,14 @@ export const BOUNDARIES = {
     "unbound: no actor carries the owner name": ["GuntherHermann_BarkAllianceFriendly","GuntherHermann_BarkAllianceHostile","GuntherHermann_BarkFutz"],
   },
   '01': {
-    "refused: speakers not together (CheckActorDistances)": ["TerroristsOverheard"],
+    "refused: speakers not together (CheckActorDistances)": ["Terrorist3Overheard","TerroristsOverheard"],
     "unbound: no actor carries the owner name": ["WaltonSimons_BarkAllianceFriendly","WaltonSimons_BarkAllianceHostile","WaltonSimons_BarkFutz"],
   },
   '02': {
     "refused: a speaker has no actor in the map": ["OverhearAlleyThug"],
+    "refused: owner in an AI state that cannot converse": ["SubGuardsBarks"],
     "refused: speakers not together (CheckActorDistances)": ["ReconciledBarksHack","WorkerOverheardHack","WorkerReconciledHack"],
+    "refused: the owner will not converse with the player (CanConverseWithPlayer)": ["SubHostageMaleBarks","SubHostageMaleRescuedBarks"],
     "refused: the player cannot start a conversation": ["GuntherHermann_BarkFutz"],
     "unbound: no actor carries the owner name": ["BoatLeaving","BoatWaiting","JosephManderley_BarkAllianceFriendly","JosephManderley_BarkAllianceHostile","JunkieBarks","WaltonSimons_BarkAllianceFriendly","WaltonSimons_BarkAllianceHostile","WaltonSimons_BarkFutz"],
   },
@@ -89,7 +97,7 @@ export const BOUNDARIES = {
   },
   '05': {
     "refused: owner in an AI state that cannot converse": ["M05AnnaAtExit","M05AnnaAtExit2"],
-    "refused: speakers not together (CheckActorDistances)": ["AnnaExitKillphrase","ChattingMJ12Overheard","M05SecretaryScared","ScientistsConsulting"],
+    "refused: speakers not together (CheckActorDistances)": ["AnnaExitKillphrase","ChattingMJ12Overheard","M05SecretaryScared","ScientistsConsulting","ScientistsConsulting2"],
   },
   '06': {
     "refused: a speaker has no actor in the map": ["M06JockTrappedBarksFrob","M06JockTrappedBarksRadius","MJ12Lab_BioWeapons_Overheard","MamasanAfterAmbush","MamasanAmbushBarks"],
@@ -122,11 +130,14 @@ export const BOUNDARIES = {
     "unbound: no actor carries the owner name": ["M12MiBOverheard"],
   },
   '14': {
+    "refused: owner in an AI state that cannot converse": ["PinkertonBarks"],
+    "refused: speakers not together (CheckActorDistances)": ["ChattingGuards"],
     "refused: the player cannot start a conversation": ["JockBarks"],
     "unbound: no actor carries the owner name": ["TiffanyGuardsOverheard"],
   },
   '15': {
     "refused: owner in an AI state that cannot converse": ["PowerGuyScared3"],
+    "refused: speakers not together (CheckActorDistances)": ["OverhearMiBSpecial"],
     "unbound: no actor carries the owner name": ["HangarOverheard","HangarOverheard2"],
   },
 };

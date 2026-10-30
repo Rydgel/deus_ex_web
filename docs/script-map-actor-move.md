@@ -85,7 +85,13 @@ spawned views already run:
   Inventory rider with no collision, and admits any non-pawn, non-brush
   collidable map actor. For a near-zero delta, the recovered body applies
   only the rotation. The shortcut had also added the delta and updated the
-  zone.
+  zone. A serialized pawn riding a spawned or map base takes its own recovered
+  MoveActor with the same flags (`ScriptRuntime.movePawn`, ignoreBases 1), as
+  a mover's pawn riders already did in `player-scene.mjs`; the rider section
+  calls one MoveActor for every rider class (`0x10399b51`) and only adds the
+  pawn's ViewRotation yaw after it. Before 2026-10-30 such a rider stopped Play
+  ("Rider MoveActor for a pawn ... is not linked", HKMilitary1 in
+  09_NYC_ShipBelow in the conversation census).
 - **FarMoveActor** (`0x10398ba0`, `relocation.mjs`):
   `ScriptRuntime.relocateMapActor` passes the actor to the recovered
   relocation with the spawned path's level services: FindSpot,

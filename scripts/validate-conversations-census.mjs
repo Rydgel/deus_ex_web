@@ -18,7 +18,10 @@
  * or the map is left by its own events; anything else (a Play stop, a child process that died) FAILs. The census is Play against itself (evidence class P): it finds stops, it does not
  * compare with the original; the placed-chain rows (6.4.*.1) do that for the conversations on each mission's required chain.
  *
- * Exit 0 when nothing fails; 1 otherwise. The census output (with any dialogue-derived text) stays under .work/, outside Git. */
+ * Exit 0 when nothing fails; 1 otherwise. The census output (with any dialogue-derived text) stays under .work/, outside Git.
+ *
+ * runner-timeout: 7200
+ * (the cold pass and its rerun took 3,330 s alone on the Linux host, 2026-10-30) */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';

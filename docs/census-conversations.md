@@ -56,7 +56,20 @@ bunker, the MiB of Area 51), 0 stops. By mission (ran / refused / owner gone): 0
 10 98/5/0, 12 47/0/0, 14 51/1/0, 15 104/2/3. Missions 0 and 11 have no slot. The validator judges the slot pass by itself: a run in the cold pass does not hide a stop
 from a slot.
 
-The cold pass of the same run: 1,520 ran (6 of them on the second start: two Liberty Island overheard conversations, a subway hostage, Gunther's futz bark, a heli base
+## Result (cold pass, 2026-10-30, master after 65ab361c)
+
+1,517 ran, 105 named boundaries, 0 stops, in 3,330 s on the Linux host (the validator declares `runner-timeout: 7200`). Against the 2026-10-24 run 21 conversations
+changed outcome, all in the state families: the pawns' first seconds differ after a week of Play changes, so other speakers are alerted, fleeing or dying when the
+harness calls (a lone `--only SubGuardsBarks` start is refused on the 2026-10-24 commit too, as FallingState). The run found two gaps, both fixed:
+* a map pawn riding a spawned base stopped Play (`Rider MoveActor for a pawn ... is not linked`, HKMilitary1 in 09_NYC_ShipBelow); it now takes its own MoveActor
+  (docs/script-map-actor-move.md);
+* the Battery Park hostage barks were "not started: the original would pick one but the invocation did nothing": the census did not read StartConversation's
+  CanConverseWithPlayer gate (the player speaks in them, and a hostage fleeing a terrorist will not converse with the player). The child now records it, with the
+  ConPlay and DataLink gates, and names the family `refused: the owner will not converse with the player (CanConverseWithPlayer)` (kind state).
+Eight names joined the state families of the table (Terrorist3Overheard, SubGuardsBarks, SubHostageMaleBarks, SubHostageMaleRescuedBarks, ScientistsConsulting2,
+PinkertonBarks, ChattingGuards, OverhearMiBSpecial); names that run now stay listed, since a state refusal can come back with the next change.
+
+The cold pass of the 2026-10-24 run: 1,520 ran (6 of them on the second start: two Liberty Island overheard conversations, a subway hostage, Gunther's futz bark, a heli base
 troop bark, a catacomb hostage), 102 named boundaries, 0 stops.
 
 ## Play stops the census found, and their fixes

@@ -2912,8 +2912,12 @@ export class ScriptRuntime {
    * ignoreBases=1, noFail=0). A map actor takes the same body on its own
    * native surface (moveMapRider). */
   moveSpawnedActor(view,delta,rotation) {
-    if(!this.collisionViewActors.has(view))
+    if(!this.collisionViewActors.has(view)){
+      // A serialized pawn riding takes its own recovered MoveActor with the
+      // rider entry's flags, as a mover's pawn riders do (player-scene.mjs).
+      if(this.isMapPawn(view))return this.movePawn(view,delta,rotation,{ignoreBases:true});
       return this.moveMapRider(view,delta,rotation);
+    }
     const level=this.levelFor(view);
     if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
     const completed=this.scriptVm?.moveActor?.rider(view,level,delta,rotation);

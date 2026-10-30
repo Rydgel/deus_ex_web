@@ -626,6 +626,9 @@ function harness(c, frameSeconds, meta) {
     if (d.canConverse === false) return { family: `refused by the original: the owner cannot converse (state ${String(d.state).split('.').pop()})`, message };
     if (d.canStart === false) return { family: 'refused by the original: the player cannot start a conversation', message };
     if (!d.frobPick && !d.radiusPick) return { family: 'refused by the original: no conversation of the owner\'s chain is valid', message };
+    const w = d.withPlayer;
+    if (w && w.speaking === true && w.bCanBeInterrupted === false && w.canConverseWithPlayer === false)
+      return { family: 'refused by the original: the owner will not converse with the player (CanConverseWithPlayer)', message };
     return { family: 'not started: the original would pick one but the invocation did nothing', message };
   }
 
@@ -638,6 +641,10 @@ function harness(c, frameSeconds, meta) {
     d.enemy = nm(get(owner, 'Enemy'));
     try { d.canConverse = call(owner, 'CanConverse'); } catch { /* none */ }
     try { d.canStart = call(player(), 'CanStartConversation'); } catch { /* none */ }
+    // StartConversation's later gates: a conversation already on ConPlay (the same one, or the owner's first-person one with the player speaking), a DataLink
+    // playing (a first-person conversation is refused)
+    try { const cp = read(player(), 'conPlay'); d.conPlay = cp ? `${nm(read(read(cp, 'con'), 'conName'))} by ${nm(read(cp, 'invokeActor'))}` : null; } catch { d.conPlay = 'ERR'; }
+    try { d.dataLinkPlay = Boolean(read(player(), 'dataLinkPlay')); } catch { d.dataLinkPlay = 'ERR'; }
     try { d.frobPick = nm(read(call(player(), 'GetActiveConversation', owner, 1), 'conName')); } catch { d.frobPick = null; }
     try { d.radiusPick = nm(read(call(player(), 'GetActiveConversation', owner, 3), 'conName')); } catch { d.radiusPick = null; }
     try { const a = c.pos(owner), b = c.pos(player()); d.distance = Math.round(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])); } catch { /* none */ }
@@ -655,6 +662,12 @@ function harness(c, frameSeconds, meta) {
         canSee: (() => { try { return call(p, 'CanActorSeePlayer', owner); } catch { return 'ERR'; } })(),
         flagRefs: chainCon ? (() => { try { return call(p, 'CheckFlagRefs', get(chainCon, 'flagRefList')); } catch { return 'ERR'; } })() : null,
         player: c.pos(p).map(Math.round), ownerAt: c.pos(owner).map(Math.round),
+      };
+      // StartConversation's CanConverseWithPlayer gate, taken when the player has a speaking part and the conversation's bCanBeInterrupted hack is unset
+      if (chainCon) d.withPlayer = {
+        speaking: (() => { try { return call(chainCon, 'IsSpeakingActor', p); } catch { return 'ERR'; } })(),
+        bCanBeInterrupted: get(chainCon, 'bCanBeInterrupted'),
+        canConverseWithPlayer: (() => { try { return call(owner, 'CanConverseWithPlayer', p); } catch { return 'ERR'; } })(),
       };
       // the speakers ConPlayBase.StartConversation checks: Conversation.CheckActors (every Speech event's speaker and speakingTo bound) and CheckActorDistances (300 units)
       if (chainCon) {

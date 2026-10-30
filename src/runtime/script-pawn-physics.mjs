@@ -462,7 +462,8 @@ function moveOps(pawn, services, dispatch, decorate, ignoreBases) {
       : unsupported('MoveActor zone update for a non-pawn source'),
     // 0x103998a0-0x10399bb0: based riders ride the committed move. The base
     // identity riders store is the host actor (pawn.self), not the view; the
-    // recursive rider MoveActor only admits spawned collision-view riders
+    // recursive rider MoveActor admits spawned collision-view riders, map
+    // pawns and map actors with a collision surface
     // (ScriptRuntime.moveSpawnedActor raises the explicit boundary for any
     // other identity).
     moveRiders: (src, finalDelta, rot) => moveActorRiders(pawn.self, finalDelta, rot, {
