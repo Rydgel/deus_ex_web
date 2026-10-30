@@ -49,7 +49,8 @@ test('the original start takes the pointer (not fullscreen), keeps it through Es
 
 // A real Escape under the pointer lock (out of a Keyboard Lock's fullscreen): the browser takes the press to release the lock and the
 // page never sees it. The page hands the game that Escape (main.mjs handEscape), so one press opens MenuMain and frees the mouse, whose
-// own position then drives the menu's cursor. A browser that delivers the key too gives one Escape, not two.
+// own position then drives the menu's cursor, which starts at the picture's centre. A browser that delivers the key too gives one
+// Escape, not two.
 test('the Escape the browser takes for the pointer lock opens the menu once; the free mouse drives it', async ({ page }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const state = () => page.evaluate(async () => ({ menu: (await window.deusExViewer.settingsProbe({ op: 'state' }))?.top ?? null,
@@ -63,6 +64,13 @@ test('the Escape the browser takes for the pointer lock opens the menu once; the
   expect((await state()).menu).toBeNull();
   await page.evaluate(() => document.exitPointerLock());   // the browser's Escape rule: the lock goes, the key does not reach the page
   await expect.poll(state).toMatchObject({ menu: 'deusex.menumain', lock: null });
+  // the menu's cursor at the picture's centre (main.mjs handEscape); a free pointer that jumps outside the picture leaves it there
+  const centre = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { x: canvas.width / 2, y: canvas.height / 2 }; });
+  const cursor = async () => (await page.evaluate(() => window.deusExViewer.settingsProbe({ op: 'state' }))).cursor;
+  await expect.poll(cursor).toEqual(centre);
+  const outside = await page.locator('#scene').boundingBox();
+  if (outside.x + outside.width < 1270) { await page.mouse.move(outside.x + outside.width + 5, outside.y + outside.height / 2); await page.waitForTimeout(200);
+    expect(await cursor()).toEqual(centre); }
   // the free mouse at its own place: MenuMain's fifth button, Training (validate-travel-play); its click takes the pointer back
   const box = await page.locator('#scene').boundingBox();
   const { result } = await page.evaluate(() => window.deusExViewer.settingsProbe({ op: 'center', field: 'winButtons', index: 4 }));

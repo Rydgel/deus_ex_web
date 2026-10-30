@@ -1678,8 +1678,13 @@ function look(dx, dy) {
 }
 function windowPointer(event,action=null){
   if(mode!=='play'||!game||runtimeError||!world||loading)return false;
-  const canvas=$('scene'),sample=windowPointerSample(event,canvas.getBoundingClientRect(),
-    renderer.domElement.width,renderer.domElement.height,document.pointerLockElement===canvas);
+  const canvas=$('scene'),rect=canvas.getBoundingClientRect(),locked=document.pointerLockElement===canvas;
+  // A free pointer over the page outside the picture (the 4:3 picture's bars) leaves the game's cursor where it is: the root would clamp
+  // it to the edge the pointer left by, where its image (drawn right of and below its hot spot) is out of sight on the right and bottom
+  // edges. The system cursor shows there; the game's comes back under the pointer as it enters the picture.
+  if(!locked&&action===null&&!(event.clientX>=rect.left&&event.clientX<rect.right&&event.clientY>=rect.top&&event.clientY<rect.bottom))
+    return simClient?simAnswers.pointerGrab:game.windowMouseGrabbed();
+  const sample=windowPointerSample(event,rect,renderer.domElement.width,renderer.domElement.height,locked);
   if(action!==null){const key=pointerButtonKey(event.button);if(key<0)return false;sample.key=key;sample.action=action;}
   try{return simInput.pointer(sample);}catch(error){pauseForRuntimeError(error);return true;}
 }
@@ -1897,6 +1902,13 @@ function handEscape() {
     for (const type of ['keydown', 'keyup']) document.dispatchEvent(new KeyboardEvent(type, { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true }));
   } finally { handingEscape = false; }
   escapeHanded = performance.now(); handedEscapeRelease = true;
+  // The menu's cursor at the picture's centre (the user's choice, 2026-10-30): the original leaves the root's cursor where it last was,
+  // anywhere (an edge the cursor's image is drawn past included), and the free pointer moves it only once it is over the picture.
+  // A window that holds the mouse after the Escape takes it (the root's pointer sample answers nothing otherwise).
+  if (mode === 'play' && game && !runtimeError) {
+    try { simInput.pointer({ relative: false, x: renderer.domElement.width / 2, y: renderer.domElement.height / 2 }); }
+    catch (error) { pauseForRuntimeError(error); }
+  }
 }
 document.addEventListener('fullscreenchange', () => { fullscreenChanged = performance.now(); });
 document.addEventListener('pointerlockchange', () => {

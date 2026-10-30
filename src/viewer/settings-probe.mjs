@@ -16,8 +16,10 @@
  *   escape                   the Escape key on the root window
  *   field {name}             a field of the top window, or a dotted path through window fields (a window as its class)
  *   state                    nothing
+ * The result also holds the root's cursor (`cursor`: XWindow::GetCursorPos on the root, drawing-buffer pixels).
  * The caller waits for frames between steps: the windows need their ticks. */
 import { createMenuDriver } from './menu-driver.mjs';
+import { getCursorPos } from '../runtime/script-window-mouse.mjs';
 
 export function settingsProbe(game, step = {op: 'state'}) {
   const driver = createMenuDriver(game), host = game.doors.scriptRuntime.windowHost, runtime = driver.runtime;
@@ -46,8 +48,9 @@ export function settingsProbe(game, step = {op: 'state'}) {
     default: throw new Error(`Unknown settings probe step ${step.op}`);
   }
   const live = runtime.audio?.volumes?.state ?? null;
+  const root = runtime.readNamed(driver.player, 'rootWindow');
   return {
-    result, top: driver.top(),
+    result, top: driver.top(), cursor: root ? getCursorPos(host.W, root) : null,
     display: {...host.display},
     audio: live ? {...live} : null,
     player: {mouseSensitivity: runtime.readNamed(driver.player, 'MouseSensitivity'), invertMouse: runtime.readNamed(driver.player, 'bInvertMouse'),
