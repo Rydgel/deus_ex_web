@@ -1,7 +1,8 @@
 import {createGalaxyAudio} from './galaxy-audio.mjs';
 import {createGalaxyMusic} from './galaxy-music.mjs';
 import {createMirrorMusicLibrary} from './galaxy-music-library.mjs';
-import { createMusicObjects, exportAt } from './galaxy-music-objects.mjs';
+import { createMusicObjects } from './galaxy-music-objects.mjs';
+import { exportAt } from '../unreal/objects.mjs';
 import {createGalaxyVolumes} from './galaxy-volumes.mjs';
 import {hostNow} from './host-clock.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';

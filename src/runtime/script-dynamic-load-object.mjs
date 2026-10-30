@@ -6,6 +6,7 @@ import {
 import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 import {DynamicExportRecord, LinkerExports, setExportObject} from './linker-exports.mjs';
 import { importAt, exportAt } from '../unreal/objects.mjs';
+import { ExportTable } from '../unreal/package-tables.mjs';
 
 // The live DataLink capture reaches this package export before an
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
@@ -188,18 +189,18 @@ export class PreparedDynamicLoadGraph{
     // so the export hash and later FName(text,1) share one identity.
     this.nameIndex(asset.name);
     for(const entry of asset.pkg.imports)this.nameIndex(entry.name);
-    const entries=asset.pkg.exports,names=new Int32Array(entries.length);
-    for(let index=0;index<entries.length;index++)names[index]=this.nameIndex(entries[index].name);
+    const entries=Array.isArray(asset.pkg.exports)?ExportTable.fromObjects(asset.pkg.exports):asset.pkg.exports,names=new Int32Array(entries.length);
+    for(let index=0;index<entries.length;index++)names[index]=this.nameIndex(entries.text(index));
 
     // The package's own export entries stay the package's; the table keeps this linker's names, objects and hash chain
     // (docs/live-heap.md "Steps 2 and 3's results").
     const table=linker.exports=new LinkerExports(entries,names,DynamicExportRecord);
     for(let index=0;index<entries.length;index++)
-      table.objects[index]=this.objects.lookup(`${asset.name}.${entries[index].path}`.toLowerCase())??null;
+      table.objects[index]=this.objects.lookup(`${asset.name}.${entries.path(index)}`.toLowerCase())??null;
     // FindExportIndex's recovered hash depends on the referenced class FName
     // pair and object FName. Link each serialized export into that exact bucket.
     for(let index=0;index<entries.length;index++){
-      const identity=this.exportClassIdentity(linker,entries[index].classIndex);
+      const identity=this.exportClassIdentity(linker,entries.classIndexes[index]);
       if(identity===null)continue;
       const normalizedOuter=identity.outer===0x18?0x17:identity.outer;
       const bucket=(identity.name*7+normalizedOuter*31+names[index])&0xff;

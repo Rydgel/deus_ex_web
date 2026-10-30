@@ -6,7 +6,7 @@ import {setTileWindow} from './script-window-tile.mjs';
 import {setWindowConfigurationNative} from './script-window-configuration.mjs';
 import { readClass } from '../unreal/classes.mjs';
 import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMetadata, readStructMetadata } from '../unreal/script-metadata.mjs';
-import { ScriptObjects, exportAt } from './script-objects.mjs';
+import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { FunctionRecord } from './script-function-record.mjs';
@@ -113,7 +113,7 @@ import { serializeScriptReferences } from './script-reference-serialization.mjs'
 import { serializeRuntimeActor } from './script-runtime-serialization.mjs';
 import { readScriptStructValue } from './script-struct-values.mjs';
 import { loadScriptStructLayout } from './script-struct-layout.mjs';
-import { readObject } from '../unreal/objects.mjs';
+import { readObject, exportAt } from '../unreal/objects.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
 import { extensionStringToName } from './script-extension-strings.mjs';
 import { scriptIsInState, scriptGetStateName } from './script-state-queries.mjs';
@@ -1832,9 +1832,9 @@ export class ScriptRuntime {
     const asset=field?.asset,owner=field?.entry?.outer;
     if(!asset||!(owner>0)||!/^strproperty$/i.test(field.entry.className??''))return [];
     const exports=asset.pkg.exports,values=new Set();
-    const descends=index=>{for(let i=index;i>0;i=exports[i-1].superIndex)if(i===owner)return true;return false;};
+    const descends=index=>{for(let i=index;i>0;i=exports.superIndex(i-1))if(i===owner)return true;return false;};
     for(let index=1;index<=exports.length;index++){
-      if(exports[index-1].className!=='Class'||!descends(index))continue;
+      if(exports.className(index-1)!=='Class'||!descends(index))continue;
       const cls=await this.loadClass(asset,index),member=this.lookupMember(cls,'fields',field.entry.name??field.name);
       if(!member)continue;
       try{const value=this.defaultValue(cls,member);if(typeof value==='string'&&value)values.add(value);}catch{}
