@@ -11,11 +11,15 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
- *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666]
+ *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666] [--dts 0.0167,0.34,0.17]
  *
  * --dt sets the simulated seconds per tick (default 1/60). A longer step
  * reaches physics branches a 60 Hz step cannot (physFalling's apex
  * subdivision needs a substep above 0.03 s).
+ *
+ * --dts lists the simulated seconds of the first ticks (tick i takes dts[i], later ticks --dt): the browser's first frames
+ * run with the dt they waited for (docs/first-frames.md), a long one after the slow first tick. The report's `firstTickMs`
+ * lists the timed ticks' first twelve wall times.
  *
  * --cpu-profile records a V8 CPU profile (node:inspector, 100 us sampling) of
  * the timed ticks only, so warm-up spawns and compilation stay out of it.
@@ -39,6 +43,7 @@ const map = flag('map', '01_NYC_UNATCOIsland'), warm = Number(flag('warm', 60)),
 const digestEvery = Number(flag('digest-every', 0)), continueMode = argv.includes('--continue');
 // The default keeps the clock's original arithmetic (1000 / 60 per tick).
 const tickSeconds = Number(flag('dt', 1 / 60)), tickMs = argv.includes('--dt') ? 1000 * tickSeconds : 1000 / 60;
+const dtList = flag('dts', null)?.split(',').map(Number) ?? null;
 if (argv.includes('--bypass')) register('./bench-sim-hooks.mjs', import.meta.url);
 
 // Determinism for digests: the Level calendar (updateTime) reads Date and the
@@ -163,10 +168,12 @@ function stampRendered() {
 }
 const errors = new Map();
 const step = () => {
-  simulatedMs += tickMs;
+  const listed = dtList !== null && tickIndex < dtList.length;
+  simulatedMs += listed ? 1000 * dtList[tickIndex] : tickMs;
   if (scenario) scenario(tickIndex);
+  const seconds = listed ? dtList[tickIndex] : tickSeconds;
   tickIndex++;
-  try { game.tick(tickSeconds); if (renderFeedback) stampRendered(); }
+  try { game.tick(seconds); if (renderFeedback) stampRendered(); }
   catch (error) {
     const message = String(error?.message ?? error).split('\n')[0];
     errors.set(message, (errors.get(message) ?? 0) + 1);
@@ -393,15 +400,16 @@ if (profiler) await writeFile(profilePath, JSON.stringify((await profiler.call('
 globalThis.__callerOn?.(false);
 fixture.key('KeyW', false);
 log('digest');
-if (globalThis.__riderVerify) report.riderVerify = globalThis.__riderVerify;
 const dumpLines = flag('dump', null) ? [] : null;
 const sorted = times.toSorted((a, b) => a - b), pct = p => +sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))].toFixed(2);
 const report = {map, warm, ticks, bypass: argv.includes('--bypass'), continue: continueMode, renderFeedback, bootMs: Math.round(bootMs),
+  firstTickMs: times.slice(0, 12).map(t => +t.toFixed(1)),
   tickMs: {mean: +(times.reduce((a, b) => a + b, 0) / ticks).toFixed(2), median: pct(0.5), p95: pct(0.95), max: pct(1)},
   // Process CPU per tick (user+system, all threads incl. GC helpers): less
   // sensitive to preemption by other processes than the wall-clock times.
   cpuMsPerTick: +((cpuUsed.user + cpuUsed.system) / 1000 / ticks).toFixed(2),
   digest: digest(dumpLines), digests, errors: Object.fromEntries(errors), unsupportedNatives: Object.fromEntries(unsupported)};
+if (globalThis.__riderVerify) report.riderVerify = globalThis.__riderVerify;
 if (scriptProfile.size) {
   const row = ([key, e]) => `self ${(e.self / ticks).toFixed(3)} incl ${(e.total / ticks).toFixed(3)} ms ${(e.calls / ticks).toFixed(1)}/tick ${key}`;
   report.scriptProfile = [...scriptProfile].sort((a, b) => b[1].self - a[1].self).slice(0, 30).map(row);
