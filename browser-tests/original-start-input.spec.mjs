@@ -8,7 +8,8 @@ import { lockedMove } from './menu-cursor.mjs';
 // to a button; a travel keeps the pointer; Alt+Enter takes fullscreen, Escape (held by the Keyboard Lock) and the pointer, and gives
 // them back (src/viewer/main.mjs).
 // Chromium's new headless mode grants pointer lock and fullscreen, so no window opens on the desktop. Escape here is a synthetic
-// key: the browser's own Escape rule (a window releases the lock, a held Escape leaves fullscreen) is not exercised.
+// key: the browser's own Escape rule (a window releases the lock, a held Escape leaves fullscreen) is not exercised. The second test
+// plays that rule as the call it makes, document.exitPointerLock() with no key: the page hands the game the Escape the browser took.
 test.use({ ...chromiumChannel, headless: true, viewport: { width: 1280, height: 800 } });
 
 test('the original start takes the pointer (not fullscreen), keeps it through Escape, the menu and a travel; Alt+Enter toggles fullscreen', async ({ page }) => {
@@ -39,7 +40,47 @@ test('the original start takes the pointer (not fullscreen), keeps it through Es
   await expect.poll(state).toMatchObject({ lock: 'scene', fullscreen: 'app' });
   await page.keyboard.down('AltLeft'); await page.keyboard.press('Enter'); await page.keyboard.up('AltLeft');
   await expect.poll(state).toMatchObject({ lock: null, fullscreen: null });
+  await page.waitForTimeout(300);
+  expect((await state()).menu).toBeNull();   // a lock the page gives back is no Escape
   await page.keyboard.down('AltLeft'); await page.keyboard.press('Enter'); await page.keyboard.up('AltLeft');
   await expect.poll(state).toMatchObject({ lock: 'scene', fullscreen: 'app' });
+  expect(errors).toEqual([]);
+});
+
+// A real Escape under the pointer lock (out of a Keyboard Lock's fullscreen): the browser takes the press to release the lock and the
+// page never sees it. The page hands the game that Escape (main.mjs handEscape), so one press opens MenuMain and frees the mouse, whose
+// own position then drives the menu's cursor. A browser that delivers the key too gives one Escape, not two.
+test('the Escape the browser takes for the pointer lock opens the menu once; the free mouse drives it', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const state = () => page.evaluate(async () => ({ menu: (await window.deusExViewer.settingsProbe({ op: 'state' }))?.top ?? null,
+    lock: document.pointerLockElement?.id ?? null, map: window.deusExViewer.status().map }));
+  const map = name => page.waitForFunction(name => { const s = window.deusExViewer?.status(); return s?.ready && s.map === name && !s.runtimeError; }, name, { timeout: 240_000 });
+  const grab = async () => { const box = await page.locator('#scene').boundingBox(); await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(state).toMatchObject({ lock: 'scene' }); await page.waitForTimeout(300); };
+  await page.goto(`${process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173'}/`);
+  await map('DX');
+  await grab();
+  expect((await state()).menu).toBeNull();
+  await page.evaluate(() => document.exitPointerLock());   // the browser's Escape rule: the lock goes, the key does not reach the page
+  await expect.poll(state).toMatchObject({ menu: 'deusex.menumain', lock: null });
+  // the free mouse at its own place: MenuMain's fifth button, Training (validate-travel-play); its click takes the pointer back
+  const box = await page.locator('#scene').boundingBox();
+  const { result } = await page.evaluate(() => window.deusExViewer.settingsProbe({ op: 'center', field: 'winButtons', index: 4 }));
+  const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
+  const x = box.x + result.x * box.width / buffer.w, y = box.y + result.y * box.height / buffer.h;
+  await page.mouse.move(x - 30, y - 10, { steps: 5 }); await page.mouse.move(x, y, { steps: 5 }); await page.waitForTimeout(150);
+  await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
+  await map('00_Training');
+  await expect.poll(state).toMatchObject({ lock: 'scene', menu: null });
+  await page.waitForTimeout(500);
+  // a browser that delivers the key as well as releasing the lock: one Escape reaches the game, so the menu stays open
+  await page.evaluate(() => document.exitPointerLock());
+  await page.keyboard.press('Escape');
+  await expect.poll(state).toMatchObject({ menu: 'deusex.menumain', lock: null });
+  await page.waitForTimeout(500);
+  expect((await state()).menu).toBe('deusex.menumain');
+  // and the next Escape, a real press with the mouse already free, is the menu's own: it closes
+  await page.keyboard.press('Escape');
+  await expect.poll(state).toMatchObject({ menu: null });
   expect(errors).toEqual([]);
 });

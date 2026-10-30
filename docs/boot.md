@@ -96,7 +96,14 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
   (NotAllowedError) and grants it once the page is fullscreen (measured 2026-10-28), so the page asks again at `fullscreenchange`;
 * a travel keeps the pointer (the original's viewport keeps the mouse across a level load);
 * out of fullscreen, or in a browser without Keyboard Lock, Escape releases the pointer as the browser requires, and the next click (a menu
-  button's included) takes it back.
+  button's included) takes it back. The browser takes that Escape press for itself (the page sees no key), so the page hands it to the game
+  (`main.mjs` `handEscape`, 2026-10-30): a lock the page did not give back itself (`releasePointer`), lost while the page keeps the focus, its
+  visibility and its fullscreen state, is an Escape, 50 ms later, through the page's own key paths; a real Escape press around it stands for
+  it, and the browser's late press or release of it is dropped. One press opens MenuMain and frees the mouse, whose own position then drives
+  the menu's cursor. (Before, the first press only freed the mouse and a second one opened the menu.) The original's windowed viewport gets
+  every Escape: WinDrv's window procedure answers WM_KEYDOWN itself;
+* a lost focus lets go of the held input and the game goes on (the user's choice, 2026-10-30; before, a blur paused Play until a click,
+  "Click the view to resume"); a hidden page runs no frame and comes back with an ordinary step, not the time it was hidden.
 
 The keys and the wheel the first click makes the game's, and the Keyboard Lock list, are in [input bindings](input-bindings.md).
 

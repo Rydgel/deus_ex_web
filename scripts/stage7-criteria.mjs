@@ -81,9 +81,9 @@ add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s pl
     need: 'the original\'s measurement; Play\'s is not measured'});
 
 // 7.6 Window and input ------------------------------------------------------------------------------------------------------------------
-add('7.6.1', 'the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['browser-tests/pointer-lock.spec.mjs'],
-    weak: 'a blur freezes Play and it resumes without catch-up, and a lost lock lets go of the held movement, in Chrome\'s worker mode and Firefox\'s inline mode (2026-10-28, Linux); a real Escape (the browser\'s own release) is not exercised under Playwright; WebKit and the Mac not run'});
+add('7.6.1', 'the pointer lock is taken on the first click; one Escape releases it and reaches the game (MenuMain); a lost lock or a blur lets go of the held input and Play goes on (no pause, the user\'s choice 2026-10-30); a hidden page resumes without catch-up', 'H', 'PARTIAL',
+  {machine: ALL, proof: ['browser-tests/pointer-lock.spec.mjs', 'browser-tests/original-start-input.spec.mjs'],
+    weak: 'Chrome\'s worker mode, headless, Linux (2026-10-30): the browser\'s Escape rule played as its call (exitPointerLock, no key) opens MenuMain once, a delivered key as well counts once, the free mouse drives the menu; a blur lets go of the held movement and the level\'s clock goes on; a real Escape is not exercised under Playwright (the user saw two presses needed on Chrome Linux and macOS before the change); the hidden-page resume is not tested; Firefox not rerun; WebKit and the Mac not run'});
 add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari)', 'O, H', 'PARTIAL',
   {machine: ALL, proof: ['browser-tests/original-start-input.spec.mjs', 'input-bindings.spec.mjs'],
     weak: 'passes in Chromium and Firefox on Linux (2026-10-28): Keyboard Lock where the browser has it, and in Firefox Alt+Enter takes the fullscreen and the pointer without it (the pointer asked again at fullscreenchange, which Firefox needs); a held Escape and F11 in a real browser are not exercised; WebKit and the Mac not run'});

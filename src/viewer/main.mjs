@@ -338,6 +338,9 @@ let simLastPost=null;
 // `preTicked` and no dt of its own. FIRST_FRAME_DT is sim-session.mjs's: the dt that first post would have measured.
 let preTickPending=false;
 const FIRST_FRAME_DT=1000/60/1000;
+// The pointer lock's Escape (releasePointer, handEscape): the page released the lock itself; the time of the last real Escape press
+// and of the Escape handed to the game; that press's release is still to come from the browser.
+let resumeClock=false,pageReleasedLock=false,escapeSeen=-Infinity,escapeHanded=-Infinity,handingEscape=false,handedEscapeRelease=false,lockLostTimer=null,lockLostAt=-Infinity,fullscreenChanged=-Infinity;
 // Measurement only: ?preTick=off leaves every level's first tick to its first frame, the A arm (docs/first-frames.md).
 const preTickParam=new URLSearchParams(location.search).get('preTick')!=='off';
 // The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
@@ -886,7 +889,7 @@ async function loadSavedFiles(request) {
 }
 function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
-  keys.clear();drag=false;document.exitPointerLock?.();lockGameKeys(false);
+  keys.clear();drag=false;releasePointer();lockGameKeys(false);
   showStats();
   // The map ended by travelling (Stage 6): a stop, not a failure.
   $('toast').textContent=error.travel
@@ -929,7 +932,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   hideNpcFocus();
   $('toast').textContent = '';stopInfoLinkPresentation();
   // The original start keeps the mouse through a travel, as the original's viewport does across a level load.
-  if (!originalStart || !travel) document.exitPointerLock?.();
+  if (!originalStart || !travel) releasePointer();
   keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
@@ -1333,7 +1336,7 @@ let displayFlushes = null, displayResolutionVersion = 0, displayFullscreenToggle
  * the process shuts down. A page cannot close itself: the simulation ends, the sound stops, the view goes blank and the page says so. */
 function endGame() {
   exited = true; paused = true;
-  keys.clear(); drag = false; document.exitPointerLock?.(); lockGameKeys(false);
+  keys.clear(); drag = false; releasePointer(); lockGameKeys(false);
   stopInfoLinkPresentation(); infoLinkAudioContext?.suspend?.().catch(() => {});
   simClient?.terminate(); simClient = null;
   $('scene').style.visibility = 'hidden';
@@ -1502,7 +1505,7 @@ previews.instructor=()=>{
       game.player.velocity=[0,0,0];
     });
     aimPreview(instructor);
-    drag=false;document.exitPointerLock?.();togglePanel(false);$('scene').focus();
+    drag=false;releasePointer();togglePanel(false);$('scene').focus();
     void activateInfoLinkAudio().catch(error=>pauseForRuntimeError(error));
     toast('Instructor preview · wait a few seconds, then right-click to speak. Player start returns to the beginning.');
   }catch(error){pauseForRuntimeError(error);}
@@ -1528,7 +1531,7 @@ previews.weapon = async () => {
     });
     yaw = 0; pitch = -0.15; camera.rotation.set(pitch, yaw, 0);
     camera.position.fromArray(toView(game.player.eye));
-    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    drag = false; releasePointer(); togglePanel(false); $('scene').focus();
     aimPreview(crowbar);
     const picked = game.use();
     const belt=game.hud.read(game.hud.hud,'belt');
@@ -1563,7 +1566,7 @@ previews.datacube = () => {
     for (let frame = 0; frame < 30; frame++)
       game.tick(1 / 60);
     camera.position.fromArray(toView(game.player.eye));
-    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    drag = false; releasePointer(); togglePanel(false); $('scene').focus();
     // The original highlight tick selects the cube from the preview aim.
     aimPreview(cube);
     toast('DataCube preview · right-click to read it; walk away or right-click again to close.');
@@ -1586,7 +1589,7 @@ previews.keypad = () => {
       game.tick(1 / 60);
     yaw = 0; pitch = Math.atan2(at[2] - game.player.eye[2], 48);
     camera.rotation.set(pitch, yaw, 0); camera.position.fromArray(toView(game.player.eye));
-    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    drag = false; releasePointer(); togglePanel(false); $('scene').focus();
     aimPreview(keypad);
     toast('Keypad preview · right-click to open it, then type the DataCube code 0012.');
   } catch (error) { pauseForRuntimeError(error); }
@@ -1705,7 +1708,7 @@ function takeFullscreen() {
 }
 function leaveFullscreen() {
   navigator.keyboard?.unlock?.();
-  document.exitPointerLock?.();
+  releasePointer();
   if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {});
 }
 document.addEventListener('fullscreenchange', () => {
@@ -1834,6 +1837,7 @@ function typeCharacters(event) {
   }
 }
 document.addEventListener('keydown', event => {
+  if (escapeAlreadyHanded(event)) return;
   // Intercept before the original key/character paths (C is TurnRight).
   // A held shortcut consumes repeats and its release even if Alt lifts first.
   const editing = event.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
@@ -1866,7 +1870,7 @@ document.addEventListener('keydown', event => {
       if(currentMap === '00_Training') activateInfoLinkAudio().catch(error => pauseForRuntimeError(error));
     }
     return;
-  } else if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
+  } else if (event.code === 'Escape') { releasePointer(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
     if(mode==='play'&&runtimeError){event.preventDefault();return;}
@@ -1876,6 +1880,53 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); simInput.reset(); });
+// The user's Escape under the pointer lock (the original start; the debugging page's double-click lock is its own). Out of a fullscreen
+// whose Keyboard Lock holds it, the browser takes that press to release the lock and the page never sees the key (Chromium on Linux and
+// macOS), so the game's Escape (Escape=ShowMainMenu in the world, a
+// menu's own Escape) took a second press. The original's viewport gets every Escape (WinDrv's window procedure answers WM_KEYDOWN
+// itself), so a lock the page did not release (releasePointer), lost while the page keeps the focus, its visibility and its fullscreen
+// state, hands the game the Escape the browser took (handEscape): the page's own keydown and keyup paths run with it, the binding and
+// its WM_CHAR 0x1b included, ESCAPE_WAIT_MS after the loss. A real Escape press around the loss (a browser that delivers the key, a
+// held Escape leaving a Keyboard Lock's fullscreen) stands for it; the browser's own press or release of the handed Escape, when it
+// comes after it, is dropped.
+const ESCAPE_WAIT_MS = 50, ESCAPE_NEAR_MS = 250;
+function releasePointer() { if (document.pointerLockElement) pageReleasedLock = true; document.exitPointerLock?.(); }
+function handEscape() {
+  handingEscape = true;
+  try {
+    for (const type of ['keydown', 'keyup']) document.dispatchEvent(new KeyboardEvent(type, { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true }));
+  } finally { handingEscape = false; }
+  escapeHanded = performance.now(); handedEscapeRelease = true;
+}
+document.addEventListener('fullscreenchange', () => { fullscreenChanged = performance.now(); });
+document.addEventListener('pointerlockchange', () => {
+  clearTimeout(lockLostTimer); lockLostTimer = null;
+  const byPage = pageReleasedLock; pageReleasedLock = false;
+  if (document.pointerLockElement || byPage || !originalStart) return;
+  const lost = lockLostAt = performance.now();
+  lockLostTimer = setTimeout(() => {
+    lockLostTimer = null;
+    if (escapeSeen > lost - ESCAPE_NEAR_MS || fullscreenChanged > lost - ESCAPE_NEAR_MS || document.pointerLockElement) return;
+    if (mode !== 'play' || !game || runtimeError || loading || document.hidden || !document.hasFocus() || document.querySelector('dialog[open]')) return;
+    handEscape();
+  }, ESCAPE_WAIT_MS);
+});
+/** A real Escape key event's part in the pointer lock's Escape: a press is noted (it stands for a lost lock's Escape); the browser's
+ * press or release of an Escape handed (or about to be handed) to the game is dropped (true). */
+function escapeAlreadyHanded(event) {
+  if (event.code !== 'Escape' || handingEscape) return false;
+  if (event.type === 'keydown') {
+    if (!event.repeat) escapeSeen = performance.now();
+    if (performance.now() - escapeHanded < ESCAPE_NEAR_MS) { event.preventDefault(); return true; }
+    handedEscapeRelease = false;
+    return false;
+  }
+  // (the release of the press the browser took, before the game is handed it)
+  if (lockLostTimer !== null && escapeSeen < lockLostAt) { event.preventDefault(); return true; }
+  if (!handedEscapeRelease) return false;
+  handedEscapeRelease = false; event.preventDefault();
+  return true;
+}
 // The mouse wheel is WinDrv's WM_MOUSEWHEEL (docs/input-bindings.md): one message per notch, and the world's NextBeltItem and
 // PrevBeltItem or a window's scroll area answer it. The wheel of the canvas (or of the locked pointer) belongs to the game; the
 // debugging page's panels keep theirs. A non-passive listener, so that Ctrl+wheel does not zoom the page.
@@ -1889,14 +1940,18 @@ document.addEventListener('wheel', event => {
   catch (error) { pauseForRuntimeError(error); }
 }, { passive: false });
 document.addEventListener('keyup', event => {
+  if (escapeAlreadyHanded(event)) return;
   if (event.target.closest?.('#saves-dialog') || (!originalStart && event.code === 'KeyS' && event.altKey)) return;
   if (event.code === 'KeyC' && crtShortcutHeld) { crtShortcutHeld = false; event.preventDefault(); return; }
   const input = inputKey(event, false);
   if (input?.consumed || (input?.handled && !input.host) || (input && gameTakesKey(event))) event.preventDefault();
   keys.delete(event.code);
 });
-window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; paused = true; simInput.reset({releasePhysical:true}); });
-document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; simInput.reset({releasePhysical:true}); } });
+// A lost focus lets go of what the player held (no key release reaches the page any more) and the game goes on: the user's choice,
+// 2026-10-30 (no pause and no click to resume; what the original does on a lost focus is not measured here). A hidden page draws no
+// frame and runs no tick; its first frame back takes an ordinary step (resumeClock), not the time it was hidden.
+window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; simInput.reset({releasePhysical:true}); });
+document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) simInput.reset({releasePhysical:true}); else resumeClock = true; });
 // Graphics context loss (docs/context-loss.md). D3DDrv's Lock tests the device every frame, sleeps while it is unavailable and rebuilds it
 // with SetRes (0x1000323f..0x10003314): the game thread does nothing meanwhile, and the next tick's delta holds the whole wait. Here a lost
 // context stops the simulation (animate posts and ticks nothing, and the clocks keep the last frame's time), and once three.js has made its
@@ -2031,6 +2086,9 @@ async settingsProbe(step) {
 },
 /** Validation only: window-probe.mjs (the root window, focus text,
  * Console line and notes) on the simulation side. */
+/** Validation: the pointer given back as the page gives it (releasePointer): the game is handed no Escape, so a test's absolute
+ * moves and clicks reach a menu that stays open. A user's release is the browser's Escape rule (handEscape). */
+releasePointer() { releasePointer(); },
 async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;
@@ -2284,6 +2342,7 @@ function animate(time) {
   requestAnimationFrame(animate);
   if (exited) return;
   if (held === 'releasing') { held = false; lastTime = simLastPost = time - 1000 / 60; }
+  if (resumeClock) { resumeClock = false; lastTime = time - 1000 / 60; if (simLastPost !== null) simLastPost = time - 1000 / 60; }
   if (held) { lastTime = time; return; }
   // A lost context (docs/context-loss.md): nothing is simulated, and lastTime and simLastPost keep the last frame's time, so the first frame
   // after the restore carries the whole wait in its dt. A snapshot simulated before the loss is applied as it arrives (its draws reach the
@@ -2403,7 +2462,7 @@ function drawFrame(snap, time) {
     // Host status only: the frob target's name and highlight are the
     // original HUD's FrobDisplayWindow.
     if (mode === 'play') $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} stops here (Stage 6) · Player start replays`
-    : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : '';
+    : runtimeError ? 'Play paused · Player start resets the scene' : '';
   }
   phase('tick');
   // The GPU timer starts before the actor layer, whose mesh passes

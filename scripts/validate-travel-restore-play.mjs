@@ -53,7 +53,7 @@ try {
   // the drawn scene is not blank: a one-colour canvas compresses to a few kilobytes of PNG, a scene to hundreds
   const lit = async () => (await page.locator('#scene').screenshot()).length;
   const click = async spec => {
-    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
+    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await frames(3); }
     const { result } = await probe({ op: 'center', ...spec });
     const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
     const box = await page.locator('#scene').boundingBox();

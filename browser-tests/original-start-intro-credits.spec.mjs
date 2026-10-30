@@ -19,9 +19,9 @@ test('Play Intro, Escape, the DXOnly menu and the Credits end at the main menu',
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   const map = (name, timeout = 240_000) => page.waitForFunction(name => { const s = window.deusExViewer?.status(); return s?.ready && s.map?.toLowerCase() === name.toLowerCase() && !s.runtimeError; }, name, { timeout });
   const runtimeError = () => page.evaluate(() => window.deusExViewer.status().runtimeError?.message ?? null);
-  /** A pointer click on a control of the top window: the menu's cursor follows absolute motion once the lock is released (a user's Escape in a window does that). */
+  /** A pointer click on a control of the top window: the menu's cursor follows absolute motion once the lock is released (as the page releases it: a user's Escape would reach the menu). */
   const clickControl = async spec => {
-    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
+    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await frames(3); }
     const { result } = await probe({ op: 'center', ...spec });
     const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
     const box = await page.locator('#scene').boundingBox();

@@ -44,9 +44,9 @@ try {
   const shot = async name => { if (shotsDir) await writeFile(`${shotsDir}/${name}.png`, await page.locator('#scene').screenshot()); };
   /** A real mouse click on a control of the top window (settingsProbe `center`: drawing-buffer pixels -> page pixels). The default
    * start takes the pointer lock after a click (docs/boot.md "The mouse and fullscreen"), under which these absolute moves would be
-   * relative motion of the menu's cursor: the lock is released first, as a user's Escape in a window does, and the click takes it again. */
+   * relative motion of the menu's cursor: the lock is released first, as the page releases it (deusExViewer.releasePointer: a user's Escape would reach the menu), and the click takes it again. */
   const click = async spec => {
-    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
+    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await frames(3); }
     const { result } = await probe({ op: 'center', ...spec });
     const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
     const box = await page.locator('#scene').boundingBox();

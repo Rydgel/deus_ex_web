@@ -48,7 +48,7 @@ test('every User.ini binding runs in Play when its key, button or wheel is press
     },
     pointerTo: async ({ x, y }) => {
       // a window's cursor follows the absolute pointer once the lock is released (a window under the lock gets relative motion)
-      if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await wait(300); }
+      if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await wait(300); }
       const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
       const rect = await page.locator('#scene').boundingBox();
       const px = rect.x + x * rect.width / buffer.w, py = rect.y + y * rect.height / buffer.h;

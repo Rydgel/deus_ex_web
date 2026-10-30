@@ -51,9 +51,9 @@ const toScreen = async (bx, by) => {
   const box = await page.locator('#scene').boundingBox();
   return [box.x + bx * box.width / buffer.w, box.y + by * box.height / buffer.h];
 };
-/** Move to a point in drawing-buffer pixels, with the pointer lock released first as the user's Escape in a window does. */
+/** Move to a point in drawing-buffer pixels, with the pointer lock released first as the page releases it (no Escape reaches the game). */
 async function moveTo(bx, by) {
-  if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
+  if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await frames(3); }
   const [x, y] = await toScreen(bx, by);
   await page.mouse.move(x - 12, y - 6); await frames(1);
   await page.mouse.move(x, y); await frames(2);

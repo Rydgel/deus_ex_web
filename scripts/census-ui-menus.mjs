@@ -104,9 +104,9 @@ const signatureOf = c => !c ? null : `${c.windows[0].class}${c.windows[0].class 
 const readControls = async () => (await probe({ op: 'controls' })).result;
 
 /** A real pointer gesture at drawing-buffer pixels (settingsProbe `center` coordinates). The default start takes the pointer lock after
- * a click (docs/boot.md "The mouse and fullscreen"): the lock is released first, as the user's Escape in a window does. */
+ * a click (docs/boot.md "The mouse and fullscreen"): the lock is released first, as the page releases it (deusExViewer.releasePointer: no Escape reaches the game). */
 async function pointer(bx, by, { button = 'left', clickCount = 1, drag = null } = {}) {
-  if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
+  if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => window.deusExViewer.releasePointer()); await frames(3); }
   const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
   const box = await page.locator('#scene').boundingBox();
   const at = (x, y) => [box.x + x * box.width / buffer.w, box.y + y * box.height / buffer.h];
