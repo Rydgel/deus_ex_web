@@ -17,6 +17,27 @@
 > [!IMPORTANT]
 > 本仓库**不包含任何游戏文件**。要游玩，你需要自己合法获得的 Deus Ex 副本，例如 GOG 或 Steam 上的 *Deus Ex: Game of the Year Edition*。详见[法律声明](#法律声明)。
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/readme/island.jpg" alt="夜晚的自由女神岛：码头、雕像和曼哈顿的灯火，以及原版 HUD"></td>
+    <td width="50%"><img src="docs/readme/conversation.jpg" alt="对话中 Paul Denton 的特写，下方是说话人的名字和字幕"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>第一个任务开始时的自由女神岛</sub></td>
+    <td align="center"><sub>与 Paul 见面：对话镜头与字幕</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/readme/training.jpg" alt="UNATCO 训练设施的大厅，屏幕上显示关卡标题"></td>
+    <td width="50%"><img src="docs/readme/hud.jpg" alt="香港湾仔市场的小巷，手持突击步枪，可见快捷栏、弹药显示和增强能力图标"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>训练设施</sub></td>
+    <td align="center"><sub>香港湾仔市场：HUD（装备来自调试页面的一键配装）</sub></td>
+  </tr>
+</table>
+
+<sub>以上为浏览器版在 Linux 上的 Chromium 中的截图，采用原版的 4:3 画面比例。画面中的原版美术内容读取自本地的游戏副本。</sub>
+
 **目录：** [进度](#进度) · [快速开始](#快速开始) · [操作](#操作) · [存档](#存档) · [工作原理](#工作原理) · [如何检验还原度](#如何检验还原度) · [性能](#性能) · [参与贡献](#参与贡献) · [文档](#文档) · [法律声明](#法律声明) · [许可证](#许可证)
 
 `docs/` 目录中的详细文档为英文。
@@ -279,6 +300,7 @@ python3 -m venv .cache/native-probe-env
 - 本项目是独立项目，与 Eidos、Square Enix 或 Deus Ex 的任何其他权利人均无关联，也未获得其认可或赞助。
 - Deus Ex 是其所有者的商标。此处使用该名称，仅为说明本项目适用于哪款游戏。
 - 本仓库不包含、也不分发原版游戏的任何文件：没有地图、贴图、音效、音乐、脚本包或提取出的脚本，也没有可执行文件或 DLL。原版文件只会在你自己的电脑上，从你提供的副本中读取。
+- `docs/readme/` 中的截图是本项目运行时的画面，其中包含原版游戏的美术内容。
 - 要游玩，你需要自己合法获得的游戏副本。
 - 本节只是对项目的说明，不构成法律意见，也不对本项目在任何国家或地区的法律地位作出保证。
 

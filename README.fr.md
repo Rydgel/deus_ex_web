@@ -29,6 +29,28 @@ de la page.
 > copie de Deus Ex, obtenue légalement, par exemple *Deus Ex: Game of the Year Edition*
 > sur GOG ou Steam. Voir les [mentions légales](#mentions-légales).
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/readme/island.jpg" alt="Liberty Island de nuit : le quai, la statue et les lumières de Manhattan, avec le HUD d'origine"></td>
+    <td width="50%"><img src="docs/readme/conversation.jpg" alt="Paul Denton en gros plan pendant un dialogue, avec le nom de l'orateur et le sous-titre en dessous"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Liberty Island au début de la première mission</sub></td>
+    <td align="center"><sub>La rencontre avec Paul : la caméra de dialogue et les sous-titres</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/readme/training.jpg" alt="Une salle du centre d'entraînement de l'UNATCO, avec le titre du niveau à l'écran"></td>
+    <td width="50%"><img src="docs/readme/hud.jpg" alt="Une ruelle du marché de Wan Chai à Hong Kong, fusil d'assaut en main, avec la ceinture d'objets, l'affichage des munitions et les icônes d'augmentations"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Le centre d'entraînement</sub></td>
+    <td align="center"><sub>Le marché de Wan Chai à Hong Kong : le HUD, avec l'équipement de la page de débogage</sub></td>
+  </tr>
+</table>
+
+<sub>Captures de la version navigateur dans Chromium sous Linux, au format 4:3 de l'original. Elles montrent les
+graphismes d'origine du jeu, lus depuis une copie locale du jeu.</sub>
+
 **Sommaire :** [État](#état) · [Démarrage](#démarrage) · [Commandes](#commandes) ·
 [Sauvegardes](#sauvegardes) · [Fonctionnement](#fonctionnement) ·
 [Vérifier la fidélité](#vérifier-la-fidélité) · [Performances](#performances) ·
@@ -424,6 +446,8 @@ chacune avec ses preuves. Pour commencer :
   ni sons, ni musique, ni paquets de scripts ou scripts extraits, ni exécutables, ni DLL. Les
   fichiers d'origine sont lus uniquement depuis une copie que vous fournissez, sur votre
   propre machine.
+- Les captures d'écran de `docs/readme/` montrent ce projet en marche, avec des graphismes
+  du jeu original.
 - Pour jouer, il vous faut votre propre copie du jeu, obtenue légalement.
 - Cette section décrit le projet. Ce n'est pas un conseil juridique, et elle ne garantit
   rien quant au statut juridique du projet dans quelque pays que ce soit.

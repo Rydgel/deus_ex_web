@@ -27,6 +27,28 @@ and a **Web Worker** keeps the simulation off the page's main thread.
 > obtained copy of Deus Ex, such as *Deus Ex: Game of the Year Edition* from GOG or
 > Steam. See [Legal](#legal).
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/readme/island.jpg" alt="Liberty Island at night: the dock, the statue and the Manhattan skyline, with the original HUD"></td>
+    <td width="50%"><img src="docs/readme/conversation.jpg" alt="Paul Denton in close-up during a conversation, with the speaker's name and subtitle below"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Liberty Island at the start of the first mission</sub></td>
+    <td align="center"><sub>Meeting Paul: the conversation camera and subtitles</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/readme/training.jpg" alt="A hall of the UNATCO training facility, with the level's title on screen"></td>
+    <td width="50%"><img src="docs/readme/hud.jpg" alt="An alley in Hong Kong's Wan Chai market with an assault rifle drawn, the object belt, the ammunition display and the augmentation icons"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>The training facility</sub></td>
+    <td align="center"><sub>Hong Kong's Wan Chai market: the HUD, with the debugging page's loadout</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots of the browser version in Chromium on Linux, in the original's 4:3 shape. They show the game's
+original artwork, read from a local copy of the game.</sub>
+
 **Contents:** [Status](#status) · [Getting started](#getting-started) ·
 [Controls](#controls) · [Saves](#saves) · [How it works](#how-it-works) ·
 [How fidelity is checked](#how-fidelity-is-checked) · [Performance](#performance) ·
@@ -391,6 +413,8 @@ places to start:
 - The repository does not include or distribute any of the original game's files: no maps,
   textures, sounds, music, script packages or extracted scripts, executables or DLLs.
   Original files are read only from a copy that you provide, on your own machine.
+- The screenshots in `docs/readme/` are captures of this project running, and show artwork
+  from the original game.
 - To play, you need your own legally obtained copy of the game.
 - This section describes the project. It is not legal advice and does not promise anything
   about the project's legal status in any country.
