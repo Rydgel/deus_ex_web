@@ -535,8 +535,17 @@ class PropertyReference {
       state.set(copyToStorage(value, descriptor, needsRaw(descriptor) || state.pure?.() !== true ? state.get() : undefined));
       return copyFromDescriptor(descriptor, value, 'arrayReference.set');
     }
-    const element = descriptor.element, whole = readWhole(state);
-    whole[index] = copyScalar(value, element, 'arrayReference.set');
+    const element = descriptor.element;
+    // A storage that writes one element on its own (an image cell without a poison entry) does not read the whole array, copy it
+    // and write every element back: `AlliancesEx[i].AllianceName = n` was two such round trips of sixteen structs (ChangeAlly, 274
+    // calls in the Island's first tick). The element is stored as the whole-value store stores it.
+    let stored, have = false;
+    if (element.type !== 'bool' && state.pure?.() === true && typeof state.writeElement === 'function') {
+      stored = copyScalar(value, element, 'arrayReference.set'); have = true;
+      if (state.writeElement(index, stored)) return copyScalar(stored, element, 'arrayReference.set');
+    }
+    const whole = readWhole(state);
+    whole[index] = have ? stored : copyScalar(value, element, 'arrayReference.set');
     writeLogical(state, whole);
     return copyScalar(whole[index], element, 'arrayReference.set');
   }

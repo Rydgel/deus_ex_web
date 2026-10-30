@@ -18,7 +18,7 @@ import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,d
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, readCell, writeCell, writeVector3, readFixedElement, isFixedCell, isPointerCell, readStructMember, scalarCell, pointerOffset } from './script-object-image.mjs';
+import { objectImageCells, readCell, writeCell, writeVector3, readFixedElement, writeFixedElement, isFixedCell, isPointerCell, readStructMember, scalarCell, pointerOffset } from './script-object-image.mjs';
 import { createFrameLocals, FrameStack, LocalCellStorage, setLocalCopy, getLocalCopy } from './script-frame-locals.mjs';
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
@@ -355,6 +355,14 @@ class CellStorage {
     if(!isFixedCell(this.cell)||instance.poison?.get(this.field.key))return NO_ELEMENT;
     return readFixedElement(this.cell,instance.arena.view,instance.refs,index,instance.base);
   }
+  /** Store one element of a fixed-array cell (PropertyReference element writes), which the whole-value path stores with every other
+   * element read and written back; false when that path keeps it: not a fixed array, a poison entry, an index outside the array. */
+  writeElement(index,value){
+    const instance=this.instance;
+    if(!isFixedCell(this.cell)||instance.poison?.get(this.field.key)||!Number.isInteger(index)||index<0||index>=this.cell.dim)return false;
+    writeFixedElement(this.cell,instance.arena.view,instance.refs,index,value,instance.base);
+    return true;
+  }
   set(value){
     const instance=this.instance,entry=instance.poison?.get(this.field.key);
     if(entry?.write)entry.read();
@@ -406,6 +414,15 @@ const imageFinalizer=new FinalizationRegistry(token=>{
   if(token.released)return;
   token.released=true;token.arena.release(token.base,token.size);
 });
+/** Whether two values Maps of one default property (index -> value) hold the same scalars; any object or array is a different value. */
+const sameDefaultValues=(current,values)=>{
+  if(current===undefined||current.size!==values.size)return false;
+  for(const [index,value] of values){
+    if(value!==null&&typeof value==='object')return false;
+    if(!current.has(index)||!Object.is(current.get(index),value))return false;
+  }
+  return true;
+};
 const sameDefaults=(snapshot,defaults)=>{
   if(snapshot.size!==defaults.size)return false;
   for(const [key,values] of defaults)if(snapshot.get(key)!==values)return false;
@@ -3358,6 +3375,10 @@ export class ScriptRuntime {
       const values=field.metadata.arrayDim>1
         ?new Map(value.map((item,index)=>[index,item])):new Map([[0,value]]);
       if(cls.loadRecord)this.classLoader.writeDefault(cls,field,values);
+      // A write of the value the default already holds (a weapon's script writes `Default.MPPickupAmmoCount` in each spawn) leaves
+      // the class's Map in place: the class image and the interpreters' copies of it are current, and were rebuilt for each write
+      // (docs/first-frames.md "Class defaults").
+      if(sameDefaultValues(cls.defaults.get(field.key),values))return;
       cls.defaults.set(field.key,values);
       classDefaultsChanged();
     });
