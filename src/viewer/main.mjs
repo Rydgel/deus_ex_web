@@ -1353,7 +1353,8 @@ function endGame() {
   exited = true; paused = true;
   keys.clear(); drag = false; releasePointer(); lockGameKeys(false);
   stopInfoLinkPresentation(); infoLinkAudioContext?.suspend?.().catch(() => {});
-  simClient?.terminate(); simClient = null;
+  // (with the worker gone, the page's input paths would fall to the inline game's methods: no game is left to take input)
+  simClient?.terminate(); simClient = null; game = null;
   $('scene').style.visibility = 'hidden';
   $('toast').textContent = 'Deus Ex has exited. Reload the page to start again.';
 }

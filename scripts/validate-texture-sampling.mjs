@@ -13,7 +13,6 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
-import { debugUrl } from './page-url.mjs';
 
 const server = await createServer({configFile: false, publicDir: false, logLevel: 'error',
   // its own dependency cache: its config differs from vite.config.mjs's, so .vite-cache/deps would be rebuilt (vite.config.mjs)
@@ -27,7 +26,8 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.route('**/__texture_sampling_fixture__', route => route.fulfill({contentType: 'text/html',
     body: '<!doctype html><script type="module">import {runTextureSamplingFixture} from "/scripts/texture-sampling-fixture.mjs"; window.samplingResult = await runTextureSamplingFixture();</script>'}));
-  await page.goto(debugUrl(new URL('/__texture_sampling_fixture__', server.resolvedUrls.local[0]).href));
+  // The fixture page itself, not the game page: debugUrl's ?debug=1 would keep the route's glob from matching (2080f245)
+  await page.goto(new URL('/__texture_sampling_fixture__', server.resolvedUrls.local[0]).href);
   await page.waitForFunction(() => window.samplingResult, {}, {timeout: 60_000});
   const result = await page.evaluate(() => window.samplingResult);
   assert.deepEqual(errors, []);
