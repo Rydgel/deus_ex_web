@@ -2448,6 +2448,35 @@ dynamic-load graph's link of DeusExConText's 50,335 exports, the first query of 
   by 11.7% and its objects by 18%, so by step 7's and 8's ratios a few percent of the marking would be expected, which is a prediction. Firefox and the Mac
   are not measured.
 
+### Everything merged on two cores (2026-10-30)
+
+Master 32c1c42e (steps 2 to 5 and 9, the load records, the actor hosts and the package tables; the scope view's HUD fix on top is
+page drawing only) against 89bd1edd, the method of "Steps 2 to 5 and 9 on two cores" with V8's marking log, each run in a memory-capped
+scope (`systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0`): four interleaved 300 s Island roams on two cores, 19,053 to
+19,247 worker frames a run.
+
+The heap (Island, 240 s roam, forced GCs; `.cache/perf/heap-island-r11-roam240`): the worker holds 2.36 M objects, 19.1 M snapshot
+edges and 168 MB of JS heap (176 MB used), from 8.21 M, 45.3 M and 336 MB at 07de3088; the page's used heap is 82 MB (115 MB).
+
+| run | worker major GCs | main-thread marking a cycle, mean (max) | atomic pause, mean | frames over 50 ms (V8 log) | over 100 ms | longest frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 89bd1edd, 1 | 6 | 205 ms (245) | 32 ms | 27 | 5 | 153 ms |
+| 89bd1edd, 2 | 5 | 203 ms (255) | 35 ms | 23 | 8 | 203 ms |
+| 32c1c42e, 1 | 11 | 15 ms (27) | 26 ms | 0 | 0 | 49 ms |
+| 32c1c42e, 2 | 11 | 14 ms (22) | 23 ms | 9 | 0 | 76 ms |
+
+**No GC frame is left over 50 ms on two cores.** Every cycle of the merged tree leaves its marking to the concurrent markers: 0 to 6 ms
+on allocation and 1 to 11 ms as tasks on the worker's thread, spread over six to nine frames, the longest frame of a cycle 28 to 48 ms.
+The cycles are twice as frequent (eleven against five or six in 300 s: the smaller old generation reaches the 32 MB slack sooner)
+and each is cheap. The nine frames over 50 ms of the second run are tick frames without GC (61 to 76 ms, where the roam meets
+something), as the base's eight and nine. What is left long is the first frames after the map's load (226 to 256 ms against 340 to
+342, no GC; "Open"). The user reports the game smooth on the Mac in Chrome and in Firefox (inline) with these cuts (2026-10-30); the
+Mac and Firefox are not measured by these tools.
+
+The merged tree's checks: the bench-sim digests, the HUD stream and `frame-alloc-meter --compare` on the Island, the 747 and Training
+are identical to 07de3088's at every merge (d0079340, dd121cbe, c2e2b8e2); 936 unit tests pass at c2e2b8e2; the families' validators
+of each merge exit 0 in memory-capped scopes, load-saves and travel-endings among them.
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
@@ -2465,7 +2494,12 @@ dynamic-load graph's link of DeusExConText's 50,335 exports, the first query of 
   worker frame (1.7 MB a drawn frame), and on two cores its cycles still give two frames over 100 ms ("Both cuts on two cores"),
   as the synthetic says at that level; the thresholds themselves are placed only once a cut takes it under 0.8 MB. Firefox
   inline is not measured against allocation.
-* **What remains of the two-core freezes.** "The script VM and world query cuts on two cores": with the worker at about 0.6 MB
+* **The first frames after a map's load.** 226 to 572 ms of worker tick in the first frames of Play on every tree measured (no GC in
+  them; "Everything merged on two cores"). Headless (`bench-sim.mjs --warm 0`) the Island's first ticks show it too (445 ms against a
+  16 ms median): the state code's first SpawnActor calls (the pawns' starting inventory, about 105 ms) and the first landings of the
+  pawns (`moveRiders`, about 70 ms). Not GC: the next work, outside this document.
+* **What remained of the two-core freezes (closed 2026-10-30).** "Everything merged on two cores": no GC frame over 50 ms is left on
+  two cores, and the user reports the Mac smooth in Chrome and Firefox. The history: "The script VM and world query cuts on two cores": with the worker at about 0.6 MB
   a frame (from 1.6 two cuts ago) the major GCs are as many as before (five in five minutes, set by the memory reducer and the
   32 MB slack after each cycle), and most still mark 180 to 250 ms on the worker's thread within two to four frames: frames over
   100 ms are as many as on 76495d62 (14 against 14), the longest shorter (192 and 281 ms against 302 and 295). Cutting allocation
