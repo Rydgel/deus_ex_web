@@ -866,6 +866,16 @@ function applyEaster() {
   return import('./easter-page.mjs').then(({ startEaster }) => startEaster({ game, simClient, assets, mapName: currentMap }))
     .catch(error => toast(`?easter: ${error.message}`));
 }
+/** The start's credit card (credit-card.mjs, docs/boot.md "The credit card"): not original, on the original start's DX.dx flight only,
+ * ?credit=0 hides it. Its module loads with the first DX.dx frame. */
+const creditParam = originalStart && new URLSearchParams(location.search).get('credit') !== '0';
+let creditCard = null, creditLoading = null;
+function creditFrame(x) {
+  if (creditCard) { creditCard.update(x); return; }
+  if (x === null || creditLoading) return;
+  creditLoading = import('./credit-card.mjs').then(({ createCreditCard }) => createCreditCard({ assets, scene: $('scene') }))
+    .then(card => { creditCard = card; }, error => toast(`credit card: ${error.message}`));
+}
 /** debug-loadout.mjs on the simulation side; the toast says what was given, or only what was refused when `quiet`. */
 async function giveLoadoutNow({ quiet = false } = {}) {
   if (!game) throw new Error('No game loaded');
@@ -2575,6 +2585,9 @@ function drawFrame(snap, time) {
     if (mode === 'play') $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} stops here (Stage 6) · Player start replays`
     : runtimeError ? 'Play paused · Player start resets the scene' : '';
   }
+  // The credit card follows the flight's view, hidden under any window the root draws (MenuMain over the flight)
+  if (creditParam && snap) creditFrame(playing && frame?.view && currentMap === 'DX' && !snap.hud?.commands?.some(command => command.texture)
+    ? frame.view.location[0] : null);
   phase('tick');
   // The GPU timer starts before the actor layer, whose mesh passes
   // (docs/gpu-mesh.md) are GPU work submitted during this phase.
