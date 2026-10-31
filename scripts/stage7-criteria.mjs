@@ -90,7 +90,8 @@ add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bind
 add('7.6.3', 'resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error', 'H', 'MISSING',
   {machine: `${LINUX}, ${MAC}`, proof: ['a new spec: resizes during Play, pixels against a fresh load at the final size'], need: 'the spec; nothing tests a resize during Play'});
 add('7.6.4', 'a hidden tab or system sleep stops Play (no frame, no tick); it comes back by itself with no catch-up (no click: the user\'s choice, 2026-10-30) and the audio follows', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'a hidden-tab spec'], weak: 'blur is tested (the game goes on, held input let go); `visibilitychange` and its resume step are not'});
+  {machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'browser-tests/hidden-tab.spec.mjs'],
+    weak: 'blur is tested (the game goes on, held input let go); the hidden page passes in Chromium and Firefox on Linux (2026-10-31: no frame and no tick while hidden, back with no click, no catch-up, the held input let go) with the hide modelled (`document.hidden`, `visibilitychange`, no animation frame), as headless browsers keep a background tab visible; a real hidden tab, system sleep and the audio not measured'});
 
 // 7.7 Graphics capability and failures --------------------------------------------------------------------------------------------------
 add('7.7.1', 'a lost WebGL context freezes Play and restores it as D3DDrv\'s `Lock` does; the frames after equal a run with no loss', 'O', 'PASS',

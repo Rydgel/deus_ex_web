@@ -103,7 +103,8 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
   the menu's cursor. (Before, the first press only freed the mouse and a second one opened the menu.) The original's windowed viewport gets
   every Escape: WinDrv's window procedure answers WM_KEYDOWN itself;
 * a lost focus lets go of the held input and the game goes on (the user's choice, 2026-10-30; before, a blur paused Play until a click,
-  "Click the view to resume"); a hidden page runs no frame and comes back with an ordinary step, not the time it was hidden.
+  "Click the view to resume"); a hidden page runs no frame and comes back with an ordinary step, not the time it was hidden
+  (`browser-tests/hidden-tab.spec.mjs`, with the hide modelled: headless Chromium and Firefox keep a background tab visible).
   A check that needs a still frame calls `deusExViewer.freeze()` (validation only): the simulation halts, as a blur did, and the page
   keeps drawing the last snapshot; `freeze(false)` goes on with no catch-up.
 
