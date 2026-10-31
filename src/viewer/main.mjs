@@ -360,6 +360,9 @@ const FIRST_FRAME_DT=1000/60/1000;
 // The pointer lock's Escape (releasePointer, handEscape): the page released the lock itself; the time of the last real Escape press
 // and of the Escape handed to the game; that press's release is still to come from the browser.
 let resumeClock=false,pageReleasedLock=false,escapeSeen=-Infinity,escapeHanded=-Infinity,handingEscape=false,handedEscapeRelease=false,lockLostTimer=null,lockLostAt=-Infinity,fullscreenChanged=-Infinity;
+// When the page last asked the browser to keep its storage (StorageManager.persist(), after the first kept save): Firefox's prompt for it
+// takes the pointer lock (measured 2026-10-28), and a lock lost then is the prompt's, not the user's Escape (handEscape).
+let persistAsked=-Infinity;
 // Measurement only: ?preTick=off leaves every level's first tick to its first frame, the A arm (docs/first-frames.md).
 const preTickParam=new URLSearchParams(location.search).get('preTick')!=='off';
 // The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
@@ -508,6 +511,7 @@ async function keepSimSave(message) {
   } catch (error) { toast(`The game could not be saved: ${error?.message ?? error}`, 12000); throw error; }
 }
 const savesReady = openSavePersistence({ mode: saveMode(location.search, originalStart), served: import.meta.env.DEV ? devServedSaves() : null,
+  requestPersist: () => { persistAsked = performance.now(); return globalThis.navigator?.storage?.persist?.() ?? null; },
   onChange: () => { pushSaves(); savesUi.update(); } })
   .then(persistence => {
     savePersistence = persistence; savesUi.update();
@@ -1963,7 +1967,7 @@ document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(
 // its WM_CHAR 0x1b included, ESCAPE_WAIT_MS after the loss. A real Escape press around the loss (a browser that delivers the key, a
 // held Escape leaving a Keyboard Lock's fullscreen) stands for it; the browser's own press or release of the handed Escape, when it
 // comes after it, is dropped.
-const ESCAPE_WAIT_MS = 50, ESCAPE_NEAR_MS = 250;
+const ESCAPE_WAIT_MS = 50, ESCAPE_NEAR_MS = 250, PROMPT_NEAR_MS = 1000;
 function releasePointer() { if (document.pointerLockElement) pageReleasedLock = true; document.exitPointerLock?.(); }
 function handEscape() {
   handingEscape = true;
@@ -1988,6 +1992,7 @@ document.addEventListener('pointerlockchange', () => {
   lockLostTimer = setTimeout(() => {
     lockLostTimer = null;
     if (escapeSeen > lost - ESCAPE_NEAR_MS || fullscreenChanged > lost - ESCAPE_NEAR_MS || document.pointerLockElement) return;
+    if (lost - persistAsked < PROMPT_NEAR_MS) return;
     if (mode !== 'play' || !game || runtimeError || loading || document.hidden || !document.hasFocus() || document.querySelector('dialog[open]')) return;
     handEscape();
   }, ESCAPE_WAIT_MS);

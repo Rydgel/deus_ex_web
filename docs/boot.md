@@ -99,7 +99,9 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
   button's included) takes it back. The browser takes that Escape press for itself (the page sees no key), so the page hands it to the game
   (`main.mjs` `handEscape`, 2026-10-30): a lock the page did not give back itself (`releasePointer`), lost while the page keeps the focus, its
   visibility and its fullscreen state, is an Escape, 50 ms later, through the page's own key paths; a real Escape press around it stands for
-  it, and the browser's late press or release of it is dropped. One press opens MenuMain and frees the mouse, whose own position then drives
+  it, and the browser's late press or release of it is dropped. A lock lost within a second of the page's `persist()` request (after the
+  first kept save) is the prompt's: Firefox's prompt takes the lock, and the save would otherwise reopen MenuMain by itself (2026-10-31,
+  `save-game.spec` in Firefox). One press opens MenuMain and frees the mouse, whose own position then drives
   the menu's cursor. (Before, the first press only freed the mouse and a second one opened the menu.) The original's windowed viewport gets
   every Escape: WinDrv's window procedure answers WM_KEYDOWN itself;
 * a lost focus lets go of the held input and the game goes on (the user's choice, 2026-10-30; before, a blur paused Play until a click,
