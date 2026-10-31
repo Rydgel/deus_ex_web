@@ -228,6 +228,31 @@ host behavior.
 - **Errors** cross as plain objects; structured clone drops an Error's own
   properties (`partial`, `travel`).
 
+## A failed worker
+
+Measured in Chromium and Firefox on Linux, 2026-10-31 (`.work/stage7-probe/worker-fail`, a bare worker; Stage 7 row 7.9.2):
+
+| The worker | The page gets | The worker after |
+| --- | --- | --- |
+| throws in a message it handles (a frame, a call) | its `failure` reply (`sim-worker.mjs` `enqueue`) | lives |
+| throws outside them (a timer, a callback) | the Worker's `error` event | lives |
+| rejects a promise nobody awaits | nothing | lives |
+| exhausts an ArrayBuffer or its Wasm memory | the RangeError, as a throw above | lives |
+| exhausts the JavaScript heap | Chromium: the tab crashes, page and worker together, into the browser's own crash page. Firefox: the heap has no limit of its own (the worker pref `javascript.options.mem.max` was not seen to bound it), the process grows | - |
+| closes itself, is terminated, or never returns from a frame | nothing | gone, or stuck |
+
+The first two pause Play with the error (`onFailure`, main.mjs `pauseForRuntimeError`): Player start resets on the ?debug=1 page, and the
+default start's toast names the reload (its toolbar is hidden), which leads to the main menu and Load Game. The last row has no event, so
+the page watches the frames it posts: `simClient.silence()` is how long the posts waiting for a snapshot have heard nothing from the
+worker. Past 15 s (`SIM_SILENCE_MS`) the page lets go of the input and says "The game stopped answering. Reload the page to continue from
+a saved game"; an answer clears it. A load posts no frames (`loading`), and a frame answers within a GC pause, so a working game never
+reaches it. `status().simulation` reports `{silent, silence, outstanding}`.
+
+A worker that dies in a save writes nothing: the slot reaches the storage only as the worker's `commit` message, after the page answered
+the picture request ([save storage](save-storage.md) "Writing a save"), and is written there whole. `browser-tests/worker-failure.spec.mjs`
+checks each row it can make (a close, a loop, a failed call, an uncaught exception, a termination at the save's picture request), in
+Chromium and Firefox.
+
 ## Boot
 
 `new Worker(new URL('./sim-worker.mjs', import.meta.url), {type: 'module'})`,

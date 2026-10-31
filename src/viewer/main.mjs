@@ -909,12 +909,27 @@ function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
   keys.clear();drag=false;releasePointer();lockGameKeys(false);
   showStats();
+  // The way back: Player start is a ?debug=1 tool; the original start's page has a reload, to the main menu and its Load Game.
+  const back=originalStart?'Reload the page to continue from a saved game':'Choose Player start to reset';
   // The map ended by travelling (Stage 6): a stop, not a failure.
   $('toast').textContent=error.travel
     ?(error.name==='TravelStop'
       ?`The map ended: it travels to “${error.travel.url}”, which stops at ${error.message}. Choose Player start to replay.`
       :`The map ended: it travels to “${error.travel.url}”. Map travel is not implemented in this session (Stage 6). Choose Player start to replay.`)
-    :`Play paused: ${error.message}. Choose Player start to reset.`;
+    :`Play paused: ${error.message}. ${back}.`;
+}
+// A simulation worker that closed, was terminated or never returns from a frame sends nothing (docs/sim-worker.md "A failed worker"): when
+// the frames posted to it have heard nothing for SIM_SILENCE_MS, the page says so. A load is not a frame (no posts while `loading`), and a
+// frame answers within a GC pause; the toast goes if the worker answers after all.
+const SIM_SILENCE_MS = 15000;
+const SIM_SILENT = 'The game stopped answering. Reload the page to continue from a saved game (your saves are kept).';
+let simSilent = false;
+function watchSimulation() {
+  const silent = simClient.silence() > SIM_SILENCE_MS;
+  if (silent === simSilent) return;
+  simSilent = silent;
+  if (silent) { keys.clear(); drag = false; releasePointer(); lockGameKeys(false); $('toast').textContent = SIM_SILENT; }
+  else if ($('toast').textContent === SIM_SILENT) $('toast').textContent = '';
 }
 function showStats() {
   const pairs = [['Map', currentMap], ['World triangles', map.summary.triangles.toLocaleString()],
@@ -2051,6 +2066,8 @@ function status() {
     calls: renderer.info.render.calls, frame: renderer.info.render.frame, shaderWarmup: shaderWarmupResult,
     graphics: { lost: graphics.lost || graphics.pending || graphics.restoring, losses: graphics.losses, restores: graphics.restores,
       converted: graphics.converted, lastRestore: graphics.lastRestore },
+    // the worker's silence (watchSimulation): `silent` once the posted frames heard nothing for SIM_SILENCE_MS
+    simulation: simClient ? { silent: simSilent, silence: Math.round(simClient.silence()), outstanding: simClient.outstanding } : null,
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
@@ -2431,6 +2448,7 @@ function animate(time) {
       // Post this display frame's input first, so the worker simulates
       // while the page draws the oldest arrived snapshot.
       postSimFrame(time);
+      watchSimulation();
       snap = lockstep ? null : simClient.take();
       draw = Boolean(snap);
     } else if (sim) {

@@ -15,6 +15,8 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
   // load (a frame in flight when the page loaded another map) is dropped.
   // `outstanding`: posts no snapshot has answered yet.
   let nextId = 1, ready = null, outstanding = 0, activeLoad = null;
+  // `heard`: when the worker last sent anything; `since`: when the oldest post no snapshot has answered went out (`silence`).
+  let heard = performance.now(), since = 0;
   const waiting = [], spares = [];
   const settle = () => { for (const resolve of settledWaiters.splice(0)) resolve(); };
   const request = (message, transfer = []) => new Promise((resolve, reject) => {
@@ -25,6 +27,7 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
   });
   const clock = () => ({ now: performance.now(), date: Date.now() });
   worker.onmessage = ({ data }) => {
+    heard = performance.now();
     switch (data.type) {
       case 'ready': ready?.resolve(); break;
       case 'progress': onProgress(data.message); break;
@@ -87,8 +90,12 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     connectMusic(port) { worker.postMessage({ type: 'music', port }, [port]); },
     queue(command) { commands.push(command); },
     get outstanding() { return outstanding; },
+    /** How long the posts waiting for a snapshot have heard nothing from the worker, in ms (0 with none waiting). A worker that closed, was
+     * terminated or never returns from a frame sends no event at all (docs/sim-worker.md "A failed worker"). */
+    silence(now = performance.now()) { return outstanding ? now - Math.max(heard, since) : 0; },
     /** Post one frame. `status` asks for the game status. */
     post(input, { status = false } = {}) {
+      if (!outstanding) since = performance.now();
       outstanding++;
       const returned = spares.splice(0);
       worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), status, returned }, returned);

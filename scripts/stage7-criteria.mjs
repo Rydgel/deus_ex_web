@@ -119,9 +119,9 @@ add('7.8.4', 'settings persist across reloads in every supported browser (row 6.
 add('7.9.1', 'a runtime error pauses Play with its message, and Player start or a reload recovers', 'H', 'PARTIAL',
   {machine: ALL, proof: ['browser-tests/runtime-error.spec.mjs'],
     weak: 'the spec passes in Chromium and Firefox on Linux (2026-10-28, brought up to date: the push read from Plant7\'s Location, the right mouse button to use); WebKit and the Mac not run'});
-add('7.9.2', 'the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half', 'H', 'MISSING',
-  {machine: LINUX, proof: ['a spec that terminates the worker and one that throws in it'],
-    need: '`onFailure` pauses with the error, but no test exists, and what an out-of-memory worker does is unknown'});
+add('7.9.2', 'the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half', 'H', 'PARTIAL',
+  {machine: LINUX, proof: ['browser-tests/worker-failure.spec.mjs', '[a failed worker](sim-worker.md#a-failed-worker)'],
+    weak: 'the spec passes in Chromium and Firefox on Linux (2026-10-31): a closed and a looping worker (the page tells them by its posts\' silence), a failed call and an uncaught exception, a termination at a save\'s picture request (the kept slot unchanged); out of memory measured in a bare worker only (a RangeError takes the exception path; Chromium\'s heap exhaustion crashes the tab into the browser\'s own page, Firefox\'s grows the process), not induced in Play'});
 add('7.9.3', 'a graphics device that never comes back: the page says so, and a reload recovers', 'H', 'PARTIAL',
   {machine: LINUX, proof: ['validate-context-loss-play.mjs with no restore'], weak: 'the toast exists ([context loss](context-loss.md)); not tested'});
 

@@ -125,10 +125,10 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.6 Window and input | 0 | 3 | 0 | 1 | 0 |
 | 7.7 Graphics capability and failures | 1 | 1 | 0 | 1 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
-| 7.9 Failure recovery | 0 | 2 | 0 | 1 | 0 |
+| 7.9 Failure recovery | 0 | 3 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 1 | 19 | 1 | 13 | 3 |
+| **Total** | 1 | 20 | 1 | 12 | 3 |
 
 ## The rows
 
@@ -209,7 +209,7 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.9.1 | a runtime error pauses Play with its message, and Player start or a reload recovers | H | browser-tests/runtime-error.spec.mjs | all browsers | weak: the spec passes in Chromium and Firefox on Linux (2026-10-28, brought up to date: the push read from Plant7's Location, the right mouse button to use); WebKit and the Mac not run | PARTIAL |
-| 7.9.2 | the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half | H | a spec that terminates the worker and one that throws in it | Linux | needed: `onFailure` pauses with the error, but no test exists, and what an out-of-memory worker does is unknown | MISSING |
+| 7.9.2 | the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half | H | browser-tests/worker-failure.spec.mjs, [a failed worker](sim-worker.md#a-failed-worker) | Linux | weak: the spec passes in Chromium and Firefox on Linux (2026-10-31): a closed and a looping worker (the page tells them by its posts' silence), a failed call and an uncaught exception, a termination at a save's picture request (the kept slot unchanged); out of memory measured in a bare worker only (a RangeError takes the exception path; Chromium's heap exhaustion crashes the tab into the browser's own page, Firefox's grows the process), not induced in Play | PARTIAL |
 | 7.9.3 | a graphics device that never comes back: the page says so, and a reload recovers | H | validate-context-loss-play.mjs with no restore | Linux | weak: the toast exists ([context loss](context-loss.md)); not tested | PARTIAL |
 
 ### 7.10 Regression coverage
