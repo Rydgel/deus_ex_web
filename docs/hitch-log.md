@@ -34,6 +34,8 @@ simulation state, and without the URL switch it installs nothing
 * `scripts/hitch-ab.mjs` runs interleaved arms with each session's CPU.
 * `scripts/frame-time-set.mjs` runs the ten-map frame-time set.
 * `scripts/hitch-frame-profile.mjs` and `scripts/gecko-gc.mjs` name what a slow frame ran.
+* `scripts/gecko-gaps.mjs RUN.json PROFILE.json` lines a Firefox run's drawn gaps up with the Gecko profile's GC and CC pauses
+  (`--thread page` inline, `--thread worker` with the worker).
 
 These tools replace the earlier `.work/hitch/` copies that the dated sections below cite.
 
@@ -242,6 +244,42 @@ a worker's allocation-triggered major GC is not incremental either: on the
 Island, one 320 to 340 ms pause about every 50 s of play, against inline's six
 to eight 100 to 133 ms frames a minute ([frame cost](play-frame-cost.md)
 "October 27"). Firefox stays inline.
+
+**After the live-heap work (2026-10-31, d01854c9).** The question was
+whether the smaller heap ([live heap](live-heap.md)) lets Firefox drop
+inline. `scripts/hitch-ab.mjs --arms
+"inline:sim=inline,worker:sim=worker,busy:sim=worker&workerBusy=1" --pairs 2
+-- --browser firefox --map 01_NYC_UNATCOIsland --seconds 100 --mode roam`,
+Linux, Firefox 155, counted from 5 s after the map by
+`scripts/hitch-summary.mjs`:
+
+| | gaps over 50 ms (a minute) | over 100 / 150 ms | longest | fps drawn | CPU |
+| --- | --- | --- | --- | --- | --- |
+| inline (default) | 23, 17 (13.6, 10.2) | 0, 1 / 0, 0 | 84, 101 ms | 52.1, 48.9 | 1.35 cores |
+| worker | 31, 32 (18.3, 18.8) | 19, 15 / 14, 14 | 366, 350 ms | 54.2, 53.8 | 1.69 cores |
+| worker, `?workerBusy=1` | 11, 12 (6.5, 7.1) | 4, 4 / 3, 4 | 216, 216 ms | 51.5, 56.7 | 1.72 cores |
+
+Inline's 100 to 133 ms frames are nearly gone: at most one a roam, of
+101 ms (in the 40 s to 100 s window the October 28 roams used: 9 and 6 gaps
+over 50 ms, none over 100 ms, against 26 to 31 and 6 to 8 over 90 ms). A third inline roam with a Gecko profile
+(`scripts/gecko-gaps.mjs RUN.json PROFILE.json`, the page's thread) puts 12
+of its 31 gaps over 50 ms on a major collection's slices, 11 of them in two
+collections (36 to 38 s and 45 s after the map) whose incremental slices ran
+5 to 80 ms (the longest with "started idle but extended" budgets; in 5 of
+the 12 the slice is under 15 ms, so the frame's own work is most of the
+gap), and 19 on no collection pause (a 2 to 3 ms minor GC at most): page
+frames of more than two display frames (sim and draw on one thread, 17 to
+20 ms median, 26 to 30 ms p95). The worker's gaps are still its own
+collections: idle, the 5 s `DOM_WORKER` GC every 5.5 to 6 s (133 to 366
+ms); with the busy queue one every 25 to 40 s of 200 to 250 ms, where the
+worker answers about 130 ms late, merges 8 to 10 posts, and runs a 41 to 55
+ms tick. Neither worker arm is profiled today (two profiled busy roams did
+not save the content process's threads at shutdown), so this rests on the
+spacing, these columns, and the October 15 and 28 profiles. Firefox stays
+inline: its worker trades frames over 50 ms for freezes of 200 ms and more.
+Since a worker's collection is one slice over the whole heap, that changes
+only with a much smaller JavaScript heap, the simulation's data in Wasm
+memory ([Rust core](rust-core.md)).
 
 Tools that found it (kept out of Git, in `.work/hitch/` of the worktree):
 `run-ff.mjs` (Firefox long run with the recorder, `--via MAP`, `--profile`,

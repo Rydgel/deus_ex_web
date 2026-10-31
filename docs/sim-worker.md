@@ -172,7 +172,10 @@ host behavior.
 - Firefox defaults to `?sim=inline`: Gecko gives a worker that idles between
   frames a full compacting GC every ~5.5 s, a stall of the whole heap's cost,
   where the page's collections are incremental ([hitch log](hitch-log.md)
-  "Firefox"). `?sim=worker` still selects the worker there.
+  "Firefox"). `?sim=worker` still selects the worker there. Re-measured
+  after the live-heap work (2026-10-31, the hitch log's "After the live-heap
+  work"): the worker still freezes 200 ms and more where inline's longest
+  gap is about 100 ms, so Firefox stays inline.
 - `?sim=inline`: the simulation frame and the page's draw both run on the
   main thread, separated by the snapshot. The Training previews, the NPC
   focus list and `?simVerify=1` drive or read the runtime on the page, so
