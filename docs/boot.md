@@ -122,3 +122,14 @@ Unicorn oracle, bit for bit at the render pass's precision control 24; the bindi
 one. On the default start the Eidos logo, the Ion Storm logo and the Deus Ex logo with its text now appear during the flight;
 `validate-umesh-play` checks the five actors and a FlyGenerator's flies on the Island. The original's `Shot` of the flight's end pose
 and Play's frame equal to within one pixel by 1/255 outside the random electricity bolt ([UMesh](umesh.md) "Frame against the original").
+
+## No WebGL 2
+
+The page draws with three.js, which needs WebGL 2. A browser that gives none (no WebGL 2, hardware acceleration turned off, WebGL disabled
+by a policy or a switch) or refuses the context makes `new THREE.WebGLRenderer` throw, which stops the page's module before any of it runs.
+`createRenderer` (main.mjs) catches it first: the gate's title becomes "This browser cannot draw the game", its message names WebGL 2 with
+the browser's own reason (the `webglcontextcreationerror` event's `statusMessage`, Chromium's "disabled by enterprise policy or
+commandline switch" under `--disable-webgl`), and its folder and Saves buttons go. `browser-tests/no-webgl.spec.mjs` turns WebGL off for
+real (`--disable-webgl`, Firefox's `webgl.disabled`) in both browsers. A WebGL 2 without `EXT_color_buffer_float` draws the actors with
+the CPU kernels instead of the GPU mesh path (`browser-tests/graphics-fallback.spec.mjs`), and a page whose WebAssembly does not load has
+no Play: the default start's toast says "The game cannot start in this browser", with the reason (`browser-tests/lodmesh-wasm.spec.mjs`).

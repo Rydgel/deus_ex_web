@@ -123,12 +123,12 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.4 Memory and long sessions | 0 | 1 | 0 | 2 | 0 |
 | 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
 | 7.6 Window and input | 0 | 3 | 0 | 1 | 0 |
-| 7.7 Graphics capability and failures | 1 | 1 | 0 | 1 | 0 |
+| 7.7 Graphics capability and failures | 2 | 1 | 0 | 0 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 0 | 3 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 1 | 20 | 1 | 12 | 3 |
+| **Total** | 2 | 20 | 1 | 11 | 3 |
 
 ## The rows
 
@@ -192,7 +192,7 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.7.1 | a lost WebGL context freezes Play and restores it as D3DDrv's `Lock` does; the frames after equal a run with no loss | O | validate-context-loss-play.mjs (Chromium worker and inline, Firefox) | Linux | weak: Safari, and the Mac, not run | PASS |
-| 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | a spec with WebGL disabled (`--disable-webgl`), and one with `EXT_color_buffer_float` refused | Linux | needed: a creation error is not handled (only the GPU mesh's missing extensions are); with WebAssembly refused the map loads for inspection and only the debugging page's notes say why ("Play mode unavailable: Failed to fetch"), the default start nothing (lodmesh-wasm.spec, 2026-10-28) | MISSING |
+| 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | browser-tests/no-webgl.spec.mjs, browser-tests/graphics-fallback.spec.mjs, browser-tests/lodmesh-wasm.spec.mjs, [no WebGL 2](boot.md#no-webgl-2) | Linux | weak: the three specs pass in Chromium and Firefox on Linux (2026-10-31); WebKit not run | PASS |
 | 7.7.3 | a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable | H | the headless default (SwiftShader) runs | Linux | weak: no validator asserts the path; "playable" has no bound on a software renderer | PARTIAL |
 
 ### 7.8 Files and storage

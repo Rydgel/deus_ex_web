@@ -95,9 +95,9 @@ add('7.6.4', 'a hidden tab or system sleep stops Play (no frame, no tick); it co
 // 7.7 Graphics capability and failures --------------------------------------------------------------------------------------------------
 add('7.7.1', 'a lost WebGL context freezes Play and restores it as D3DDrv\'s `Lock` does; the frames after equal a run with no loss', 'O', 'PASS',
   {machine: LINUX, proof: ['validate-context-loss-play.mjs (Chromium worker and inline, Firefox)'], weak: 'Safari, and the Mac, not run'});
-add('7.7.2', 'no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back', 'H', 'MISSING',
-  {machine: LINUX, proof: ['a spec with WebGL disabled (`--disable-webgl`), and one with `EXT_color_buffer_float` refused'],
-    need: 'a creation error is not handled (only the GPU mesh\'s missing extensions are); with WebAssembly refused the map loads for inspection and only the debugging page\'s notes say why ("Play mode unavailable: Failed to fetch"), the default start nothing (lodmesh-wasm.spec, 2026-10-28)'});
+add('7.7.2', 'no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back', 'H', 'PASS',
+  {machine: LINUX, proof: ['browser-tests/no-webgl.spec.mjs', 'browser-tests/graphics-fallback.spec.mjs', 'browser-tests/lodmesh-wasm.spec.mjs', '[no WebGL 2](boot.md#no-webgl-2)'],
+    weak: 'the three specs pass in Chromium and Firefox on Linux (2026-10-31); WebKit not run'});
 add('7.7.3', 'a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable', 'H', 'PARTIAL',
   {machine: LINUX, proof: ['the headless default (SwiftShader) runs'], weak: 'no validator asserts the path; "playable" has no bound on a software renderer'});
 

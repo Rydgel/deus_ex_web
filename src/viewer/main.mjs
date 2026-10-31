@@ -247,7 +247,22 @@ async function showSplash(files) {
 // The canvas is multisampled; ?antialias=0 turns that off: the original's Direct3D 7 device has no multisampling, so its frames have none
 // (docs/visual-acceptance.md "Security cameras"). The pixel validators (validate-sim-split, validate-decals-play, validate-mesh-path-frames) add preserveDrawingBuffer by patching the first occurrence of the call's closing antialias text, so that text must not appear above it.
 const rendererOptions = options => new URLSearchParams(location.search).get('antialias') === '0' ? { ...options, antialias: false } : options;
-const renderer = new THREE.WebGLRenderer(rendererOptions({ canvas: $('scene'), antialias: true }));
+// No WebGL 2 (a browser without it, hardware acceleration turned off) or a context the browser refuses: three.js throws, and the page has
+// nothing to draw with. The gate says what is missing, with the browser's own reason (`webglcontextcreationerror`), instead of a dead page.
+function createRenderer() {
+  const canvas = $('scene'); let reason = '';
+  const listen = event => { reason = event.statusMessage?.trim() || reason; };
+  canvas.addEventListener('webglcontextcreationerror', listen);
+  try { return new THREE.WebGLRenderer(rendererOptions({ canvas, antialias: true })); }
+  catch (error) {
+    $('gate-title').textContent = 'This browser cannot draw the game';
+    $('gate-message').textContent = `The game needs WebGL 2, which the browser did not give the page (${reason || error.message}). `
+      + 'Turn on hardware acceleration in its settings, or use another browser.';
+    $('gate-choose').hidden = true; $('gate-saves').hidden = true;
+    throw error;
+  } finally { canvas.removeEventListener('webglcontextcreationerror', listen); }
+}
+const renderer = createRenderer();
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 // World and actor shaders apply the original display-encoded modulation
 // themselves and draw raw colours; the display ramp maps the finished frame
@@ -1160,6 +1175,11 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     if (fogOrderParam === 'last') world.fog?.setLast(true);
     if (world.mirrors.stats.planes > 0) world.mirrors.clipShape(renderer);
     game = nextGame;sim = nextSim;runtimeError=null;lockGameKeys(true); $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
+    // Play is not offered (its kernels did not load, sim-host.mjs): the default start, which has no notes panel, says why.
+    if (!game && originalStart) {
+      const note = world.notes.find(text => text.startsWith('Play mode unavailable: '));
+      $('toast').textContent = `The game cannot start in this browser: ${note ? note.slice('Play mode unavailable: '.length) : 'Play mode unavailable'}. Reload the page; if it stays, try another browser.`;
+    }
     // The previews drive the runtime directly: on the page only.
     const training = Boolean(game) && name === '00_Training' && !simClient;
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
