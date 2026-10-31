@@ -94,7 +94,11 @@ The canvas's two events map onto that rule
 * **A restore that fails** (an exception in the steps above) pauses Play with
   the error, the counterpart of "Failed resetting mode". A context the browser
   never gives back leaves the game waiting, as the original waits with no
-  limit. Reloading the page is the host's way out.
+  limit. Reloading the page is the host's way out: a new document gets a
+  new context. `validate-context-loss-play.mjs --case never` loses the
+  context for ten seconds of the page clock (nothing simulated, the toast
+  saying so), reloads, and checks the page draws and simulates again
+  (Chromium worker and inline, Firefox, 2026-10-31).
 
 `deusExViewer.status().graphics` reports `{lost, losses, restores, converted,
 lastRestore}`. `converted` counts the bindings each restore moved to the CPU

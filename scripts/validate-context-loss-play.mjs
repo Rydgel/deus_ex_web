@@ -11,13 +11,16 @@
 //   - freeze: 00_Training with the shader warm-up on. While the context is lost the clock runs two seconds and nothing is
 //     simulated (state digest and Level.TimeSeconds unchanged); the first tick after the restore advances
 //     Level.TimeSeconds by the whole time since the last one, as the original's next tick does after D3DDrv's wait.
+//   - never: 00_Training, a context the browser never gives back. Ten seconds of the page clock pass with nothing simulated and the
+//     toast saying so (the original waits with no limit); a reload of the page makes a new context, and Play runs again (Stage 7
+//     row 7.9.3).
 //
 // The pixel runs turn the shader warm-up off (?shaderWarmup=0) on both sides: the restore's warm-up waits on timers the
 // paused clock would have to advance, which would add that time to the next frame. Host measurement of the page against
 // itself; the original's side is the D3DDrv code in docs/context-loss.md.
 //
 //   node scripts/validate-context-loss-play.mjs [--browser chromium|firefox] [--sim worker|inline] [--before 30] [--after 30]
-//     [--case loss|race|freeze]   (--sim: default the browser's own mode, Chromium's worker and Firefox's inline)
+//     [--case loss|race|freeze|never]   (--sim: default the browser's own mode, Chromium's worker and Firefox's inline)
 import assert from 'node:assert/strict';
 import {chromium, firefox} from '@playwright/test';
 import {createServer} from 'vite';
@@ -183,6 +186,39 @@ async function freeze(browser) {
     return `freeze: ${elapsed} ms lost and restoring, the next tick advanced ${(advanced * 1000).toFixed(1)} ms; restore ${JSON.stringify(last.graphics.lastRestore)}, ${staleDeletes()} stale deletes`;
   } finally { await page.close(); }
 }
+/** A context that never comes back on 00_Training: the game waits, saying so, and a reload recovers. */
+async function never(browser) {
+  const {page, errors, glErrors} = await open(browser, '00_Training', '');
+  try {
+    for (let n = 0; n < 10; n++) await step(page);
+    const digest = () => page.evaluate(() => window.deusExViewer.stateDigest());
+    const start = await digest();
+    await lose(page); await until(page, lost, 'the loss');
+    for (let elapsed = 0; elapsed < 10000; elapsed += 100) await page.clock.runFor(100);
+    await page.evaluate(() => window.deusExViewer.settled());
+    assert.deepEqual(await digest(), start, 'never: nothing is simulated while the context stays lost');
+    const waiting = await page.evaluate(() => ({graphics: window.deusExViewer.status().graphics, toast: document.getElementById('toast').textContent}));
+    assert.equal(waiting.graphics.lost, true, 'never: the page still waits for the device');
+    assert.equal(waiting.graphics.restores, 0, 'never: no restore');
+    assert.equal(waiting.toast, 'The browser lost the graphics device: the game waits for it. Reload the page if it does not come back.', 'never: the toast says so');
+    // the reload: a new document, a new context (the clock runs again: the page's load waits on its timers)
+    await page.clock.resume();
+    await page.reload();
+    await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === '00_Training' && s.mode === 'play'; }, {}, {timeout: 240000});
+    await page.evaluate(() => window.deusExViewer.release());
+    const frame = await page.evaluate(() => window.deusExViewer.status().frame), released = await digest();
+    await page.waitForFunction(frame => window.deusExViewer.status().frame > frame + 30, frame, {timeout: 60000});
+    const back = await page.evaluate(async () => ({status: window.deusExViewer.status(), toast: document.getElementById('toast').textContent,
+      lost: document.getElementById('scene').getContext('webgl2').isContextLost()}));
+    assert.equal(back.lost, false, 'never: the reloaded page has a live context');
+    assert.equal(back.status.graphics.lost, false, 'never: the reloaded page draws');
+    assert.equal(back.status.runtimeError, null, 'never: runtime error after the reload');
+    assert.notDeepEqual(await digest(), released, 'never: the reloaded game simulates');
+    assert.doesNotMatch(back.toast, /lost the graphics device/, 'never: the toast went with the reload');
+    assert.deepEqual(errors, [], 'never: page errors'); assert.deepEqual(glErrors, [], 'never: GL errors');
+    return 'never: 10 s lost with the toast and nothing simulated; the reload draws and simulates';
+  } finally { await page.close(); }
+}
 
 const browser = engine === 'firefox' ? await firefox.launch()
   : await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
@@ -220,5 +256,6 @@ try {
     summary.unshift(`paths ${reference.paths.join('/')}, ${reference.bindings} bindings`);
   }
   if (!only || only === 'freeze') summary.push(await freeze(browser));
+  if (!only || only === 'never') summary.push(await never(browser));
 } finally { await browser.close(); await server.close(); }
 console.log(`validate-context-loss-play: PASS (${engine} ${worker ? 'worker' : 'inline'}; ${summary.join('; ')})`);
