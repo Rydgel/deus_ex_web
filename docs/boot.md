@@ -134,3 +134,17 @@ commandline switch" under `--disable-webgl`), and its folder and Saves buttons g
 real (`--disable-webgl`, Firefox's `webgl.disabled`) in both browsers. A WebGL 2 without `EXT_color_buffer_float` draws the actors with
 the CPU kernels instead of the GPU mesh path (`browser-tests/graphics-fallback.spec.mjs`), and a page whose WebAssembly does not load has
 no Play: the default start's toast says "The game cannot start in this browser", with the reason (`browser-tests/lodmesh-wasm.spec.mjs`).
+
+## A resize
+
+The canvas follows the page's view box (`resize`, a ResizeObserver on `#viewport`): in Play the 4:3 picture is fitted and centred, and
+its drawing buffer snapped down to whole root units (ResizeRoot's `m`), and the next frame posts the new size to the simulation, whose
+root window and camera take it. The mirrors' targets and the frame keeper's copy follow the buffer's size each frame. A new device pixel
+ratio with the same CSS box (a zoom, the window moved to another screen) is no resize to the observer: `watchPixelRatio` listens to a
+resolution query for the current ratio and renews it after each change (2026-10-31; before, the buffer kept the old ratio).
+
+`validate-resize-play.mjs` resizes during Play on 10_Paris_Club's bar mirror (the HUD, a mirror pass, the dancers) and compares the last
+frame, then MenuMain over the kept frame, with a fresh load at the final size, byte for byte: 1024 x 640 to 1280 x 720, and through
+1600 x 1000 (root units of 2), in Chromium and Firefox. In Chromium it also takes the ratio from 1 to 2 and compares with a fresh load
+at 2. Headless Chromium's emulated ratio (CDP `Emulation.setDeviceMetricsOverride`) reaches `devicePixelRatio` but fires no resolution
+query change, so the run nudges the height to have the page resize: how the page learns of a real ratio change is not measured.

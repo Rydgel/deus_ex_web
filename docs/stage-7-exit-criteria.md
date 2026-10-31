@@ -122,13 +122,13 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
 | 7.4 Memory and long sessions | 0 | 1 | 0 | 2 | 0 |
 | 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
-| 7.6 Window and input | 0 | 3 | 0 | 1 | 0 |
+| 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
 | 7.7 Graphics capability and failures | 2 | 1 | 0 | 0 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 3 | 19 | 1 | 11 | 3 |
+| **Total** | 3 | 20 | 1 | 10 | 3 |
 
 ## The rows
 
@@ -184,7 +184,7 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.6.1 | the pointer lock is taken on the first click; one Escape releases it and reaches the game (MenuMain); a lost lock or a blur lets go of the held input and Play goes on (no pause, the user's choice 2026-10-30); a hidden page resumes without catch-up | H | browser-tests/pointer-lock.spec.mjs, original-start-input.spec.mjs | all browsers | weak: Chrome's worker mode, headless, Linux (2026-10-30): the browser's Escape rule played as its call (exitPointerLock, no key) opens MenuMain once, a delivered key as well counts once, the free mouse drives the menu; a blur lets go of the held movement and the level's clock goes on; a real Escape is not exercised under Playwright (the user saw two presses needed on Chrome Linux and macOS before the change); the hidden-page resume is not tested; Firefox not rerun; WebKit and the Mac not run | PARTIAL |
 | 7.6.2 | Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari) | O, H | browser-tests/original-start-input.spec.mjs, input-bindings.spec.mjs | all browsers | weak: passes in Chromium and Firefox on Linux (2026-10-28): Keyboard Lock where the browser has it, and in Firefox Alt+Enter takes the fullscreen and the pointer without it (the pointer asked again at fullscreenchange, which Firefox needs); a held Escape and F11 in a real browser are not exercised; WebKit and the Mac not run | PARTIAL |
-| 7.6.3 | resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error | H | a new spec: resizes during Play, pixels against a fresh load at the final size | Linux, Mac | needed: the spec; nothing tests a resize during Play | MISSING |
+| 7.6.3 | resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error | H | validate-resize-play.mjs, [a resize](boot.md#a-resize) | Linux, Mac | weak: resizes during Play equal a fresh load at the final size byte for byte, the frame and MenuMain over the kept frame, in Chromium and Firefox on Linux (2026-10-31), and the page at a new pixel ratio does in Chromium; a real ratio change (a zoom, another screen) is not produced headless, so `watchPixelRatio` is unmeasured; the Mac not run | PARTIAL |
 | 7.6.4 | a hidden tab or system sleep stops Play (no frame, no tick); it comes back by itself with no catch-up (no click: the user's choice, 2026-10-30) and the audio follows | H | pointer-lock.spec.mjs (blur), browser-tests/hidden-tab.spec.mjs | all browsers | weak: blur is tested (the game goes on, held input let go); the hidden page passes in Chromium and Firefox on Linux (2026-10-31: no frame and no tick while hidden, back with no click, no catch-up, the held input let go) with the hide modelled (`document.hidden`, `visibilitychange`, no animation frame), as headless browsers keep a background tab visible; a real hidden tab, system sleep and the audio not measured | PARTIAL |
 
 ### 7.7 Graphics capability and failures
@@ -279,7 +279,10 @@ Causes: **stale**, the spec predates a change in Play and fails in every browser
    Chromium and Firefox on Linux; two more Firefox bugs they found are fixed (the pointer after Alt+Enter, later saves held by the
    `persist()` prompt). Left: WebKit and Safari, and the suite on the Mac.
 3. **The small reliability gaps.** A creation-error message (7.7.2), a resize spec (7.6.3), the hidden tab (7.6.4), a
-   worker failure (7.9.2) and a device that never returns (7.9.3).
+   worker failure (7.9.2) and a device that never returns (7.9.3). Done 2026-10-31 on Linux: 7.7.2 and 7.9.3 pass; a worker that stops
+   answering is now told by its posts' silence (7.9.2), a pixel ratio change now resizes the canvas (7.6.3), and the hidden tab is checked
+   with the hide modelled (7.6.4). What headless browsers cannot produce stays open in those rows: a JavaScript heap out of memory in
+   Play, a real ratio change, a real hidden tab and sleep.
 4. **A measurement pass on the Mac.** The frame-time set, the load census and the memory budget in every browser (7.2,
    7.3, 7.4.2) give each row its first status on the reference machine.
 5. **The performance work against 7.2.1.** Each step goes family by family, as a measurement names it, in the Rust core

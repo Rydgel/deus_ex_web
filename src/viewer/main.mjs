@@ -644,6 +644,11 @@ function resize() {
   layoutCrtComparison();
 }
 new ResizeObserver(resize).observe($('viewport'));
+// A new device pixel ratio with the same CSS box (a zoom, the window moved to another screen) is no resize to the observer: a resolution
+// query for the current ratio says when it changes, and is renewed for the next one.
+(function watchPixelRatio() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => { resize(); watchPixelRatio(); }, { once: true });
+})();
 function renderViewportFor(rect) {
   const pr = renderer.getPixelRatio(), height = renderer.domElement.height;
   return [rect.x / pr, (height - rect.y - rect.height) / pr, rect.width / pr, rect.height / pr];
