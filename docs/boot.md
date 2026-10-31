@@ -130,13 +130,13 @@ and Play's frame equal to within one pixel by 1/255 outside the random electrici
 assistant, as in the [?easter=1 mod](easter-egg.md)) under rydgel's avatar while the flight crosses the black between the Ion Storm logo and
 the Deus Ex logo. The original has no such card. It is the page's own, drawn outside the simulation (`credit-card.mjs`: a canvas over the
 scene's that takes no input), so the simulation, the frames' pixels (a `readPixels`, the frame keeper's copy under a menu) and every tool and
-validator on `?debug=1` are unchanged; `?credit=0` hides it. Its opacity follows the posted view's X: in from 1250 to 1080 (the Ion Storm logo
-leaves the view near 1150, 16.5 s after the map, measured in Chromium at 1280 × 960 on 2026-10-31), full to 480, out to 150 (the Deus Ex logo
-comes in near 400), about 15.6 to 19.5 s into the flight; it is hidden while the root draws a window (Escape's MenuMain over the flight). The
+validator on `?debug=1` are unchanged; `?credit=0` hides it. Its opacity follows the posted view's X: in from 1250 to 1150 (the Ion Storm logo
+leaves the view near 1150, 16.5 s after the map, measured in Chromium at 1280 × 960 on 2026-10-31), full to 400 (the Deus Ex logo comes in
+near 400, 18.3 s), out to 150, about 15.5 to 19.5 s into the flight, 2 s of it at full; it is hidden while the root draws a window (Escape's MenuMain over the flight). The
 text has the original's credits look: `CreditsScrollWindow`'s class defaults (read from DeusEx.u) `fontHeader` FontConversationLargeBold in
 `colHeader` (255, 255, 255) over `fontText` FontConversationLarge in `colText` (200, 200, 200), drawn by the recovered `GC.DrawText` path
-(`hud-text.mjs`) in whole root units (ResizeRoot's m, as `resize` snaps the canvas); the avatar (`credit-avatar.webp`, 384 px, from
-jeromem.dev) is 96 root units square. Checked headless in Chromium, worker and `?sim=inline`: the fade in and out, MenuMain hiding it,
+(`hud-text.mjs`) and scaled up by whole pixels, one per 360 rows of the picture (2 from 720 to 1079, 3 at 1080), about twice the root
+window's own text, to read at a glance; the avatar (`credit-avatar.webp`, 384 px, from jeromem.dev) is 96 font pixels square. Checked headless in Chromium, worker and `?sim=inline`: the fade in and out, MenuMain hiding it,
 `?credit=0`, no page error; `original-start-input.spec` passes.
 
 ## No WebGL 2

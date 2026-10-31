@@ -4,7 +4,7 @@
  * measured 2026-10-31 (Chromium, 1280 x 960): the Ion Storm logo leaves the view near X 1150 (16.5 s after the map) and the Deus Ex logo
  * comes in near X 400 (18.3 s). The text has the original's credits look: CreditsScrollWindow's fontHeader FontConversationLargeBold in
  * colHeader (255, 255, 255) over its fontText FontConversationLarge in colText (200, 200, 200), class defaults read from DeusEx.u, drawn by
- * the recovered GC.DrawText (hud-text.mjs) in whole root units, as the root window draws. ?credit=0 hides it. */
+ * the recovered GC.DrawText (hud-text.mjs), scaled up by whole pixels. ?credit=0 hides it. */
 import { createHudText } from './hud-text.mjs';
 
 const LINES = [
@@ -15,10 +15,10 @@ const LINES = [
 // lines, the width the lines are centred in.
 const AVATAR = 96, GAP = 10, LINE = 23, LEADING = 2, WIDTH = 320;
 
-/** The card's opacity at the view's X: in as the Ion Storm logo leaves (X 1250 to 1080), out as the Deus Ex logo comes in (X 480 to 150). */
+/** The card's opacity at the view's X: in as the Ion Storm logo leaves (X 1250 to 1150), out as the Deus Ex logo comes in (X 400 to 150). */
 export function creditOpacity(x) {
   if (x > 1250 || x <= 150) return 0;
-  return x > 1080 ? (1250 - x) / 170 : x > 480 ? 1 : (x - 150) / 330;
+  return x > 1150 ? (1250 - x) / 100 : x > 400 ? 1 : (x - 150) / 250;
 }
 
 /** One GC.DrawText tile into `pixels` (RGBA, `width` wide): the glyph page's texels times the text colour; a masked texel is not drawn. */
@@ -48,9 +48,10 @@ export async function createCreditCard({ assets, scene }) {
   canvas.style.display = 'none';
   scene.after(canvas);
   let painted = '';
-  /** The card over the scene's box at its buffer size, in the root window's whole units (main.mjs resize: ResizeRoot's m). */
+  /** The card over the scene's box at its buffer size, in whole multiples `m` of the fonts' pixels: one per 360 rows (2 at 720 to 1079, 3 at
+   * 1080), about twice the root window's text (ResizeRoot's min(floor(w/640), floor(h/480))), so it reads at a glance. */
   function paint() {
-    const w = scene.width, h = scene.height, m = Math.max(1, Math.min(Math.floor(w / 640), Math.floor(h / 480)));
+    const w = scene.width, h = scene.height, m = Math.max(1, Math.floor(h / 360));
     canvas.width = w; canvas.height = h;
     Object.assign(canvas.style, { width: scene.style.width, height: scene.style.height, left: `${scene.offsetLeft}px`, top: `${scene.offsetTop}px` });
     const g = canvas.getContext('2d'), top = Math.floor((h / m - (AVATAR + GAP + height)) / 2) * m;
