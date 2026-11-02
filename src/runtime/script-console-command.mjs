@@ -289,6 +289,14 @@ export function stringOutputDevice() {
   return {text: '', log(text) { this.text += text; }};
 }
 
+/** The Console's FOutputDevice (+0x28): UConsole::Serialize (Engine 0x10379740) makes an FString of the line and calls
+ * eventMessage(NULL, Line, NULL, Event) (0x103797da). eventMessage (0x1034e2a0) packs PRI at +0, the FString at +4, its third
+ * argument at +0x10 and the Event name at +0x14, but the shipped Console.Message's parameters are PRI, Msg and N (N at +0x10):
+ * N receives the NULL, NAME_None, and the event name lies past the parameters. Each Log is one Message. */
+export function consoleOutputDevice(runtime, console) {
+  return {log(text) { runtime.processEvent(console, 'Message', [null, String(text), 'None']); }};
+}
+
 /**
  * The dispatch over Play's objects. `input` is the prepared binding data
  * ({names, bindings, aliases, keyName, keyBinding}); `services`:
@@ -835,7 +843,9 @@ export function createConsoleCommands({runtime, input, services}) {
 
   // UEngine::InputEvent hands Process the Console's FOutputDevice (+0x28).
   function consoleOutput() {
-    return {log(text) { throw new UnsupportedConsoleCommandError(`Console output device is not linked: ${text}`); }};
+    const console = read(services.viewport(), 'Console');
+    if (!console) return {log(text) { throw new UnsupportedConsoleCommandError(`Console output device without a Console: ${text}`); }};
+    return consoleOutputDevice(runtime, console);
   }
 
   function gLogOutput() {

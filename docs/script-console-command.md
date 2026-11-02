@@ -186,8 +186,8 @@ Explicit boundaries (`UnsupportedConsoleCommandError`):
   and FLUSH.
 * A binding that fails after an earlier line of it already ran is marked
   `partial` and pauses Play.
-* A logging command reached from a key, because the Console output device
-  is not linked.
+* (Since 2026-11-02 the Console's output device is `UConsole::Serialize`, a console message per line: a logging command reached from
+  a key no longer stops Play. The typed line's Enter runs `Console.ConsoleCommand` through this chain: [the typed console](console.md).)
 * A net or demo driver on the level.
 * The Y/N remap.
 

@@ -17,7 +17,8 @@ export async function attachLocalViewportConsole({runtime,assets,engine,viewport
   // Native-only Viewport has no script export or own script members. Use its
   // canonical native identity with the loaded Player prefix; do not fabricate
   // an Engine.u export or claim to construct the WindowsViewport tail.
-  const viewportClass={record:runtime.classLoader.identity(native),base:playerClass,
+  // (`nativeOnly`: a cast to Viewport walks this attached chain, script-runtime.mjs castToNativeClass)
+  const viewportClass={record:runtime.classLoader.identity(native),nativeOnly:true,base:playerClass,
     metadata:playerClass.metadata,fields:new Map(),methods:new Map(),states:new Map(),
     stateOrder:[],propertyOrder:[],propertyLink:playerClass.propertyLink,
     destructorLink:playerClass.destructorLink,defaults:new Map(playerClass.defaults)};

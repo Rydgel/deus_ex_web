@@ -20,9 +20,10 @@
  * - WrappedPrint (0x10376790): the word-wrapping line loop; DrawString (0x10376d20) draws a line glyph by glyph and the tile submit
  *   (0x10377170) rejects or clips each glyph against the frame before RenDev->DrawTile.
  *
- * The rest of Console.PostRender (the border pattern without a world, the time demo, the console lines, DrawSingleView's messages) is not
- * run here, nor on Play's other frames (a gap of every frame, named in the doc); the loading frame runs DrawLevelAction, whose only
- * branch PaintProgress reaches is LevelAction's message: LoadMap has just cleared bShowMenu and Pauser.
+ * Every Play frame runs the console's part of UGameEngine::Draw (docs/console.md): UConsole::PreRender's Tick event before the world,
+ * and after the HUD the viewport actor's and the console's PostRender events, whose DrawSingleView draws the typed line ("(> Say _")
+ * and the last messages with these natives. The loading frame runs the same tail; on it LoadMap has just cleared bShowMenu and Pauser.
+ * DrawTile (466), which the full console and the border patterns need, is refused by name.
  */
 import {exportAt, readObject} from '../unreal/objects.mjs';
 import {refValue} from './script-vm.mjs';
@@ -39,7 +40,7 @@ export const LOADING_FRAME = Object.freeze({
   // PaintProgress's stand-ins for the viewport actor's FlashScale and FlashFog (0x1038877b..0x10388789, 0x10388764..0x10388772)
   flashScale: Object.freeze([0.1, 0.1, 0.1]), flashFog: Object.freeze([0, 0, 0]),
 });
-const STR_LEN = 464, DRAW_TEXT = 465;
+const STR_LEN = 464, DRAW_TEXT = 465, DRAW_TILE = 466;
 const f32 = Math.fround, ftol = Math.trunc;   // _ftol (0x10413652 -> MSVCRT): truncation
 
 /** WrappedPrint's PolyFlags (0x1037684e..0x10376887): STY_None PF_Invisible, STY_Translucent PF_Translucent, STY_Modulated PF_Modulated,
@@ -147,8 +148,9 @@ function decodeFont(ref) {
   return {charsPerPage: decoded.charsPerPage, pages};
 }
 
-/** The console's canvas for the loading frame: an Engine.Canvas object, the font tables it reaches, and `paint`, which runs the
- * PaintProgress steps around the HUD paint (`hudPaint(flash)`) and DrawLevelAction after it. */
+/** The console's canvas: an Engine.Canvas object, the font tables it reaches, the per-frame UConsole::PreRender (`preRender`) and the
+ * PostRender events of UGameEngine::Draw's tail (`postRender`), and `paint`, which runs the PaintProgress steps around the HUD paint
+ * (`hudPaint(flash)`) and the same tail after it. */
 export async function createConsoleLevelAction({runtime, assets}) {
   const engine = await assets.get('Engine');
   const canvasClass = await runtime.loadClass(engine, engine.exportsByPath.get('canvas'));
@@ -169,10 +171,51 @@ export async function createConsoleLevelAction({runtime, assets}) {
     style: Number(read(canvas, 'Style')), center: Boolean(read(canvas, 'bCenter')), frameX: frame.width, frameY: frame.height});
   const store = s => { write(canvas, 'CurX', s.curX); write(canvas, 'CurY', s.curY); write(canvas, 'CurYL', s.curYL); };
   const colorOf = () => { const c = read(canvas, 'DrawColor'); return ['r', 'g', 'b'].map(k => c?.[`core.object.color.${k}`] ?? 0); };
+  const consoleOf = player => { const viewport = read(player, 'Player'); return {viewport, console: viewport && read(viewport, 'Console')}; };
   return {
     canvas,
-    /** The stock LargeFont's page textures, which DrawLevelAction's messages draw with: the page decodes them before the first frame. */
-    textures() { return (fontOf(read(canvas, 'LargeFont'))?.pages ?? []).map(page => page.texture).filter(Boolean); },
+    /** The stock fonts' page textures the console draws with (LargeFont: DrawLevelAction's messages; MedFont: the typed line and the
+     * message lines), which the page decodes before the first frame: the loading frame is drawn once and kept, and the typed line
+     * shows on the frame that starts it. */
+    textures() {
+      return ['LargeFont', 'MedFont'].flatMap(name => (fontOf(read(canvas, name))?.pages ?? []).map(page => page.texture)).filter(Boolean);
+    },
+    /**
+     * UConsole::PreRender (0x10379d10), which UGameEngine::Draw calls after Render->PreRender and before Canvas->Update (0x1038f685):
+     * the Tick event with Delta = (FLOAT)(Viewport->CurrentTime - LastUpdateTime) (0x10379d3f..0x10379d62; `delta`, the page's frame
+     * clock), then ConsoleLines (+0x724), BorderLines (+0x728) and BorderPixels (+0x72c) zeroed and, with ConsolePos (+0x730) above 0,
+     * ConsoleLines = _ftol(min(Frame->Y * ConsolePos, Frame->Y)) (0x10379d9d..0x10379dc3; the render pass's 24-bit precision control
+     * rounds the product to a float). BorderSize (+0x720) of 2 or more shrinks the frame (0x10379dd8..0x10379ea1): not translated.
+     */
+    preRender({player, delta, height}) {
+      const {console} = consoleOf(player);
+      if (!console) throw new Error('UConsole::PreRender requires the viewport Console');
+      runtime.processEvent(console, 'Tick', [f32(delta)]);
+      write(console, 'ConsoleLines', 0); write(console, 'BorderLines', 0); write(console, 'BorderPixels', 0);
+      const position = f32(read(console, 'ConsolePos'));
+      if (position > 0) write(console, 'ConsoleLines', ftol(Math.min(f32(height * position), height)));
+      if (read(console, 'BorderSize') >= 2) throw new Error('UConsole::PreRender with BorderSize >= 2 (the frame border, 0x10379dd8) is not translated');
+    },
+    /**
+     * UGameEngine::Draw's tail after RenDev->EndFlash (0x1038f714): the viewport actor's PostRender event (0x1038f73e), then
+     * UConsole::PostRender (0x10379f70: the frame PreRender kept, FrameX (+0x738) and FrameY (+0x73c) from its X and Y) and the
+     * console's PostRender event (0x1038f772). Canvas->Update (0x1038f68e, before the world: the Reset event, then ClipX/SizeX and
+     * ClipY/SizeY from the frame) is made here, after the HUD's paint, which writes none of the canvas's script fields. Returns the
+     * console's tiles as HUD tile commands.
+     */
+    postRender({player, width, height}) {
+      const {viewport, console} = consoleOf(player);
+      if (!console) throw new Error('The console PostRender requires the viewport Console');
+      write(canvas, 'Viewport', viewport);
+      runtime.processEvent(canvas, 'Reset', []);
+      write(canvas, 'ClipX', f32(width)); write(canvas, 'SizeX', width);
+      write(canvas, 'ClipY', f32(height)); write(canvas, 'SizeY', height);
+      return withCanvasNatives({width, height}, () => {
+        runtime.processEvent(player, 'PostRender', [canvas]);
+        write(console, 'FrameX', f32(width)); write(console, 'FrameY', f32(height));
+        runtime.processEvent(console, 'PostRender', [canvas]);
+      });
+    },
     /**
      * One PaintProgress frame (LoadMap 0x1038c3e0..0x1038c59b with `action` LEVEL_ACTION.loading): `hudPaint()` is the frame's HUD paint
      * (PostRenderFlash), which reads the flash planes while PaintProgress has them swapped; returns its result and `console`, the console's
@@ -188,36 +231,32 @@ export async function createConsoleLevelAction({runtime, assets}) {
     /**
      * PaintProgress alone (0x10388740), with the level's LevelAction as its caller left it: SaveCurrentLevel's frame (LevelAction 2, set at
      * DeusEx 0x1000fd7a and cleared at 0x1000ffa4 after the save; Pauser and bShowMenu untouched). The flash swap around `hudPaint()`, then
-     * the console's DrawLevelAction; returns `{hud, console}` as `paint` does.
+     * Draw's tail (`postRender`): DrawLevelAction draws the message; returns `{hud, console}` as `paint` does. Its Draw's
+     * UConsole::PreRender (the Tick event) is not run.
      */
     paintProgress({player, width, height, hudPaint}) {
-      const viewport = read(player, 'Player'), console = viewport && read(viewport, 'Console');
-      if (!console) throw new Error('The loading frame requires the viewport Console');
       const scale = [...read(player, 'FlashScale')], fog = [...read(player, 'FlashFog')];
       write(player, 'FlashFog', LOADING_FRAME.flashFog.map(f32)); write(player, 'FlashScale', LOADING_FRAME.flashScale.map(f32));
       let hud, tiles = [];
       try {
         hud = hudPaint();
-        // UConsole::PreRender keeps the frame Draw gives it and PostRender (vtable +0x5c) puts it back: FrameX (+0x738) and FrameY (+0x73c)
-        // are its X and Y. UCanvas::Update: the Reset event, then ClipX/SizeX and ClipY/SizeY from the frame.
-        write(console, 'FrameX', f32(width)); write(console, 'FrameY', f32(height));
-        write(canvas, 'Viewport', viewport);
-        runtime.processEvent(canvas, 'Reset', []);
-        write(canvas, 'ClipX', f32(width)); write(canvas, 'SizeX', width);
-        write(canvas, 'ClipY', f32(height)); write(canvas, 'SizeY', height);
-        tiles = drawLevelAction(console, {width, height});
+        tiles = this.postRender({player, width, height});
       } finally {
         write(player, 'FlashFog', fog); write(player, 'FlashScale', scale);
       }
       return {hud, console: tiles};
     },
   };
-  function drawLevelAction(console, frame) {
-    const tiles = [], previous = runtime.native, added = [STR_LEN, DRAW_TEXT].filter(index => !runtime.boundaryNatives.has(index));
+  /** `run()` with the canvas text natives bound to this canvas: StrLen (464) and DrawText (465); DrawTile (466), which the full console
+   * (Shift+` while typing: ConsoleLines above 0) and the border patterns reach, is refused by name. Returns the drawn tiles. */
+  function withCanvasNatives(frame, run) {
+    const tiles = [], previous = runtime.native, added = [STR_LEN, DRAW_TEXT, DRAW_TILE].filter(index => !runtime.boundaryNatives.has(index));
     for (const index of added) runtime.boundaryNatives.add(index);
     runtime.native = call => {
-      if (call.index !== 464 && call.index !== 465) return previous(call);
-      if (call.receiver !== canvas) throw new Error(`Canvas native ${call.index} reached the loading frame with another receiver`);
+      if (call.index !== 464 && call.index !== 465 && call.index !== 466) return previous(call);
+      if (call.receiver !== canvas) throw new Error(`Canvas native ${call.index} reached the console with another receiver`);
+      if (call.index === 466)
+        throw new Error('Canvas.DrawTile (native 466, UCanvas::execDrawTile) is not translated: the full console (Shift+` while typing) and the border patterns draw with it');
       const raw = Array.from({length: call.argumentCount}, (_, i) => call.evaluateArgument(i));
       const text = String(refValue(raw[0]) ?? ''), font = fontOf(read(canvas, 'Font')), s = state(frame);
       if (call.index === 464) {
@@ -229,13 +268,15 @@ export async function createConsoleLevelAction({runtime, assets}) {
         return undefined;
       }
       if (!font) throw new Error('Canvas.DrawText: No font (execDrawText logs it and draws nothing; not modelled)');
-      const cr = raw[1] === undefined ? true : Boolean(refValue(raw[1])), color = colorOf(), style = s.style;
+      // (WrappedPrint's PolyFlags always carry PF_Masked (textPolyFlags): STY_Normal text is the HUD renderer's masked style 2, which
+      // leaves the glyph page's index-zero texels undrawn; STY_Translucent and STY_Modulated keep their own)
+      const cr = raw[1] === undefined ? true : Boolean(refValue(raw[1])), color = colorOf(), style = s.style === 1 ? 2 : s.style;
       canvasDrawText(s, font, text, cr, record => tiles.push({texture: record.texture, x: record.x, y: record.y, width: record.width,
         height: record.height, u: record.u, v: record.v, ul: record.ul, vl: record.vl, color, style}));
       store(s);
       return undefined;
     };
-    try { runtime.processEvent(console, 'DrawLevelAction', [canvas]); }
+    try { run(); }
     finally { runtime.native = previous; for (const index of added) runtime.boundaryNatives.delete(index); }
     return tiles;
   }

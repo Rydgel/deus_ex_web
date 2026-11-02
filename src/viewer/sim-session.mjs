@@ -92,8 +92,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The corona scan (corona-scan.mjs) and the view model's simulation half
   // (weapon-overlay-sim.mjs), the frame's last world steps.
   let coronaScan = null, weaponSim = null, size = null;
-  // The console's canvas for LoadMap's PaintProgress frame (script-console-level-action.mjs, docs/loading-frame.md).
-  let levelAction = null;
+  // The console's canvas (script-console-level-action.mjs): every frame's console PreRender and PostRender (docs/console.md) and
+  // LoadMap's PaintProgress frame (docs/loading-frame.md); `consoleClock`, the viewport's LastUpdateTime for the console's Tick.
+  let levelAction = null, consoleClock = null;
   // SaveCurrentLevel's PaintProgress frame (travel-save.mjs, docs/loading-frame.md "Saving"), drawn in the save, between frames or in a
   // tick: the flash PaintProgress swaps in and the console's DrawLevelAction tiles for the last frame's size. Its world and HUD are the
   // frame the page drew last, which the page draws again under them (main.mjs drawProgressFrame).
@@ -1035,7 +1036,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         if (progress !== LEVEL_ACTION.none && levelAction) {
           const viewer = game.player.collisionActor;
           consoleTiles = levelAction.paint({ player: viewer, levelInfo: runtime.readNamed(viewer, 'Level'), width, height, action: progress, hudPaint: paint }).console;
-        } else paint();
+        } else {
+          paint();
+          // Draw's tail after EndFlash: the actor's and the console's PostRender events (the typed line, the console's messages).
+          if (levelAction) consoleTiles = levelAction.postRender({ player: game.player.collisionActor, width, height });
+        }
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, commands, stream: hudStream, infoLink, flash, console: consoleTiles };
     },
@@ -1217,7 +1222,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height,
-          aspect: input.aspect, resizes: input.resizes, preTicked: input.preTicked === true });
+          aspect: input.aspect, resizes: input.resizes, preTicked: input.preTicked === true, seconds: input.seconds ?? null });
         collect(begun.errors);
         const { errors: _, ...frame } = begun;
         snapshot.begin = frame;
@@ -1287,7 +1292,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const hud = this.hud({ width, height, view, stream: true, progress: begun?.travel ? LEVEL_ACTION.loading : LEVEL_ACTION.none });
         collect(hud.errors);
         // `stream` (the tiles as numbers) or, after an error, `commands`: the page draws the list `expandHudStream` makes of the stream
-        snapshot.hud = { commands: hud.commands ?? (hud.stream ? null : []), stream: hud.stream, infoLink: hud.infoLink, flash: hud.flash, console: hud.console };
+        snapshot.hud = { commands: hud.commands ?? (hud.stream ? null : []), stream: hud.stream, infoLink: hud.infoLink, flash: hud.flash, console: hud.console,
+          progress: Boolean(begun?.travel) };
       }
       // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
       snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;
@@ -1612,7 +1618,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * pauses the simulation; `halted` while it stopped on an error of its
      * own. A step that throws stops the later gated steps, as
      * pauseForRuntimeError did. */
-    begin({ dt, run, halted, width, height, aspect = null, resizes = 0, preTicked: ahead = false }) {
+    begin({ dt, run, halted, width, height, aspect = null, resizes = 0, preTicked: ahead = false, seconds = null }) {
       // The page's resize() since the last frame: the canvas aspect and the
       // default FOV, before PlayerCalcView points the camera.
       if (aspect !== null && resizes !== resizesSeen) {
@@ -1657,6 +1663,15 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           lights.previousA.set(lightNoise.A);
           lightNoise.update(timeSeconds);
           frame.light = { timeSeconds, noise: lightNoiseSnapshot(lightNoise) };
+        } catch (error) { fail(error); }
+      }
+      // UConsole::PreRender (Draw 0x1038f685, after Render->PreRender and before the actor's PreRender): the console's Tick event on
+      // the viewport clock (the page's frame time, as the mesh lighting's CurrentTime and LastUpdateTime) and ConsoleLines.
+      if (levelAction && seconds !== null && !stopped()) {
+        try {
+          const delta = consoleClock === null ? 0 : seconds - consoleClock;
+          consoleClock = seconds;
+          levelAction.preRender({ player: game.player.collisionActor, delta, height });
         } catch (error) { fail(error); }
       }
       if (frame.view && !stopped()) {

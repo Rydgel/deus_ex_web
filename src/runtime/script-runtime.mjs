@@ -36,7 +36,7 @@ import { probeNames, probeIndex } from '../unreal/probe-names.mjs';
 import { conditionalDestroyScriptObject, destroyScriptObject } from './script-object-lifecycle.mjs';
 import { setScriptOwner } from './script-owner.mjs';
 import { destroyScriptActor } from './script-destroy.mjs';
-import { scriptObjectToString } from './script-string-operations.mjs';
+import { scriptObjectToString, scriptStringText } from './script-string-operations.mjs';
 import { constructFreshScriptObject, allocateFreshScriptObject, constructActorBase, nativeConstructorFor } from './script-object-construction.mjs';
 import { checkActorEncroachment, actorBlockedBy } from './check-encroachment.mjs';
 import { setBase } from './walking-callbacks.mjs';
@@ -184,6 +184,7 @@ import {staticLoadObject as execStaticLoadObject} from './script-static-load-obj
 import {CLIENT_LAZY_LOAD,clientTextureLodSet} from './script-client-resource-settings.mjs';
 import {DEUSEX_VERSION_NATIVE,getDeusExVersion} from './script-deusex-version.mjs';
 import {execObjectLog} from './script-log.mjs';
+import {localize} from './script-localize.mjs';
 import {execVRand} from './script-vrand.mjs';
 import {execRotRand} from './script-rot-rand.mjs';
 import {parseToken} from './script-console-command.mjs';
@@ -1869,7 +1870,14 @@ export class ScriptRuntime {
     const loader=this.classLoader;
     if(!loader)throw new Error('Native-only class casts require the native class loader');
     const record=loader.nativeRecords.get(value)??value.loadRecord;
-    if(!record)throw new Error(`Native-only class cast needs a natively loaded object: ${value.key??'<object>'}`);
+    if(!record){
+      // The local Viewport (script-viewport-console.mjs) is attached to the native-only Viewport identity over the loaded Player: its
+      // class chain is the attached one (PlayerPawn.PostRender's Viewport(Player)).
+      const cls=this.instances.get(value)?.cls;
+      if(!cls?.nativeOnly)throw new Error(`Native-only class cast needs a natively loaded object: ${value.key??'<object>'}`);
+      for(let c=cls;c;c=c.base)if(c.record===target)return value;
+      return null;
+    }
     const graph=loader.graph;
     for(let cls=graph.classRecordOf(record);cls;cls=graph.superOf(cls))if(loader.identity(cls)===target)return value;
     return null;
@@ -3552,6 +3560,15 @@ export class ScriptRuntime {
       const config=this.classLoader?.graph?.config;
       if(!config)throw new Error('GetConfig requires GConfig (the native class loader and installed .ini files)');
       return config.getString(section,key,null)??'';
+    }
+    // Core UObject::execLocalize 0x1013ce00 -> Localize 0x10148430 (script-localize.mjs): Console.Typing's "Unrecognized command".
+    if(call.index===0&&call.record?.key==='core.object.localize'){
+      if(call.argumentCount!==3)throw new Error('Localize requires a section, a key and a package');
+      const [section,key,pkg]=[0,1,2].map(i=>scriptStringText(refValue(call.evaluateArgument(i))??''));
+      const config=this.classLoader?.graph?.config;
+      if(!config)throw new Error('Localize requires GConfig (the native class loader and the installed .ini and .int files)');
+      const device=typeof this.logDevice==='function'?this.logDevice:typeof this.logDevice?.log==='function'?entry=>this.logDevice.log(entry):null;
+      return localize(config,section,key,pkg,{log:device});
     }
     // DeusEx ParticleIterator.UpdateParticles (docs/particles.md).
     if(call.index===3017){

@@ -1662,6 +1662,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
       const reference=actorRefs(call);if(reference.handled)return reference;
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
+      const typed=inputConsole.consoleConsoleCommand(call,consoleCommands);if(typed.handled)return typed;
       // ViewportWindow 1940-1943 (the bodies that reach actor references and
       // the player's AdditionalViews); the leaf setters are host natives.
       if(call.index>=1940&&call.index<=1943)return viewportNative(call);

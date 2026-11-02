@@ -218,9 +218,9 @@ text is SAVING's measured ink (125 × 23, centred on the glyph cells); the frame
 * **None is drawn** with `?gamma=material` (no raw copy of the frame), after a canvas resize since the last frame, or before a level's first frame.
 * **`BeginSlowTask`** (the Save Game screen's and a travel's, not the Quick Save's) feeds GWarn's progress, which the captures show nothing of
   in the game window; not modelled.
-* **The rest of Console.PostRender** (the Border pattern with `bNoDrawWorld`, the time demo, the console lines and border,
-  DrawSingleView's messages) is not run, on the loading frame or on any other Play frame; DrawLevelAction is, and on the loading frame
-  its only reachable branch is the LevelAction message.
+* **The rest of Console.PostRender** runs since 2026-11-02 ([the typed console](console.md)): every frame and the loading frame run the
+  whole event, whose DrawSingleView draws the typed line and the console's messages (on the loading frame LoadMap has cleared bShowMenu,
+  so a message younger than 6 s shows there too). The full console and the border patterns stop at `DrawTile`, which is not translated.
 * **The canvas branches the loading frame does not reach**: WrappedPrint's word wrap, a centred line (`bCenter`), non-zero SpaceX/SpaceY,
   several lines and DrawText's CR are translated from the disassembly above but not compared with the original (no oracle run, no
   capture). The loading frame is one unwrapped line with SpaceX = SpaceY = 0 and `bCenter` false, which the grab verifies.

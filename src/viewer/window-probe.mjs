@@ -3,7 +3,7 @@
  * simulation sees it, on whichever side runs it (sim-worker.mjs `call`, or
  * the page with ?sim=inline). Reads only: the topmost modal's class, the
  * focus window's class and, for a text window, its text (+0x168), the
- * keyboard grab count, the Console's state and TypedStr, and the player's
+ * keyboard grab count, the Console's state, TypedStr and newest lines, the player's cheat flags, and the player's
  * DeusExNote texts, the object belt and the item in hand. */
 export function windowProbe(game) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
@@ -33,6 +33,10 @@ export function windowProbe(game) {
   const inHand = runtime.readNamed(player, 'inHand');
   const belt = game.hud ? game.hud.snapshot().belt : null;
   return {top: cls(top), focus: cls(focus), family, text, belt, inHand: inHand?.name ?? null, keyboardGrab: root ? W.i32(root, 0x5d0) : null,
-    console: {state: runtime.instance(console_).state?.stateNode?.record.name ?? null, typed: runtime.readNamed(console_, 'TypedStr')}, notes,
+    console: {state: runtime.instance(console_).state?.stateNode?.record.name ?? null, typed: runtime.readNamed(console_, 'TypedStr'),
+      // (the message ring's newest four lines, newest last, and the count DrawSingleView still shows)
+      lines: Array.from({length: 4}, (_, i) => (runtime.readNamed(console_, 'TopLine') - 3 + i + 64) % 64).map(i => runtime.readNamed(console_, 'MsgText')[i]),
+      textLines: runtime.readNamed(console_, 'TextLines')},
+    cheats: {enabled: runtime.readNamed(player, 'bCheatsEnabled'), reducedDamageType: runtime.readNamed(player, 'ReducedDamageType')}, notes,
     sounds, galaxy, slotModel: slotModel ? {count: slotModel.count, source: slotModel.source, allocated: slotModel.allocated, rejected: slotModel.rejected, unattributed: slotModel.unattributed} : null};
 }

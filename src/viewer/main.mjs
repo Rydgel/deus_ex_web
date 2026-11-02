@@ -2793,11 +2793,11 @@ function drawFrame(snap, time) {
   if (playing && !runtimeError && snap?.hud?.flash) {
     try { flashPass.render(renderer, snap.hud.flash, () => progressFrame.keepBeforeFlash(renderer)); } catch (error) { pauseForRuntimeError(error); }
   }
-  // The console's PostRender event follows EndFlash (Draw 0x1038f772): on LoadMap's PaintProgress frame, DrawLevelAction's LOADING
-  // (sim-session.mjs hud `progress`, docs/loading-frame.md).
+  // The console's PostRender event follows EndFlash (Draw 0x1038f772): the typed line and the console's messages (docs/console.md); on
+  // LoadMap's PaintProgress frame, DrawLevelAction's LOADING (sim-session.mjs hud `progress`, docs/loading-frame.md), which is kept.
   if (playing && !runtimeError && snap?.hud?.console?.length && hudRenderer) {
     try { hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.console); } catch (error) { pauseForRuntimeError(error); }
-    lastLoadingFrame = { map: currentMap, width: renderer.domElement.width, height: renderer.domElement.height, tiles: snap.hud.console, flash: snap.hud.flash };
+    if (snap.hud.progress) lastLoadingFrame = { map: currentMap, width: renderer.domElement.width, height: renderer.domElement.height, tiles: snap.hud.console, flash: snap.hud.flash };
   }
   framePhases.hudCalls += drawCalls() - calls;
   phase('hud');

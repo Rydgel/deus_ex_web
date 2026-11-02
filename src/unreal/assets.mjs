@@ -27,6 +27,8 @@ export class AssetStore {
     // Packages whose load has finished, for synchronous callers (loaded()).
     this.ready = new Map();
     this.configFiles = [];
+    // System/*.int, which GConfig reads as <Package>.int for Localize (script-localize.mjs).
+    this.localizationFiles = [];
     const iniFiles = [];
     // Installed native libraries by lowercase leaf name (System/*.dll), for
     // UPackage::BindPackage's appGetDllHandle. Only names are needed.
@@ -35,6 +37,7 @@ export class AssetStore {
       this.sourceFiles.push(file);
       const leaf = file.path.replaceAll('\\', '/').split('/').pop();
       if (/\.ini$/i.test(leaf)) iniFiles.push(file);
+      if (/\.int$/i.test(leaf)) this.localizationFiles.push(file);
       if (/\.dll$/i.test(leaf)) this.libraries.add(leaf.toLowerCase());
       if (!/\.(u|utx|dx|unr|uax|umx)$/i.test(leaf)) continue;
       const name = leaf.replace(/\.[^.]+$/, '');

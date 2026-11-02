@@ -30,7 +30,7 @@ export default defineConfig({
         for (const directory of ['Maps', 'Textures', 'System', 'Sounds', 'Music', 'Help']) {
           for (const file of await readdir(path.join(root, directory), { withFileTypes: true })) {
             // (Help: the splash bitmaps only, docs/boot.md)
-            if (file.isFile() && (directory === 'Help' ? /\.bmp$/i.test(file.name) : /\.(u|utx|dx|unr|uax|umx|ini)$/i.test(file.name))) {
+            if (file.isFile() && (directory === 'Help' ? /\.bmp$/i.test(file.name) : /\.(u|utx|dx|unr|uax|umx|ini|int)$/i.test(file.name))) {
               const name = `${directory}/${file.name}`;
               files.set(name, path.join(root, name));
             } else if (file.isFile() && directory === 'System' && /\.dll$/i.test(file.name)) {

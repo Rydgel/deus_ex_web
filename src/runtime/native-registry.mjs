@@ -70,7 +70,7 @@ export const NATIVE_SITES = [
       1421-1423 1425 1428 1430-1434 1438 1440 1455-1461 1467 1475-1477 1488 1493 1550-1551 1556-1557 1610-1612 1971 1973 1975-1976
       1978 1980 1985 1987 2001 2052-2056 2060-2062 2100-2102 2108-2109 3016-3017 3970`),
     names: ['engine.pawn.stopwaiting', 'engine.decal.attachdecal', 'engine.playerpawn.clienttravel', 'engine.decal.detachdecal',
-      'core.object.dynamicloadobject', 'core.object.getenum', 'core.object.getconfig'],
+      'core.object.dynamicloadobject', 'core.object.getenum', 'core.object.getconfig', 'core.object.localize'],
     gates: [[1535, 1545, 'window-tile'], [2105, 2107, 'pawn-alliance'], [2210, 2221, 'text-parser']],
     notRoutes: [[0, 'the marker of a native bound by name: its branch tests the record key']],
     dynamic: ['this.boundaryNatives.has(index)', 'names[index]'],
@@ -96,6 +96,8 @@ export const NATIVE_SITES = [
     indices: idx('1497-1499')},
   {id: 'console-command', layer: 'window-host', file: R + 'script-input-console.mjs', anchor: /playerConsoleCommand\(call,commands\)\{/,
     names: ['engine.playerpawn.consolecommand']},
+  {id: 'console-typed-command', layer: 'window-host', file: R + 'script-input-console.mjs', anchor: /consoleConsoleCommand\(call,commands\)\{/,
+    names: ['engine.console.consolecommand']},
   {id: 'window-list', layer: 'window-host', file: R + 'script-window-list.mjs', anchor: /export function dispatchListWindowNative\(/,
     indices: idx('1720-1725 1730-1737 1740-1747 1750-1751 1755-1756 1760-1762 1765-1778 1780-1786 1790-1795 1800-1812')},
   {id: 'window-edit', layer: 'window-host', file: R + 'script-window-edit-natives.mjs', anchor: /export function dispatchEditWindowNative\(/,
@@ -138,7 +140,8 @@ export const NATIVE_SITES = [
   {id: 'weapon-overlay', layer: 'play-host', file: V + 'weapon-overlay-sim.mjs', anchor: /runtime\.native=call=>\{/,
     indices: idx('467'), when: 'only while the first-person overlay is recorded'},
   {id: 'console-level-action', layer: 'play-host', file: R + 'script-console-level-action.mjs', anchor: /runtime\.native = call => \{/,
-    indices: idx('464 465'), when: 'only while the loading frame runs Console.DrawLevelAction (LoadMap\'s PaintProgress frame, docs/loading-frame.md)'},
+    indices: idx('464 465 466'), when: 'while Play\'s frames and the loading frame run the console\'s PostRender (docs/console.md, docs/loading-frame.md)',
+    partial: [[466, 'refused by name (UCanvas::execDrawTile is not translated): the full console (Shift+` while typing) and the border patterns']]},
 ];
 
 /** The Rust interpreter's kinds (native/script-vm, lowered by script-vm-lower.mjs): each native here also has a JavaScript
@@ -178,10 +181,10 @@ export const NATIVE_DECISIONS = Object.freeze([
     evidence: 'dump-script-function.mjs: DeusExWeapon.PlaySimSound (@11 NetMode == 0 -> native 264, @71 PlayOwnedSound), DeusExWeapon.SelectiveSpawnEffects ' +
       '(@0 NetMode == 0 -> SpawnEffects, return), DeusExPlayer.DoJump (native 264 at @90, no Super call); System/User.ini line 249; Engine.dll execPlayOwnedSound ' +
       '0x103e29d0: in NM_Standalone it only forwards ClientHearSound to the player pawns (no local sound of its own).',
-    reopen: 'a networked NetMode, or DodgeClickTime > 0 (an edited User.ini; Play has no typed console and does not persist the ini).'},
+    reopen: 'a networked NetMode, or DodgeClickTime > 0 (an edited User.ini, or a `set` typed in the console since 2026-11-02, docs/console.md).'},
   {native: 1050, name: 'PlayerPawnExt.PreRenderWindows', decision: 'host-path', date: '2026-10-21',
     reason: 'The native is the Draw-time window work of the PreRender script event (Extension exec 0x10038480 calls the pawn\'s vtable slot +0xb4 with the Canvas). ' +
-      'Play never dispatches the PreRender, PostRender or PostRenderFlash events (Engine.PlayerPawn.PreRender only forwards to myHUD); it runs the windows ' +
+      'Play never dispatches the PreRender or PostRenderFlash events (Engine.PlayerPawn.PreRender only forwards to myHUD; PostRender it runs every frame, docs/console.md); it runs the windows ' +
       'directly: RootWindow rendering rectangle and PreRender frame (script-root-render-viewport.mjs, validate-root-render-viewport against ' +
       '0x1003a7dd..0x1003a8cb) in HudPlay.renderViewport, and the paint in HudPlay.commands (src/runtime/script-play-hud.mjs), both inside the render ' +
       'pass at x87 precision control 24 (render-precision.mjs).',

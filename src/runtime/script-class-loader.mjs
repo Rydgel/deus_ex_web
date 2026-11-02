@@ -45,13 +45,13 @@ export class ScriptClassLoader {
   /** Fetch a dependency closure before any synchronous native load begins.
    * Serialize preparation requests so overlapping/cyclic closures cannot see
    * half-fetched tables. Native export creation remains lazy after fetching. */
-  /** GConfig from the installed System/*.ini files, bound to the graph
+  /** GConfig from the installed System/*.ini and *.int files, bound to the graph
    * before the first synchronous class load (UClass::Serialize reaches
    * LoadConfig). An install without .ini files yields an empty cache. */
   prepareConfig() {
     // Flush's writes go to the asset store's config store, where there is one: the player's kept files (docs/config-persistence.md).
     const store = this.assets?.configStore;
-    return this.configReady ??= loadConfigCache(this.assets?.configFiles ?? [], { onWrite: store ? (name, text) => store.write(name, text) : null })
+    return this.configReady ??= loadConfigCache([...(this.assets?.configFiles ?? []), ...(this.assets?.localizationFiles ?? [])], { onWrite: store ? (name, text) => store.write(name, text) : null })
       .then(cache => { this.graph.setConfig(cache); return cache; });
   }
 

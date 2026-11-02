@@ -1,7 +1,7 @@
 import {readUserConfig} from '../unreal/user-config.mjs';
 import {refValue} from './script-vm.mjs';
 import {scriptStringText,scriptStringComplementEqual} from './script-string-operations.mjs';
-import {parseCommand,readInputAliases,ALIAS_MEMBERS,ALIAS_COUNT} from './script-console-command.mjs';
+import {parseCommand,readInputAliases,ALIAS_MEMBERS,ALIAS_COUNT,consoleOutputDevice} from './script-console-command.mjs';
 
 /** UInput::GetKeyName 0x10394b20; names come from original EInputKey data. */
 export function inputKeyName(names,index){
@@ -176,6 +176,16 @@ export async function createInputConsole(runtime,assets,{config}={}){
       if(!runtime.readNamed(call.receiver,'Player'))return {handled:true,value:''};
       if(!commands)return query.execute(command);
       return {handled:true,value:commands.consoleCommand(call.receiver,command)};
+    },
+    /** UConsole::execConsoleCommand 0x10379900, the typed line's Enter (Console.Typing.KeyEvent): P_GET_STR S, P_FINISH, then
+     * Viewport (+0x2c) -> its FExec (+0x2c) slot 0, UWindowsViewport::Exec, with the Console's own FOutputDevice (+0x28,
+     * UConsole::Serialize) as Ar; the result is Exec's. */
+    consoleConsoleCommand(call,commands){
+      if(call.record?.key!=='engine.console.consolecommand')return {handled:false};
+      if(call.argumentCount!==1)throw new Error('Console.ConsoleCommand requires one string argument');
+      const command=scriptStringText(refValue(call.evaluateArgument(0)));
+      if(!commands)throw new Error('Console.ConsoleCommand requires the console command chain');
+      return {handled:true,value:Boolean(commands.viewportExec(command,consoleOutputDevice(runtime,call.receiver)))};
     },
   };
 }
