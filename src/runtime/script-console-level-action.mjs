@@ -23,12 +23,14 @@
  * Every Play frame runs the console's part of UGameEngine::Draw (docs/console.md): UConsole::PreRender's Tick event before the world,
  * and after the HUD the viewport actor's and the console's PostRender events, whose DrawSingleView draws the typed line ("(> Say _")
  * and the last messages with these natives. The loading frame runs the same tail; on it LoadMap has just cleared bShowMenu and Pauser.
- * DrawTile (466), which the full console and the border patterns need, is refused by name.
+ * DrawTile (466) draws the full console's background (Shift+` while typing) and the border patterns, for the console's own textures.
  */
 import {exportAt, readObject} from '../unreal/objects.mjs';
 import {refValue} from './script-vm.mjs';
 import {decodeFontExport} from './script-font-model.mjs';
 import {plainTexture} from './script-window-plain-texture.mjs';
+import {TextureStore} from '../unreal/textures.mjs';
+import {canvasDrawTile} from './sprite-tile.mjs';
 
 export const LEVEL_ACTION = Object.freeze({none: 0, loading: 1, saving: 2, connecting: 3, precaching: 4});
 export const LOADING_FRAME = Object.freeze({
@@ -71,15 +73,20 @@ function drawString(canvas, polyFlags, font, x, y, text, tile) {
   return acc;
 }
 
-/** The tile submit (0x10377170): PF_Invisible draws nothing; a tile outside the canvas frame or without area is dropped; one the frame
- * cuts is clipped there with its U/V extents scaled by integer division (0x103771de..0x1037727c), a branch not reached by a centred
- * message and not translated: it stops by name. */
+/** The tile submit (0x10377170) of a glyph (UL = XL, VL = YL): PF_Invisible draws nothing; a tile outside the canvas frame (Frame->X,
+ * Frame->Y, +0xa8 and +0xac) or without area is dropped. The frame clips it in integers (0x103771de..0x1037727c), with idiv's
+ * truncation: left of 0, d = X * UL / XL, UL += d, U -= d, XL = X + XL, X = 0; above 0 the same in Y; past the right edge
+ * UL += (FrameX - X - XL) * UL / XL, past the bottom VL alike (XL and YL stay). RenDev->DrawTile then gets UL and VL as its XL and YL
+ * (0x103772bb..0x10377300: the pushes for XL and YL are the converted UL and VL): the drawn rectangle is the source's, 1:1. */
 function submitTile(canvas, polyFlags, texture, x, y, w, h, u, v, tile) {
   if (polyFlags & 1) return;
   if (x + w <= 0 || y + h <= 0 || x >= canvas.frameX || y >= canvas.frameY || w <= 0 || h <= 0) return;
-  if (x < 0 || y < 0 || w > canvas.frameX - x || h > canvas.frameY - y)
-    throw new Error(`Canvas text tile at (${x}, ${y}) ${w}x${h} is cut by the ${canvas.frameX}x${canvas.frameY} frame: the tile submit's clipping (0x103771de) is not translated`);
-  tile({texture, x, y, width: w, height: h, u, v, ul: w, vl: h, polyFlags});
+  let ul = w, vl = h;
+  if (x < 0) { const d = Math.trunc(x * ul / w); ul += d; u -= d; w += x; x = 0; }
+  if (y < 0) { const d = Math.trunc(y * vl / h); v -= d; vl += d; h += y; y = 0; }
+  if (w > canvas.frameX - x) ul += Math.trunc((canvas.frameX - x - w) * ul / w);
+  if (h > canvas.frameY - y) vl += Math.trunc((canvas.frameY - y - h) * vl / h);
+  tile({texture, x, y, width: ul, height: vl, u, v, ul, vl, polyFlags});
 }
 
 /** UCanvas::WrappedPrint (0x10376790) over a canvas state ({spaceX, spaceY, orgX, orgY, clipX, clipY, curX, curY, frameX, frameY});
@@ -172,13 +179,26 @@ export async function createConsoleLevelAction({runtime, assets}) {
   const store = s => { write(canvas, 'CurX', s.curX); write(canvas, 'CurY', s.curY); write(canvas, 'CurYL', s.curYL); };
   const colorOf = () => { const c = read(canvas, 'DrawColor'); return ['r', 'g', 'b'].map(k => c?.[`core.object.color.${k}`] ?? 0); };
   const consoleOf = player => { const viewport = read(player, 'Player'); return {viewport, console: viewport && read(viewport, 'Console')}; };
+  // The textures the console's own DrawTile calls draw (Engine.Console's ConBackground and Border defaults): what UTexture::Lock gives
+  // UCanvas::DrawTile (the base mip's size, UScale = VScale = Scale) and the PolyFlags Masked bit it adds, read before any frame (the
+  // native is synchronous).
+  const consoleClass = await runtime.loadClass(engine, engine.exportsByPath.get('console')), textureStore = new TextureStore(assets), tileTextures = new Map();
+  for (const name of ['ConBackground', 'Border']) {
+    const ref = runtime.defaultValue(consoleClass, runtime.lookupMember(consoleClass, 'fields', name));
+    if (!ref?.asset || !Number.isInteger(ref.index)) continue;
+    const data = await textureStore.get(ref.asset, ref.index), values = data.values ?? {}, scale = f32(values.Scale ?? 1);
+    tileTextures.set(ref.key, {usize: values.USize | 0, vsize: values.VSize | 0, infoUSize: data.mips[0].width, infoVSize: data.mips[0].height,
+      uScale: scale, vScale: scale, masked: Boolean(values.bMasked), animated: Boolean(values.AnimNext),
+      texture: plainTexture({key: ref.key, asset: ref.asset, index: ref.index, kind: 'Texture'})});
+  }
   return {
     canvas,
     /** The stock fonts' page textures the console draws with (LargeFont: DrawLevelAction's messages; MedFont: the typed line and the
      * message lines), which the page decodes before the first frame: the loading frame is drawn once and kept, and the typed line
      * shows on the frame that starts it. */
     textures() {
-      return ['LargeFont', 'MedFont'].flatMap(name => (fontOf(read(canvas, name))?.pages ?? []).map(page => page.texture)).filter(Boolean);
+      return [...['LargeFont', 'MedFont'].flatMap(name => (fontOf(read(canvas, name))?.pages ?? []).map(page => page.texture)).filter(Boolean),
+        ...[...tileTextures.values()].map(info => info.texture)];
     },
     /**
      * UConsole::PreRender (0x10379d10), which UGameEngine::Draw calls after Render->PreRender and before Canvas->Update (0x1038f685):
@@ -247,17 +267,40 @@ export async function createConsoleLevelAction({runtime, assets}) {
       return {hud, console: tiles};
     },
   };
-  /** `run()` with the canvas text natives bound to this canvas: StrLen (464) and DrawText (465); DrawTile (466), which the full console
-   * (Shift+` while typing: ConsoleLines above 0) and the border patterns reach, is refused by name. Returns the drawn tiles. */
+  /**
+   * UCanvas::execDrawTile (0x10377ba0): Tex, XL, YL, U, V, UL, VL; no texture logs "DrawTile: Missing Texture" (not reached: the console's
+   * textures are its defaults) and draws nothing. With a Style, PolyFlags = PF_Translucent for STY_Translucent, PF_Modulated for
+   * STY_Modulated, PF_NoSmooth with bNoSmooth, and PF_TwoSided (0x10377ccd..0x10377cfd), then UCanvas::DrawTile (vtable +0x5c) at
+   * (OrgX + CurX, OrgY + CurY) with DrawColor's plane and no fog (canvasDrawTile: the clip to the frame and the U/V scale, checked for
+   * sprites against the original); the texture's Masked bit joins the flags. Then CurX = SpaceX + CurX + XL and CurYL = max(CurYL, YL)
+   * (0x10377d6a..0x10377d88), drawn or not.
+   */
+  function drawTile([texture, xl, yl, u, v, ul, vl], frame, tiles) {
+    [xl, yl, u, v, ul, vl] = [xl, yl, u, v, ul, vl].map(f32);
+    if (!texture) throw new Error('Canvas.DrawTile without a texture (it logs "DrawTile: Missing Texture"; not modelled)');
+    const style = Number(read(canvas, 'Style'));
+    if (style !== 0) {
+      const info = tileTextures.get(texture.key);
+      if (!info) throw new Error(`Canvas.DrawTile of ${texture.key}: only the console's ConBackground and Border are prepared`);
+      if (info.animated) throw new Error(`Canvas.DrawTile of an animated texture (${texture.key}): UTexture::Update and AnimCur are not translated`);
+      const x = f32(read(canvas, 'CurX') + read(canvas, 'OrgX')), y = f32(read(canvas, 'CurY') + read(canvas, 'OrgY'));
+      const tile = canvasDrawTile({x, y, xl, yl, u, v, ul, vl}, {fx: f32(frame.width), fy: f32(frame.height)}, info);
+      // (the HUD renderer's styles: 3 translucent, 4 modulated, 2 masked, 1 opaque)
+      if (tile) tiles.push({texture: info.texture, x: tile.x, y: tile.y, width: tile.xl, height: tile.yl, u: tile.u, v: tile.v, ul: tile.ul, vl: tile.vl,
+        color: colorOf(), style: style === 3 ? 3 : style === 4 ? 4 : info.masked ? 2 : 1});
+    }
+    write(canvas, 'CurX', f32(f32(read(canvas, 'SpaceX') + read(canvas, 'CurX')) + xl));
+    if (read(canvas, 'CurYL') < yl) write(canvas, 'CurYL', yl);
+  }
+  /** `run()` with the canvas natives bound to this canvas: StrLen (464), DrawText (465) and DrawTile (466). Returns the drawn tiles. */
   function withCanvasNatives(frame, run) {
     const tiles = [], previous = runtime.native, added = [STR_LEN, DRAW_TEXT, DRAW_TILE].filter(index => !runtime.boundaryNatives.has(index));
     for (const index of added) runtime.boundaryNatives.add(index);
     runtime.native = call => {
       if (call.index !== 464 && call.index !== 465 && call.index !== 466) return previous(call);
       if (call.receiver !== canvas) throw new Error(`Canvas native ${call.index} reached the console with another receiver`);
-      if (call.index === 466)
-        throw new Error('Canvas.DrawTile (native 466, UCanvas::execDrawTile) is not translated: the full console (Shift+` while typing) and the border patterns draw with it');
       const raw = Array.from({length: call.argumentCount}, (_, i) => call.evaluateArgument(i));
+      if (call.index === 466) { drawTile(raw.map(refValue), frame, tiles); return undefined; }
       const text = String(refValue(raw[0]) ?? ''), font = fontOf(read(canvas, 'Font')), s = state(frame);
       if (call.index === 464) {
         if (!font) throw new Error('Canvas.StrLen without a Font');

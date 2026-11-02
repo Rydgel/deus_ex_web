@@ -141,7 +141,7 @@ export const NATIVE_SITES = [
     indices: idx('467'), when: 'only while the first-person overlay is recorded'},
   {id: 'console-level-action', layer: 'play-host', file: R + 'script-console-level-action.mjs', anchor: /runtime\.native = call => \{/,
     indices: idx('464 465 466'), when: 'while Play\'s frames and the loading frame run the console\'s PostRender (docs/console.md, docs/loading-frame.md)',
-    partial: [[466, 'refused by name (UCanvas::execDrawTile is not translated): the full console (Shift+` while typing) and the border patterns']]},
+    partial: [[466, 'the console\'s own textures (Console ConBackground and Border defaults); an animated texture is refused']]},
 ];
 
 /** The Rust interpreter's kinds (native/script-vm, lowered by script-vm-lower.mjs): each native here also has a JavaScript

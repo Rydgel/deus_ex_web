@@ -3,7 +3,8 @@
 The original's console line: **T** (`Talk`) opens `(> Say _` at the bottom left of the picture, the player types, and **Enter**
 runs the line through the engine's command chain. This is how cheats are typed in the original (`set DeusEx.JCDentonMale
 bCheatsEnabled True`, then `god`, `summon`, ...). Play runs it since 2026-11-02 from the original's bytecode and Engine.dll and
-Core.dll bodies. The line and the console's messages are drawn pixel for pixel where the original draws them (below).
+Core.dll bodies. The line, the console's messages and the full console (Shift+` while typing) are drawn as the original draws them
+(below).
 
 Before this, Play entered the console's `Typing` state and collected the characters, but drew nothing, and **Enter paused Play**
 with a runtime error (`Console.ConsoleCommand` was not implemented, "Unsupported original door native 0 in
@@ -93,11 +94,35 @@ checksum of the original's set), the console's state and lines (`windowProbe`'s 
 message gone 7 s later. Its cost, measured in inline mode on 00_Training: the console's PreRender under 0.1 ms a frame, its PostRender
 0.1 ms (0.2 ms while typing), about 1 % of the 8.3 ms frame budget, in the worker.
 
+### The full console (Shift+` while typing)
+
+`Console.Typing.KeyType` on `~`: `ConsoleDest = 1.0` (Deus Ex's "fullscreen console"); `Console.Tick` slides ConsolePos up by each
+frame's Delta (a second), PreRender turns it into ConsoleLines, and PostRender draws `ConBackground` (Engine's `ConsoleBack`, tiled)
+over the frame from `ConsoleLines - FrameY` at DrawColor (128, 128, 128), then `DrawConsoleView`: the message ring from the bottom up,
+`"(>" @ TypedStr` first.
+
+* **`Canvas.DrawTile`** (466): `UCanvas::execDrawTile` (`0x10377ba0`): with a Style, PolyFlags from the style (`PF_Translucent`,
+  `PF_Modulated`), `PF_NoSmooth` with bNoSmooth and `PF_TwoSided`, then `UCanvas::DrawTile` (`0x10376160`) at
+  `(OrgX + CurX, OrgY + CurY)`; then `CurX = SpaceX + CurX + XL`, `CurYL = max(CurYL, YL)`. `UCanvas::DrawTile`'s clip to the frame,
+  its U/V scale from the texture's Lock and the Masked bit are the sprites' (`sprite-tile.mjs canvasDrawTile`, checked against the
+  original under Unicorn by `validate-sprite-tiles`), now for any source rectangle. The texture's Lock values are read before the
+  first frame for the console's own two textures (ConBackground and Border); an animated texture is refused (`UTexture::Update` and
+  `AnimCur` are not translated).
+* **The glyph clip** of WrappedPrint's tile submit (`0x103771de..0x1037727c`), which lines crossing the top edge reach while the
+  console slides: in integers, with idiv's truncation, left of 0 `d = X * UL / XL`, `UL += d`, `U -= d`, `XL = X + XL`, `X = 0`;
+  above 0 the same in Y; past the right edge `UL += (FrameX - X - XL) * UL / XL` (XL stays), past the bottom VL alike. The device
+  then gets UL and VL as its XL and YL (the pushes at `0x103772bb..0x10377300`): the drawn glyph is the source rectangle, 1:1.
+
+Checked against the original (`FULL=1 .work/console/original.sh`: T, `~`, 2.5 s, `xyz`, a grab): with the original's display
+ramp taken off Play's frame (the original's `SetGammaRamp` works at scanout, so an X grab has none; Play draws
+`pow(x/255, 1/(2.5 Brightness))` into the canvas), every sampled pixel of the background (a 3-pixel grid over 890 × 630) is within
+1 level of the original's, mean difference 0.00; the line `(> Say xyz` is the original's 91 pixels. `validate-console-play` checks
+the line's set and ten background pixels through the ramp. Twelve unknown commands and the slide (lines crossing the top edge) draw
+with no error.
+
 ## Not done
 
-* **The full console** (Shift+` while typing: `ConsoleDest = 1.0`, the console slides down over a second). Its background is
-  `Canvas.DrawTile` (466, `UCanvas::execDrawTile` `0x10377ba0` and `UCanvas::DrawTile` `0x10376160`: the clip against the frame
-  with its UV adjustment, the texture's Lock and UV scale), which is not translated: Play stops by name when ConsoleLines
-  becomes positive. The border patterns (`bNoDrawWorld`, BorderLines) reach the same native.
 * The time demo (`bTimeDemo`) is not reachable from a key in Deus Ex and is not checked.
 * `PaintProgress`'s own `UConsole::PreRender` (its Draw's console Tick) is not run on the loading and saving frames.
+* `BorderSize` of 2 or more and an animated texture in `Canvas.DrawTile` are refused by name; nothing in Deus Ex reaches them.
+* The page's credit card (not original, [boot](boot.md)) is drawn over the full console during the logo flight.

@@ -32,7 +32,13 @@ export function spriteIcon(sprite, texture) {
  * `fx`, `fy` (Frame->FX, FY); `texture` `usize`, `vsize`, `infoUSize`,
  * `infoVSize`, `uScale`, `vScale` (Info.UScale/VScale). */
 export function canvasTile(icon, frame, texture) {
-  let { x, y, xl, yl } = icon, u = 0, v = 0, ul = f(texture.usize), vl = f(texture.vsize);
+  return canvasDrawTile({ ...icon, u: 0, v: 0, ul: f(texture.usize), vl: f(texture.vsize) }, frame, texture);
+}
+
+/** UCanvas::DrawTile (0x10376160) for any source rectangle `{x, y, xl, yl, u, v, ul, vl}`: the clip and the scale above (the console's
+ * Canvas.DrawTile, script-console-level-action.mjs). */
+export function canvasDrawTile(rect, frame, texture) {
+  let { x, y, xl, yl, u, v, ul, vl } = rect;
   if (!(xl > 0) || !(yl > 0)) return null;
   const x2 = f(x + xl), y2 = f(y + yl);
   if (!(x2 > 0) || !(y2 > 0)) return null;

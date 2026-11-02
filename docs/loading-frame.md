@@ -220,12 +220,13 @@ text is SAVING's measured ink (125 × 23, centred on the glyph cells); the frame
   in the game window; not modelled.
 * **The rest of Console.PostRender** runs since 2026-11-02 ([the typed console](console.md)): every frame and the loading frame run the
   whole event, whose DrawSingleView draws the typed line and the console's messages (on the loading frame LoadMap has cleared bShowMenu,
-  so a message younger than 6 s shows there too). The full console and the border patterns stop at `DrawTile`, which is not translated.
+  so a message younger than 6 s shows there too). The full console's background and the border patterns draw with `DrawTile`.
 * **The canvas branches the loading frame does not reach**: WrappedPrint's word wrap, a centred line (`bCenter`), non-zero SpaceX/SpaceY,
   several lines and DrawText's CR are translated from the disassembly above but not compared with the original (no oracle run, no
   capture). The loading frame is one unwrapped line with SpaceX = SpaceY = 0 and `bCenter` false, which the grab verifies.
-* **Partial clipping** of a canvas glyph (the tile submit's `0x103771de..0x1037727c`) is not translated and stops by name; a centred
-  message reaches it only in a frame narrower than the message (150 px for LOADING).
+* **Partial clipping** of a canvas glyph (the tile submit's `0x103771de..0x1037727c`) is translated since 2026-11-02 for the full
+  console's lines ([the typed console](console.md)); a centred message reaches it only in a frame narrower than the message (150 px for
+  LOADING), not checked against the original there.
 * **The audio refresh** after PaintProgress (`Audio->SetViewport`) is not modelled here.
 * **A canvas resize during the load** (the window resized, fullscreen toggled) clears the browser's drawing buffer, and the held frame
   with it, until the next level's first frame. The original's window keeps its last presented frame.
