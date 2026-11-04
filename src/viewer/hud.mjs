@@ -39,7 +39,7 @@ export async function createHudRenderer({assets,preload=[]}){
       // turns into a black screen.
       if(data.procedural==='FireTexture'||data.procedural==='WetTexture'){
         const live=sharedProceduralTextures().acquire(await store.get(asset,ref.index,false));
-        const image={key:ref.key,width:data.values.USize|0,height:data.values.VSize|0,gpu:live.texture};
+        const image={key:ref.key,width:data.values.USize|0,height:data.values.VSize|0,gpu:live.texture,lease:live};
         images.set(ref.key,image);return image;
       }
       const image={key:ref.key,...data.mips[0]};
@@ -158,15 +158,17 @@ export async function createHudRenderer({assets,preload=[]}){
   /** A texture the page made at run time: `image` is {width, height, data} (RGBA bytes, top row first). The previous texture of that key,
    * and its materials, are dropped. */
   function setDynamicImage(key,image){
+    images.get(key)?.lease?.release();
     images.set(key,{key,...image});
     textures.get(key)?.dispose();textures.delete(key);
     for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
   }
   function releaseDynamicImage(key){
-    images.delete(key);textures.get(key)?.dispose();textures.delete(key);
+    images.get(key)?.lease?.release();images.delete(key);textures.get(key)?.dispose();textures.delete(key);
     for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
   }
   return {render,draw,setDynamicImage,releaseDynamicImage,
-    dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const [key,t] of textures)if(!images.get(key)?.gpu)t.dispose();},
+    dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const [key,t] of textures)if(!images.get(key)?.gpu)t.dispose();
+      for(const image of images.values())image.lease?.release();},
   };
 }

@@ -77,7 +77,8 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
         // Fire and wet textures (smoke puffs) are the page's live procedural
         // textures, as on BSP surfaces and mesh skins.
         if (data.procedural === 'FireTexture' || data.procedural === 'WetTexture') {
-          Object.assign(entry, { texture: sharedProceduralTextures().acquire(data).texture, width: data.values.USize, height: data.values.VSize,
+          const lease = sharedProceduralTextures().acquire(data);
+          Object.assign(entry, { texture: lease.texture, lease, width: data.values.USize, height: data.values.VSize,
             infoWidth: data.values.USize, infoHeight: data.values.VSize, scale: Math.fround(data.values.DrawScale ?? data.values.Scale ?? 1), shared: true });
           return;
         }
@@ -170,5 +171,5 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
   }
 
   return { root, update, mainPass, framePass, numberedPass, notes, skipped, count: () => used,
-    dispose() { for (const object of pool) object.material.dispose(); for (const entry of textureCache.values()) if (!entry.shared) entry.texture?.dispose(); } };
+    dispose() { for (const object of pool) object.material.dispose(); for (const entry of textureCache.values()) { entry.lease?.release(); if (!entry.shared) entry.texture?.dispose(); } } };
 }

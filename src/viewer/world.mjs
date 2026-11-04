@@ -51,6 +51,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   // Identity, never moved: no auto-update cascade (main.mjs, the scene).
   root.matrixAutoUpdate = false;
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
+  // The page's procedural textures this world's surfaces hold (procedural-textures.mjs): released with the world.
+  const proceduralLeases = [];
   // The script-VM kernel runs the animated light-map merge (light.rs) and
   // the volumetric fog loop (fog.rs) when it loads.
   let scriptKernel = null;
@@ -166,7 +168,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const own = texture => pan ? Object.assign(texture.clone(), { needsUpdate: true }) : texture;
       // A FireTexture or WetTexture surface draws the page's live texture
       // (docs/fire-texture.md).
-      const fire = data.fire || data.wet ? sharedProceduralTextures().acquire(data).texture : null;
+      const lease = data.fire || data.wet ? sharedProceduralTextures().acquire(data) : null;
+      if (lease) proceduralLeases.push(lease);
+      const fire = lease?.texture ?? null;
       const material = new THREE.MeshBasicMaterial({ map: own(fire ?? gpuTexture(data, flags)),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
@@ -719,7 +723,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); lighting.dispose(); },
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); lighting.dispose();
+      for (const lease of proceduralLeases) lease.release(); },
   };
   return world;
 }

@@ -152,7 +152,7 @@ lowest reading (1335 MB) is the same lag: the bunker's runtime collected between
 `textures` phase went from 0.38 to 0.91 ms, every other phase within 0.1 ms. The page keeps one procedural texture set for its life
 (`procedural-textures.mjs sharedProceduralTextures`), and its `update` ticks every Fire and Wet texture ever acquired, each frame:
 after the warm-up pass, every visited map's. The original updates the textures it draws (that module's own note); the past maps'
-ticks also take values from the generator the drawn ones share. Not changed here (below, "Not done").
+ticks also take values from the generator the drawn ones share. Fixed after the hours (below).
 
 ### Firefox, inline mode, after the warm-up pass (2026-11-04, master 8f82b56b, 79 minutes)
 
@@ -178,9 +178,17 @@ five-map trial (the Island, Training, the Bar, Battery Park, the Island): the pa
 Island visit, 27, 19 and 32 on the maps between, and 34 (126 MB) with 20 MB in its released cache on the last
 (`deusExViewer.assetsProbe`). Checked: validate-travel-play, -travel-restore-play, -travel-newgame-play, -save-load-play, -hitch-log.
 
+## A fifth fault: every visited map's procedural textures ticked (fixed after the hours)
+
+`procedural-textures.mjs` counts the acquisitions that hold each texture (the world's BSP materials, released with the world; a
+live mesh's skin lease; a sprite scene's; the HUD's), and `update` ticks only the textures in use, in acquisition order as before
+(docs/fire-texture.md "Host choices"). A route trial (half-minute warm-up visits, `--minutes 11`): the page's `textures` phase is
+0.38 ms on the cold Island, the warm Island and the last Island visit alike (0.38 and 0.91 ms before), and every map's depends on
+its own textures only (0.07 ms in Wan Chai's market, 0.55 ms in the Chateau). The cold hour's rise of the page's frame work (3.3 to
+3.8 ms) was of the same size; that hour kept no phase times, so this is its likely cause, not shown. Checked:
+validate-fire-texture-play, -fire-texture-rust, -native-fire-texture (1178 cases, no mismatch), -particles-play,
+-sprite-tiles-play, -sprite-tiles-mirror-play, -actor-mesh-scene, -travel-play.
+
 ## Not done
 
-* The page's procedural textures keep ticking every visited map's Fire and Wet textures (above): about 0.5 ms a frame after the
-  route, and a shared generator stream that differs from the original's. The cold hour's rise of the page's frame work (3.3 to
-  3.8 ms) is the same size; that hour kept no phase times, so it is likely the same cause, not shown.
 * The Mac (the reference machine for the numbers): both warm hours pass on the Linux host only.

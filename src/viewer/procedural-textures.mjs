@@ -17,11 +17,16 @@ const fireKernelMode = () => (typeof process !== 'undefined' && process.env?.FIR
  * record per FireTexture or WetTexture object with its load state
  * (constructor, Serialize, PostLoad: fire-texture.mjs) and UTexture's
  * Update/Tick (texture-animation.mjs) whose ConstantTimeTick is the class's.
- * `update(time)` runs Get(time) for each, as Render does for every drawn face
- * with Viewport->CurrentTime, and uploads the P8 buffer through the palette
- * when a tick ran.
+ * `update(time)` runs Get(time) for each texture in use, as Render does for
+ * every drawn face with Viewport->CurrentTime, and uploads the P8 buffer
+ * through the palette when a tick ran. A texture is in use while an
+ * acquisition holds it (the level's BSP surfaces, a live mesh's skin, a
+ * sprite, the HUD; each releases it when it goes): a left level's textures,
+ * which the original no longer draws, stop ticking and stop drawing on the
+ * shared generator, and keep their state for a later level that uses them
+ * (UTexture::Tick then makes one step, its accumulator capped).
  *
- * Host choices, noted: every acquired texture updates each frame in
+ * Host choices, noted: every texture in use updates each frame in
  * acquisition order (the original updates the drawn ones in draw order, and
  * they share one generator), and the module tables take their 512 appRand
  * bytes from a host-seeded MSVCRT stream (the original process's rand
@@ -91,13 +96,15 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
         // Accumulator 0 and LastUpdateTime at the load clock.
         primeCount: (v.PrimeCount ?? 0) & 255, primeCurrent: 0,
         minFrameRate: Math.fround(v.MinFrameRate ?? 0), maxFrameRate: Math.fround(v.MaxFrameRate ?? 0),
-        accumulator: 0, lastUpdateTime: clock(), animCur: null, animNext: null,
+        accumulator: 0, lastUpdateTime: clock(), animCur: null, animNext: null, users: 0,
         constantTimeTick: r => { tick(); r.changed = true; }};
       upload(record);
       records.set(data.key, record);
       notes.add('Fire and wet textures update every frame in acquisition order from a host-seeded generator (docs/fire-texture.md).');
     }
-    return {texture: record.texture, release: () => {}};
+    record.users++;
+    let released = false;
+    return {texture: record.texture, release: () => { if (!released) { released = true; record.users--; } }};
   }
 
   function upload(record) {
@@ -113,9 +120,10 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
 
   return {
     acquire, notes,
-    /** Get(Viewport->CurrentTime) for every fire, then the uploads. */
+    /** Get(Viewport->CurrentTime) for every fire in use, then the uploads. */
     update(time = clock()) {
       for (const record of records.values()) {
+        if (!record.users) continue;
         if (record.kind !== heldKind) textureFrame(record, time);
         if (record.changed) upload(record);
       }
@@ -143,7 +151,7 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
      * ConstantTimeTick and its upload. */
     inspect: () => ({records: [...records.values()], globals, upload,
       step: record => { record.constantTimeTick(record); upload(record); }}),
-    records: () => [...records.values()].map(r => ({key: r.key, kind: r.kind, backend: r.expand ? 'rust' : 'js',
+    records: () => [...records.values()].map(r => ({key: r.key, kind: r.kind, backend: r.expand ? 'rust' : 'js', users: r.users,
       sparks: r.state.activeSparkNum, size: [r.state.uSize, r.state.vSize],
       phase: r.state.globalPhase, checksum: r.state.pixels.reduce((sum, value, index) => (sum + value * (index + 1)) >>> 0, 0)})),
     dispose() { for (const record of records.values()) record.texture.dispose(); records.clear(); },

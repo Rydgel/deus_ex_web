@@ -245,10 +245,19 @@ Virus_SFX, Nano_SFX_A, Auc_Nanofeed, BobPage's BP_FX_03...) and mesh skins
 (`actor-mesh-textures.mjs`), so a texture object has one state as in the
 original; the world's per-frame update runs it.
 
-Host choices, noted in the viewer: every acquired fire updates each frame in
+Host choices, noted in the viewer: every fire in use updates each frame in
 acquisition order (the original updates the drawn ones in draw order with one
 shared generator), and the module tables take their appRand bytes from a
-host-seeded MSVCRT stream. Sprites (a ParticleGenerator's SmokePuff1, for
+host-seeded MSVCRT stream. A fire is in use while an acquisition holds it: the
+current level's BSP surfaces (released with the world), a live mesh's skin, a
+sprite or the HUD (since 2026-11-04; before, every texture the page had ever
+acquired, every visited map's, ticked each frame: 0.4 to 0.9 ms of the page's
+frame on the Island after the one-hour session's route, and ticks a left
+level's textures drew from the shared generator, which the original no longer
+draws: docs/long-session.md). A texture a later level uses again keeps its
+state and makes one step at its next update (UTexture::Tick caps its
+accumulator); whether the original would have reloaded it fresh, its package
+unloaded at the travel, is not checked. Sprites (a ParticleGenerator's SmokePuff1, for
 one) draw from the same set (`sprite-scene.mjs`, docs/particles.md).
 
 Wet textures go through the same path: drtywater_a is live on Island's and
