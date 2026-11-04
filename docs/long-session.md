@@ -133,6 +133,40 @@ Before the fixes the same maps read 869, 940, 1093 MB on the Island, Training an
 comparison is weak: three low-priority Node analyses (heap snapshots and the Node route, single-threaded, `nice 19`) shared the
 16-core machine during the first visit, the baseline.
 
+### Chromium, worker mode, after the warm-up pass (2026-11-04, master 8f82b56b, 77 minutes)
+
+With the page store's fix and the warm-up pass (1.5 minutes a map). No runtime, page or console error; ten map changes in the
+measured hour; five Quick Save and Quick Load round trips (3.1 to 4.2 s after the walk). **D5 passes:**
+
+| | warm Island (the first plateau) | last Island visit | change |
+| --- | ---: | ---: | ---: |
+| total after GC | 1428 MB (median of 1428, 1433, 1335) | 1387 to 1393 MB | -2.4 % |
+| page median frame work | 4.0 ms | 3.6 ms | -10 % |
+| worker median frame work | 12.8 ms | 11.6 ms | -9.4 % |
+
+The warm-up pass took the total from 1028 MB (the Island, cold) to 1428 MB; over the measured hour the visits read between 1046 MB
+(the Ship) and 1569 MB (the Ship's first reading, with the bunker's runtime not yet collected), with no trend. The warm Island's
+lowest reading (1335 MB) is the same lag: the bunker's runtime collected between the second and third readings.
+
+**The page's frame work after the warm-up.** The cold Island visit's page frame work averaged 3.46 ms, the warm one's 4.07: the
+`textures` phase went from 0.38 to 0.91 ms, every other phase within 0.1 ms. The page keeps one procedural texture set for its life
+(`procedural-textures.mjs sharedProceduralTextures`), and its `update` ticks every Fire and Wet texture ever acquired, each frame:
+after the warm-up pass, every visited map's. The original updates the textures it draws (that module's own note); the past maps'
+ticks also take values from the generator the drawn ones share. Not changed here (below, "Not done").
+
+### Firefox, inline mode, after the warm-up pass (2026-11-04, master 8f82b56b, 79 minutes)
+
+No runtime, page or console error; ten map changes in the measured hour; five Quick Save and Quick Load round trips (6.4 to 10.3 s
+after the walk). Nothing else ran on the machine. **D5 passes:**
+
+| | warm Island (the first plateau) | last Island visit | change |
+| --- | ---: | ---: | ---: |
+| page after Gecko's minimize | 1167 MB (1163, 1167, 1169) | 1234 to 1239 MB | +6.2 % |
+| page median frame work | 21.0 ms | 21.0 ms | 0 % |
+
+The rise is the JS heap 215 to 227 MB and the ArrayBuffers and Wasm 952 to 1012 MB. The page's `textures` phase: 0.40 ms on the cold
+Island, 0.91 on the warm one, 1.01 on the last (the procedural textures, above).
+
 ## A fourth fault: the page's store in worker mode (fixed after the hours)
 
 With `?sim=worker` the page keeps its own asset store for drawing, and only the worker's script process releases packages
@@ -146,6 +180,7 @@ Island visit, 27, 19 and 32 on the maps between, and 34 (126 MB) with 20 MB in i
 
 ## Not done
 
-* The page's frame work rose 15 % in the Chromium hour (3.3 to 3.8 ms on the Island, every quarter of the visit), not explained:
-  the hour's frames had no phase times. The harness keeps the page's phases now and names the four whose means moved most.
-* The Mac (the reference machine for the numbers), and the hours again after the page store's fix.
+* The page's procedural textures keep ticking every visited map's Fire and Wet textures (above): about 0.5 ms a frame after the
+  route, and a shared generator stream that differs from the original's. The cold hour's rise of the page's frame work (3.3 to
+  3.8 ms) is the same size; that hour kept no phase times, so it is likely the same cause, not shown.
+* The Mac (the reference machine for the numbers): both warm hours pass on the Linux host only.

@@ -124,7 +124,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
 | 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
 | 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
-| 7.4 Memory and long sessions | 0 | 1 | 1 | 1 | 0 |
+| 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
 | 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
 | 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
 | 7.7 Graphics capability and failures | 2 | 1 | 0 | 0 | 0 |
@@ -132,7 +132,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 3 | 20 | 2 | 9 | 3 |
+| **Total** | 3 | 21 | 1 | 9 | 3 |
 
 ## The rows
 
@@ -173,7 +173,7 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
 | 7.4.2 | each map of the frame-time set stays within a declared memory budget (page plus worker, after GC) | H | profile-live-heap.mjs, profile-firefox-memory.mjs | Mac | needed: the budget, to fit a 16 GB machine; today the Island's worker reaches 1.4 GB before a GC in Chrome | MISSING |
-| 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | session-hour.mjs ([long session](long-session.md)) | Mac | measured on Linux, 2026-11-04 (75bc6341): both hours ran with no runtime error, ten map changes and five save and load round trips, and fail the heap bound read from the first Island visit, Chrome +33 % and Firefox +44 % on the last; Chrome's page frame work also rose 15 % (not explained). The rise is the process's classes and the packages they hold, the released-package caches and Wasm high-water marks, and the page's store in worker mode (fixed after the hours); whether the first plateau is a cold start or the level after the warm-up is not decided; the Mac not run | FAIL |
+| 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | session-hour.mjs ([long session](long-session.md)) | Mac | weak: passes on Linux, 2026-11-04 (8f82b56b), with the first plateau after a warm-up pass of the route (the user's reading of D5): no runtime error, ten map changes, five save and load round trips; the last Island visit's heap -2.4 % (Chrome, worker) and +6.2 % (Firefox, inline) from the warm plateau, the median frame work -10 % (page) and -9.4 % (worker) in Chrome, 0 % in Firefox. From a cold start both failed (+33 %, +44 %): the process filling its classes, packages and caches. The runs found five memory faults, fixed; the page's procedural textures still tick every visited map's (about 0.5 ms a frame once warm). The Mac not run | PARTIAL |
 
 ### 7.5 Audio (D6)
 
