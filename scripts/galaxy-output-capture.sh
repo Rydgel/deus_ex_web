@@ -13,6 +13,12 @@
 #       footsteps and a landing, effect voices), PLAY seconds later (default
 #       20) a console `musicorder 2` (glxControlMusic(1, 2): the resync while the song plays), AFTER seconds later (default 15)
 #       the capture stops and detaches, and the game is quit. Writes <out>/replay-training.bin.
+#   scripts/galaxy-output-capture.sh latency [out dir]
+#       Stage 7 row 7.5.2 (docs/audio-latency.md): the game on 00_Training with the shipped volumes, `dx-live-win.exe galaxy
+#       latency` (read only, every INTERVAL_US, default 250) for SECONDS_ (default 60) while the player walks forward and back
+#       and jumps (STEPS rounds of WALK, default 8: footsteps and landings, each a PlaySound's glxStartSample on an effect voice),
+#       after a console `open 00_Training` from the title map as in replay.
+#       Writes <out>/latency-training.txt; scripts/audio-latency-original.mjs reads it.
 #
 # Takes the sessions' bottle lock (.work/bottle.lock, mkdir) on the Mac and releases it once the game is quit.
 # Writes <out>/training-load{1,2}.{json,pan.bin,poll.txt}. Needs ad/build/dx-live-win.exe built from tools/dx-live-win.c
@@ -21,6 +27,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 MODE=poll
 if [ "${1:-}" = replay ]; then MODE=replay; shift; fi
+if [ "${1:-}" = latency ]; then MODE=latency; shift; fi
 OUT=${1:-/Users/gcc/Documents/deus_ex_web/.work/audio-output}
 COUNT=${COUNT:-3000} INTERVAL=${INTERVAL:-1}
 if [ "$(uname)" = Darwin ]; then
@@ -30,6 +37,8 @@ else
   LOCK=${DX_LOCK:-/home/rydgel/projects/deus_ex_web/.work/wine-deusex.lock}
   export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
   export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
+  # a Wine virtual desktop: the tiling compositor cannot resize the game's window (original-game.mjs launch)
+  export DX_DESKTOP=${DX_DESKTOP-1400x860}
 fi
 cd "$ROOT" || exit 1
 mkdir -p "$OUT"
@@ -69,6 +78,8 @@ if [ "$MODE" = replay ]; then
     "$DX_WINE" "$ROOT/ad/build/dx-live-win.exe" galaxy capture "$OUT/replay-training.bin" 600 00_Training.dx "$STOP" ) > "$OUT/replay-training.log" 2>&1 &
   TRACER=$!
 else
+  # latency: the shipped volumes, so that PlaySound starts its voices (the INI copy silences Galaxy otherwise)
+  [ "$MODE" = latency ] && export DX_INI_SET=${DX_INI_SET:-Galaxy.GalaxyAudioSubsystem.MusicVolume=153;Galaxy.GalaxyAudioSubsystem.SoundVolume=204;Galaxy.GalaxyAudioSubsystem.SpeechVolume=255}
   node ad/scripts/original-game.mjs launch 00_Training.dx || { release_bottle; exit 1; }
 fi
 PID=
@@ -101,6 +112,25 @@ if [ "$MODE" = replay ]; then
   finish_replay
   tail -5 "$OUT/replay-training.log" >&2
   ls -la "$OUT/replay-training.bin" >&2
+  exit 0
+fi
+if [ "$MODE" = latency ]; then
+  sleep 5
+  printf 'cmd open 00_Training\n' > /tmp/galaxy-output-open.txt
+  node ad/scripts/original-game.mjs run /tmp/galaxy-output-open.txt >/dev/null 2>&1
+  sleep "${LOAD:-30}"
+  wait_player || { echo "the player never came back after the load" >&2; exit 1; }
+  sleep 5
+  "$DX_WINE" ad/build/dx-live-win.exe galaxy latency "${SECONDS_:-60}" "${INTERVAL_US:-250}" "$OUT/latency-training.txt" &
+  POLL=$!
+  sleep 2
+  : > /tmp/galaxy-output-steps.txt
+  for _ in $(seq 1 "${STEPS:-8}"); do
+    printf '%b' "${WALK:-key W 1800\nsleep 400\nkey Space 100\nsleep 1200\nkey S 1800\nsleep 400\n}" >> /tmp/galaxy-output-steps.txt
+  done
+  node ad/scripts/original-game.mjs run /tmp/galaxy-output-steps.txt >/dev/null 2>&1
+  wait "$POLL" || exit 1
+  ls -la "$OUT/latency-training.txt" >&2
   exit 0
 fi
 sleep 5

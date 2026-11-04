@@ -2147,6 +2147,15 @@ async musicStatus() {
   const output = musicOutput ? await musicOutput.refresh() : null;
   return { ...musicStatus(output), library: simClient ? await simClient.call('musicStatus') : pageMusicLibrary?.status() ?? null };
 },
+/** Measurement (docs/audio-latency.md, scripts/audio-latency.mjs): the
+ * effect starts' post times on the simulation side and the worklet's
+ * arrival, render and play timing for the same batches, with the context's
+ * latencies. */
+async audioLatency() {
+  const worklet = musicOutput ? await musicOutput.latency(infoLinkAudioContext) : null;
+  const posts = simClient ? await simClient.call('musicLatency') : pageMusicLibrary?.latencyPosts() ?? null;
+  return { mode: simClient ? 'worker' : 'inline', posts, worklet };
+},
 /** Validation only (galaxy-music-library.mjs driveMusicLibrary): Update's
  * library calls for a song and section, or `{unregister: true}`, issued by
  * the simulation side's library service. */

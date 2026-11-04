@@ -28,7 +28,8 @@
  *   afresh (glxInit's state, Init's EffectsChannels, the output open at
  *   `latency` with a fresh secondary buffer played from its start) and
  *   `port` becomes the batch source; `status {id}` answered with the
- *   counters (only on request).
+ *   counters (only on request); `latency {id}` answered with the effect
+ *   starts' timing (below).
  * - Simulation port: `batch {id, ops, modules}` (galaxy-music-library.mjs
  *   encodeMusicBatch), applied whole on arrival, which is always between two
  *   callbacks (Update's critical section against the timer callback). After
@@ -38,6 +39,19 @@
  *   voice i's Active byte, the subsystem's "voice finished" poll; positions:
  *   [slot, read head] of each voice playing host-decoded speech; windows:
  *   [slot, available, bytes], the lip-sync window at that read head).
+ *
+ * Start timing (Stage 7 row 7.5.2, docs/audio-latency.md; a measurement,
+ * nothing reads it back): for the last LATENCY_STARTS batches holding an
+ * effect start (glxStartSample of a loaded sample, not a host record), the
+ * batch id, this scope's clock at its arrival, the consumed frame then, the
+ * frame at which the next callback's render begins (its head B), the clock
+ * when the audio thread renders that frame (`playedAt`) and `takenAt`, the
+ * time it is taken at the context's rate from the start of its burst (the
+ * render calls of one device callback: a call 3 ms or more after the last
+ * starts a burst; its first frame is taken at the call, each later frame
+ * one frame time after the one before, as the device plays the block).
+ * `clock` is performance.timeOrigin + performance.now() where the scope has
+ * `performance`, else Date.now().
  *
  * Self-contained (no imports) so that Vite serves and copies it as is; Node
  * imports it for the validator (registerProcessor is then absent). */
@@ -53,6 +67,9 @@ export const OPS = Object.freeze({
 export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
   15: 4, 16: 3, 17: 1 });
 export const CALLBACK_FRAMES = 882;
+const LATENCY_STARTS = 256;
+const CLOCK = typeof globalThis.performance?.now === 'function' ? 'performance' : 'date';
+const clock = CLOCK === 'performance' ? () => performance.timeOrigin + performance.now() : () => Date.now();
 /** The write cursor's lead over the play cursor at the first callback, in
  * bytes: D's host part (scope §3.1, §7 item 2), a labelled HOST INPUT
  * measured on the reference machine (CrossOver's dsound in the bottle
@@ -238,6 +255,8 @@ export function createMusicKernel(exports) {
     },
     /** The decoder thread's refills posted during the last callback (ring.rs). */
     deliver: () => x.galaxy_ring_deliver() >>> 0,
+    /** Whether `sample` is a host record (speech), whose start the PCM may hold. */
+    isHost: sample => hosts.has(sample >>> 0),
     /** The voice slots whose start waits for its host record's PCM. */
     heldSlots: () => [...held.keys()],
     voicesPtr: () => x.galaxy_voices_ptr(),
@@ -265,6 +284,9 @@ export class GalaxyMusicProcessor extends Base {
     // The secondary buffer (int16 frames, read in place), the play cursor in
     // bytes, the frames of consumption left before the next callback.
     this.size = 0; this.play = 0; this.untilCallback = 0; this.view = null; this.viewMemory = null;
+    // Frames consumed since the library opened; the start timing records and the render bursts (see the file comment).
+    this.consumed = 0; this.starts = []; this.waiting = [];
+    this.lastCall = -Infinity; this.burstAt = 0; this.burstFrame = 0;
     this.reported = { batch: -1, state: -1, active: -1, positions: '' };
     this.stats = { rate: globalThis.sampleRate ?? null, connects: 0, batches: 0, ops: 0, lastBatch: 0, loads: 0,
       callbacks: 0, quanta: 0, underruns: 0, resyncs: 0, refills: 0, reports: 0, fault: 0, error: null };
@@ -289,6 +311,8 @@ export class GalaxyMusicProcessor extends Base {
         this.start();
       } else if (data.type === 'status') {
         this.port.postMessage({ type: 'status', id: data.id, status: this.status() });
+      } else if (data.type === 'latency') {
+        this.port.postMessage({ type: 'latency', id: data.id, latency: { clock: CLOCK, consumed: this.consumed, starts: this.starts } });
       }
     } catch (error) { this.stats.error = String(error?.message ?? error); }
   }
@@ -303,6 +327,7 @@ export class GalaxyMusicProcessor extends Base {
     // A fresh secondary buffer (CreateSoundBuffer), played from its start.
     this.kernel.openOutput(latency);
     this.size = this.kernel.output(0); this.play = 0; this.untilCallback = 0; this.view = null;
+    this.consumed = 0; this.starts = []; this.waiting = [];
     this.open = true;
     for (const message of this.queue.splice(0)) this.apply(message);
     this.report();
@@ -316,13 +341,22 @@ export class GalaxyMusicProcessor extends Base {
   }
 
   apply(message) {
+    let effectStart = false;
     try {
       forEachMusicOp(message, (code, a, b, module, args) => {
+        if (code === OPS.startSample && !this.kernel.isHost(args[1])) effectStart = true;
         this.kernel.apply(code, a, b, module, args);
         this.stats.ops++;
         if (code === OPS.loadMusic) this.stats.loads++;
       });
     } catch (error) { this.stats.error = String(error?.message ?? error); }
+    // Not a start queued before the library opened (its first callback, the resync, places nothing).
+    if (effectStart && this.open && this.stats.callbacks > 0) {
+      const start = { batch: message.id, at: clock(), frame: this.consumed, first: null, playedAt: null, takenAt: null };
+      this.starts.push(start); this.waiting.push(start);
+      if (this.starts.length > LATENCY_STARTS) this.starts.shift();
+      if (this.waiting.length > LATENCY_STARTS) this.waiting.shift();
+    }
     this.stats.batches++; this.stats.lastBatch = message.id;
   }
 
@@ -344,6 +378,9 @@ export class GalaxyMusicProcessor extends Base {
   /** One timer callback 0x106142a0 at the current play cursor. */
   callback() {
     const play = this.play, write = (play + this.config.writeLead) % this.size;
+    // Starts applied since the last callback begin where this callback's bus B render begins.
+    for (const start of this.waiting) if (start.first === null)
+      start.first = this.consumed + ((this.kernel.output(2) - play + this.size) % this.size) / 4;
     if (this.kernel.callback(play, write)) { this.stats.fault = this.kernel.fault(); return false; }
     // The stream decoder thread's messages posted during the callback (ring.rs: after the callback, in post order).
     this.stats.refills += this.kernel.deliver();
@@ -365,6 +402,9 @@ export class GalaxyMusicProcessor extends Base {
   process(inputs, outputs) {
     const channels = outputs[0], left = channels[0], right = channels[1] ?? channels[0], n = left.length;
     this.stats.quanta++;
+    const now = clock();
+    if (now - this.lastCall >= 3) { this.burstAt = now; this.burstFrame = this.consumed; }
+    this.lastCall = now;
     let i = 0;
     while (this.open && !this.stats.fault && i < n) {
       if (this.untilCallback === 0) {
@@ -378,7 +418,11 @@ export class GalaxyMusicProcessor extends Base {
         left[i + k] = view[at] / 32768; right[i + k] = view[at + 1] / 32768;
         at += 2; if (at === size >> 1) at = 0;
       }
-      this.play = (this.play + 4 * run) % size; i += run; this.untilCallback -= run;
+      this.play = (this.play + 4 * run) % size; i += run; this.untilCallback -= run; this.consumed += run;
+    }
+    while (this.waiting.length && this.waiting[0].first !== null && this.waiting[0].first < this.consumed) {
+      const start = this.waiting.shift();
+      start.playedAt = now; start.takenAt = this.burstAt + (start.first - this.burstFrame) * 1000 / this.stats.rate;
     }
     if (i < n) {
       // Nothing to play: before the library opens, or after a fault.

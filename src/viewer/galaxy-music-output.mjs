@@ -52,6 +52,7 @@ export function createMusicOutput({ effectsChannels = 16 } = {}) {
           ]);
           node = new AudioWorkletNode(context, 'galaxy-music', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
           node.port.onmessage = ({ data }) => {
+            if (data.type === 'latency') { waiters.get(data.id)?.(data.latency); waiters.delete(data.id); return; }
             if (data.type !== 'status') return;
             last = data.status;
             waiters.get(data.id)?.(data.status); waiters.delete(data.id);
@@ -80,6 +81,20 @@ export function createMusicOutput({ effectsChannels = 16 } = {}) {
         node.port.postMessage({ type: 'status', id });
       });
       return { running: true, error, worklet: status };
+    },
+    /** Measurement (docs/audio-latency.md): the worklet's start timing records
+     * and its clock, with the context's latencies; null without a node or
+     * an answer within a second. */
+    async latency(context) {
+      if (!node) return null;
+      const id = nextStatus++;
+      const latency = await new Promise(resolve => {
+        const timer = setTimeout(() => { waiters.delete(id); resolve(null); }, 1000);
+        waiters.set(id, value => { clearTimeout(timer); resolve(value); });
+        node.port.postMessage({ type: 'latency', id });
+      });
+      return latency && { ...latency, sampleRate: context?.sampleRate ?? null, baseLatency: context?.baseLatency ?? null,
+        outputLatency: context?.outputLatency ?? null, state: context?.state ?? null };
     },
   };
   return output;

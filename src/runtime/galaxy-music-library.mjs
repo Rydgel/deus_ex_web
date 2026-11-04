@@ -351,6 +351,10 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
   const counts = { batches: 0, ops: 0, modules: 0, moduleBytes: 0, reports: 0, samples: 0, sampleBytes: 0, voiceOps: 0,
     hostSamples: 0, attaches: 0, attachBytes: 0, releases: 0 };
   let registry = null, registryError = null;
+  // Measurement (docs/audio-latency.md): the batches holding an effect start
+  // (not a host record's), with the clock when posted; the worklet keeps the
+  // other half under the same batch ids.
+  const hostHandles = new Set(), posts = [];
   const ready = samples ? Promise.resolve(samples).then(r => { registry = r; }, error => { registryError = String(error?.message ?? error); }) : null;
   const registered = new Map();
   function flush(ops) {
@@ -359,6 +363,10 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
     counts.batches++; counts.ops += ops.length;
     for (const buffer of message.modules) { counts.modules++; counts.moduleBytes += buffer.byteLength; }
     post(message, transfer);
+    if (ops.some(op => op[0] === 'startSample' && !hostHandles.has(op[2] >>> 0))) {
+      posts.push({ batch: id, at: performance.timeOrigin + performance.now(), date: Date.now() });
+      if (posts.length > 256) posts.shift();
+    }
     const mirrored = [];
     for (const op of ops) {
       if (MIRRORED.has(op[0])) mirrored.push([op[0], op[1], op[2]]);
@@ -423,6 +431,7 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
       if (!registry) throw new Error(registryError ?? 'Galaxy sample registry not ready');
       entry = registry.loadHost(rate, frames, channels);
       registered.set(key, entry);
+      hostHandles.add(entry.handle >>> 0);
       counts.hostSamples++;
       call(['loadHostSample', rate, frames, entry.handle, channels]);
       return entry;
@@ -486,6 +495,8 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
         windows: new Map((data.windows ?? []).map(([slot, available, bytes]) => [slot, { available, bytes }])) };
       while (pending.length && pending[0].id <= data.batch) pending.shift();
     },
+    /** Measurement: the effect starts' batches as posted ({batch, at, date}), oldest first. */
+    latencyPosts: () => posts.slice(),
     status() {
       return { issued, acknowledged: reported.batch, order: library.order(), reportedOrder: reported.order,
         playing: reported.playing, loaded: reported.loaded, songLength: reported.songLength, mirrored: pending.length,

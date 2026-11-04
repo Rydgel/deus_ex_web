@@ -77,6 +77,12 @@ The user took each recommendation below. The alternatives are kept for the recor
 
    The alternative is a host bound of 100 ms with no original reference.
 
+   **How it is read** (2026-11-04, [sound start latency](audio-latency.md); not yet confirmed by the user): the "output" is the
+   moment the host's audio path takes the sound's first frame out of Galaxy's buffer, counted at the device's rate. In the original
+   that is Wine's dsound mixer; in Play, the AudioWorklet's render. What each host adds after that is its own buffering to the device
+   (`AudioContext.outputLatency`, Wine's buffering to PulseAudio). It is reported, not bounded. The original's figure is a 20-minute
+   distribution, since the phase of Galaxy's timer against Wine's mixer moves it by several milliseconds. Median and p95 are compared.
+
 ## What a row is, and what passes it
 
 Kinds:
@@ -125,14 +131,14 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
 | 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
 | 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
-| 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
+| 7.5 Audio | 0 | 2 | 0 | 0 | 0 |
 | 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
 | 7.7 Graphics capability and failures | 2 | 1 | 0 | 0 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 3 | 21 | 1 | 9 | 3 |
+| **Total** | 3 | 22 | 1 | 8 | 3 |
 
 ## The rows
 
@@ -180,7 +186,7 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | validate-galaxy-music-play.mjs, a browser spec | Mac, Linux | weak: Chromium only; suspension and resume are not checked | PARTIAL |
-| 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | a Wine measurement of the original, `AudioContext.outputLatency` plus the worklet's queue in Play | Mac, Linux | needed: the original's measurement; Play's is not measured | MISSING |
+| 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | galaxy-output-capture.sh latency and audio-latency-original.mjs (the original under Wine), audio-latency.mjs (Play; [sound start latency](audio-latency.md)) | Mac, Linux | weak: passes on Linux, 2026-11-04: from a start to the host taking its first frame out of Galaxy's buffer (the boundary this row reads as D6's "output"; each host's own buffering to the device after it is reported, not bounded), the original under Wine 11.20 over 20 minutes (the phase of Galaxy's 20 ms timer against Wine's 10 ms mixer moves its figure by several ms, so a minute is not enough) median 45.6 ms and p95 56.1; Play in Chromium (worker) 46.0 and 55.4, in Firefox (inline) 45.0 and 55.7. The Mac (CrossOver, 2,048-byte periods) not run | PARTIAL |
 
 ### 7.6 Window and input
 
@@ -291,5 +297,6 @@ Causes: **stale**, the spec predates a change in Play and fails in every browser
    7.3, 7.4.2) give each row its first status on the reference machine.
 5. **The performance work against 7.2.1.** Each step goes family by family, as a measurement names it, in the Rust core
    (AGENTS.md), and only for gains over 5%.
-6. **The long session** (7.4.3) and the audio latency (7.5.2, which starts with the original's measurement).
+6. **The long session** (7.4.3) and the audio latency (7.5.2, which starts with the original's measurement). Both pass on Linux
+   (2026-11-04: [long session](long-session.md), [sound start latency](audio-latency.md)); the Mac is left.
 7. **The gate.** The sweep, the browser suite and the earlier stages' gates on one commit (7.10).

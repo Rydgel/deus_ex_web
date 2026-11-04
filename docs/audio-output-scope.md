@@ -388,6 +388,14 @@ image, so the capture traces from the launch instead, with load inputs as bytes 
 * Scene: a known effect started in the same frame as a song section change, and the offset between their onsets measured by
   cross-correlation with the sounds' own PCM. Expected: about 960 ms minus the write lead measured in §5.1.
 
+### 5.4 `dx-live-win.exe galaxy latency <seconds> <interval_us> <out>` (read-only; built and run 2026-11-04, Linux)
+
+For Stage 7 row 7.5.2 ([sound start latency](audio-latency.md)): a 250 µs poll of the heads, the 16 effect voices and Wine's dsound
+object, `scripts/galaxy-output-capture.sh latency`. Under Wine 11.20 on Linux:
+* D is 8,820, as under CrossOver.
+* Wine's play cursor is the object's `+0xb4` and moves in 1,764-byte (10 ms) periods, so every R is 3,528.
+* A start begins at the previous callback's head B in 100 of 109 real starts; the other nine had their second render changed.
+
 ## 6. Criterion for row 4.3.7 (adopted 2026-10-16)
 
 **Scene and claim.** "Galaxy's output buffer": for a recorded scene of the running original (the launch to the title map, a console

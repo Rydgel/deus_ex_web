@@ -29,6 +29,14 @@
  *       <qpc_us> <size> <A> <B> <ahead> <frames mixed 0x10698194> <cnt1 0x10698204> <cnt2 0x1069834c>
  *       (size, A, B and ahead are one 16-byte read)
  *
+ *   wine dx-live-win.exe galaxy latency <seconds> <interval_us> <out file>
+ *       a sound's start against Galaxy's output (Stage 7 row 7.5.2, docs/audio-latency.md), read only: every `interval_us` (a spin
+ *       on QPC) one read each of the heads (size, A, B, ahead at 0x10697cd0), the 16 effect voices (0x1068dca0 + 0xa0·slot) and
+ *       the first 0x100 bytes of the secondary buffer's object ([0x10697cc8]: Wine's dsound object, whose play position is
+ *       found in it from the data); a line per change: `h <qpc_us> <A> <B> <ahead>`, `v <qpc_us> <slot> <Active +0x0f>
+ *       <StartTime +0x08> <Mutex +0x98> <SmpPtr +0x46>` (glxStartSample writes all three of the first; the mixer moves SmpPtr),
+ *       `d <qpc_us> <offset>=<value> ...` (the buffer object's dwords that changed)
+ *
  *   wine dx-live-win.exe galaxy capture <out file> <seconds> <map> [stop file]
  *       Galaxy.dll from the game's launch (docs/audio-output-scope.md §5.2, Stage 4 row 4.3.7 check 3): starts DeusEx.exe <map>
  *       INI=DeusEx-ad.ini USERINI=User-ad.ini under the debugger, arms breakpoints when Galaxy.dll loads (it must be at its preferred
@@ -211,7 +219,8 @@ static int write_mem(uintptr_t address, const void *in, SIZE_T size) {
 static unsigned read_u32(uintptr_t address) { unsigned v = 0; read_mem(address, &v, 4); return v; }
 static long long qpc_us(void) {
   LARGE_INTEGER now; QueryPerformanceCounter(&now);
-  return (long long)(now.QuadPart * 1000000LL / qpf.QuadPart);
+  /* Split, so that a long uptime does not overflow the product (Wine's 10 MHz counter passes 2^63 / 10^6 after 10.7 days). */
+  return (long long)(now.QuadPart / qpf.QuadPart * 1000000LL + now.QuadPart % qpf.QuadPart * 1000000LL / qpf.QuadPart);
 }
 
 /* FName index -> text, cached. */
@@ -1558,6 +1567,68 @@ static int do_galaxy_poll(int count, int interval, const char *prefix) {
   return 0;
 }
 
+/* galaxy latency <seconds> <interval_us> <out file> (see the file comment). */
+#define LAT_SLOTS 16
+#define LAT_BUFFER_BYTES 0x100
+static int do_galaxy_latency(int seconds, int interval_us, const char *out_path) {
+  QueryPerformanceFrequency(&qpf);
+  pid = find_pid("DeusEx.exe");
+  if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
+  process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+  galaxy_base = module_base("Galaxy.dll");
+  if (!process || !galaxy_base) { fprintf(stderr, "cannot read DeusEx.exe (Galaxy.dll 0x%lx)\n", (unsigned long)galaxy_base); return 1; }
+  FILE *out = fopen(out_path, "w");
+  if (!out) { fprintf(stderr, "cannot write %s\n", out_path); return 1; }
+  /* The secondary buffer's object (the interface is its first member in Wine's dsound). */
+  uintptr_t buffer = read_u32(GX(0x10697cc8));
+  fprintf(out, "# galaxy latency galaxyBase=0x%08lx buffer=0x%08lx latency=%u intervalUs=%d\n", (unsigned long)galaxy_base,
+    (unsigned long)buffer, read_u32(GX(0x1064a65c)), interval_us);
+  unsigned heads[4] = {0}, last_heads[4] = {0};
+  static unsigned char voices[LAT_SLOTS * 0xa0], last_voices[LAT_SLOTS * 0xa0];
+  unsigned words[LAT_BUFFER_BYTES / 4] = {0}, last_words[LAT_BUFFER_BYTES / 4] = {0};
+  int first = 1;
+  long lines = 0, samples = 0;
+  long long end = qpc_us() + (long long)seconds * 1000000LL, next = qpc_us();
+  while (qpc_us() < end) {
+    while (qpc_us() < next) YieldProcessor();
+    next += interval_us;
+    int got_heads = read_mem(GX(0x10697cd0), heads, sizeof(heads));
+    int got_voices = read_mem(GX(0x1068dca0), voices, sizeof(voices));
+    int got_words = buffer && read_mem(buffer, words, sizeof(words));
+    long long t = qpc_us();
+    samples++;
+    if (got_heads && (first || memcmp(heads, last_heads, sizeof(heads)))) {
+      fprintf(out, "h %lld %u %u %d\n", t, heads[1], heads[2], (int)heads[3]); lines++;
+      memcpy(last_heads, heads, sizeof(heads));
+    }
+    if (got_voices) for (int s = 0; s < LAT_SLOTS; s++) {
+      const unsigned char *v = voices + 0xa0 * s, *w = last_voices + 0xa0 * s;
+      unsigned start, mutex, ptr, wstart, wmutex, wptr;
+      memcpy(&start, v + 0x08, 4); memcpy(&mutex, v + 0x98, 4); memcpy(&ptr, v + 0x46, 4);
+      memcpy(&wstart, w + 0x08, 4); memcpy(&wmutex, w + 0x98, 4); memcpy(&wptr, w + 0x46, 4);
+      if (first || v[0x0f] != w[0x0f] || start != wstart || mutex != wmutex || ptr != wptr) {
+        fprintf(out, "v %lld %d %u %u %u %u\n", t, s, v[0x0f], start, mutex, ptr); lines++;
+      }
+    }
+    if (got_voices) memcpy(last_voices, voices, sizeof(voices));
+    if (got_words) {
+      int any = 0;
+      for (int i = 0; i < LAT_BUFFER_BYTES / 4; i++) if (first || words[i] != last_words[i]) {
+        if (!any) { fprintf(out, "d %lld", t); any = 1; }
+        fprintf(out, " %x=%u", i * 4, words[i]);
+      }
+      if (any) { fputc('\n', out); lines++; }
+      memcpy(last_words, words, sizeof(words));
+    }
+    first = 0;
+  }
+  fclose(out);
+  fprintf(stderr, "galaxy latency: %ld samples, %ld lines, Galaxy.dll at 0x%lx, buffer 0x%lx\n", samples, lines,
+    (unsigned long)galaxy_base, (unsigned long)buffer);
+  CloseHandle(process);
+  return 0;
+}
+
 /* ---------------- galaxy capture (see the file comment) ---------------- */
 enum { GX_INIT = 1, GX_CHANNELS, GX_OPEN, GX_SAMPLE_VOLUME, GX_MUSIC_VOLUME, GX_LOAD_MUSIC, GX_LOAD_MUSIC_RESULT, GX_UNLOAD_MUSIC,
   GX_START_MUSIC, GX_STOP_MUSIC, GX_CONTROL_MUSIC, GX_CLEAR_ACTIVE, GX_BREAK, GX_LOAD_SAMPLE, GX_LOAD_SAMPLE_RESULT, GX_START_SAMPLE,
@@ -1929,7 +2000,9 @@ int main(int argc, char **argv) {
   if (!strcmp(argv[1], "galaxy")) {
     if (argc >= 6 && !strcmp(argv[2], "poll")) return do_galaxy_poll(atoi(argv[3]), atoi(argv[4]), argv[5]);
     if (argc >= 6 && !strcmp(argv[2], "capture")) return do_galaxy_capture(argv[3], atoi(argv[4]), argv[5], argc > 6 ? argv[6] : NULL);
-    fprintf(stderr, "galaxy poll <count> <interval_ms> <out prefix> | galaxy capture <out file> <seconds> <map> [stop file]\n"); return 2;
+    if (argc >= 6 && !strcmp(argv[2], "latency")) return do_galaxy_latency(atoi(argv[3]), atoi(argv[4]), argv[5]);
+    fprintf(stderr, "galaxy poll <count> <interval_ms> <out prefix> | galaxy capture <out file> <seconds> <map> [stop file]"
+      " | galaxy latency <seconds> <interval_us> <out file>\n"); return 2;
   }
   QueryPerformanceFrequency(&qpf);
   pid = find_pid("DeusEx.exe");

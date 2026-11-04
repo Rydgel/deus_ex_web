@@ -78,9 +78,10 @@ add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'PARTIAL', 
 // 7.5 Audio (D6) ------------------------------------------------------------------------------------------------------------------------
 add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'PARTIAL',
   {machine: `${MAC}, ${LINUX}`, proof: ['validate-galaxy-music-play.mjs', 'a browser spec'], weak: 'Chromium only; suspension and resume are not checked'});
-add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s plus one render quantum (D6)', 'O', 'MISSING',
-  {decision: 'D6', machine: `${MAC}, ${LINUX}`, proof: ['a Wine measurement of the original', '`AudioContext.outputLatency` plus the worklet\'s queue in Play'],
-    need: 'the original\'s measurement; Play\'s is not measured'});
+add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s plus one render quantum (D6)', 'O', 'PARTIAL',
+  {decision: 'D6', machine: `${MAC}, ${LINUX}`, proof: ['galaxy-output-capture.sh latency and audio-latency-original.mjs (the original under Wine)',
+    'audio-latency.mjs (Play; [sound start latency](audio-latency.md))'],
+    weak: 'passes on Linux, 2026-11-04: from a start to the host taking its first frame out of Galaxy\'s buffer (the boundary this row reads as D6\'s "output"; each host\'s own buffering to the device after it is reported, not bounded), the original under Wine 11.20 over 20 minutes (the phase of Galaxy\'s 20 ms timer against Wine\'s 10 ms mixer moves its figure by several ms, so a minute is not enough) median 45.6 ms and p95 56.1; Play in Chromium (worker) 46.0 and 55.4, in Firefox (inline) 45.0 and 55.7. The Mac (CrossOver, 2,048-byte periods) not run'});
 
 // 7.6 Window and input ------------------------------------------------------------------------------------------------------------------
 add('7.6.1', 'the pointer lock is taken on the first click; one Escape releases it and reaches the game (MenuMain); a lost lock or a blur lets go of the held input and Play goes on (no pause, the user\'s choice 2026-10-30); a hidden page resumes without catch-up', 'H', 'PARTIAL',
