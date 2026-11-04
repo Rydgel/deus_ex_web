@@ -9,9 +9,9 @@ import {spawn} from 'node:child_process';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {summarize} from './hitch-summary.mjs';
+import {FRAME_TIME_SET} from './frame-time-maps.mjs';
 
-export const FRAME_TIME_SET=Object.freeze(['00_Training','01_NYC_UNATCOIsland','02_NYC_Bar','02_NYC_BatteryPark','03_NYC_Airfield',
-  '06_HongKong_WanChai_Market','09_NYC_Ship','10_Paris_Chateau','11_Paris_Everett','15_Area51_Bunker']);
+export {FRAME_TIME_SET};
 
 const option=(n,f)=>{const i=process.argv.indexOf(`--${n}`);return i<0?f:process.argv[i+1];};
 const engine=option('browser','chromium'),seconds=option('seconds','60'),dir=option('dir','.cache/perf/frame-time-set');

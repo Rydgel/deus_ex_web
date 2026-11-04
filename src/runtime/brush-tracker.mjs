@@ -110,6 +110,10 @@ export function trackerCapacities(model, movers) {
 
 /** The tracker over an occlusion's blocks (`at`: nodes, verts, points,
  * surfs; their capacities in `caps`), with its own blocks from `block`. */
+// The kernel holds one tracker (tracker.rs's statics, as Engine's one GBrushTracker): the host whose construct ran last owns it. A
+// travel builds the next level's host before the last one goes (sim-host.mjs dispose), so the one left must not destroy it.
+const trackerOwners = new WeakMap();
+
 export function createTrackerHost(kernel, model, movers, { at, caps, block, words, scratchBytes = 8 << 20 }) {
   if (!kernel.trackerHeaderPtr) throw new Error('The script VM core predates the brush tracker; run npm run build:wasm');
   const vectors = block(12 * caps.vectors), dsurfs = block(4 * DSURF.WORDS * Math.max(1, caps.polys)),
@@ -162,17 +166,17 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
   const h = i => words()[headerAt() + i];
   const vertexCounts = movers.map(m => m.polys.map(p => p.vertexBits.length));
   const mover = i => (moverBlock >>> 2) + MOVER.WORDS * i;
-  return {
+  const host = {
     blocks: { vectors, dsurfs, moverBlock, polyBlock, nodeMaps, owners, helper },
     header: h,
     /** GNewBrushTracker: AddBrush every mover, then Update(NULL) at the
      * game thread's precision (`pc64`, the assumption: docs/brush-tracker.md). */
-    construct({ pc64 = true } = {}) { return kernel.trackerConstruct(pc64 ? 1 : 0); },
+    construct({ pc64 = true } = {}) { trackerOwners.set(kernel, host); return kernel.trackerConstruct(pc64 ? 1 : 0); },
     /** Update(mover `i`, or NULL for -1); SetupDynamics' calls are PC24. */
     update(i, { pc64 = false } = {}) { return kernel.trackerUpdate(i, pc64 ? 1 : 0); },
     flush: i => kernel.trackerFlush(i),
     surfIsDynamic: s => kernel.trackerSurfIsDynamic(s),
-    destroy: () => kernel.trackerDestroy(),
+    destroy: () => { if (trackerOwners.get(kernel) !== host) return; trackerOwners.delete(kernel); kernel.trackerDestroy(); },
     /** A mover's Location (float bits), Rotation and bHidden. */
     setMover(i, { locationBits, rotation, hidden }) {
       const u = words(), o = mover(i);
@@ -238,8 +242,10 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
       }
       return out;
     },
-    live: () => h(TRACKER.LIVE) !== 0,
+    /** This host's tracker exists: constructed, not destroyed, and not replaced by a later host's. */
+    live: () => trackerOwners.get(kernel) === host && h(TRACKER.LIVE) !== 0,
   };
+  return host;
 }
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);

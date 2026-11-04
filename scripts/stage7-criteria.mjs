@@ -71,7 +71,9 @@ add('7.4.1', 'ten Island and Training round trips in one process: the same state
 add('7.4.2', 'each map of the frame-time set stays within a declared memory budget (page plus worker, after GC)', 'H', 'MISSING',
   {machine: MAC, proof: ['profile-live-heap.mjs', 'profile-firefox-memory.mjs'],
     need: 'the budget, to fit a 16 GB machine; today the Island\'s worker reaches 1.4 GB before a GC in Chrome'});
-add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'MISSING', {decision: 'D5', machine: MAC, proof: ['a session harness'], need: 'the harness'});
+add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'MISSING', {decision: 'D5', machine: MAC,
+  proof: ['session-hour.mjs ([long session](long-session.md))'],
+  need: 'the full hour in each browser; the harness exists since 2026-11-04, and its short trials found three memory faults across map changes, fixed (the hitch log\'s Wasm watch, a level\'s BSP occlusion never freed, the kernel allocator)'});
 
 // 7.5 Audio (D6) ------------------------------------------------------------------------------------------------------------------------
 add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'PARTIAL',

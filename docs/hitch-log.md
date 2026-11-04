@@ -33,6 +33,7 @@ simulation state, and without the URL switch it installs nothing
 * `scripts/hitch-summary.mjs` reads the file (and a saved dump): frame work and drawn-gap figures, and the 7.2 rows' verdicts.
 * `scripts/hitch-ab.mjs` runs interleaved arms with each session's CPU.
 * `scripts/frame-time-set.mjs` runs the ten-map frame-time set.
+* `scripts/session-hour.mjs` runs the one-hour session (row 7.4.3, [long session](long-session.md)).
 * `scripts/hitch-frame-profile.mjs` and `scripts/gecko-gc.mjs` name what a slow frame ran.
 * `scripts/gecko-gaps.mjs RUN.json PROFILE.json` lines a Firefox run's drawn gaps up with the Gecko profile's GC and CC pauses
   (`--thread page` inline, `--thread worker` with the worker).
@@ -69,7 +70,9 @@ the renderer process of the game's tab) says the same in one picture.
   on the thread that draws (ANGLE's Metal backend compiles slowly).
 - `rows`: per-frame columns (`columns`) for the frames around every hitch
   (the draw gap exceeded `hitchLimitMs`) and around every slow second, plus
-  the last 15 s. `deusExHitch.dump({full: true})` returns every frame kept.
+  the last 15 s. `deusExHitch.dump({full: true})` returns every frame kept. `deusExHitch.since(n, columns)` returns the frames
+  recorded from frame number `n` on (as rows of the named columns) and the number to ask from next: a session longer than the
+  ring reads it in pieces ([long session](long-session.md)).
 - `summary`: draw-gap percentiles over all kept frames.
 
 The per-frame columns: `t`, `dt` (requestAnimationFrame interval), `drawn`

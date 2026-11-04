@@ -107,27 +107,57 @@ export function createScriptVmKernel(instance, memory) {
   uploadSineTable(x, memory);
   const resultAt = x.result_ptr() >>> 2;
   // Kernel blocks (Fire.dll textures, fire.rs; animated light maps,
-  // light.rs) live above the memory's initial size, past the statics and
-  // stack. Fire blocks stay for the instance's life (a page's procedural
-  // textures do too); a world's light-map blocks are freed with it. A freed
-  // block is handed whole to a later request it fits (first fit), so equal
-  // requests reuse it exactly. This allocator is the only thing that grows
-  // this instance's memory; the other kernels here re-derive their views on
-  // every call.
+  // light.rs; the BSP occlusion's and decals' tables) live above the
+  // memory's initial size, past the statics and stack. Fire blocks stay for
+  // the instance's life (a page's procedural textures do too); a world's
+  // light-map blocks and a level's occlusion are freed with them. A freed
+  // block joins an address-ordered free list, merged with its free
+  // neighbours (and given back to the top when it ends there). A request
+  // takes the smallest free block it fits, split when the rest is worth
+  // keeping, or else the top; either way it starts zeroed, as fresh pages
+  // do. (Until 2026-11-04 a freed block went whole to the first later
+  // request it fitted, so after a map change a small table could take the
+  // last level's 32 MB occlusion work block and the next work block grew
+  // the memory: docs/long-session.md.) This allocator is the only thing that
+  // grows this instance's memory; the other kernels here re-derive their
+  // views on every call.
   let top = memory.buffer.byteLength;
-  const sizes = new Map(), freed = [];
+  const sizes = new Map(), freeList = [];  // freeList: {at, bytes}, by address
+  const MIN_SPLIT = 256;
   const alloc = bytes => {
-    bytes = (bytes + 15) & ~15;
-    const reuse = freed.findIndex(at => sizes.get(at) >= bytes);
-    if (reuse >= 0) return freed.splice(reuse, 1)[0];
-    const at = (top + 15) & ~15, end = at + bytes;
-    if (end > memory.buffer.byteLength) memory.grow(Math.ceil((end - memory.buffer.byteLength) / 65536));
+    bytes = Math.max(16, (bytes + 15) & ~15);
+    let best = -1;
+    for (let i = 0; i < freeList.length; i++) {
+      const size = freeList[i].bytes;
+      if (size >= bytes && (best < 0 || size < freeList[best].bytes)) { best = i; if (size === bytes) break; }
+    }
+    if (best >= 0) {
+      const block = freeList[best], at = block.at;
+      if (block.bytes - bytes >= MIN_SPLIT) { block.at += bytes; block.bytes -= bytes; sizes.set(at, bytes); }
+      else { freeList.splice(best, 1); sizes.set(at, block.bytes); }
+      new Uint8Array(memory.buffer, at, sizes.get(at)).fill(0);
+      return at;
+    }
+    const at = (top + 15) & ~15, end = at + bytes, before = memory.buffer.byteLength;
+    if (end > before) memory.grow(Math.ceil((end - before) / 65536));
+    // (below the old size the bytes may be a freed block's that the top took back; fresh pages are zero)
+    if (at < before) new Uint8Array(memory.buffer, at, Math.min(end, before) - at).fill(0);
     top = end; sizes.set(at, bytes);
     return at;
   };
   const free = at => {
-    if (!sizes.has(at) || freed.includes(at)) throw new Error(`Kernel block ${at} is not allocated`);
-    freed.push(at);
+    const bytes = sizes.get(at);
+    if (bytes === undefined) throw new Error(`Kernel block ${at} is not allocated`);
+    sizes.delete(at);
+    let lo = 0, hi = freeList.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (freeList[mid].at < at) lo = mid + 1; else hi = mid; }
+    let index = lo, block;
+    const before = freeList[lo - 1];
+    if (before && before.at + before.bytes === at) { before.bytes += bytes; block = before; index = lo - 1; }
+    else { block = { at, bytes }; freeList.splice(lo, 0, block); }
+    const after = freeList[index + 1];
+    if (after && block.at + block.bytes === after.at) { block.bytes += after.bytes; freeList.splice(index + 1, 1); }
+    if (block.at + block.bytes === top) { top = block.at; freeList.splice(index, 1); }
   };
   const vector = () => { const w = words(); return [num(w[resultAt]), num(w[resultAt + 1]), num(w[resultAt + 2])]; };
   // Views of RESULT and FCOORDS that persist while the memory does (made again when it grows): the x87 tails of
@@ -142,6 +172,14 @@ export function createScriptVmKernel(instance, memory) {
   const result3 = () => { views(); return [resultFloats[0], resultFloats[1], resultFloats[2]]; };
   const ints = () => { const w = new Int32Array(memory.buffer); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; };
   return Object.freeze({
+    /** Measurement only (scripts/session-hour.mjs): the block allocator's state, bytes held by live blocks and by freed ones, the top
+     * and the memory's size. */
+    blockStats: () => {
+      let used = 0, free = 0;
+      for (const bytes of sizes.values()) used += bytes;
+      for (const block of freeList) free += block.bytes;
+      return { blocks: sizes.size, usedBytes: used, freed: freeList.length, freeBytes: free, top, memoryBytes: memory.buffer.byteLength };
+    },
     /** The x87 precision control of this instance (render-precision.mjs). */
     setPrecision: value => x.set_x87_precision(value),
     vectorSize: v => num(x.op_vector_size(bits(v[0]), bits(v[1]), bits(v[2]))),

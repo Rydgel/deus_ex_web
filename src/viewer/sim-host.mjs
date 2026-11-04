@@ -120,6 +120,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   runtime.audio?.setLipSync(lipSync);
   // The original BSP occlusion (bsp-occlusion.mjs) over the map's model, with
   // each surface texture's PolyFlags (UTexture +0x80, the packed bools).
+  // `releaseOcclusion` frees its kernel blocks when the host goes (dispose).
+  let releaseOcclusion = () => {};
   try {
     const textureFlags = new Map(), surfaceTextureFlags = [];
     const surfaces = map.model.surfaces;
@@ -219,6 +221,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     };
     buildOcclusion();
     session.setOcclusionRebuild(buildOcclusion, dropOcclusion);
+    releaseOcclusion = dropOcclusion;
     // DrawFrame's decal block runs over the same frames (decal-draw.mjs).
     const decals = (await loadScriptVmKernel()).decals;
     if (decals) session.setDecalKernel(decals, () => kernel.framePtr());
@@ -242,7 +245,9 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     // `keepProcess`, the script process the next level attaches to (a travel
     // arrival's: script-process.mjs), keeps its identities and their handles.
     dispose(keepProcess = null) {
-      disposeAudio(); session.dispose(); actorSim?.dispose();
+      // The occlusion's blocks live in the script-VM kernel's memory, which outlives the level (one instance a realm): without
+      // this, every map change kept its 32 MB work block and model tables (docs/long-session.md).
+      disposeAudio(); releaseOcclusion(); session.dispose(); actorSim?.dispose();
       releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit(), keepProcess ? identity => keepProcess.owns(identity) : null);
       // A process no level attaches to any more: the identities it kept through earlier levels go too.
       if (keepProcess !== runtime.process) releaseHandlesWhere(identity => runtime.process.owns(identity));

@@ -169,7 +169,7 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
 | 7.4.2 | each map of the frame-time set stays within a declared memory budget (page plus worker, after GC) | H | profile-live-heap.mjs, profile-firefox-memory.mjs | Mac | needed: the budget, to fit a 16 GB machine; today the Island's worker reaches 1.4 GB before a GC in Chrome | MISSING |
-| 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | a session harness | Mac | needed: the harness | MISSING |
+| 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | session-hour.mjs ([long session](long-session.md)) | Mac | needed: the full hour in each browser; the harness exists since 2026-11-04, and its short trials found three memory faults across map changes, fixed (the hitch log's Wasm watch, a level's BSP occlusion never freed, the kernel allocator) | MISSING |
 
 ### 7.5 Audio (D6)
 

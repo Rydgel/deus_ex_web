@@ -11,7 +11,7 @@
  * every hook with `hitch?.`). It is imported first so that the WebGL and
  * WebAssembly wrappers precede the first context and the first memory.
  * Measurement only; it changes no simulation state. */
-import { watchWasm, wasmBytes, wasmCount } from './hitch-wasm.mjs';
+import { watchWasm, wasmBytes, wasmCount, wasmMemories } from './hitch-wasm.mjs';
 
 const param = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('hitchlog');
 export const hitchEnabled = param !== null && param !== '0' && param !== 'off';
@@ -151,7 +151,7 @@ export function createHitchLog() {
     savedLine = document.createElement('div'); savedLine.style.pointerEvents = 'none';
     box.append(overlay, button, savedLine);
     document.body.appendChild(box);
-    window.deusExHitch = { download, save, dump, status: () => ({ frames: count, seconds: seconds.length, events: events.length, hitches }), events: () => events, seconds: () => seconds };
+    window.deusExHitch = { download, save, dump, since, wasmMemories, status: () => ({ frames: count, seconds: seconds.length, events: events.length, hitches }), events: () => events, seconds: () => seconds };
   }
 
   function frameStart() { /* the frame's own timestamp arrives with frameEnd; wrappers need no reset */ }
@@ -250,6 +250,15 @@ export function createHitchLog() {
     const at = ((first + i) % MAX_ROWS) * NCOL, row = new Array(NCOL);
     for (let c = 0; c < NCOL; c++) row[c] = rows[at + c];
     return row;
+  }
+
+  /** The frames recorded since frame number `from` (0 = the first ever recorded) that the ring still holds, as rows of the named
+   * columns: {from, next, rows}, `next` the number to ask from next time. A long session (scripts/session-hour.mjs) reads the log in
+   * pieces this way, as the ring keeps only its last MAX_ROWS frames. */
+  function since(from = 0, names = ['t', 'drawn', 'animate', 'w.start', 'w.dur']) {
+    const first = Math.max(from, count - MAX_ROWS, 0), picked = names.map(ci), out = [];
+    for (let i = first; i < count; i++) { const at = (i % MAX_ROWS) * NCOL; out.push(picked.map(c => round(rows[at + c]))); }
+    return { from: first, next: count, columns: names, rows: out };
   }
 
   /** The log as plain data: per-second table, events, a summary and the
