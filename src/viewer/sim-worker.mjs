@@ -31,7 +31,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe`, `inputProbe` and `renderPassProbe` (validation), `loadout` (debug-loadout.mjs, the debugging page's loadout), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe`, `inputProbe` and `renderPassProbe` (validation), `processProbe` (process-probe.mjs, measurement), `loadout` (debug-loadout.mjs, the debugging page's loadout), `musicStatus` (the library
  *   service's counters), `musicLatency` (its effect starts' post times,
  *   docs/audio-latency.md), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
@@ -218,6 +218,7 @@ async function handle(data) {
       else if (data.method === 'musicStatus') value = musicLibrary?.status() ?? null;
       else if (data.method === 'musicLatency') value = musicLibrary?.latencyPosts() ?? null;
       else if (data.method === 'musicDrive') value = await music.driveMusicLibrary(musicLibrary, assets, data.args ?? {});
+      else if (data.method === 'processProbe') value = await (await import('./process-probe.mjs')).processProbe(host?.scriptProcess, assets);
       else if (game) {
         if (data.clock) setHostClock(data.clock);
         if (data.method === 'view') value = host.session.view();

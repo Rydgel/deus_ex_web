@@ -127,7 +127,9 @@ here may pass on a quiet machine; they are to be measured again there, and on th
 at its 16 GB cap after 80 travels in 12 minutes. Chromium's run of the same census peaked at 7.5 GB for the browser and the harness
 together. The one-hour session (row 7.4.3) did not see this: its warm-up visits all ten of its maps before the plateau is taken, so
 memory a map keeps after it is left is already in the plateau. A process that visits many distinct maps grows with each, which rows
-7.4.1 and 7.4.2 have to answer. Not investigated yet.
+7.4.1 and 7.4.2 have to answer: [memory across many maps](map-memory.md) found four faults (in Firefox every left level stayed
+alive through the interpreter's process-wide WeakRef walks, the cause of the OOM) and fixed them; both browsers now reach the 83rd map
+without forced collections (Firefox's tree at most 9.4 GB, Chromium's 7.4), and two slower growths are left.
 
 ## Why a map change costs this much
 

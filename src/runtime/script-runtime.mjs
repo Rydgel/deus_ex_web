@@ -302,8 +302,8 @@ class ScriptInstance {
     this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
     // The Rust actor tick's field mask and class flags (actor-tick-kernel.mjs).
     this.tickDesc=undefined;
-    // The image range's release token (arena, base, size); see releaseObjectImage.
-    this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
+    // The image range's release token (the arena's owner cell, base, size); see releaseObjectImage.
+    this.imageToken=storage.base?{owner:storage.arena.owner,base:storage.base,size:storage.size,released:false}:null;
   }
   get slots(){return this.slotMap??=new Map();}
   /** Bind `key` to `binding`: the only writer of `bindings` (script-bindings.mjs setBindingOf). */
@@ -413,7 +413,8 @@ export function cleanupPlan(instance) {
 }
 const imageFinalizer=new FinalizationRegistry(token=>{
   if(token.released)return;
-  token.released=true;token.arena.release(token.base,token.size);
+  // (the arena through its owner cell: a detached level's arena is gone, ObjectArena.detach)
+  token.released=true;token.owner.arena?.release(token.base,token.size);
 });
 /** Whether two values Maps of one default property (index -> value) hold the same scalars; any object or array is a different value. */
 const sameDefaultValues=(current,values)=>{
@@ -1002,7 +1003,7 @@ export class ScriptRuntime {
     if(!token||token.released)return;
     token.released=true;
     imageFinalizer.unregister(token);
-    token.arena.release(token.base,token.size);
+    token.owner.arena?.release(token.base,token.size);
   }
   /** Construct fresh script storage using the class-default/template values,
    * followed by registry insertion and a verified class-native constructor.

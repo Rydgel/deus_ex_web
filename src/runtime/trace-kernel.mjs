@@ -68,7 +68,8 @@ const lineCheckImports = {
 
 async function load() {
   const module = await compileScriptVm();
-  const arena = new ObjectArena();
+  // (it outlives every level whose models and hashes it holds: freed ranges coalesce, script-object-arena.mjs)
+  const arena = new ObjectArena(64, {coalesce: true});
   // This instance runs no scripts: every other function the module imports
   // (the interpreter's) is a host fault here.
   const imports = {memory: arena.memory};

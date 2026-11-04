@@ -2215,6 +2215,11 @@ assetsProbe() {
   for (const value of assets.ready.values()) bytes += value.bytes.byteLength;
   return { ready: assets.ready.size, readyBytes: bytes, released: assets.released.size, releasedBytes: assets.releasedBytes };
 },
+/** Measurement only (scripts/map-memory-census.mjs): the simulation side's script process and asset store (process-probe.mjs). */
+async processProbe() {
+  if (simClient) return simClient.call('processProbe');
+  return (await import('./process-probe.mjs')).processProbe(simHost?.scriptProcess, assets);
+},
 async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;

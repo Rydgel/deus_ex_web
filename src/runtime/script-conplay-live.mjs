@@ -129,7 +129,8 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   async function prepareSound(sound,id=null){
     if(sounds.has(sound))return;
     const {asset,index}=sound;
-    await runtime.classLoader.prepare(asset);
+    // (for this level: the next level's start prepares the speech it needs, and the collection that unloads this package drops it)
+    await runtime.classLoader.prepare(asset,{level:true});
     const resource=await runtime.prepareResource(sound);
     await runtime.dynamicLoadGraph.prepare(sound,resource);
     const decoded=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry:exportAt(asset.pkg, index)});

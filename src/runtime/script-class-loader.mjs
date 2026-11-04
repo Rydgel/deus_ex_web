@@ -38,6 +38,11 @@ export class ScriptClassLoader {
     this.levelIdentities = new WeakMap();
     this.nativeRecords = new WeakMap();
     this.linking = new Set();
+    // Packages prepared for one level's synchronous loads only (prepare's `level`: the speech of a level's conversations,
+    // script-conplay-live.mjs), which each level's start prepares again: the collection that unloads one drops it from the graph
+    // (unloadPackages), so the asset store releases its bytes as any unloaded package's. Every other prepared package is readiness for
+    // the process's life (a body prepared once may load from it synchronously, prefetchDynamicLoadPackage).
+    this.levelPrepared = new Set();
     this.prepareQueue = Promise.resolve();
     this.bits = new DataView(new ArrayBuffer(4));
   }
@@ -55,7 +60,7 @@ export class ScriptClassLoader {
       .then(cache => { this.graph.setConfig(cache); return cache; });
   }
 
-  prepare(asset) {
+  prepare(asset, { level = false } = {}) {
     const pending = this.prepareQueue.then(async () => {
       await this.prepareConfig();
       const visited = new Set();
@@ -65,6 +70,8 @@ export class ScriptClassLoader {
         const key = current.name.toLowerCase();
         if (visited.has(key)) continue;
         visited.add(key);
+        if (!level) this.levelPrepared.delete(key);
+        else if (!this.graph.packageAssets.has(key)) this.levelPrepared.add(key);
         this.graph.packageAssets.set(key, current);
         for (const name of current.pkg.dependencies) {
           if (!visited.has(name.toLowerCase())) queue.push(await this.assets.get(name));
@@ -101,11 +108,12 @@ export class ScriptClassLoader {
 
   /** The collection unloaded these packages (lower-case names; ScriptProcess.unloadPackages, which keeps a package with a loaded export):
    * the graph drops their linkers and package roots, and the tracker forgets them. A package the graph prepared keeps its bytes there
-   * (packageAssets), so a later load makes a new linker synchronously. */
+   * (packageAssets), so a later load makes a new linker synchronously, unless it was prepared for a level only (levelPrepared). */
   unloadPackages(names) {
     const graph = this.graph, roots = new Set();
     for (const name of names) {
       graph.linkers.delete(name);
+      if (this.levelPrepared.delete(name)) graph.packageAssets.delete(name);
       const root = graph.packageRoots.get(name);
       if (root) { roots.add(root); graph.packageRoots.delete(name); this.identities.delete(root); }
     }

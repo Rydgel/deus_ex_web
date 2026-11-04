@@ -63,6 +63,9 @@ onFieldImageCellWithdrawn(() => {
   }
 });
 
+/** Measurement only (process-probe.mjs): the event hosts the cell walk reaches. */
+export const eventHostCount = () => hosts.size;
+
 export class EventHost {
   constructor(vm) {
     this.vm = vm;
@@ -70,6 +73,8 @@ export class EventHost {
     this.templates = [null];
     this.templateIds = new WeakMap();
     this.deleteMe = null;
+    // This host's entry in `hosts` (attach), until dispose.
+    this.ref = null;
   }
   attach(x) {
     const vm = this.vm, arena = vm.arena;
@@ -86,7 +91,7 @@ export class EventHost {
     TICK_EVENTS.forEach(([name], i) => view.setUint32(enames + 4 * i, (probeNames.get(name.toLowerCase()) ?? -1) >>> 0, true));
     vm.runtime.objects?.operandListeners?.push(() => this.bump());
     vm.runtime.boundaryFunctions?.listeners?.push(() => this.bump());
-    hosts.add(new WeakRef(this));
+    hosts.add(this.ref = new WeakRef(this));
     // The call cache (dispatch.rs CALLS): on unless RUST_CALLS=0.
     this.callsAt = x.vm_calls_ptr();
     const calls = arena.alloc(CALL_SLOTS * CALL_SLOT);
@@ -109,6 +114,8 @@ export class EventHost {
     for (let slot = calls, end = calls + CALL_SLOTS * CALL_SLOT; slot < end; slot += CALL_SLOT)
       if (view.getUint32(slot, true) === code || view.getUint32(slot + 24, true) === code) view.setUint32(slot, 0, true);
   }
+  /** The level is gone (RustScriptVm.dispose): its caches follow no withdrawn cell. */
+  dispose() { if (this.ref) hosts.delete(this.ref); this.ref = null; }
   /** Every cache entry is resolved again. */
   bump() {
     if (!this.at) return;

@@ -248,13 +248,15 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       // The occlusion's blocks live in the script-VM kernel's memory, which outlives the level (one instance a realm): without
       // this, every map change kept its 32 MB work block and model tables (docs/long-session.md).
       disposeAudio(); releaseOcclusion(); session.dispose(); actorSim?.dispose();
+      // (the interpreter leaves the process-wide WeakRef walks, which in Firefox kept every left level alive: docs/map-memory.md)
+      runtime.scriptVm?.dispose();
       releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit(), keepProcess ? identity => keepProcess.owns(identity) : null);
       // A process no level attaches to any more: the identities it kept through earlier levels go too.
       if (keepProcess !== runtime.process) releaseHandlesWhere(identity => runtime.process.owns(identity));
       // The image arena's views of the native heap are closures over this
-      // runtime; the arena itself stays reachable from the process-wide
-      // FinalizationRegistry that returns image ranges (script-runtime.mjs
-      // imageFinalizer), whose held values would keep the runtime alive.
-      runtime.arena.listeners.length = 0;
+      // runtime, and the process-wide FinalizationRegistry that returns image
+      // ranges (script-runtime.mjs imageFinalizer) holds a token for each of
+      // its objects: detached, neither keeps the runtime or its memory alive.
+      runtime.arena.detach();
     } };
 }

@@ -170,7 +170,14 @@ const STATE_LAYOUT = Object.freeze({size: 0, refCount: 0, cells: new Map(), fiel
 
 // Interpreters whose handle class tables follow handle releases and class
 // default changes, weakly held (an interpreter lives as long as its runtime).
+// A disposed level's leaves at once (RustScriptVm.dispose): these walks run
+// on every handle release, receiver epoch and state change, and a WeakRef
+// read during SpiderMonkey's incremental marking marks its target, so in
+// Firefox a left level's interpreter, with its runtime and object arena,
+// outlived every incremental collection (docs/map-memory.md).
 const interpreters = new Set();
+/** Measurement only (process-probe.mjs): the interpreters the walks below reach. */
+export const interpreterCount = () => interpreters.size;
 function eachInterpreter(fn) {
   for (const ref of interpreters) {
     const vm = ref.deref();
@@ -262,6 +269,8 @@ export class RustScriptVm {
     this.runtime = runtime;
     this.arena = runtime.objectArena();
     this.exports = null;
+    // This interpreter's entry in `interpreters` (attach), until dispose.
+    this.ref = null;
     // Active runs by id; an import's `frame` argument indexes it. The count
     // of active runs (the next id) is FRAMES[3], which Rust puts back with
     // the frame stack after a call, so a callee whose arguments are still
@@ -317,6 +326,13 @@ export class RustScriptVm {
     // October 1: tick events dispatched in Rust (dispatch.rs).
     this.events = new EventHost(this);
   }
+  /** The level is gone (sim-host.mjs dispose): nothing runs this interpreter
+   * again, so the process-wide walks stop reaching it. */
+  dispose() {
+    if (this.ref) interpreters.delete(this.ref);
+    this.ref = null;
+    this.events.dispose();
+  }
   attach() {
     const x = this.exports;
     this.runawayAt = x.vm_runaway_ptr();
@@ -365,7 +381,7 @@ export class RustScriptVm {
     this.setReceiverEpoch(receiverEpoch());
     if (RECEIVER_VERIFY) this.arena.view.setUint32(this.receiversAt + 12, 1, true);
     for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
-    interpreters.add(new WeakRef(this));
+    interpreters.add(this.ref = new WeakRef(this));
     if (CHECK) this.arena.view.setUint32(x.vm_check_ptr(), 1, true);
   }
   /** Make the class table cover `handle`. */

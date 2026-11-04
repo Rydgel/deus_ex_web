@@ -6,7 +6,10 @@
  * runs unless a caller installs it. Measurement only. */
 // (weakly: a memory the program has dropped, such as a left level's object arena, must stay collectable, or the watch itself keeps
 // every past level's memory alive over a long session, docs/long-session.md; `seen` counts a memory once, as the import and the export
-// of the same instance)
+// of the same instance). Weakly is not enough in Firefox: a WeakRef read during SpiderMonkey's incremental marking marks its target,
+// and these reads run each second on the page and each frame in the worker, so with the hitch log Firefox's incremental collections
+// keep every memory until a non-incremental one (Gecko's minimize, which session-hour.mjs and map-memory-census.mjs force before a
+// reading); docs/map-memory.md
 const memories = new Set(), seen = new WeakSet();
 let installed = false;
 // (each with the frames that created it, for `wasmMemories`)
