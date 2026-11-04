@@ -67,6 +67,10 @@ The user took each recommendation below. The alternatives are kept for the recor
 
    It passes with no runtime error. The heap after each forced GC must stay within 10% of the first plateau, and the median
    frame time of the last five minutes within 5% of the first five.
+
+   The first plateau is the level after a warm-up pass of the route (the user's choice, 2026-11-04): a cold start's first visit
+   measures the process loading its classes, the packages they hold and its caches, which the original's startup loads at
+   once, not a leak ([long session](long-session.md)).
 6. **D6, audio latency.** The original's latency (Galaxy's mix buffer through DirectSound) has not been measured. Following
    the fidelity rule, the recommendation is to measure it under Wine first, then hold Play to it: the time from a sound's
    PlaySound call to its first output sample, at most the original's plus one browser render quantum.

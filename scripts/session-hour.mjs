@@ -14,12 +14,17 @@
 // slots and elements, as V8's usedSize counts it, with ArrayBuffer and Wasm memory and the rest kept apart) after each scan and at
 // each map's end, the browser's process tree RSS (Linux) every 10 s, and every runtime error. Host measurement only.
 //
-// D5 passes with no runtime error, the heap after each forced GC on the last Island visit within 10% of the first visit's plateau (the
-// same map at the same route steps: the median of the first visit's readings), and the median frame work of the last five minutes
-// (the last Island visit) within 5% of the first five (the first): the page's (`animate`) and, in worker mode, the worker's (`w.dur`).
-// Every other map's readings are reported (row 7.4.2's figures).
+// Before the hour, a warm-up pass: the route's maps but the last (the Island and the nine), --warmup minutes each, the same steps,
+// no save. D5's first plateau is the Island after it (the user's reading, 2026-11-04: a cold start's first visit measures the
+// process filling its classes, the packages they hold and its caches, which the original's startup loads at once; docs/long-session.md).
+//
+// D5 passes with no runtime error, the heap after each forced GC on the last Island visit within 10% of the first measured visit's
+// plateau (the same map at the same route steps: the median of that visit's readings), and the median frame work of the last five
+// minutes (the last Island visit) within 5% of the first five (the first measured one): the page's (`animate`) and, in worker mode,
+// the worker's (`w.dur`). Every other map's readings are reported (row 7.4.2's figures).
 //
 //   node scripts/session-hour.mjs [--browser chromium|firefox] [--minutes 60] [--edge 5] (the first and last visits, minutes)
+//     [--warmup 1.5] (minutes a map in the warm-up pass; 0: none, the first visit is a cold start's)
 //     [--save-every 10] [--maps a,b,...] (the visits between the two Island ones) [--out .cache/perf/session/<browser>]
 //     [--url URL] (else a dev server for this tree is started in process) [--size 1440x960] [--query k=v&k=v] [--headed] [--cdp-port 9341]
 //     [--snapshots] (Chromium: heap snapshots of the page and the worker at the end of the first and the last Island visit,
@@ -57,10 +62,11 @@ export function verdict(run){
   const visits=run.visits.map(v=>({...v,work:v.window?work(rowsBetween(v.window[0],v.window[1])):null,
     phases:v.window&&frames.columns.includes('p.render')?phases(rowsBetween(v.window[0],v.window[1])):null,
     heap:v.readings.map(r=>r.totalMB)}));
-  const first=visits[0],last=visits.at(-1),checks=[];
+  // (the warm-up pass's visits are reported, not judged)
+  const measured=visits.filter(v=>!v.warmup),first=measured[0],last=measured.at(-1),checks=[];
   checks.push({check:'no runtime error',pass:!run.errors.length&&!run.ended,value:run.ended??`${run.errors.length} errors`});
-  const sameMap=first&&last&&visits.length>1&&first.map===last.map;
-  checks.push({check:`${run.visits.length-1} map changes`,pass:visits.length-1>=10,value:visits.length-1});
+  const sameMap=first&&last&&measured.length>1&&first.map===last.map;
+  checks.push({check:`${measured.length-1} map changes in the measured hour`,pass:measured.length-1>=10,value:measured.length-1});
   checks.push({check:'saves and loads',pass:run.saves.length>0&&run.saves.every(s=>s.loaded),value:`${run.saves.filter(s=>s.loaded).length} of ${run.saves.length}`});
   if(sameMap&&first.heap.length&&last.heap.length){
     const plateau=q(first.heap,.5),worst=Math.max(...last.heap);
@@ -82,12 +88,12 @@ export function verdict(run){
       checks.push({check:'worker median frame work: last five minutes within 5% of the first five',pass:worker<=FRAME_BOUND,
         value:`${f1(first.work.worker)} -> ${f1(last.work.worker)} ms (${f1((worker-1)*100)}%)`});}
   }else checks.push({check:'median frame work',pass:false,value:'no window on the same map at both ends'});
-  return {pass:checks.every(c=>c.pass),checks,visits:visits.map(v=>({map:v.map,arrivalS:v.arrivalS,loadS:v.loadS,work:v.work,
+  return {pass:checks.every(c=>c.pass),checks,visits:visits.map(v=>({map:v.map,warmup:Boolean(v.warmup),arrivalS:v.arrivalS,loadS:v.loadS,work:v.work,
     heapMB:v.heap,pageMB:v.readings.map(r=>r.pageMB),workerMB:v.readings.map(r=>r.workerMB),rssMB:v.readings.map(r=>r.rssMB)}))};
 }
 function printVerdict(v,log=console.log){
   log('\n| Visit | map | arrival (min) | load (s) | page p50 | worker p50 | heap after GC (MB) | RSS (MB) |\n|---:|---|---:|---:|---:|---:|---|---|');
-  v.visits.forEach((x,i)=>log(`| ${i} | ${x.map} | ${f1(x.arrivalS/60)} | ${f1(x.loadS)} | ${f1(x.work?.page)} | ${f1(x.work?.worker)} | ${x.heapMB.map(f1).join(', ')} | ${x.rssMB.map(v=>v??'-').join(', ')} |`));
+  v.visits.forEach((x,i)=>log(`| ${i} | ${x.map}${x.warmup?' (warm-up)':''} | ${f1(x.arrivalS/60)} | ${f1(x.loadS)} | ${f1(x.work?.page)} | ${f1(x.work?.worker)} | ${x.heapMB.map(f1).join(', ')} | ${x.rssMB.map(v=>v??'-').join(', ')} |`));
   log('');for(const c of v.checks)log(`${c.pass?'PASS':'FAIL'}  ${c.check}: ${c.value}`);
   log(`\nD5 ${v.pass?'PASS':'FAIL'}`);
 }
@@ -97,9 +103,12 @@ const engine=option('browser','chromium');
 if(engine!=='chromium'&&engine!=='firefox')throw new Error('--browser must be chromium or firefox');
 const isChromium=engine==='chromium';
 if(!isChromium&&process.platform!=='linux')throw new Error('Firefox\'s forced GC (the memory report signal) is Linux only');
-const minutes=Number(option('minutes',60)),edge=Number(option('edge',5)),saveEvery=Number(option('save-every',10));
+const minutes=Number(option('minutes',60)),edge=Number(option('edge',5)),saveEvery=Number(option('save-every',10)),warmup=Number(option('warmup',1.5));
 const middle=option('maps',null)?.split(',').filter(Boolean)??FRAME_TIME_SET.filter(m=>m!==HOME);
 const route=[HOME,...middle,HOME];
+// The visits in order: the warm-up pass (every map of the route but the last), then the measured route.
+const plan=[...(warmup>0?route.slice(0,-1).map(map=>({map,kind:'warmup'})):[]),
+  ...route.map((map,k)=>({map,k,kind:k===0?'first':k===route.length-1?'last':'middle'}))];
 // The visits between the two edges share what is left of the session.
 const middleS=(minutes-2*edge)*60/middle.length;
 if(!(middleS>60))throw new Error(`--minutes ${minutes} leaves ${f1(middleS)} s a visit between the edges`);
@@ -334,22 +343,23 @@ try{
   await page.goto(debugUrl(`${url}/?hitchlog=1${option('query',null)?'&'+option('query',null):''}`));
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:300000});
   if(isChromium){await openCdp();await findBrowserPid();}
+  // t0: the measured hour's start, the first measured visit's arrival
   let t0=null;
-  for(let i=0;i<route.length;i++){
-    const map=route[i],asked=Date.now();
-    say(`visit ${i}: ${map}`);
+  for(let i=0;i<plan.length;i++){
+    const {map,kind,k}=plan[i],asked=Date.now(),warm=kind==='warmup';
+    say(`visit ${i}: ${map}${warm?' (warm-up)':''}`);
     await releaseKeys();
     if(i===0)await page.evaluate(map=>{const menu=document.getElementById('map');menu.value=map;menu.dispatchEvent(new Event('change'));},map);
     else await exec([`open ${map}`]);
     await waitFor(()=>arrived(map),{timeout:300000,what:`arrival on ${map}`});
-    const arrival=Date.now();t0??=arrival;
+    const arrival=Date.now();if(kind==='first')t0=arrival;
     await page.waitForTimeout(1000);await takePointer();await cheats();
-    const visit={map,arrivalS:(arrival-t0)/1000,loadS:(arrival-asked)/1000,readings:[],steps:0,window:null};visits.push(visit);
+    const visit={map,warmup:warm,arrivalS:(arrival-started)/1000,loadS:(arrival-asked)/1000,readings:[],steps:0,window:null};visits.push(visit);
     if(isChromium)await cdpTargets();
     const start=await page.evaluate(()=>window.deusExViewer.placeProbe({})),view=(await page.evaluate(()=>window.deusExViewer.viewProbe({}))).viewRotation;
     say(`  arrived in ${f1(visit.loadS)} s at ${start.location.map(Math.round).join(' ')}`);
-    const edgeVisit=i===0||i===route.length-1;
-    const ends=edgeVisit?arrival+edge*60000:t0+(edge*60+i*middleS)*1000;
+    const edgeVisit=kind==='first'||kind==='last';
+    const ends=warm?arrival+warmup*60000:edgeVisit?arrival+edge*60000:t0+(edge*60+k*middleS)*1000;
     await page.waitForTimeout(SKIP_S*1000);
     const windowStart=await frameCount();
     const left=()=>ends-Date.now();
@@ -360,8 +370,8 @@ try{
         await page.evaluate(([location,rotation])=>window.deusExViewer.placeProbe({location,rotation}),[start.location,[view[0],(view[1]+k*10923)%65536,view[2]]]);
         await hold(15000);visit.steps++;
       }
-      if(left()>0&&!edgeVisit&&(Date.now()-t0)/1000>=nextSave){await saveAndLoad(map);nextSave+=saveEvery*60;}
-      if(left()>20000)visit.readings.push(await reading(`${map} ${visit.readings.length}`));
+      if(left()>0&&kind==='middle'&&(Date.now()-t0)/1000>=nextSave){await saveAndLoad(map);nextSave+=saveEvery*60;}
+      if(left()>20000&&!warm)visit.readings.push(await reading(`${map} ${visit.readings.length}`));
       // the placed walks: from the start, four headings 90 degrees apart, a jump when stuck
       for(let k=0;k<4&&left()>0;k++){
         await page.evaluate(([location,rotation])=>window.deusExViewer.placeProbe({location,rotation}),[start.location,[0,(view[1]+k*16384)%65536,0]]);
@@ -376,14 +386,14 @@ try{
     }
     await releaseKeys();
     visit.window=[windowStart,await frameCount()];
-    visit.readings.push(await reading(`${map} end`,{snapshot:isChromium&&flag('snapshots')&&edgeVisit?`visit${i}`:null}));
+    visit.readings.push(await reading(`${map}${warm?' (warm-up)':''} end`,{snapshot:isChromium&&flag('snapshots')&&edgeVisit?`visit${i}`:null}));
     await pull();
   }
 }catch(error){ended=error.message;say(`ended: ${error.message}`);}
 pulling=false;await background;
 try{await pull();}catch{}
 const run={browser:engine,args:process.argv.slice(2),started:new Date(started).toISOString(),minutes:(Date.now()-started)/60000,
-  sim:await page.evaluate(()=>window.deusExViewer.status().sim).catch(()=>null),route,visits,saves,samples,errors,ended,frames};
+  sim:await page.evaluate(()=>window.deusExViewer.status().sim).catch(()=>null),route,warmup,visits,saves,samples,errors,ended,frames};
 run.verdict=verdict(run);
 writeFileSync(`${out}.json`,JSON.stringify(run));
 printVerdict(run.verdict,say);

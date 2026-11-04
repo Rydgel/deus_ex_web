@@ -32,10 +32,14 @@ after its minimize, the signal of `profile-firefox-memory.mjs`, Linux only), the
 every page error, console error and runtime error. `<out>.json` holds all of it with the verdict; `--summary <out>.json` prints the
 verdict again.
 
+**The warm-up pass** (since 2026-11-04, the user's reading of D5's "first plateau"): before the hour, the Island and the nine
+maps, `--warmup` minutes each (1.5 by default), the same steps and no save; the measured hour starts on the Island after it, so the
+first plateau and the first five minutes are a warm process's. `--warmup 0` is a cold start, as the first hours below ran.
+
 **The verdict**, as the harness reads D5:
 * no runtime error, page error or console error, and every load back where its save stood;
-* the heap after each forced GC on the last Island visit at most 10% above the first plateau: the median of the first visit's
-  readings, the same map at the same route steps. Comparing maps with one another would compare levels, not a leak; every map's
+* the heap after each forced GC on the last Island visit at most 10% above the first plateau: the median of the first measured
+  visit's readings, the same map at the same route steps. Comparing maps with one another would compare levels, not a leak; every map's
   readings are reported instead (row 7.4.2's figures);
 * the median frame work of the last five minutes (the last Island visit, from 5 s after its arrival) at most 5% above the first
   five's: the page's (`animate`) and, in worker mode, the worker's (`w.dur`, one per worker frame), as row 7.2.1 measures them.
@@ -109,8 +113,8 @@ classes a process has loaded stay, and the packages they reference stay with the
 state over the session instead of at the start. That the eight more packages are the ones the original's would hold is not checked.
 
 Apart from the page's store (finding 4, fixed after this run), what D5's bound measures, read this way, is the warm-up from a cold
-start: nothing else found grows without a bound. Whether D5's "first plateau" means the first Island visit (as the harness reads it)
-or the level after the warm-up (for example the Island after a first pass of the route) is the criterion's to say: not decided.
+start: nothing else found grows without a bound. The user's reading (2026-11-04): the first plateau is the level after a warm-up pass
+of the route (the warm-up pass above); this hour and the next read it from a cold start.
 
 ### Firefox, inline mode (2026-11-04, 61 minutes)
 
@@ -144,5 +148,4 @@ Island visit, 27, 19 and 32 on the maps between, and 34 (126 MB) with 20 MB in i
 
 * The page's frame work rose 15 % in the Chromium hour (3.3 to 3.8 ms on the Island, every quarter of the visit), not explained:
   the hour's frames had no phase times. The harness keeps the page's phases now and names the four whose means moved most.
-* D5's reading of "the first plateau" (above): a cold start, or after the warm-up.
 * The Mac (the reference machine for the numbers), and the hours again after the page store's fix.
