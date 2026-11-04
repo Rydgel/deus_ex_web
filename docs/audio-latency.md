@@ -28,7 +28,8 @@ pinned to the measured 8,820.
 
 ## What is measured
 
-**The figure ("take")**: from a start to the moment the host's audio path takes the voice's first frame out of Galaxy's buffer,
+**The figure ("take")**, D6's "output" as the user chose to read it on 2026-11-04 (the alternative, the speaker, would need the
+loopback below and would compare Wine's and the browsers' audio stacks more than Galaxy): from a start to the moment the host's audio path takes the voice's first frame out of Galaxy's buffer,
 counting frames at the device's rate from the start of the block the host takes at once. In the original the first byte B always
 begins a Wine period (Galaxy's heads move by the cursor's own steps), so the take time is the moment Wine's cursor moves past B. In
 Play the first frame can sit anywhere in a rendered burst. The render call's own time would make a frame late in a burst look as
@@ -128,7 +129,5 @@ the stepped cursor's lead plus the wait for Wine's next period. The two land wit
   2,048 bytes, so its figures differ from Linux's.
 * **The hosts' output paths**: the browser's `outputLatency` (32 to 45 ms here), and Wine's buffering to PulseAudio, which is not
   measured. A loopback recording of both would be the route; it measures the hosts, not Galaxy.
-* **The reading of D6's "output"** as the host's take is this note's, not yet confirmed by the user. The other reading, the
-  speaker, needs the loopback above and would compare Wine's and the browsers' audio stacks more than Galaxy.
 * **Speech** is not measured: its start waits for the page's decode, and Galaxy's ring transport adds its own head start
   ([audio output](audio-output-scope.md) §3.2).
