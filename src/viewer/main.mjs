@@ -335,12 +335,16 @@ let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // passes on the CPU, far slower than the kernels, so it keeps the CPU path
 // unless ?gpuMesh=1 forces the GPU path.
 const gpuMeshParam=new URLSearchParams(location.search).get('gpuMesh');
-function softwareRenderer(){
-  try{
+let rendererNameRead=null;
+/** The WebGL renderer's name (WEBGL_debug_renderer_info's, else RENDERER), read once. */
+function rendererName(){
+  if(rendererNameRead===null)try{
     const gl=renderer.getContext(),info=gl.getExtension('WEBGL_debug_renderer_info');
-    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(info?info.UNMASKED_RENDERER_WEBGL:gl.RENDERER)));
-  }catch{return false;}
+    rendererNameRead=String(gl.getParameter(info?info.UNMASKED_RENDERER_WEBGL:gl.RENDERER));
+  }catch{return '';}
+  return rendererNameRead;
 }
+const softwareRenderer=()=>/swiftshader|llvmpipe|softpipe|software|basic render/i.test(rendererName());
 let gpuMesh=null;
 // The view model's page half (weapon-overlay-draw.mjs), its own GPU mesh
 // instance and the last frame's summary from the simulation side.
@@ -537,15 +541,20 @@ async function activateInfoLinkAudio(){
   // worklet, at Galaxy's output rate (the installed OutputRate, 44100 Hz).
   if(!infoLinkAudioContext){
     infoLinkAudioContext=new AudioContextClass({sampleRate:44100});
+    // A context the browser or the system suspends (another program takes the device, Safari's interruption) is resumed at
+    // once: the page has had its gesture, so it needs no other; a key or a click resumes it too (below). Not after the game
+    // exited (endGame suspends it for good). docs/stage-7-exit-criteria.md row 7.5.1.
+    const context=infoLinkAudioContext;
+    context.addEventListener('statechange',()=>{if(!exited&&context.state!=='running'&&context.state!=='closed')context.resume().catch(()=>{});});
     musicOutput?.start(infoLinkAudioContext).catch(error=>{musicError=String(error?.message??error);});
   }
-  if(infoLinkAudioContext.state==='suspended')await infoLinkAudioContext.resume();
+  if(infoLinkAudioContext.state!=='running'&&infoLinkAudioContext.state!=='closed')await infoLinkAudioContext.resume();
   return infoLinkAudioContext;
 }
 // Music plays on every map: any gesture creates or resumes the context
 // (browsers start audio only after one).
 if(musicOutput)for(const type of ['pointerdown','keydown'])
-  document.addEventListener(type,()=>{if(infoLinkAudioContext?.state!=='running')activateInfoLinkAudio().catch(()=>{});},true);
+  document.addEventListener(type,()=>{if(!exited&&infoLinkAudioContext?.state!=='running')activateInfoLinkAudio().catch(()=>{});},true);
 /** Galaxy's EffectsChannels from DeusEx.ini, clamped to 0..32 as the
  * subsystem's Init (0x10605580) does; the worklet opens the library with it. */
 async function readGalaxyOutputConfig(files){
@@ -2108,7 +2117,7 @@ function status() {
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
     calls: renderer.info.render.calls, frame: renderer.info.render.frame, shaderWarmup: shaderWarmupResult,
     graphics: { lost: graphics.lost || graphics.pending || graphics.restoring, losses: graphics.losses, restores: graphics.restores,
-      converted: graphics.converted, lastRestore: graphics.lastRestore },
+      converted: graphics.converted, lastRestore: graphics.lastRestore, renderer: rendererName(), meshPath: !world ? null : gpuMesh ? 'gpu' : 'cpu' },
     // the worker's silence (watchSimulation): `silent` once the posted frames heard nothing for SIM_SILENCE_MS
     simulation: simClient ? { silent: simSilent, silence: Math.round(simClient.silence()), outstanding: simClient.outstanding } : null,
   };
@@ -2146,6 +2155,12 @@ settled() { return simClient?.settled() ?? Promise.resolve(); },
 async musicStatus() {
   const output = musicOutput ? await musicOutput.refresh() : null;
   return { ...musicStatus(output), library: simClient ? await simClient.call('musicStatus') : pageMusicLibrary?.status() ?? null };
+},
+/** Validation only (browser-tests/audio-resume.spec.mjs): the page's AudioContext state; `{op: 'suspend'}` first suspends it, as a
+ * browser or the system would. */
+async audioContextProbe({ op = 'state' } = {}) {
+  if (op === 'suspend' && infoLinkAudioContext) await infoLinkAudioContext.suspend();
+  return infoLinkAudioContext?.state ?? 'uninitialized';
 },
 /** Measurement (docs/audio-latency.md, scripts/audio-latency.mjs): the
  * effect starts' post times on the simulation side and the worklet's

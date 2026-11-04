@@ -129,16 +129,16 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
 | 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
-| 7.3 Loading time | 0 | 1 | 2 | 0 | 0 |
+| 7.3 Loading time | 0 | 2 | 1 | 0 | 0 |
 | 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
 | 7.5 Audio | 0 | 2 | 0 | 0 | 0 |
 | 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
-| 7.7 Graphics capability and failures | 2 | 1 | 0 | 0 | 0 |
+| 7.7 Graphics capability and failures | 3 | 0 | 0 | 0 | 0 |
 | 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 3 | 22 | 3 | 6 | 3 |
+| **Total** | 4 | 22 | 2 | 6 | 3 |
 
 ## The rows
 
@@ -169,9 +169,9 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)) | Mac | weak: passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 7.9 to 8.2 s (the dev server 6.6 to 6.8 and 9.6 s); the Mac not run | PARTIAL |
-| 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel --maps all (the 83 maps) | Mac | Linux, 2026-11-04: all 83 arrive in both; Chromium median 2.23 s, max 4.30 s (passes); Firefox, the production build, median 5.42 s, max 11.56 s: Paris Metro 11.6 s and the Island 10.5 s over the bound, the simulation's load 2.3 times Chromium's worker and the page's world build before it on the one thread; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run | FAIL |
-| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs --saves (the internet corpus's 39 slots of one playthrough, each by `loadgame N`) | Mac | Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 7.10 s, max 10.86 s, 11 of 39 over, cold 7.85 to 10.63 s; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run | FAIL |
+| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)) | Mac | weak: passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 6.1 to 6.3 s (the dev server adds 1.5 to 2 s); the Mac not run | PARTIAL |
+| 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel --maps all (the 83 maps) | Mac | weak: passes on Linux, 2026-11-04: all 83 arrive; Chromium median 2.23 s, max 4.30 s (Paris Metro); Firefox, the production build in fresh browsers of about 20 maps, median 4.17 s, max 8.73 s (on a machine under a background load, 11.6 s); the Mac not run | PARTIAL |
+| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs --saves (the internet corpus's 39 slots of one playthrough, each by `loadgame N`) | Mac | Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 5.22 s, every slot under the bound but the Island's Save0001, cold 7.94 to 8.19 s (median 8.05 of six runs): the page's world build 1.3 s and the simulation's createGame 5.5 s, one after the other on its one thread; the Mac not run | FAIL |
 
 ### 7.4 Memory and long sessions (D5)
 
@@ -185,7 +185,7 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | validate-galaxy-music-play.mjs, a browser spec | Mac, Linux | weak: Chromium only; suspension and resume are not checked | PARTIAL |
+| 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | browser-tests/audio-resume.spec.mjs, validate-galaxy-music-play.mjs | Mac, Linux | weak: passes in Chromium and Firefox on Linux, 2026-11-04: the first click starts the logo map's song; a hidden page (modelled, as headless browsers keep a background tab visible) keeps the mix playing, as the original's DSBCAPS_GLOBALFOCUS buffer does, and the game's sound comes back with its ticks; a suspended context resumes by itself (before, only a key or a click resumed it, and a key after Exit brought the sound back); a real hidden tab, a system interruption, WebKit and the Mac not run | PARTIAL |
 | 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | galaxy-output-capture.sh latency and audio-latency-original.mjs (the original under Wine), audio-latency.mjs (Play; [sound start latency](audio-latency.md)) | Mac, Linux | weak: passes on Linux, 2026-11-04: from a start to the host taking its first frame out of Galaxy's buffer (D6's "output" as the user chose to read it, 2026-11-04; each host's own buffering to the device after it is reported, not bounded), the original under Wine 11.20 over 20 minutes (the phase of Galaxy's 20 ms timer against Wine's 10 ms mixer moves its figure by several ms, so a minute is not enough) median 45.6 ms and p95 56.1; Play in Chromium (worker) 46.0 and 55.4, in Firefox (inline) 45.0 and 55.7. The Mac (CrossOver, 2,048-byte periods) not run | PARTIAL |
 
 ### 7.6 Window and input
@@ -203,7 +203,7 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.7.1 | a lost WebGL context freezes Play and restores it as D3DDrv's `Lock` does; the frames after equal a run with no loss | O | validate-context-loss-play.mjs (Chromium worker and inline, Firefox) | Linux | weak: Safari, and the Mac, not run | PASS |
 | 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | browser-tests/no-webgl.spec.mjs, browser-tests/graphics-fallback.spec.mjs, browser-tests/lodmesh-wasm.spec.mjs, [no WebGL 2](boot.md#no-webgl-2) | Linux | weak: the three specs pass in Chromium and Firefox on Linux (2026-10-31); WebKit not run | PASS |
-| 7.7.3 | a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable | H | the headless default (SwiftShader) runs | Linux | weak: no validator asserts the path; "playable" has no bound on a software renderer | PARTIAL |
+| 7.7.3 | a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable | H | browser-tests/software-renderer.spec.mjs (Chromium on SwiftShader, Firefox on llvmpipe) | Linux | weak: passes on Linux, 2026-11-04: the renderer is named (Firefox masks it as "llvmpipe, or similar", still recognised), the mesh path is the CPU one, Training keeps real time (game 10.02 and 10.07 s in 10.04 s) and draws 133 fps (SwiftShader) and 195 fps (llvmpipe) at 960×640; "playable" is read as keeping real time, the frame rate reported, not bounded; WebKit not run | PASS |
 
 ### 7.8 Files and storage
 
