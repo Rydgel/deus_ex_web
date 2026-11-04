@@ -1710,3 +1710,44 @@ interactive check needs a visible tab; the script's own Chromium page is visible
 `scripts/weapon-cost.mjs` measures what one feature costs a drawn frame in the default worker mode: pairs of fresh pages of one view, interleaved, with and without it (`?weapons=off`, or any two
 query strings with `--on`/`--off`), the median over the pairs of every `framePhases` phase (the worker's `w.*` steps and the page's), and the layer's own time and the number of weapon records it made per frame
 (`lodProbe({list: 'weaponStats'})`). The pawns' third-person weapons are the first user: [weapon attachment, Cost](weapon-attachment.md#cost-2026-10-15).
+
+## The frame-time set on 2026-11-04 (Linux)
+
+Stage 7 row 7.2.1 asks for at most 8.3 ms of frame work on each map of the frame-time set, the larger of the page's and the worker's
+medians, in Chrome's worker mode on the reference machine. `node scripts/frame-time-set.mjs` on the Linux host (AMD Radeon 780M, 16
+cores, 1440×960, headless Chromium with ANGLE on GL, a quiet machine, 909eea99). The scan route now runs in god mode
+(`hitch-run.mjs --god`): the first run lost the Area 51 bunker to a death 49 s in, which leads to DXOnly, so that session measured
+two maps; a session that ends on another map is now reported as such.
+
+| Map | page p50 | worker p50 | 7.2.1 |
+| --- | ---: | ---: | --- |
+| 00_Training | 2.1 | 4.6 | under |
+| 01_NYC_UNATCOIsland | 2.6 to 2.7 | 8.7 to 8.9 | over |
+| 02_NYC_Bar | 2.0 | 5.1 | under |
+| 02_NYC_BatteryPark | 6.6 | 9.0 | over |
+| 03_NYC_Airfield | 3.1 | 9.0 | over |
+| 06_HongKong_WanChai_Market | 2.0 | 8.5 | over |
+| 09_NYC_Ship | 2.7 | 7.0 | under |
+| 10_Paris_Chateau | 2.5 | 6.1 | under |
+| 11_Paris_Everett | 1.8 | 5.0 | under |
+| 15_Area51_Bunker | 3.1 | 7.9 | under |
+
+No shader program was built during play on any map (row 7.2.5). Every map is bound by the worker. The Island's worker was 12.2 ms on
+2026-10-27.
+
+**Where the Island's worker frame goes**, from a worker CPU profile of the same route (`hitch-run.mjs --worker-profile --sample-us
+250`, 3,865 frames, about 9.0 ms a frame with the profiler on):
+
+| Part | ms a frame |
+| --- | ---: |
+| the level tick (actor ticks: the tick kernel, script events, state code) | 4.4 |
+| the actor mesh scene's update (below) | 2.0 |
+| of which BSP occlusion (the Rust pass 0.55, packing the dynamic actors 0.32) | 1.1 |
+| of which the meshes' update, reconcile and mesh reads | 0.85 |
+| the HUD's paint (UnrealScript windows through the VM) | 1.3 |
+| the snapshot's post | about 0.2 |
+
+No family left is large: the object image's field reads from JavaScript (`readInstanceField`, `readNamed`, `instance`, `readHandle`
+and the like) add up to about 0.9 ms, from many callers, none over 0.15 ms. Bringing the Island under 8.3 ms here takes about
+0.4 to 0.6 ms, several of these families. The Mac's tick measured about 1.35 times faster than this host's (bench-sim, 2026-10-03),
+which would put the worst map near 6.6 ms there; row 7.2.1 is the Mac's.

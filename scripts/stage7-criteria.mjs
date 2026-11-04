@@ -40,7 +40,7 @@ add('7.1.4', 'Safari, macOS', 'H', 'MISSING', {decision: 'D1', machine: MAC,
 // 7.2 Frame time (D2, D3) ---------------------------------------------------------------------------------------------------------------
 add('7.2.1', 'Chrome, worker: on each map of the frame-time set, the larger of the page\'s and the worker\'s median frame work ≤ 8.3 ms (AGENTS.md)', 'H', 'MISSING',
   {decision: 'D2', machine: MAC, proof: ['frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs)'],
-    need: 'a Mac measurement. Indicative: the Island\'s worker frame p50 12.2 ms on Linux (2026-10-27)'});
+    need: 'a Mac measurement. Indicative, Linux 2026-11-04 (909eea99, god mode, [frame cost](play-frame-cost.md#the-frame-time-set-on-2026-11-04-linux)): every map worker-bound; six of ten under the bound (Training 4.6, the Bar 5.1, the Ship 7.0, the Chateau 6.1, Everett 5.0, the bunker 7.9 ms), four over: the Island 8.7 to 8.9, Battery Park 9.0, the Airfield 9.0, Wan Chai\'s market 8.5 ms; the Mac\'s tick was about 1.35 times this host\'s'});
 add('7.2.2', 'every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps\' jitter)', 'H', 'MISSING',
   {decision: 'D2', machine: MAC, proof: ['frame-time-set.mjs --browser B, headed (hitch-run.mjs --headed)'],
     need: 'a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux'});
@@ -52,7 +52,7 @@ add('7.2.4', 'Firefox inline: from a map\'s first 5 s on, no gap over 150 ms and
     weak: 'fails on its second half: on the Island, Linux, 2026-10-31 (d01854c9, after the live-heap work), three 100 s roams drew no gap over 150 ms and at most one over 100 ms (longest 84, 101, 101 ms), but 10 to 18 over 50 ms a minute (2026-10-28: 26 to 31 over 50 ms in 65 s, longest 133 ms). A Gecko profile of one roam puts 12 of its 31 on major-collection slices (5 to 80 ms, 11 in two collections) and 19 on no pause (long page frames: sim and draw on one thread, 17 to 20 ms median). The worker is no way out: its non-incremental collections freeze 14 times over 150 ms a roam (up to 366 ms) idle, and once every 25 to 40 s for 200 to 250 ms with ?workerBusy=1 (docs/hitch-log.md "Firefox")'});
 add('7.2.5', 'no shader program is compiled during play after a load', 'P', 'PARTIAL',
   {machine: `${MAC}, ${LINUX}`, proof: ['hitch-summary.mjs (programs created from 5 s on) over the frame-time set'],
-    weak: '0 programs measured on the Island, Airfield and UNATCO HQ (Chrome) and the Island (Firefox), on Linux; the Mac is not measured'});
+    weak: '0 programs on all ten maps of the frame-time set (Chrome, Linux, 2026-11-04), and on the Island in Firefox (2026-10-28); the Mac is not measured'});
 
 // 7.3 Loading time (D4) -----------------------------------------------------------------------------------------------------------------
 add('7.3.1', 'navigation to the logo map\'s first frame ≤ 10 s (Chrome and Firefox)', 'H', 'PARTIAL',

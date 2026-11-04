@@ -1,6 +1,7 @@
 // The Stage 7 frame-time set (docs/stage-7-exit-criteria.md 7.2): each map of the October 2 census (docs/play-frame-cost.md) through
 // the census route (scripts/hitch-run.mjs --mode scan: four headings 60 degrees apart), one session per map against one dev server,
-// then each session's figures and row verdicts (scripts/hitch-summary.mjs). A number is the reference machine's only (Apple M2 Pro,
+// in god mode (hitch-run.mjs --god), then each session's figures and row verdicts (scripts/hitch-summary.mjs); a session that ends on
+// another map is reported as such. A number is the reference machine's only (Apple M2 Pro,
 // 1440x960); elsewhere the table is indicative.
 //
 //   node scripts/frame-time-set.mjs [--browser chromium|firefox] [--seconds 60] [--maps a,b,...] [--dir .cache/perf/frame-time-set]
@@ -34,11 +35,15 @@ const results=[];
 try{
   for(const map of maps){
     const out=`${dir}/${engine}-${map}`;
-    const args=['scripts/hitch-run.mjs','--browser',engine,'--map',map,'--mode','scan','--seconds',seconds,'--url',url,'--out',out,
+    // god mode: a hostile map's NPCs would otherwise kill the standing player, and a death leads to DXOnly (the bunker, 2026-11-04)
+    const args=['scripts/hitch-run.mjs','--browser',engine,'--map',map,'--mode','scan','--seconds',seconds,'--url',url,'--out',out,'--god',
       ...(option('query',null)?['--query',option('query',null)]:[])];
     const code=await new Promise(resolve=>spawn(process.execPath,args,{stdio:'inherit'}).on('exit',resolve));
     if(code){results.push({map,failed:`exit ${code}`});continue;}
-    results.push({map,...summarize(JSON.parse(readFileSync(`${out}.json`,'utf8')),{file:`${out}.json`})});
+    const run=JSON.parse(readFileSync(`${out}.json`,'utf8'));
+    // a session that ended on another map (a death, a travel) measured two levels: not a row of this map
+    if(String(run.status?.map).toLowerCase()!==map.toLowerCase()){results.push({map,failed:`ended on ${run.status?.map}`});continue;}
+    results.push({map,...summarize(run,{file:`${out}.json`})});
   }
 }finally{await server?.close();}
 console.log(`\n| Map | page p50 | worker p50 | interval p95 | gaps >100 | programs | ${['7.2.1','7.2.2','7.2.5'].join(' | ')} |\n|---|---:|---:|---:|---:|---:|---|---|---|`);

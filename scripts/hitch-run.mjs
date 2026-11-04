@@ -5,7 +5,8 @@
 //   node scripts/hitch-run.mjs --map 01_NYC_UNATCOIsland --seconds 120 --mode roam [--browser chromium|firefox] [--out PREFIX]
 //     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do; --vite-port N gives it that port)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
-//     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--headed] [--no-hitchlog] [--worker-patch FILE]
+//     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--god] (the console's god mode before the settle)
+//     [--headed] [--no-hitchlog] [--worker-patch FILE]
 //     [--screenshot FILE] (a PNG of the page at the end of the run)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
@@ -125,6 +126,9 @@ await page.waitForFunction(()=>window.deusExViewer.status().gameplay?.hud?.healt
 // (a click in 00_Intro skips it)
 if(map!=='00_Intro')await page.locator('#scene').click({position:{x:Math.round(width*.4),y:Math.round(height*.36)}});
 if(option('place',null))await page.evaluate(args=>window.deusExViewer.placeProbe(JSON.parse(args)),option('place',null));
+// --god: the console's cheats (`set DeusEx.JCDentonMale bCheatsEnabled True`, then the toggle `god`, as session-hour.mjs gives them),
+// so that a hostile map cannot end the session in a death (which leads to DXOnly); the NPCs still see, shoot and chase the player
+if(flag('god'))await page.evaluate(exec=>window.deusExViewer.viewProbe({exec}),['set DeusEx.JCDentonMale bCheatsEnabled True','god']);
 await page.waitForTimeout(settle);
 await mkdir(dirname(out),{recursive:true});
 
