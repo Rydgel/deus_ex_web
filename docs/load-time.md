@@ -73,18 +73,28 @@ Rows 7.3.1 to 7.3.3 of the [Stage 7 criteria](stage-7-exit-criteria.md) (decisio
 
 The report is written after every load.
 
+Firefox's figures are from a quiet machine; Chromium's are from the first, busy run (below), so they can only be lower on a quiet one.
+
 | Row | Bound | Chromium | Firefox |
 | --- | --- | --- | --- |
-| 7.3.1 navigation to the logo map's first frame | 10 s | 4.7 to 4.8 s (dev server 6.6 to 6.8) | 7.9 to 8.2 s (dev server 9.6) |
-| 7.3.2 a travel's first frame, 83 maps | 5 s (Chrome), 10 s (Firefox) | median 2.23 s, max 4.30 s (Paris Metro); dev server, in one page | median 5.42 s, max 11.56 s; over the bound: Paris Metro 11.6 s, the Island 10.5 s; four fresh browsers of about 20 maps |
-| 7.3.3 Load Game's first frame, 39 real slots | 8 s | in one page after the logo map: median 2.13 s, max 4.20 s; cold (the first load of a page), six slots: 2.85 to 4.12 s | in one page: median 7.10 s, max 10.86 s, 11 of 39 over; cold: 7.85 to 10.63 s, 5 of 6 over |
+| 7.3.1 navigation to the logo map's first frame | 10 s | 4.7 to 4.8 s (dev server 6.6 to 6.8) | 6.1 to 6.3 s |
+| 7.3.2 a travel's first frame, 83 maps | 5 s (Chrome), 10 s (Firefox) | median 2.23 s, max 4.30 s (Paris Metro); dev server, in one page | median 4.17 s, max 8.73 s; four fresh browsers of about 20 maps |
+| 7.3.3 Load Game's first frame, 39 real slots | 8 s | in one page after the logo map: median 2.13 s, max 4.20 s; cold (the first load of a page), six slots: 2.85 to 4.12 s | in one page: median 5.22 s, max 8.05 s; cold, six slots: 5.84 to 8.00 s; the Island's slot (Save0001) cold in six runs: 7.94 to 8.19 s, median 8.05 |
 
 The slots are the internet corpus's 39 of one playthrough (nicouzouf; `.work/internet-saves`, outside Git), every one arriving on its
 map. The travel census goes through the maps in name order from Training, so each arrival is in a process that has loaded the maps
 before it, as a player's travels are.
 
-**Chromium passes all three rows. Firefox passes 7.3.1 and misses 7.3.2 (two maps) and 7.3.3 (a third of the slots).** Paris Metro
-by travel, step by step (dev server):
+**Chromium passes all three rows. Firefox passes 7.3.1 and 7.3.2, and misses 7.3.3 by a few hundredths of a second on one slot:**
+Save0001's Load Game reaches the Island's first frame in 8.05 s (median of six). In Firefox it is, in order on the one thread:
+* the page's world build, 1.3 s;
+* the simulation's `createGame`, 5.5 s;
+* the meshes, 0.35 s;
+* the first frame, 0.24 s.
+
+Every other slot is under the bound.
+
+Paris Metro by travel, step by step (dev server, the busy machine):
 
 | Step | Firefox, inline | Chromium, worker |
 | --- | --- | --- |
@@ -117,11 +127,16 @@ Firefox driver attaches one to every page, so the harness paid a cost a player's
 `--ff-asyncstack` keep the driver's state), and the figures above are with it off. Every Firefox figure taken before 2026-11-04 had
 it on.
 
-**The machine was busy.** Every figure here was taken with a background load on the host (load average about 7, one renderer of
-another browser using about 1.2 cores for over a day). The commit row 7.2.4 was measured on (d01854c9, 2026-10-31) measured the same
-as master in an interleaved A/B the same afternoon: Firefox's page frame on the Island at 25 ms (master 23 to 26), against 17 to
-20 ms on October 31. So the machine, not the code, was about a quarter slower than then. The Firefox loads that miss their bound
-here may pass on a quiet machine; they are to be measured again there, and on the Mac.
+**The machine was busy at first.** The first runs had a background load on the host: load average about 7, and a renderer of the
+user's own browser using 1.2 to 1.7 cores for over a day, with the browser's network service as busy.
+* **Not the code.** The commit row 7.2.4 was measured on (d01854c9, 2026-10-31) measured the same as master in an interleaved A/B:
+  Firefox's page frame on the Island at 25 ms (master 23 to 26), against 17 to 20 ms on October 31.
+* **Quiet again.** After the tab was closed, the same roam measured 19 ms and 48 fps, with 22 gaps over 50 ms in 100 s, which is
+  October 31's state.
+* **Firefox's loads on the busy machine** were about 1.5 times the quiet ones, all three:
+  * the logo map, 8.0 against 6.2 s;
+  * travels, max 11.6 against 8.7 s, with Paris Metro and the Island over 10 s;
+  * Load Game, median 7.1 against 5.2 s, with 11 of 39 over 8 s.
 
 **Memory across many maps.** The first Firefox travel census, one browser through all 83 maps, was killed by the kernel's OOM killer
 at its 16 GB cap after 80 travels in 12 minutes. Chromium's run of the same census peaked at 7.5 GB for the browser and the harness

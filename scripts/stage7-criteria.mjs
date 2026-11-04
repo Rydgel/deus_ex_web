@@ -57,13 +57,13 @@ add('7.2.5', 'no shader program is compiled during play after a load', 'P', 'PAR
 // 7.3 Loading time (D4) -----------------------------------------------------------------------------------------------------------------
 add('7.3.1', 'navigation to the logo map\'s first frame ≤ 10 s (Chrome and Firefox)', 'H', 'PARTIAL',
   {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux))'],
-    weak: 'passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 7.9 to 8.2 s (the dev server 6.6 to 6.8 and 9.6 s); the Mac not run'});
-add('7.3.2', 'a travel arrival\'s first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map', 'H', 'FAIL',
+    weak: 'passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 6.1 to 6.3 s (the dev server adds 1.5 to 2 s); the Mac not run'});
+add('7.3.2', 'a travel arrival\'s first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map', 'H', 'PARTIAL',
   {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --travel --maps all (the 83 maps)'],
-    weak: 'Linux, 2026-11-04: all 83 arrive in both; Chromium median 2.23 s, max 4.30 s (passes); Firefox, the production build, median 5.42 s, max 11.56 s: Paris Metro 11.6 s and the Island 10.5 s over the bound, the simulation\'s load 2.3 times Chromium\'s worker and the page\'s world build before it on the one thread; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run'});
+    weak: 'passes on Linux, 2026-11-04: all 83 arrive; Chromium median 2.23 s, max 4.30 s (Paris Metro); Firefox, the production build in fresh browsers of about 20 maps, median 4.17 s, max 8.73 s (on a machine under a background load, 11.6 s); the Mac not run'});
 add('7.3.3', 'Load Game to the first frame ≤ 8 s', 'H', 'FAIL',
   {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --saves (the internet corpus\'s 39 slots of one playthrough, each by `loadgame N`)'],
-    weak: 'Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 7.10 s, max 10.86 s, 11 of 39 over, cold 7.85 to 10.63 s; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run'});
+    weak: 'Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 5.22 s, every slot under the bound but the Island\'s Save0001, cold 7.94 to 8.19 s (median 8.05 of six runs): the page\'s world build 1.3 s and the simulation\'s createGame 5.5 s, one after the other on its one thread; the Mac not run'});
 
 // 7.4 Memory and long sessions (D5) -----------------------------------------------------------------------------------------------------
 add('7.4.1', 'ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope', 'P', 'PARTIAL',
