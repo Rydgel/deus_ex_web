@@ -52,7 +52,10 @@ export function verdict(run){
     for(const r of rows){const d=r[ci['w.dur']];if(!(d>=0)||seen.has(r[ci['w.start']]))continue;seen.add(r[ci['w.start']]);worker.push(d);}
     return {frames:rows.length,page:q(page,.5),worker:worker.length?q(worker,.5):null};
   };
+  // each page phase's mean (ms) over a window: what a change of the page's frame work is made of
+  const phases=rows=>Object.fromEntries(frames.columns.filter(c=>c.startsWith('p.')||c==='gpu').map(c=>[c,rows.reduce((n,r)=>n+Math.max(0,r[ci[c]]),0)/Math.max(1,rows.length)]));
   const visits=run.visits.map(v=>({...v,work:v.window?work(rowsBetween(v.window[0],v.window[1])):null,
+    phases:v.window&&frames.columns.includes('p.render')?phases(rowsBetween(v.window[0],v.window[1])):null,
     heap:v.readings.map(r=>r.totalMB)}));
   const first=visits[0],last=visits.at(-1),checks=[];
   checks.push({check:'no runtime error',pass:!run.errors.length&&!run.ended,value:run.ended??`${run.errors.length} errors`});
@@ -72,7 +75,9 @@ export function verdict(run){
     const ratio=(a,b)=>b/a;
     const page=ratio(first.work.page,last.work.page);
     checks.push({check:'page median frame work: last five minutes within 5% of the first five',pass:page<=FRAME_BOUND,
-      value:`${f1(first.work.page)} -> ${f1(last.work.page)} ms (${f1((page-1)*100)}%)`});
+      value:`${f1(first.work.page)} -> ${f1(last.work.page)} ms (${f1((page-1)*100)}%)`+(first.phases&&last.phases?`; phase means that moved most: ${
+        Object.keys(first.phases).map(k=>[k,last.phases[k]-first.phases[k]]).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,4)
+          .map(([k,d])=>`${k} ${first.phases[k].toFixed(2)} -> ${last.phases[k].toFixed(2)}`).join(', ')}`:'')});
     if(first.work.worker!==null){const worker=ratio(first.work.worker,last.work.worker);
       checks.push({check:'worker median frame work: last five minutes within 5% of the first five',pass:worker<=FRAME_BOUND,
         value:`${f1(first.work.worker)} -> ${f1(last.work.worker)} ms (${f1((worker-1)*100)}%)`});}
@@ -216,7 +221,10 @@ const waitFor=async(test,{timeout,step=1000,what})=>{
 const arrived=async map=>{const s=await status();if(s.error)throw new Error(`runtime error: ${s.error}`);return s.ready&&sameMap(s.map,map)?s:null;};
 
 // The hitch log's frames, read every 15 s (its ring keeps the last 96000).
-const frames={columns:['t','drawn','animate','w.start','w.dur'],base:0,rows:[],lost:0};
+// (with the page's phases, hitch-log.mjs PAGE_KEYS, so a change of the page's frame work can be placed)
+const PAGE_PHASES=['p.tick','p.lighting','p.sprites','p.actors','p.lightAnimation','p.textures','p.lightUpload','p.fog','p.mirrors','p.render',
+  'p.coronas','p.weapon','p.hud','p.ramp','p.audio','gpu'];
+const frames={columns:['t','drawn','animate','w.start','w.dur',...PAGE_PHASES],base:0,rows:[],lost:0};
 let nextFrame=0,pulling=true;
 async function pull(){
   const piece=await page.evaluate(([from,names])=>window.deusExHitch.since(from,names),[nextFrame,frames.columns]);
@@ -256,6 +264,9 @@ async function reading(label,{snapshot=null}={}){
   const realm=p=>p?p.js+(p.buffers??0):null;
   row.pageMB=realm(row.parts.page);row.workerMB=realm(row.parts.worker);
   row.totalMB=(row.pageMB??0)+(row.workerMB??0);row.rssMB=await treeRss();
+  // the page's asset store: the packages it holds and its released cache (main.mjs assetsProbe)
+  row.pageAssets=await page.evaluate(()=>window.deusExViewer.assetsProbe?.()??null).catch(()=>null);
+  if(row.pageAssets)say(`    page asset store: ${row.pageAssets.ready} packages ${f1(row.pageAssets.readyBytes/1048576)} MB, released cache ${row.pageAssets.released} (${f1(row.pageAssets.releasedBytes/1048576)} MB)`);
   // the page's script-VM kernel's block allocator (script-vm-kernel.mjs blockStats): live and freed bytes
   row.kernel=await page.evaluate(async()=>{const k=(await import('/src/runtime/script-vm-kernel.mjs')).scriptVmKernel;return k?.blockStats?.()??null;}).catch(()=>null);
   if(row.kernel)say(`    page kernel blocks: ${row.kernel.blocks} live ${f1(row.kernel.usedBytes/1048576)} MB, ${row.kernel.freed} freed ${f1(row.kernel.freeBytes/1048576)} MB, top ${f1(row.kernel.top/1048576)} of ${f1(row.kernel.memoryBytes/1048576)} MB`);

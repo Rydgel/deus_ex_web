@@ -71,9 +71,9 @@ add('7.4.1', 'ten Island and Training round trips in one process: the same state
 add('7.4.2', 'each map of the frame-time set stays within a declared memory budget (page plus worker, after GC)', 'H', 'MISSING',
   {machine: MAC, proof: ['profile-live-heap.mjs', 'profile-firefox-memory.mjs'],
     need: 'the budget, to fit a 16 GB machine; today the Island\'s worker reaches 1.4 GB before a GC in Chrome'});
-add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'MISSING', {decision: 'D5', machine: MAC,
+add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'FAIL', {decision: 'D5', machine: MAC,
   proof: ['session-hour.mjs ([long session](long-session.md))'],
-  need: 'the full hour in each browser; the harness exists since 2026-11-04, and its short trials found three memory faults across map changes, fixed (the hitch log\'s Wasm watch, a level\'s BSP occlusion never freed, the kernel allocator)'});
+  weak: 'measured on Linux, 2026-11-04 (75bc6341): both hours ran with no runtime error, ten map changes and five save and load round trips, and fail the heap bound read from the first Island visit, Chrome +33 % and Firefox +44 % on the last; Chrome\'s page frame work also rose 15 % (not explained). The rise is the process\'s classes and the packages they hold, the released-package caches and Wasm high-water marks, and the page\'s store in worker mode (fixed after the hours); whether the first plateau is a cold start or the level after the warm-up is not decided; the Mac not run'});
 
 // 7.5 Audio (D6) ------------------------------------------------------------------------------------------------------------------------
 add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'PARTIAL',

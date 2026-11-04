@@ -73,4 +73,76 @@ Short trials (`--minutes 4 to 6 --edge 0.5 to 1`, the Island, Training, the Bar,
 
 ## Runs
 
-The full hour in Chromium and Firefox on the Linux host: not yet run (the findings above come from the short trials only).
+On the Linux host (16 cores, headless, 1440×960, master 75bc6341), outside Git in `.cache/perf/session/hour/`.
+
+### Chromium, worker mode (2026-11-04, 61 minutes)
+
+No runtime, page or console error; ten map changes; five Quick Save and Quick Load round trips, each back where its save stood
+(3.2 to 4.1 s after the walk); loads of 2.0 to 4.4 s, the first 7.0 s. **D5 fails** on two of its bounds:
+
+| | first Island visit | last Island visit | change |
+| --- | ---: | ---: | ---: |
+| total after GC (page and worker, JS and buffers) | 1032 MB (plateau) | 1369 to 1377 MB | **+33 %** |
+| page median frame work (`animate`) | 3.3 ms | 3.8 ms | **+15 %** |
+| worker median frame work (`w.dur`) | 12.2 ms | 11.9 ms | -2.5 % |
+
+The page's frame work is higher by the same 0.5 ms in every quarter of the last visit (3.3, 3.3, 3.4, 3.2 ms against 3.8, 3.8, 4.0,
+3.6 ms), so it is not noise; the frames kept carry no phase times, so which part grew is not known (not explained).
+
+The memory, from the readings and the heap snapshots of both visits (`--snapshots`, `heap-families.mjs`):
+
+| | first | last | what it is |
+| --- | ---: | ---: | --- |
+| page JS heap | 78 MB | 85 MB | |
+| page ArrayBuffers | 352 MB | 416 MB | the page's asset store held more packages (`AssetStore.ready`, 125 to 183 MB in the page's snapshots): in worker mode nothing released a package from the page's store (finding 4 below) |
+| worker JS heap | 164 MB | 195 MB | the process's classes and their decoded code (functions, load records, linked classes; 213k to 358k function objects) |
+| worker packages held (`AssetStore.ready`) | 199 MB | 300 MB | the packages the process holds; see below |
+| worker released-package cache | 0 | 46 MB | bounded at 64 MB |
+| worker Wasm memories | 122 MB | 196 MB | the same five memories, larger: high-water marks (a Wasm memory never shrinks): the script-VM kernel (two levels' occlusions at a travel), the trace kernel's arena (9 to 46 MB: each level's collision hash is released by a FinalizationRegistry when collected, a level or two late, and the arena grows by half when full) |
+
+Across the hour the totals follow the map, not the clock (972 MB on the Ship, 1268 MB in the Area 51 bunker), and the worker
+sometimes holds the previous one or two levels' object arenas for a while (6 or 7 Wasm memories on Training, the Bar and the Market,
+5 again on Battery Park and the Ship): collected late, not kept. The same route in Node (`validate-process-memory.mjs --maps`, the
+simulation alone) holds 979 classes and 54 packages on the first Island arrival and 1156 classes and 62 packages on the last: the
+classes a process has loaded stay, and the packages they reference stay with them. The original loads DeusEx.u whole at startup
+(its classes and what their defaults reference), where Play loads a class when it is first used, so Play's process reaches that
+state over the session instead of at the start. That the eight more packages are the ones the original's would hold is not checked.
+
+Apart from the page's store (finding 4, fixed after this run), what D5's bound measures, read this way, is the warm-up from a cold
+start: nothing else found grows without a bound. Whether D5's "first plateau" means the first Island visit (as the harness reads it)
+or the level after the warm-up (for example the Island after a first pass of the route) is the criterion's to say: not decided.
+
+### Firefox, inline mode (2026-11-04, 61 minutes)
+
+No runtime, page or console error; ten map changes; five Quick Save and Quick Load round trips (6.4 to 10.4 s after the walk); loads
+of 6.3 to 13.2 s, the first 22.1 s. **D5 fails** on the heap:
+
+| | first Island visit | last Island visit | change |
+| --- | ---: | ---: | ---: |
+| page after Gecko's minimize (JS heap, ArrayBuffers and Wasm) | 837 MB (plateau) | 1198 to 1204 MB | **+44 %** |
+| page median frame work | 23.0 ms | 21.0 ms | -8.7 % |
+
+The parts: the JS heap 188 to 224 MB; Wasm memories 163 to 264 MB, the script-VM kernel's 113 to 153 MB among them (its high-water
+mark: two levels' occlusions at a travel, larger on the later maps; its live blocks are the same, 59.8 and 61.1 MB); the other
+ArrayBuffers 487 to 716 MB (inline, the one asset store holds the simulation's packages and the page's, and the released cache).
+Before the fixes the same maps read 869, 940, 1093 MB on the Island, Training and the Bar; in this run 842, 738, 736 MB. The frame
+comparison is weak: three low-priority Node analyses (heap snapshots and the Node route, single-threaded, `nice 19`) shared the
+16-core machine during the first visit, the baseline.
+
+## A fourth fault: the page's store in worker mode (fixed after the hours)
+
+With `?sim=worker` the page keeps its own asset store for drawing, and only the worker's script process releases packages
+(`ScriptProcess.unloadPackages`, from the worker's store): nothing released one from the page's, which kept every package it had read
+(125 MB of packages on the first Island visit, 183 MB on the last). Inline, the one store is released by the process during
+createSimHost's LoadMap, after the next world is built. The worker now reports the packages its store released with each load's
+reply (`sim-worker.mjs releasedPackages`) and the page releases them from its store at the same point of its load (`main.mjs`). A
+five-map trial (the Island, Training, the Bar, Battery Park, the Island): the page's store holds 38 packages (134 MB) on the first
+Island visit, 27, 19 and 32 on the maps between, and 34 (126 MB) with 20 MB in its released cache on the last
+(`deusExViewer.assetsProbe`). Checked: validate-travel-play, -travel-restore-play, -travel-newgame-play, -save-load-play, -hitch-log.
+
+## Not done
+
+* The page's frame work rose 15 % in the Chromium hour (3.3 to 3.8 ms on the Island, every quarter of the visit), not explained:
+  the hour's frames had no phase times. The harness keeps the page's phases now and names the four whose means moved most.
+* D5's reading of "the first plateau" (above): a cold start, or after the warm-up.
+* The Mac (the reference machine for the numbers), and the hours again after the page store's fix.

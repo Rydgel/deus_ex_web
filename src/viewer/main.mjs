@@ -984,7 +984,7 @@ function remoteHost(loaded) {
   const summary = loaded.summary;
   return { game: loaded.game ? { remote: true, notes: loaded.gameNotes, hud: loaded.hud } : null, session: loaded.game ? { remote: true } : null,
     actorSim: summary ? { summary, actors: [], npcActors: [] } : null, lit: loaded.lit, meshLighting: null,
-    notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, loadMarks: loaded.loadMarks ?? null, dispose() {} };
+    notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, loadMarks: loaded.loadMarks ?? null, released: loaded.released ?? [], dispose() {} };
 }
 /** The last map load's steps (Stage 7 loading time, docs/load-time.md): `marks`, the page's in ms from loadMap's start; `simMarks`, the
  * simulation side's (in ms from the worker's receipt of the load, or from loadMap's start inline); `firstDraw`, the first frame drawn after it. */
@@ -1085,6 +1085,9 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       onProgress: progress,
       // SaveCurrentLevel's PaintProgress frame, drawn by the save on this thread (a key's between frames, a tick's in a frame): animate draws it next
       onPaintProgress: frame => { inlineFrames.push({ progress: frame }); } });
+    // The packages the worker's script process released since its last load (sim-worker.mjs releasedPackages) leave the page's store
+    // too, now that the next world is built: inline, the one store has released them at the same point (createSimHost's LoadMap).
+    for (const name of nextHost.released ?? []) assets.release(name);
     loadMark('host');
     // The level's first tick (about 200 ms on the Island: every pawn's first state code) would be the first frame's, and the page would wait for
     // it after the load. The worker is done with the level and idle while the page builds its meshes and swaps its world in: it makes the tick
@@ -2195,6 +2198,14 @@ releasePointer() { releasePointer(); },
 /** Validation: a frozen frame. The simulation halts (the frame input's `run`) and the page keeps drawing the last snapshot, as a lost
  * focus did before 4bf5b4bd; `freeze(false)` goes on without catching up. The page's own controls never freeze. */
 freeze(on = true) { paused = Boolean(on); if (!on) resumeClock = true; },
+/** Validation only (scripts/session-hour.mjs): the page's asset store, the packages it holds loaded and their bytes, and its
+ * released-package cache (with ?sim=worker the simulation's store is the worker's). */
+assetsProbe() {
+  if (!assets) return null;
+  let bytes = 0;
+  for (const value of assets.ready.values()) bytes += value.bytes.byteLength;
+  return { ready: assets.ready.size, readyBytes: bytes, released: assets.released.size, releasedBytes: assets.releasedBytes };
+},
 async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;

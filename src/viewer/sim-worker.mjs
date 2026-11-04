@@ -46,6 +46,10 @@ let host = null, loadId = null, assets = null, decodeMap = null, createSimHost =
 let musicLibrary = null, music = null;
 // Audio events since the last snapshot; sound bytes cross once per key.
 const audio = [], sentSounds = new Set();
+// The packages this side's script process released (ScriptProcess.unloadPackages -> AssetStore.release) since the last load's reply:
+// the page's own store releases the same ones (main.mjs), as inline mode's one store does. Without it the page kept every package it
+// had read, about 6 MB more a map change (docs/long-session.md).
+const releasedPackages = [];
 // The last answer to each key code and to the last pointer sample, for the
 // page's synchronous decisions (preventDefault, pointer capture).
 const keyAnswers = {};
@@ -131,6 +135,8 @@ async function handle(data) {
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
         : async () => { throw new Error(`Native library bytes are not served: ${file.path}`); } })), { configStore });
+      const release = assets.release.bind(assets);
+      assets.release = name => { const released = release(name); if (released) releasedPackages.push(name); return released; };
       send({ type: 'ready' });
       return;
     }
@@ -165,7 +171,7 @@ async function handle(data) {
       const summary = host.actorSim?.summary;
       send({ type: 'loaded', id: data.id, game: Boolean(host.game), hud: Boolean(host.game?.hud), lit: Boolean(host.meshLighting), notes: host.notes, gameNotes: host.game?.notes ?? [],
         events: host.events.splice(0), hudTextures: host.hudTextures,
-        summary: summary ? structuredClone(summary) : null,
+        summary: summary ? structuredClone(summary) : null, released: releasedPackages.splice(0),
         // the load's steps in ms from this message's receipt (the worker's clock is not the page's)
         loadMarks: [...host.loadMarks, ['loaded', performance.now()]].map(([step, at]) => [step, Math.round(at - loadStart)]) });
       return;
