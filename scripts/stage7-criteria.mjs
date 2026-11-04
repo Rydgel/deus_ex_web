@@ -78,7 +78,8 @@ add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'PARTIAL', 
 
 // 7.5 Audio (D6) ------------------------------------------------------------------------------------------------------------------------
 add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'PARTIAL',
-  {machine: `${MAC}, ${LINUX}`, proof: ['validate-galaxy-music-play.mjs', 'a browser spec'], weak: 'Chromium only; suspension and resume are not checked'});
+  {machine: `${MAC}, ${LINUX}`, proof: ['browser-tests/audio-resume.spec.mjs', 'validate-galaxy-music-play.mjs'],
+    weak: 'passes in Chromium and Firefox on Linux, 2026-11-04: the first click starts the logo map\'s song; a hidden page (modelled, as headless browsers keep a background tab visible) keeps the mix playing, as the original\'s DSBCAPS_GLOBALFOCUS buffer does, and the game\'s sound comes back with its ticks; a suspended context resumes by itself (before, only a key or a click resumed it, and a key after Exit brought the sound back); a real hidden tab, a system interruption, WebKit and the Mac not run'});
 add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s plus one render quantum (D6)', 'O', 'PARTIAL',
   {decision: 'D6', machine: `${MAC}, ${LINUX}`, proof: ['galaxy-output-capture.sh latency and audio-latency-original.mjs (the original under Wine)',
     'audio-latency.mjs (Play; [sound start latency](audio-latency.md))'],
@@ -104,8 +105,9 @@ add('7.7.1', 'a lost WebGL context freezes Play and restores it as D3DDrv\'s `Lo
 add('7.7.2', 'no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back', 'H', 'PASS',
   {machine: LINUX, proof: ['browser-tests/no-webgl.spec.mjs', 'browser-tests/graphics-fallback.spec.mjs', 'browser-tests/lodmesh-wasm.spec.mjs', '[no WebGL 2](boot.md#no-webgl-2)'],
     weak: 'the three specs pass in Chromium and Firefox on Linux (2026-10-31); WebKit not run'});
-add('7.7.3', 'a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable', 'H', 'PARTIAL',
-  {machine: LINUX, proof: ['the headless default (SwiftShader) runs'], weak: 'no validator asserts the path; "playable" has no bound on a software renderer'});
+add('7.7.3', 'a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable', 'H', 'PASS',
+  {machine: LINUX, proof: ['browser-tests/software-renderer.spec.mjs (Chromium on SwiftShader, Firefox on llvmpipe)'],
+    weak: 'passes on Linux, 2026-11-04: the renderer is named (Firefox masks it as "llvmpipe, or similar", still recognised), the mesh path is the CPU one, Training keeps real time (game 10.02 and 10.07 s in 10.04 s) and draws 133 fps (SwiftShader) and 195 fps (llvmpipe) at 960×640; "playable" is read as keeping real time, the frame rate reported, not bounded; WebKit not run'});
 
 // 7.8 Files and storage -----------------------------------------------------------------------------------------------------------------
 add('7.8.1', 'the game folder opens through the gate\'s picker in every supported browser', 'H', 'PARTIAL',

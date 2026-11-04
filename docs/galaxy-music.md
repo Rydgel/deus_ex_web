@@ -649,6 +649,18 @@ Update's read.
   (the installed OutputRate) on the first gesture (any pointerdown or
   keydown when music is on); the Web Audio voices and speech share it. The
   worklet refuses any other rate.
+- A hidden page (no frame, no tick: Stage 7 row 7.6.4) leaves the context
+  running: the worklet keeps mixing what plays, as the original's Galaxy
+  keeps mixing on its timer thread into a DirectSound buffer made with
+  `DSBCAPS_GLOBALFOCUS`, which sounds while the window is not the focus
+  ([audio output](audio-output-scope.md) §1.1 row 11). Update's batches
+  stop with the ticks and come back with them.
+- A context the browser or the system suspends (another program takes the
+  device, Safari's interruption) is resumed by the page at once
+  (`statechange`), as it has had its gesture; a key or a click also resumes
+  it. After the game exits (`endGame` suspends it), neither does.
+  `browser-tests/audio-resume.spec.mjs` checks the first click, the hidden
+  page and a suspension in Chromium and Firefox (Stage 7 row 7.5.1).
 - The page fetches `galaxy-kernel.wasm` and posts the bytes; the worklet
   compiles them (some worklet scopes have no fetch). Batches that arrive
   first wait in the worklet until the library is open.
