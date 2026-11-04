@@ -55,19 +55,20 @@ add('7.2.5', 'no shader program is compiled during play after a load', 'P', 'PAR
     weak: '0 programs measured on the Island, Airfield and UNATCO HQ (Chrome) and the Island (Firefox), on Linux; the Mac is not measured'});
 
 // 7.3 Loading time (D4) -----------------------------------------------------------------------------------------------------------------
-add('7.3.1', 'navigation to the logo map\'s first frame ≤ 10 s (Chrome and Firefox)', 'H', 'MISSING',
-  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs (the first map from navigation)'],
-    need: 'a measurement of the original start, not of `?debug=1` Training'});
-add('7.3.2', 'a travel arrival\'s first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map', 'H', 'PARTIAL',
-  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --travel, as a census over the 83 maps'],
-    weak: 'measured for the Island (4.6 s) and Training (1.5 s) in Chrome only'});
-add('7.3.3', 'Load Game to the first frame ≤ 8 s', 'H', 'MISSING',
-  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs over the internet save corpus\'s slots'], need: 'the measurement; no tool times a load from a save'});
+add('7.3.1', 'navigation to the logo map\'s first frame ≤ 10 s (Chrome and Firefox)', 'H', 'PARTIAL',
+  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux))'],
+    weak: 'passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 7.9 to 8.2 s (the dev server 6.6 to 6.8 and 9.6 s); the Mac not run'});
+add('7.3.2', 'a travel arrival\'s first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map', 'H', 'FAIL',
+  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --travel --maps all (the 83 maps)'],
+    weak: 'Linux, 2026-11-04: all 83 arrive in both; Chromium median 2.23 s, max 4.30 s (passes); Firefox, the production build, median 5.42 s, max 11.56 s: Paris Metro 11.6 s and the Island 10.5 s over the bound, the simulation\'s load 2.3 times Chromium\'s worker and the page\'s world build before it on the one thread; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run'});
+add('7.3.3', 'Load Game to the first frame ≤ 8 s', 'H', 'FAIL',
+  {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --saves (the internet corpus\'s 39 slots of one playthrough, each by `loadgame N`)'],
+    weak: 'Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 7.10 s, max 10.86 s, 11 of 39 over, cold 7.85 to 10.63 s; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run'});
 
 // 7.4 Memory and long sessions (D5) -----------------------------------------------------------------------------------------------------
 add('7.4.1', 'ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope', 'P', 'PARTIAL',
   {machine: `${LINUX}, ${MAC}`, proof: ['validate-process-memory.mjs (by hand)', 'the same sequence in the page'],
-    weak: 'passes in Node, which has no page, worker, GPU or audio; the browser\'s page and worker heaps are not measured over map changes'});
+    weak: 'passes in Node, which has no page, worker, GPU or audio; the browser\'s page and worker heaps are not measured over these round trips. Over many distinct maps the browser grows: the 83-map travel census of 2026-11-04 drove Firefox\'s process tree to its 16 GB cap (the OOM killer, after 80 travels) and Chromium\'s to 7.5 GB ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)), not investigated'});
 add('7.4.2', 'each map of the frame-time set stays within a declared memory budget (page plus worker, after GC)', 'H', 'MISSING',
   {machine: MAC, proof: ['profile-live-heap.mjs', 'profile-firefox-memory.mjs'],
     need: 'the budget, to fit a 16 GB machine; today the Island\'s worker reaches 1.4 GB before a GC in Chrome'});

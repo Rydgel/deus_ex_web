@@ -55,6 +55,80 @@ shows:
 | Page world | about 700 | `addModel`: static lightmaps 550 ms (`staticLightMap`, `shadowIllumination`) |
 | GC, unattributed, idle | about 1,300 | |
 
+## The Stage 7 rows, 2026-11-04 (Linux)
+
+Rows 7.3.1 to 7.3.3 of the [Stage 7 criteria](stage-7-exit-criteria.md) (decision D4).
+* **Machine:** the Linux host (AMD, 16 cores), so the figures are indicative; the reference is the Mac.
+* **Browsers:** headless Chromium 153 in worker mode and Playwright's Firefox 155 inline, each browser's default.
+* **Build:** the production build (`npm run build`, served by Vite's preview server) unless a line says the dev server. A load is
+  timed to the first frame drawn after it, from the page's own load timeline.
+
+**The tool.** `profile-map-load.mjs` has these options:
+* `--browser chromium|firefox`;
+* `--start original` (the page as the original starts, on the logo map DX.dx);
+* `--folder` (the production build: the game folder given to the gate's picker as soon as it is shown);
+* `--maps all` (the 83 single-player maps, every map but `DXMP_*`), with `--travel`;
+* `--saves <Save folder> --slots` (the slots imported through the Saves window, each loaded by the console's `loadgame N`,
+  `DeusExPlayer.LoadGame`'s exec, the Load Game screen's own call).
+
+The report is written after every load.
+
+| Row | Bound | Chromium | Firefox |
+| --- | --- | --- | --- |
+| 7.3.1 navigation to the logo map's first frame | 10 s | 4.7 to 4.8 s (dev server 6.6 to 6.8) | 7.9 to 8.2 s (dev server 9.6) |
+| 7.3.2 a travel's first frame, 83 maps | 5 s (Chrome), 10 s (Firefox) | median 2.23 s, max 4.30 s (Paris Metro); dev server, in one page | median 5.42 s, max 11.56 s; over the bound: Paris Metro 11.6 s, the Island 10.5 s; four fresh browsers of about 20 maps |
+| 7.3.3 Load Game's first frame, 39 real slots | 8 s | in one page after the logo map: median 2.13 s, max 4.20 s; cold (the first load of a page), six slots: 2.85 to 4.12 s | in one page: median 7.10 s, max 10.86 s, 11 of 39 over; cold: 7.85 to 10.63 s, 5 of 6 over |
+
+The slots are the internet corpus's 39 of one playthrough (nicouzouf; `.work/internet-saves`, outside Git), every one arriving on its
+map. The travel census goes through the maps in name order from Training, so each arrival is in a process that has loaded the maps
+before it, as a player's travels are.
+
+**Chromium passes all three rows. Firefox passes 7.3.1 and misses 7.3.2 (two maps) and 7.3.3 (a third of the slots).** Paris Metro
+by travel, step by step (dev server):
+
+| Step | Firefox, inline | Chromium, worker |
+| --- | --- | --- |
+| the page's world (BSP, static lighting, textures) | 1.56 s, before the simulation starts | 1.06 s, while the worker loads |
+| the simulation's `createGame` (classes, LoadMap, Login) | 7.3 s | 3.1 s |
+| actor meshes, the swap, Player start | 0.97 s | 0.47 s |
+| ready to the first drawn frame | 0.89 s | 0.25 s |
+| total | 11.2 s | 4.3 s |
+
+So most of the gap is the simulation's load running 2.3 times slower in SpiderMonkey, on the same thread as the world build. A Gecko
+profile of the logo map and a Load Game (`--gecko-profile`, 1 ms samples) spreads that time:
+* class serializing and linking (`linkerPreload`, `linkScriptClass`), about 3.5 s;
+* the level's attach (`createScriptDoors`), about 5.5 s inclusive;
+* the page's world build (`addModel`, static lighting, the surfaces' geometry), about 4.3 s;
+* the mesh loads, about 2.1 s.
+
+No single function dominates. The async loader's own cost shows in `field` (1.1 s self) and `AssetStore.get` (1.2 s self).
+
+**Firefox under Playwright.** Firefox captures an async stack at every promise and `await` only for a page under a debugger
+(`javascript.options.asyncstack_capture_debuggee_only`, true in the release build's `greprefs.js`, as is `asyncstack`). Playwright's
+Firefox driver attaches one to every page, so the harness paid a cost a player's Firefox does not:
+`js::SavedStacks::saveCurrentStack` under `field`, 3.5 s of the profiled run. Interleaved, two runs each:
+
+| | logo map | Load Game Save0001 | Load Game Save0016 |
+| --- | ---: | ---: | ---: |
+| capture on | 11.5 s | 16.3 s | 12.6 s |
+| capture off | 9.6 s | 11.8 s | 9.1 s |
+
+`profile-map-load.mjs` and `hitch-run.mjs` now turn it off in Firefox (`javascript.options.asyncstack` false; `--ff-prefs '{}'` and
+`--ff-asyncstack` keep the driver's state), and the figures above are with it off. Every Firefox figure taken before 2026-11-04 had
+it on.
+
+**The machine was busy.** Every figure here was taken with a background load on the host (load average about 7, one renderer of
+another browser using about 1.2 cores for over a day). The commit row 7.2.4 was measured on (d01854c9, 2026-10-31) measured the same
+as master in an interleaved A/B the same afternoon: Firefox's page frame on the Island at 25 ms (master 23 to 26), against 17 to
+20 ms on October 31. So the machine, not the code, was about a quarter slower than then. The Firefox loads that miss their bound
+here may pass on a quiet machine; they are to be measured again there, and on the Mac.
+
+**Memory across many maps.** The first Firefox travel census, one browser through all 83 maps, was killed by the kernel's OOM killer
+at its 16 GB cap after 80 travels in 12 minutes. Chromium's run of the same census peaked at 7.5 GB for the browser and the harness
+together. The one-hour session (row 7.4.3) did not see this: its warm-up visits all ten of its maps before the plateau is taken, so
+memory a map keeps after it is left is already in the plateau. A process that visits many distinct maps grows with each, which rows
+7.4.1 and 7.4.2 have to answer. Not investigated yet.
+
 ## Why a map change costs this much
 
 **Every level reloads every script class.** In Play, a level is one

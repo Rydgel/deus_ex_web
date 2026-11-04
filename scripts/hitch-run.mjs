@@ -19,6 +19,7 @@
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
+//     [--ff-asyncstack] (keep the async stack capture Playwright's driver turns on; off by default since 2026-11-04)
 // The browser's process tree RSS is sampled on Linux only (/proc). Moved from .work/hitch/run.mjs and run-ff.mjs (2026-10-28).
 import {chromium,firefox} from '@playwright/test';
 import {mkdir,writeFile,readFile,readdir} from 'node:fs/promises';
@@ -52,7 +53,10 @@ const profOut=option('profile',null);
 const browser=isChromium
   ?await chromium.launch({args:[`--use-angle=${option('angle',process.platform==='darwin'?'metal':'gl')}`,'--enable-precise-memory-info','--mute-audio',
     `--remote-debugging-port=${cdpPort}`,...(option('js-flags',null)?[`--js-flags=${option('js-flags',null)}`]:[])],headless:!flag('headed'),executablePath:option('exe',undefined)})
-  :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:flag('gclog')?{'javascript.options.mem.log':true}:{},
+  // Firefox captures an async stack at every promise and await only for a page under a debugger, which Playwright's driver makes
+  // every page (docs/load-time.md "Firefox under Playwright"): off, as in a player's Firefox, unless --ff-asyncstack keeps it.
+  :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:{...(flag('gclog')?{'javascript.options.mem.log':true}:{}),
+    ...(flag('ff-asyncstack')?{}:{'javascript.options.asyncstack':false})},
     env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:'js,threads,markers',
       MOZ_PROFILER_STARTUP_FILTERS:'GeckoMain,DOM Worker',MOZ_PROFILER_STARTUP_ENTRIES:'40000000',MOZ_PROFILER_SHUTDOWN:profOut}:process.env});
 const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:dpr});

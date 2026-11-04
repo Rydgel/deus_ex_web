@@ -129,7 +129,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
 | 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
-| 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
+| 7.3 Loading time | 0 | 1 | 2 | 0 | 0 |
 | 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
 | 7.5 Audio | 0 | 2 | 0 | 0 | 0 |
 | 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
@@ -138,7 +138,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 3 | 22 | 1 | 8 | 3 |
+| **Total** | 3 | 22 | 3 | 6 | 3 |
 
 ## The rows
 
@@ -169,15 +169,15 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs (the first map from navigation) | Mac | needed: a measurement of the original start, not of `?debug=1` Training | MISSING |
-| 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel, as a census over the 83 maps | Mac | weak: measured for the Island (4.6 s) and Training (1.5 s) in Chrome only | PARTIAL |
-| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs over the internet save corpus's slots | Mac | needed: the measurement; no tool times a load from a save | MISSING |
+| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)) | Mac | weak: passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 7.9 to 8.2 s (the dev server 6.6 to 6.8 and 9.6 s); the Mac not run | PARTIAL |
+| 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel --maps all (the 83 maps) | Mac | Linux, 2026-11-04: all 83 arrive in both; Chromium median 2.23 s, max 4.30 s (passes); Firefox, the production build, median 5.42 s, max 11.56 s: Paris Metro 11.6 s and the Island 10.5 s over the bound, the simulation's load 2.3 times Chromium's worker and the page's world build before it on the one thread; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run | FAIL |
+| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs --saves (the internet corpus's 39 slots of one playthrough, each by `loadgame N`) | Mac | Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 7.10 s, max 10.86 s, 11 of 39 over, cold 7.85 to 10.63 s; under a background load (the machine about a quarter slower than on 2026-10-31); the Mac not run | FAIL |
 
 ### 7.4 Memory and long sessions (D5)
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
+| 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over these round trips. Over many distinct maps the browser grows: the 83-map travel census of 2026-11-04 drove Firefox's process tree to its 16 GB cap (the OOM killer, after 80 travels) and Chromium's to 7.5 GB ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)), not investigated | PARTIAL |
 | 7.4.2 | each map of the frame-time set stays within a declared memory budget (page plus worker, after GC) | H | profile-live-heap.mjs, profile-firefox-memory.mjs | Mac | needed: the budget, to fit a 16 GB machine; today the Island's worker reaches 1.4 GB before a GC in Chrome | MISSING |
 | 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | session-hour.mjs ([long session](long-session.md)) | Mac | weak: passes on Linux, 2026-11-04 (8f82b56b), with the first plateau after a warm-up pass of the route (the user's reading of D5): no runtime error, ten map changes, five save and load round trips; the last Island visit's heap -2.4 % (Chrome, worker) and +6.2 % (Firefox, inline) from the warm plateau, the median frame work -10 % (page) and -9.4 % (worker) in Chrome, 0 % in Firefox. From a cold start both failed (+33 %, +44 %): the process filling its classes, packages and caches. The runs found five memory faults and every visited map's procedural textures ticking each frame (about 0.5 ms once warm), all fixed. The Mac not run | PARTIAL |
 
