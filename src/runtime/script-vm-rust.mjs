@@ -128,6 +128,8 @@ function shape(run, n, depth = 2) {
 }
 // bench-sim clears its measurements after the warm-up ticks.
 if (STATS) globalThis.__scriptVmStatsReset = () => { STATS.clear(); TIMED?.clear(); };
+// (scripts that count one step of a frame alone read the maps between resets: hud-stats.mjs)
+if (STATS) globalThis.__scriptVmStats = { counts: STATS, times: TIMED };
 if (STATS) process.on('exit', () => {
   const rows = [...STATS].sort(TIMED ? (a, b) => (TIMED.get(b[0]) ?? 0) - (TIMED.get(a[0]) ?? 0) : (a, b) => b[1] - a[1])
     .slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
