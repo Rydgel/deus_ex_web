@@ -1498,7 +1498,13 @@ now run in Rust, and state code runs its lowered statements there.
   class's chain is fixed. Record ids are small integers per class record,
   shared with the lowering. The table starts with every handle released so
   far, and `releaseHandle` now notifies each interpreter
-  (`onHandleRelease`).
+  (`onHandleRelease`). Since 2026-11-05 the class, receiver and state tables
+  are indexed by handle slot (interp.rs `handle_slot`,
+  script-vm-handle-slots.mjs): the level's own handles from the handle limit
+  when its interpreter attached, and the handles live below it then, in an
+  open-addressed old part; any other handle below it reads RELEASED. Tables
+  indexed by handle grew with every handle the process had allocated, each
+  level's again ([memory across many maps](map-memory.md#the-handle-tables)).
 * **Released handles read None.** Object reads from memory (locals, fields,
   elements) turn a RELEASED handle into None, as `identityOfHandle` does for
   the JavaScript read. Before this, Rust passed the stale handle on. No

@@ -114,3 +114,7 @@ export const liveHandleCount = () => handles.size;
 
 /** The live identities, for lifetime validators. */
 export const liveHandleIdentities = () => handles.keys();
+
+/** The live handles, in no order (script-vm-handle-slots.mjs: a level's
+ * interpreter tables cover those below the level's first handle). */
+export const liveHandles = () => handles.values();

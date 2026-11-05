@@ -218,7 +218,7 @@ async function handle(data) {
       else if (data.method === 'musicStatus') value = musicLibrary?.status() ?? null;
       else if (data.method === 'musicLatency') value = musicLibrary?.latencyPosts() ?? null;
       else if (data.method === 'musicDrive') value = await music.driveMusicLibrary(musicLibrary, assets, data.args ?? {});
-      else if (data.method === 'processProbe') value = await (await import('./process-probe.mjs')).processProbe(host?.scriptProcess, assets);
+      else if (data.method === 'processProbe') value = await (await import('./process-probe.mjs')).processProbe(host?.scriptProcess, assets, host?.handleTables?.() ?? null);
       else if (game) {
         if (data.clock) setHostClock(data.clock);
         if (data.method === 'view') value = host.session.view();

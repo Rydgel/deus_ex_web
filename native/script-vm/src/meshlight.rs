@@ -17,7 +17,7 @@
 //! re-trace index comes from `js_ml_index` once per handle. The BSP line
 //! check is `js_ml_trace`. Host bookkeeping, not an original structure.
 
-use crate::interp::{load32, load8, store32};
+use crate::interp::{handle_slot, load32, load8, store32, GONE};
 use crate::render::{
     Obj, MESH_LIGHT_FIELDS, R_BDELETEME, R_BMOVABLE, R_BSPECIALLIT, R_BSTATIC, R_LIGHTBRIGHTNESS, R_LIGHTEFFECT,
     R_LIGHTRADIUS, R_LIGHTTYPE, R_LOCATION,
@@ -28,8 +28,11 @@ use core::ptr::{addr_of, addr_of_mut};
 static mut SQRT: [u32; 2048] = [0; 2048];
 /// ML_STATE: [light slot table, its capacity (handles), cache table, its
 /// capacity (handles), frame stamp, membership bytes, their capacity,
-/// index table (index + 1, 0 unknown), its capacity].
-static mut ML_STATE: [u32; 9] = [0; 9];
+/// index table (index + 1, 0 unknown), its capacity, spare light slot]. The
+/// tables are indexed by handle slot, each capacity its window (interp.rs
+/// header, HANDLES); a handle without a slot takes the spare light slot,
+/// which js_ml_light rewrites at each use.
+static mut ML_STATE: [u32; 10] = [0; 10];
 
 #[no_mangle]
 pub extern "C" fn ml_sqrt_ptr() -> *mut u32 {
@@ -68,24 +71,27 @@ const CACHE_ENTRIES: u32 = 16;
 const MAX_LIST: usize = 120;
 
 #[inline(always)]
-fn state() -> [u32; 9] {
+fn state() -> [u32; 10] {
     unsafe { *addr_of!(ML_STATE) }
 }
 
 /// Fill the slot at `at` of `handle` from the image; false when a field
 /// takes the JavaScript path.
-fn fill(handle: u32, at: u32, s: &[u32; 9]) -> bool {
+fn fill(handle: u32, at: u32, s: &[u32; 10]) -> bool {
     let a = Obj::of(handle);
     if !a.has(MESH_LIGHT_FIELDS) {
         return false;
     }
-    let member = handle < s[6] && load8(s[5].wrapping_add(handle)) != 0;
-    let alive = member && !a.flag(R_BDELETEME);
-    let index = if handle < s[8] && load32(s[7].wrapping_add(4 * handle)) != 0 {
-        load32(s[7].wrapping_add(4 * handle)).wrapping_sub(1)
-    } else {
-        unsafe { js_ml_index(handle) }
+    let member = match handle_slot(handle, s[6]) {
+        slot if slot < GONE => load8(s[5].wrapping_add(slot)) != 0,
+        _ => false,
     };
+    let alive = member && !a.flag(R_BDELETEME);
+    let entry = match handle_slot(handle, s[8]) {
+        slot if slot < GONE => load32(s[7].wrapping_add(slot.wrapping_mul(4))),
+        _ => 0,
+    };
+    let index = if entry != 0 { entry.wrapping_sub(1) } else { unsafe { js_ml_index(handle) } };
     let flags = SL_RECORD
         | if alive { SL_ALIVE } else { 0 }
         | if a.flag(R_BSTATIC) { SL_STATIC } else { 0 }
@@ -107,8 +113,9 @@ fn fill(handle: u32, at: u32, s: &[u32; 9]) -> bool {
 /// `handle`'s slot for this frame; with `record`, its fields too.
 fn slot(handle: u32, record: bool) -> u32 {
     let s = state();
-    if handle < s[1] {
-        let at = s[0].wrapping_add(handle.wrapping_mul(SLOT_WORDS * 4));
+    let slot = handle_slot(handle, s[1]);
+    if slot < GONE {
+        let at = s[0].wrapping_add(slot.wrapping_mul(SLOT_WORDS * 4));
         if load32(at) == s[4] && (!record || load32(at.wrapping_add(20)) & SL_RECORD != 0) {
             return at;
         }
@@ -117,8 +124,12 @@ fn slot(handle: u32, record: bool) -> u32 {
         }
     }
     unsafe { js_ml_light(handle, record as u32) };
+    // js_ml_light grew the table to give a level's handle its slot; any other handle's light is in the spare slot.
     let s = state();
-    s[0].wrapping_add(handle.wrapping_mul(SLOT_WORDS * 4))
+    match handle_slot(handle, s[1]) {
+        slot if slot < GONE => s[0].wrapping_add(slot.wrapping_mul(SLOT_WORDS * 4)),
+        _ => s[9],
+    }
 }
 #[inline(always)]
 fn word(slot: u32, i: u32) -> u32 {
@@ -127,8 +138,9 @@ fn word(slot: u32, i: u32) -> u32 {
 
 fn cache_block(handle: u32) -> u32 {
     let s = state();
-    if handle < s[3] {
-        let at = load32(s[2].wrapping_add(handle.wrapping_mul(4)));
+    let slot = handle_slot(handle, s[3]);
+    if slot < GONE {
+        let at = load32(s[2].wrapping_add(slot.wrapping_mul(4)));
         if at != 0 {
             return at;
         }

@@ -50,8 +50,24 @@
 //! significand of a NaN pair (the positive NaN on a tie), a lone NaN operand,
 //! quieted, or the indefinite 0xFFC00000 for an invalid operation.
 //!
+//! Handle slots (docs/map-memory.md "The handle tables"). The per-runtime
+//! handle tables (CLASSES, RECEIVERS, natives.rs STATES) hold one entry per
+//! slot, not per handle: handles are never reused (script-object-handles.mjs),
+//! so tables indexed by handle covered every handle the process had ever
+//! allocated. HANDLES = [first, old keys, old capacity, old shift]
+//! (script-vm-handle-slots.mjs): `first` is the handle limit when the level's
+//! interpreter attached. A handle at or above it has slot `old capacity +
+//! handle - first` while `handle - first` is below the table's capacity (its
+//! window); a handle below it that was live then is a key of the old part,
+//! `old capacity` u32 keys (a power of two, 0 empty, linear probing from
+//! `handle * 0x9E3779B1 >> old shift`), and its slot is its position there.
+//! Any other handle below `first` had been released when the level started
+//! and has no slot: its class entry is RELEASED. Every table has `old
+//! capacity` slots before its window. All words 0 (no old part, `first` 0)
+//! is the table indexed by handle.
+//!
 //! Handle classes (R2b-5). CLASSES = [table, capacity] is a per-runtime u32
-//! table indexed by handle: 0 (not described), RELEASED (the handle's
+//! table indexed by handle slot: 0 (not described), RELEASED (the handle's
 //! identity ended; a pointer holding it reads None, as identityOfHandle's
 //! null does), or the address of the class row of the handle's attached
 //! instance (`instances.get(identity).cls`), written by js_class_row. A row
@@ -59,16 +75,17 @@
 //! name ids and R3-c's two perception words, percep.rs). Its default
 //! image word is 0 when the host must look again (a class default or class
 //! image changed), UNREADABLE when DefaultVariable reads of that class stay
-//! in JavaScript, else the base of the class default image. Every released
-//! handle is below the capacity, so a handle at or above it is live.
+//! in JavaScript, else the base of the class default image. A handle released
+//! since the level started is inside the window or the old part, one released
+//! before it has no slot, so a handle at or beyond the window is live.
 //!
 //! Receiver table. RECEIVERS = [table, capacity, epoch, verify] is a
-//! per-runtime table of two u32 per handle, [info, epoch]: the receiver info
-//! js_receiver returned for the handle and the host's receiver epoch when it
-//! did (receiver-epoch.mjs). An entry whose epoch is the current one is the
-//! info js_receiver would return now, because the host advances the epoch
-//! on every event that can change it and clears a released handle's entry;
-//! any other entry, a handle at or beyond the capacity, and every lookup
+//! per-runtime table of four u32 per handle slot, [info, epoch, binding set,
+//! 0]: the receiver info js_receiver returned for the handle and the host's
+//! receiver epoch when it did (receiver-epoch.mjs). An entry whose epoch is
+//! the current one is the info js_receiver would return now, because the host
+//! advances the epoch on every event that can change it and clears a released
+//! handle's entry; any other entry, a handle without a slot, and every lookup
 //! while `verify` is set (RECEIVER_VERIFY=1) ask js_receiver, which enters
 //! the answer.
 //! * Object reads from memory (LOCAL_OBJECT, FIELD_OBJECT, *_ELEM_OBJECT)
@@ -461,6 +478,9 @@ static mut CALL_BLOCK: [u32; 4] = [0; 4];
 pub(crate) const PROBE_NONE: u32 = 0xffff_ffff;
 static mut CLASSES: [u32; 2] = [0; 2];
 static mut RECEIVERS: [u32; 4] = [0; 4];
+/// HANDLES = [first, old keys, old capacity, old shift]: the handle slots of
+/// the tables (header).
+static mut HANDLES: [u32; 4] = [0; 4];
 /// js_receiver's binding set for the handle it answered (for a handle the
 /// receiver table does not cover).
 static mut RECEIVER_BIND: u32 = 0;
@@ -511,6 +531,10 @@ pub extern "C" fn vm_call_block_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn vm_classes_ptr() -> *mut u32 {
     addr_of_mut!(CLASSES) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_handles_ptr() -> *mut u32 {
+    addr_of_mut!(HANDLES) as *mut u32
 }
 #[no_mangle]
 pub extern "C" fn vm_receivers_ptr() -> *mut u32 {
@@ -657,18 +681,67 @@ fn x87_nan_of(x: f64, y: f64) -> f64 {
     } | 0x40_0000;
     f64::from_bits((((keep & 0x8000_0000) as u64) << 32) | 0x7ff0_0000_0000_0000 | (((keep & 0x7f_ffff) as u64) << 29))
 }
+/// No slot: None, or a handle at or beyond a table's window (live, not
+/// entered).
+pub(crate) const NO_SLOT: u32 = u32::MAX;
+/// No slot: a handle below the level's first that had been released when
+/// the level started.
+pub(crate) const GONE: u32 = u32::MAX - 1;
+/// `handle`'s slot in a table whose window is `capacity` handles (header),
+/// else NO_SLOT or GONE.
+#[inline(always)]
+pub(crate) fn handle_slot(handle: u32, capacity: u32) -> u32 {
+    let (first, old) = unsafe {
+        let handles = addr_of!(HANDLES) as *const u32;
+        (*handles, *handles.add(2))
+    };
+    let i = handle.wrapping_sub(first);
+    if i < capacity {
+        return old.wrapping_add(i);
+    }
+    if handle >= first || handle == 0 {
+        return NO_SLOT;
+    }
+    old_slot(handle)
+}
+/// The slot of `handle` (nonzero, below the level's first) in the old part,
+/// or GONE.
+#[inline(never)]
+fn old_slot(handle: u32) -> u32 {
+    let (keys, capacity, shift) = unsafe {
+        let handles = addr_of!(HANDLES) as *const u32;
+        (*handles.add(1), *handles.add(2), *handles.add(3))
+    };
+    if capacity == 0 {
+        return GONE;
+    }
+    // Never full (the host keeps it at most half full), so the probe ends.
+    let mask = capacity - 1;
+    let mut at = handle.wrapping_mul(0x9E37_79B1) >> shift;
+    loop {
+        let key = load32(keys.wrapping_add(at.wrapping_mul(4)));
+        if key == handle {
+            return at;
+        }
+        if key == 0 {
+            return GONE;
+        }
+        at = at.wrapping_add(1) & mask;
+    }
+}
 /// A handle's class table entry: 0, RELEASED or its class row (0 at or
-/// beyond the capacity, where every handle is live).
+/// beyond the window, where every handle is live; RELEASED for one released
+/// before the level started).
 #[inline(always)]
 pub(crate) fn class_entry(handle: u32) -> u32 {
     let (table, capacity) = unsafe {
         let classes = addr_of!(CLASSES) as *const u32;
         (*classes, *classes.add(1))
     };
-    if handle < capacity {
-        load32(table.wrapping_add(handle.wrapping_mul(4)))
-    } else {
-        0
+    match handle_slot(handle, capacity) {
+        NO_SLOT => 0,
+        GONE => RELEASED,
+        slot => load32(table.wrapping_add(slot.wrapping_mul(4))),
     }
 }
 /// A handle's receiver info: its receiver table entry when that was entered
@@ -681,16 +754,19 @@ pub(crate) fn receiver_info(handle: u32) -> u32 {
 /// bytes...]`, one byte per field key id, nonzero for each key the object
 /// itself binds (0 when it binds none, or when the host gave no set: then a
 /// BOUND receiver's bound keys are the global table's). The receiver table
-/// holds [info, epoch, binding set, 0] per handle.
+/// holds [info, epoch, binding set, 0] per handle slot.
 pub(crate) fn receiver(handle: u32) -> (u32, u32) {
     let (table, capacity, epoch, verify) = unsafe {
         let receivers = addr_of!(RECEIVERS) as *const u32;
         (*receivers, *receivers.add(1), *receivers.add(2), *receivers.add(3))
     };
-    if verify == 0 && handle < capacity {
-        let at = table.wrapping_add(handle.wrapping_mul(16));
-        if load32(at.wrapping_add(4)) == epoch {
-            return (load32(at), load32(at.wrapping_add(8)));
+    if verify == 0 {
+        let slot = handle_slot(handle, capacity);
+        if slot < GONE {
+            let at = table.wrapping_add(slot.wrapping_mul(16));
+            if load32(at.wrapping_add(4)) == epoch {
+                return (load32(at), load32(at.wrapping_add(8)));
+            }
         }
     }
     let info = unsafe { js_receiver(handle) };

@@ -25,10 +25,11 @@
 //! is not a number) hands the whole node to JavaScript, which reads again
 //! and raises the body's errors. The clock imports run no script.
 
-use crate::interp::{load32, load8, Recv, Run, CK_BOOL, CK_FLOAT, CK_NAME, NAME_NONE};
+use crate::interp::{handle_slot, load32, load8, Recv, Run, CK_BOOL, CK_FLOAT, CK_NAME, GONE, NAME_NONE};
 use core::ptr::{addr_of, addr_of_mut};
 
-/// STATES = [table, capacity, verify] (script-vm-states.mjs).
+/// STATES = [table, capacity, verify] (script-vm-states.mjs): an entry per
+/// handle slot, `capacity` the window (interp.rs header, HANDLES).
 static mut STATES: [u32; 3] = [0; 3];
 /// Set by a clock import whose value the body would not use.
 static mut NATIVE_FAULT: u32 = 0;
@@ -71,18 +72,25 @@ pub(crate) fn state_verify() -> bool {
 pub(crate) fn state_entry(handle: u32) -> u32 {
     let states = addr_of!(STATES) as *const u32;
     let (table, capacity, verify) = unsafe { (*states, *states.add(1), *states.add(2)) };
-    if verify == 0 && handle < capacity {
-        let at = table.wrapping_add(ENTRY.wrapping_mul(handle));
-        if load32(at) != 0 {
-            return at;
+    if verify == 0 {
+        let slot = handle_slot(handle, capacity);
+        if slot < GONE {
+            let at = table.wrapping_add(ENTRY.wrapping_mul(slot));
+            if load32(at) != 0 {
+                return at;
+            }
         }
     }
     if unsafe { js_state(handle) } == 0 {
         return 0;
     }
-    // js_state entered the handle, growing the table if it had to.
-    let table = unsafe { *states };
-    table.wrapping_add(ENTRY.wrapping_mul(handle))
+    // js_state entered the handle, growing the table if it had to (a handle
+    // it describes is live, so it has a slot then).
+    let (table, capacity) = unsafe { (*states, *states.add(1)) };
+    match handle_slot(handle, capacity) {
+        slot if slot < GONE => table.wrapping_add(ENTRY.wrapping_mul(slot)),
+        _ => 0,
+    }
 }
 
 /// Whether `handle`'s object probes the name with probe index `ename` (0x12c..0x16b): the state table's probe words decide as

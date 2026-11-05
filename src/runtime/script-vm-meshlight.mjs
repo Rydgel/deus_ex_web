@@ -4,7 +4,13 @@
  * SetupForActor's light choice runs in the interpreter; this module owns the
  * per-handle light slots (filled once per frame from the viewer's light
  * records), the per-actor fade cache blocks, the square-root table and the
- * BSP line check. Host bookkeeping, not an original structure.
+ * BSP line check. Host bookkeeping, not an original structure. Its
+ * per-handle tables are indexed by the level's handle slots
+ * (script-vm-handle-slots.mjs, interp.rs `handle_slot`); a handle without a
+ * slot (released before the level started) takes the spare light slot and a
+ * cache block of its own, so a stale handle writes nothing outside them; not
+ * reached, as every handle the selection reads is a live light's or actor's
+ * (handleOf) or one its caches stored during this level.
  *
  * MESH_LIGHT=js in Node or ?meshLight=js in the viewer keeps
  * mesh-lighting.mjs setupForActor; MESH_LIGHT=verify (?meshLight=verify)
@@ -36,12 +42,16 @@ export class MeshLightHost {
     this.out = 0;
     this.members = 0; this.membersCapacity = 0; this.memberSet = null;
     this.indices = 0; this.indicesCapacity = 0;
+    // The light slot of a handle without a slot (rewritten at each use), and such handles' cache blocks.
+    this.spare = 0; this.spareCaches = new Map();
   }
   attach(x) {
     this.x = x;
     this.stateAt = x.ml_state_ptr();
     new Uint32Array(this.vm.arena.memory.buffer, x.ml_sqrt_ptr(), 2048).set(squareRootTable());
     this.out = this.vm.arena.alloc(4 * OUT_WORDS);
+    this.spare = this.vm.arena.alloc(4 * SLOT_WORDS);
+    this.writeState();
   }
   get view() { return this.vm.arena.view; }
   writeState() {
@@ -51,6 +61,7 @@ export class MeshLightHost {
     view.setUint32(at + 16, this.frame, true);
     view.setUint32(at + 20, this.members, true); view.setUint32(at + 24, this.membersCapacity, true);
     view.setUint32(at + 28, this.indices, true); view.setUint32(at + 32, this.indicesCapacity, true);
+    view.setUint32(at + 36, this.spare, true);
   }
   /** The membership bytes of `live` (a view's Level.Actors set, rebuilt
    * with actorsEpoch), rebuilt when the set object changes. */
@@ -58,29 +69,26 @@ export class MeshLightHost {
     if (live === this.memberSet) return;
     this.memberSet = live;
     let top = 0;
-    const handles = [];
+    const handles = [], slots = this.vm.slots;
     for (const actor of live) if (actor) { const handle = handleOf(actor); handles.push(handle); top = Math.max(top, handle); }
     const arena = this.vm.arena;
-    if (top >= this.membersCapacity) {
-      if (this.members) arena.release(this.members, this.membersCapacity);
-      this.membersCapacity = Math.max(4096, (top + 1) * 2);
-      this.members = arena.alloc(this.membersCapacity);
+    if (!this.members || slots.outside(top, this.membersCapacity)) {
+      if (this.members) arena.release(this.members, slots.slotCount(this.membersCapacity));
+      this.membersCapacity = slots.windowFor(top);
+      this.members = arena.alloc(slots.slotCount(this.membersCapacity));
     }
-    arena.bytes.fill(0, this.members, this.members + this.membersCapacity);
-    for (const handle of handles) arena.bytes[this.members + handle] = 1;
+    arena.bytes.fill(0, this.members, this.members + slots.slotCount(this.membersCapacity));
+    for (const handle of handles) {
+      const slot = slots.slot(handle, this.membersCapacity);
+      if (slot >= 0) arena.bytes[this.members + slot] = 1;
+    }
   }
-  /** Grow a handle-indexed table of `words` u32 per handle to hold `handle`. */
+  /** Grow a table of `words` u32 per handle slot to give `handle` a slot. */
   grow(kind, handle, words) {
-    const key = CAPACITY[kind], capacity = this[key];
-    if (handle < capacity) return;
-    const next = Math.max(4096, (handle + 1) * 2), arena = this.vm.arena, bytes = 4 * words;
-    const base = arena.alloc(next * bytes);
-    arena.bytes.fill(0, base, base + next * bytes);
-    if (this[kind]) {
-      arena.bytes.copyWithin(base, this[kind], this[kind] + capacity * bytes);
-      arena.release(this[kind], capacity * bytes);
-    }
-    this[kind] = base; this[key] = next;
+    const key = CAPACITY[kind], capacity = this[key], slots = this.vm.slots;
+    if (this[kind] && !slots.outside(handle, capacity)) return;
+    [this[kind], this[key]] = slots.grow(this[kind], capacity, 4 * words, handle);
+    const base = this[kind], next = this[key];
     if (kind === 'caches' && this.context) { this.context.caches = base; this.context.cacheCapacity = next; }
     this.writeState();
   }
@@ -99,8 +107,8 @@ export class MeshLightHost {
   /** js_ml_index: the light record's index of `handle`, entered. */
   lightIndex(handle) {
     this.grow('indices', handle, 1);
-    const index = this.provider.index(handle) >>> 0;
-    this.vm.arena.view.setUint32(this.indices + 4 * handle, (index + 1) >>> 0, true);
+    const index = this.provider.index(handle) >>> 0, slot = this.vm.slots.slot(handle, this.indicesCapacity);
+    if (slot >= 0) this.vm.arena.view.setUint32(this.indices + 4 * slot, (index + 1) >>> 0, true);
     return index;
   }
   use(context) {
@@ -115,8 +123,9 @@ export class MeshLightHost {
    * JavaScript selection makes it). */
   fillLight(handle, needRecord) {
     this.grow('slots', handle, SLOT_WORDS);
-    const view = this.view, at = this.slots + 4 * SLOT_WORDS * handle;
-    const fresh = view.getUint32(at, true) !== this.frame;
+    const slot = this.vm.slots.slot(handle, this.slotCapacity);
+    const view = this.view, at = slot < 0 ? this.spare : this.slots + 4 * SLOT_WORDS * slot;
+    const fresh = slot < 0 || view.getUint32(at, true) !== this.frame;
     const alive = fresh ? this.provider.alive(handle) : Boolean(view.getUint32(at + 20, true) & SL_ALIVE);
     view.setUint32(at, this.frame, true);
     if (!needRecord) { view.setUint32(at + 20, alive ? SL_ALIVE : 0, true); return; }
@@ -133,12 +142,13 @@ export class MeshLightHost {
   /** js_ml_cache: `handle`'s cache block, allocated absent. */
   cacheBlock(handle) {
     this.grow('caches', handle, 1);
-    const view = this.view, at = this.caches + 4 * handle;
-    let block = view.getUint32(at, true);
+    const slot = this.vm.slots.slot(handle, this.cacheCapacity);
+    let block = slot < 0 ? this.spareCaches.get(handle) ?? 0 : this.view.getUint32(this.caches + 4 * slot, true);
     if (!block) {
       block = this.vm.arena.alloc(CACHE_BLOCK);
       this.vm.arena.bytes.fill(0, block, block + CACHE_BLOCK);
-      view.setUint32(at, block, true);
+      if (slot < 0) this.spareCaches.set(handle, block);
+      else this.view.setUint32(this.caches + 4 * slot, block, true);
     }
     return block;
   }

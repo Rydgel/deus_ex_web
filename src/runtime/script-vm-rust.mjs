@@ -44,6 +44,7 @@ import {PawnPhysicsHost} from './pawn-physics-kernel.mjs';
 import {ActorPhysicsHost} from './actor-physics-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 import {StateTable} from './script-vm-states.mjs';
+import {HandleSlots} from './script-vm-handle-slots.mjs';
 import {EventHost, MAX_RUNS} from './script-vm-events.mjs';
 import {onStateChange, onFrameChange} from './script-state.mjs';
 
@@ -288,6 +289,9 @@ export class RustScriptVm {
     this.boundTable = 0;
     this.boundCapacity = 0;
     this.lowered = 0;
+    // The handle slots of the tables below (script-vm-handle-slots.mjs):
+    // the level's own handles and those live when it attached.
+    this.slots = new HandleSlots(this.arena);
     // The handle class table (interp.rs CLASSES) and its class rows by class.
     this.classTable = 0;
     this.classCapacity = 0;
@@ -335,6 +339,9 @@ export class RustScriptVm {
   }
   attach() {
     const x = this.exports;
+    // The handle slots first (script-vm-handle-slots.mjs): every per-handle
+    // table's window starts at the handle limit now.
+    this.slots.attach(x.vm_handles_ptr());
     this.runawayAt = x.vm_runaway_ptr();
     this.scriptRunsAt = x.vm_script_runs_ptr();
     this.budgetAt = x.vm_budget_ptr();
@@ -346,8 +353,9 @@ export class RustScriptVm {
     this.framesAt = x.vm_frames_ptr();
     this.runtime.frameStack().attach(this.framesAt);
     this.callAt = x.vm_call_block_ptr();
-    // R2b-5: the handle class table starts with every handle released so
-    // far; later releases arrive through onHandleRelease.
+    // R2b-5: the handle class table, whose handles released before the
+    // level started have no slot (they read RELEASED); later releases arrive
+    // through onHandleRelease.
     this.classesAt = x.vm_classes_ptr();
     // The receiver table starts empty: every entry's epoch word is 0, below
     // the first epoch. Entries are [info, epoch, binding set, 0].
@@ -373,46 +381,33 @@ export class RustScriptVm {
     this.walkLoop.attach(x);
     this.pawnPhysics.attach(x);
     this.actorPhysics.attach(x);
-    const limit = handleLimit();
-    this.states.attach(x, limit);
+    const first = this.slots.first;
+    this.states.attach(x, first);
     this.faultAt = x.vm_native_fault_ptr();
     this.events.attach(x);
-    this.growClassTable(limit);
-    this.growReceiverTable(limit);
+    this.growClassTable(first);
+    this.growReceiverTable(first);
     this.setReceiverEpoch(receiverEpoch());
     if (RECEIVER_VERIFY) this.arena.view.setUint32(this.receiversAt + 12, 1, true);
-    for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
     interpreters.add(this.ref = new WeakRef(this));
     if (CHECK) this.arena.view.setUint32(x.vm_check_ptr(), 1, true);
   }
-  /** Make the class table cover `handle`. */
+  /** Make the class table's window cover `handle` (a handle below the
+   * level's first has its slot, or none, already). */
   growClassTable(handle) {
-    if (handle < this.classCapacity) return;
-    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 4);
-    if (this.classTable) {
-      this.arena.bytes.copyWithin(base, this.classTable, this.classTable + this.classCapacity * 4);
-      this.arena.release(this.classTable, this.classCapacity * 4);
-    }
-    this.classTable = base;
-    this.classCapacity = capacity;
+    if (this.classTable && !this.slots.outside(handle, this.classCapacity)) return;
+    [this.classTable, this.classCapacity] = this.slots.grow(this.classTable, this.classCapacity, 4, handle);
     const view = this.arena.view;
-    view.setUint32(this.classesAt, base, true);
-    view.setUint32(this.classesAt + 4, capacity, true);
+    view.setUint32(this.classesAt, this.classTable, true);
+    view.setUint32(this.classesAt + 4, this.classCapacity, true);
   }
-  /** Make the receiver table cover `handle`. */
+  /** Make the receiver table's window cover `handle`. */
   growReceiverTable(handle) {
-    if (handle < this.receiverCapacity) return;
-    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 16);
-    this.arena.bytes.fill(0, base + this.receiverCapacity * 16, base + capacity * 16);
-    if (this.receiverTable) {
-      this.arena.bytes.copyWithin(base, this.receiverTable, this.receiverTable + this.receiverCapacity * 16);
-      this.arena.release(this.receiverTable, this.receiverCapacity * 16);
-    }
-    this.receiverTable = base;
-    this.receiverCapacity = capacity;
+    if (this.receiverTable && !this.slots.outside(handle, this.receiverCapacity)) return;
+    [this.receiverTable, this.receiverCapacity] = this.slots.grow(this.receiverTable, this.receiverCapacity, 16, handle);
     const view = this.arena.view;
-    view.setUint32(this.receiversAt, base, true);
-    view.setUint32(this.receiversAt + 4, capacity, true);
+    view.setUint32(this.receiversAt, this.receiverTable, true);
+    view.setUint32(this.receiversAt + 4, this.receiverCapacity, true);
   }
   /** The receiver epoch advanced: every table entry is computed again. */
   setReceiverEpoch(epoch) {
@@ -422,9 +417,21 @@ export class RustScriptVm {
    * its receiver entry is computed again (HOST). */
   markReleased(handle) {
     this.growClassTable(handle);
-    this.arena.view.setUint32(this.classTable + 4 * handle, RELEASED, true);
-    if (handle < this.receiverCapacity) this.arena.view.setUint32(this.receiverTable + 16 * handle + 4, 0, true);
+    const slots = this.slots, slot = slots.slot(handle, this.classCapacity);
+    // (no slot: released before the level started, so it reads RELEASED already; never reached, as a handle is released once)
+    if (slot < 0) return;
+    this.arena.view.setUint32(this.classTable + 4 * slot, RELEASED, true);
+    const receiver = slots.slot(handle, this.receiverCapacity);
+    if (receiver >= 0) this.arena.view.setUint32(this.receiverTable + 16 * receiver + 4, 0, true);
     this.states.clear(handle);
+  }
+  /** Measurement only (process-probe.mjs): the handle tables' slots and bytes (docs/map-memory.md). */
+  handleTables() {
+    const slots = this.slots, old = slots.oldCapacity, ml = this.meshLight, n = capacity => capacity ? old + capacity : 0;
+    return {first: slots.first, oldKeys: slots.old.size, old, classes: this.classCapacity, receivers: this.receiverCapacity,
+      states: this.states.capacity, meshLight: [ml.slotCapacity, ml.cacheCapacity, ml.indicesCapacity, ml.membersCapacity],
+      bytes: 4 * old + n(this.classCapacity) * 4 + n(this.receiverCapacity) * 16 + n(this.states.capacity) * 16 +
+        n(ml.slotCapacity) * 40 + n(ml.cacheCapacity) * 4 + n(ml.indicesCapacity) * 4 + n(ml.membersCapacity)};
   }
   invalidateDefaultImages() {
     const view = this.arena.view;
@@ -465,7 +472,8 @@ export class RustScriptVm {
     if (this.arena.view.getUint32(row.address, true) === 0)
       this.arena.view.setUint32(row.address, this.defaultImage(row), true);
     this.growClassTable(handle);
-    this.arena.view.setUint32(this.classTable + 4 * handle, row.address, true);
+    const slot = this.slots.slot(handle, this.classCapacity);
+    if (slot >= 0) this.arena.view.setUint32(this.classTable + 4 * slot, row.address, true);
     return row.address;
   }
   /** A class row's default image word: the class default image's base when
@@ -566,9 +574,11 @@ export class RustScriptVm {
   receiverInfo(handle) {
     const info = this.computeReceiverInfo(handle), bind = info & BOUND ? this.bindingSet(handle) : 0;
     this.arena.view.setUint32(this.receiverBindAt, bind, true);
-    if (handle > 0 && handle < handleLimit()) {
-      this.growReceiverTable(handle);
-      const view = this.arena.view, at = this.receiverTable + 16 * handle, epoch = receiverEpoch() >>> 0;
+    const allocated = handle > 0 && handle < handleLimit();
+    if (allocated) this.growReceiverTable(handle);
+    const slot = allocated ? this.slots.slot(handle, this.receiverCapacity) : -1;
+    if (slot >= 0) {
+      const view = this.arena.view, at = this.receiverTable + 16 * slot, epoch = receiverEpoch() >>> 0;
       if (RECEIVER_VERIFY && view.getUint32(at + 4, true) === epoch &&
         (view.getUint32(at, true) !== info || view.getUint32(at + 8, true) !== bind))
         throw new Error(`Receiver table entry of handle ${handle} is stale: ${view.getUint32(at, true)}/${view.getUint32(at + 8, true)}, now ${info}/${bind}`);

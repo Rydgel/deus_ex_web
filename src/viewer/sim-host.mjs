@@ -234,6 +234,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio, loadMarks,
     // The script process this level's runtime attached to: a travel from here hands it to the next level (sim-worker.mjs, main.mjs).
     scriptProcess: runtime.process,
+    // Measurement only (process-probe.mjs): the level interpreter's handle tables.
+    handleTables: () => runtime.scriptVm?.handleTables() ?? null,
     // The current BSP occlusion (validation: scripts/validate-detail-play-sim.mjs runs a reference pass over it).
     occlusion: () => occlusionNow,
     // The page's WebGL context was lost and restored (docs/context-loss.md): the bindings whose cache poses the GPU mesh

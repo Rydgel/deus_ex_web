@@ -121,25 +121,97 @@ the same process state (990 classes, the same 46 packages and the same page stor
 9.6 MB a round trip in Chromium (902 to 988 MB at Training) and 8.1 in Firefox (731 to 804 MB): about half of it the level's object
 arena (32 to 76 MB at Training, the same in both browsers) and the rest the purged meshes' lazy arrays, both below. With the meshes
 destroyed as the original destroys them (2026-11-05, below) the rise is 6.9 MB a round trip in Chromium (899 to 961 MB) and 5.2 in
-Firefox (728 to 775 MB).
+Firefox (728 to 775 MB); with the handle tables bounded too ([below](#the-handle-tables-2026-11-05-linux)), 1.9 MB a round trip in
+Chromium (898 to 915 MB; 0.4 after the script-VM kernel's one step to its high-water mark) and 0.4 in Firefox (729 to 733 MB).
 
 **Without forced collections** both browsers now reach the 83rd map. Firefox's content process still climbs (1.2 to 8.5 GB) because
 Gecko's collector runs every five to seven maps under a page that never idles (inline mode: the simulation and the drawing on one
-thread), and each left level's object arena, the largest part of its garbage, grows over the session (below): from map 56 on it is 150
-to 220 MB a level, and Gecko collects them late.
+thread), and each left level's object arena, the largest part of its garbage, grew over the session: from map 56 on it was 150
+to 220 MB a level, and Gecko collected them late ([the handle tables](#the-handle-tables-2026-11-05-linux) bound it since).
 
-## Left: the handle tables
+## The handle tables (2026-11-05, Linux)
 
-Handles are never reused (script-object-handles.mjs: a stale one resolves to no object, not another), and each level's interpreter
-builds its tables over every handle the process has allocated: the class table (4 bytes a handle), the receiver table (16) and the
-state table (16, script-vm-states.mjs), each sized to twice the highest handle when the level starts and doubled again as the level
-allocates. A map change allocates about 10,000 handles (825,000 after the 83 maps; about 9,800 a map change over the round trips), and
-a level's object arena grows by about 2.4 MB a map change (Training's 32 MB on the first round trip, 76 MB on the tenth; 221 MB for the
-smallest maps at the end of the census), with the arena's growth by half and the doubled tables' old copies, which its exact-size free
-lists cannot reuse. This is the remaining slope after forced collections in both browsers, and in Firefox it is what makes the late
-garbage large. Bounding it touches the Rust interpreter's table lookups (`class_entry`, `receiver`, `state_entry` index flat tables,
-and a released handle's RELEASED entry is what makes its pointers read None) or the never-reused rule: paged tables, or tables over
-the handles a level can reach, with the process's own handles answered another way. Not done here.
+**The growth.** Handles are never reused (script-object-handles.mjs: a stale one resolves to no object, not another), and each level's
+interpreter built its tables over every handle the process had allocated: the class table (4 bytes a handle), the receiver table (16)
+and the state table (16, script-vm-states.mjs), each sized to twice the highest handle when the level started and doubled again as the
+level allocated, and the mesh-light selection's four tables (script-vm-meshlight.mjs: light slots 40 bytes a handle, fade caches 4,
+light indices 4, membership 1), sized the same way when the first lit actor was drawn. A map change allocates about 10,000 handles
+(825,000 after the 83 maps; about 9,800 a map change over the round trips), so a level's object arena grew with every map change before
+it (Training's 31 MB on the first arrival, 76 MB on the tenth round trip; 221 MB for the smallest maps at the end of the census), with
+the arena's growth by half and the doubled tables' old copies, which its exact-size free lists cannot reuse. The interpreter's attach
+also walked every handle allocated so far to enter the released ones. The mesh-light tables run in the page only (Node draws no lit
+actor), so a headless probe of the interpreter's tables alone showed a flat arena while the browser's still stepped up (31 to 47 MB at
+the fifth Training arrival).
+
+**The bound** (interp.rs `handle_slot`, script-vm-handle-slots.mjs). The tables hold an entry per handle *slot*. When a level's
+interpreter attaches (before the level allocates its first handle: the handle limit then is the level's start, `first`), two kinds of
+handle get slots:
+
+* the level's own, from `first`: the window, slot `old capacity + handle - first`, which a table grows to twice the handle it must
+  cover, as before but from the level's start;
+* the handles below `first` live at the attach (the script process's, about 820; in Firefox's inline mode also the previous level's,
+  about 13,000, whose host is disposed after the next one is built): the old part, an open-addressed table of u32 keys (a power of two
+  at least twice their count, linear probing from `handle * 0x9E3779B1 >> shift`) built once in JavaScript and probed in Rust, the slot
+  a key's position. It never grows, as no handle below `first` becomes live again.
+
+Any other handle below `first` had been released when the level started and has no slot: `class_entry` returns RELEASED for it, so a
+pointer holding it reads None as before (`live`), and its receiver and state lookups ask JavaScript, which describes no released handle.
+A handle released since the level started has its slot and its RELEASED entry, and a handle at or beyond the window is live, as before:
+the class table's answers are the tables indexed by handle's, entry for entry. All words zero is the table indexed by handle (the
+validators' setup). The mesh-light tables use the same slots; a handle without one would take a spare light slot and a cache block of
+its own, never reached (each handle the selection reads is a live light's or actor's, or one its caches stored during the level). The
+attach now walks the live handles only.
+
+**Checks.** validate-script-vm-interp.mjs's handle-slot section: every handle below `first` reads itself when it is a key and None
+otherwise, releases after the attach, casts on an old key's class row decided in Rust, the window's growth keeping both parts, and
+GetStateName on an old key's state entry. The state digests are unchanged against f2f1cb6f: bench-sim on the Island
+(`15e3720088490242`) and a Node travel flow in one process (DX, Training, the Island, Training, the Island, then 600 frames: the same
+five stateDigest values), which also ran with SCRIPT_VM_CHECK, STATE_VERIFY, RECEIVER_VERIFY and DISPATCH_VERIFY set (every object
+read, state entry, receiver entry and dispatch decision compared with JavaScript's) without a difference. The page's round trips ran
+with `?meshLight=verify` (both selections every frame) without a difference, and the mesh-light validators pass. Speed, interleaved
+A/B: bench-sim's Island tick median 7.15 ms before, 7.19 after (three runs each); the travel flow's Island frame median 6.81 and 6.96
+before, 6.97 and 6.95 after: no change.
+
+**Row 7.4.1's sequence after** (`--maps` the Island and Training ten times, forced collections): the handle tables alone (on
+f2f1cb6f, `rt-*-tables`), then with the purged meshes destroyed too ([below](#purged-meshes-lazy-arrays-fixed-2026-11-05), on
+92e56e05, `rt-*`):
+
+| | Chromium (worker) | Firefox (inline) |
+| --- | ---: | ---: |
+| the level's arena at Training, second arrival to the eleventh (both runs) | 31, 31 MB (before: 32, 76) | 35, 35 MB (before: 32, 76) |
+| the level's arena at the Island, first arrival to the tenth (both runs) | 36, 36 MB (before: 37, 59) | 38, 38 MB (before: 37, 59) |
+| its handle tables (Training, the Island; both runs) | 1.25, 1.86 MB, every arrival | 3.86, 3.08 MB, every arrival |
+| the total at Training, second arrival to the eleventh, the tables alone | 901 to 943 MB: 4.7 MB a round trip (before 9.6) | 733 to 763 MB: 3.3 MB a round trip (before 8.1) |
+| the same with the meshes destroyed too | 898 to 915 MB: 1.9 MB a round trip, 0.4 from the fourth arrival on | 729 to 733 MB: 0.4 MB a round trip |
+
+Firefox's tables are larger by the old part holding the previous level's handles (32,768 slots at Training); constant, as each level
+starts with the previous one alive. With the tables alone, what still rose was in the ArrayBuffers outside the Wasm memories
+(Chromium's worker 4.1 MB a round trip, Firefox's page 3.0): the purged meshes' lazy arrays, which the collection now destroys
+(below). With both, the total at Training is flat to 0.4 MB a round trip in both browsers; Chromium's one step (898 to 913 MB by the
+fourth arrival) is the script-VM kernel's memory reaching its high-water mark, 72 to 82 MB (a Wasm memory never shrinks: "Not faults"
+above). The process-wide handle table itself (script-object-handles.mjs `identities`, one array slot a handle ever allocated, 8
+bytes) still grows with the handles, about 0.16 MB a round trip, outside the level.
+
+**The 83 maps after** (the whole census from Training, forced collections, `.cache/perf/map-memory/`):
+
+| | Chromium (worker) | Firefox (inline) |
+| --- | ---: | ---: |
+| the level's arena, every arrival | 29 to 36 MB (before: 31 to 223) | 29 to 41 MB (before: 31 to 224) |
+| its handle tables | 0.30 to 2.60 MB | 0.30 to 7.86 MB |
+| the total: first arrival, last, highest | 798, 896, 1,158 MB (before: 792, 1,148, 1,354) | 581, 703, 995 MB (before: 581, 734, 1,181) |
+| the total's slope over the last 42 maps | 0.4 MB a map (before 3.8) | 0.8 MB a map (before 1.8) |
+| the tree's RSS, highest | 2,511 MB (before 2,641) | 2,658 MB (before 2,762) |
+
+A level's arena is its first-visit size wherever it falls in the session: in Chromium, Training's 31 MB at the first arrival in a
+fresh page and the Island's 36 MB at its first arrival are their sizes at every later arrival, and the last maps' arenas are the
+smallest maps' (29 MB) in both browsers. The old part grows only with the script process's live handles (about 820 after two maps, 1,730 after the 83: the
+classes and package objects the process keeps) and, in Firefox's inline mode, with the previous level's, which is alive when the next
+level's interpreter attaches (Training 35 MB from its second arrival on, after the Island; the largest, 7.86 MB of tables).
+
+**Without forced collections** (`--gc none --no-hitchlog`, the runs that set the 2026-11-04 table's last rows): the tree's RSS peaks
+at 6,211 MB in Chromium (before 7,393) and ends at 2,887 (before 6,631); in Firefox it peaks at 6,099 MB (before 9,443), the content
+process at 5,254 (before 8,539): each left level's arena, the largest part of the garbage Gecko collects late, is now its first-visit
+size.
 
 ## Purged meshes' lazy arrays (fixed 2026-11-05)
 
@@ -161,8 +233,8 @@ MB of backing stores in 1,530 ArrayBuffers at the second Training arrival and 10
 35.6 MB in 2,046 before); the total at Training goes
 899 to 961 MB (902 to 988 before), the worker's buffers 408 to 463 MB (411 to 492), and the slope over the last eleven arrivals is 3.6
 MB a map (5.0 before; worker buffers 3.3, 4.7 before). Firefox (inline, the same arrivals): 728 to 775 MB at Training (731 to 804
-before), slope 3.5 MB a map (4.9 before), no error in either browser. What is left is the handle tables' growth above, including the
-step at the eighth round trip where the level's arena grows by half (in every run).
+before), slope 3.5 MB a map (4.9 before), no error in either browser. What was left then was the handle tables' growth, including the
+step at the eighth round trip where the level's arena grew by half (in every run): [bounded since](#the-handle-tables-2026-11-05-linux).
 
 The other resources the collection purges (textures, sounds, music, fonts) attach no lazy loader in Play: the graph leaves their
 records unloaded (RF_NeedLoad), so no other kind accumulates on a held linker.

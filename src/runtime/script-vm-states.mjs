@@ -5,7 +5,8 @@
  * structure.
  *
  * STATES = [table, capacity, verify] (natives.rs). An entry is four u32 per
- * handle: [row, probe lo, probe hi, frame]. Row 0 means not computed: Rust asks
+ * handle slot (script-vm-handle-slots.mjs; `capacity` is the window):
+ * [row, probe lo, probe hi, frame]. Row 0 means not computed: Rust asks
  * js_state, which computes the entry and enters it. A state row is
  * [node id, n, name ids along the node's base chain], where the node is what
  * the state queries read (script-runtime.mjs, natives 281/284):
@@ -75,35 +76,35 @@ export class StateTable {
     this.rows = new Map();
     this.none = 0;
   }
-  attach(x, limit) {
+  attach(x, first) {
     this.at = x.vm_states_ptr();
-    this.grow(limit);
+    this.grow(first);
     if (STATE_VERIFY) this.arena.view.setUint32(this.at + 8, 1, true);
   }
-  /** Make the table cover `handle`. New entries are zero (not computed). */
+  /** Make the table's window cover `handle` (vm.slots). New entries are zero
+   * (not computed). */
   grow(handle) {
-    if (handle < this.capacity) return;
-    const capacity = Math.max(4096, (handle + 1) * 2), bytes = capacity * ENTRY, base = this.arena.alloc(bytes);
-    this.arena.bytes.fill(0, base, base + bytes);
-    if (this.table) {
-      this.arena.bytes.copyWithin(base, this.table, this.table + this.capacity * ENTRY);
-      this.arena.release(this.table, this.capacity * ENTRY);
-    }
-    this.table = base;
-    this.capacity = capacity;
+    const slots = this.vm.slots;
+    if (this.table && !slots.outside(handle, this.capacity)) return;
+    [this.table, this.capacity] = slots.grow(this.table, this.capacity, ENTRY, handle);
     const view = this.arena.view;
-    view.setUint32(this.at, base, true);
-    view.setUint32(this.at + 4, capacity, true);
+    view.setUint32(this.at, this.table, true);
+    view.setUint32(this.at + 4, this.capacity, true);
+  }
+  /** The address of `handle`'s entry, or 0 when it has no slot. */
+  entry(handle) {
+    const slot = this.vm.slots.slot(handle, this.capacity);
+    return slot < 0 ? 0 : this.table + ENTRY * slot;
   }
   /** The handle's state changed or its handle was released. */
   clear(handle) {
-    if (handle > 0 && handle < this.capacity) this.arena.view.setUint32(this.table + ENTRY * handle, 0, true);
+    const at = this.entry(handle);
+    if (at) this.arena.view.setUint32(at, 0, true);
   }
   /** `handle`'s frame changed: a filled entry takes its new frame word. */
   frame(handle) {
-    if (handle <= 0 || handle >= this.capacity) return;
-    const view = this.arena.view, at = this.table + ENTRY * handle;
-    if (view.getUint32(at, true) === 0) return;
+    const view = this.arena.view, at = this.entry(handle);
+    if (!at || view.getUint32(at, true) === 0) return;
     const instance = this.instance(handle);
     if (instance) view.setUint32(at + 12, frameWord(instance.state), true);
     else view.setUint32(at, 0, true);
@@ -113,7 +114,9 @@ export class StateTable {
     const entry = this.compute(handle);
     if (!entry) return 0;
     this.grow(handle);
-    const view = this.arena.view, at = this.table + ENTRY * handle;
+    // A handle compute describes is live, so it has a slot once the window covers it (else natives.rs reads no entry either).
+    const view = this.arena.view, at = this.entry(handle);
+    if (!at) return entry.row;
     if (STATE_VERIFY && view.getUint32(at, true) !== 0) {
       const words = [0, 4, 8, 12].map(offset => view.getUint32(at + offset, true));
       if (words[0] !== entry.row || words[1] !== entry.lo || words[2] !== entry.hi || words[3] !== entry.frame)

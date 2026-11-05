@@ -19,6 +19,7 @@ import {executeMoverPrimitive} from '../src/runtime/script-mover-primitives.mjs'
 import {x87mul32, x87div32, x87add32, x87sub32} from '../src/runtime/x87-nan.mjs';
 import {finishVectorSize} from '../src/runtime/mover-finish.mjs';
 import {actorInStasis} from '../src/runtime/actor-tick.mjs';
+import {HandleSlots} from '../src/runtime/script-vm-handle-slots.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -281,6 +282,7 @@ const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHEC
 const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr(), RECEIVER_BIND_AT = x.vm_receiver_bind_ptr();
 const EVENTS_AT = x.vm_events_ptr(), DELETE_ME_AT = x.vm_delete_me_ptr(), ENAMES_AT = x.vm_enames_ptr();
 const RUNS_AT = x.vm_runs_ptr(), SERIAL_AT = x.vm_serial_ptr(), CALLS_AT = x.vm_calls_ptr();
+const HANDLES_AT = x.vm_handles_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -307,9 +309,11 @@ function reset() {
   wr32(FRAMES_AT + 8, 0);
   wr32(FRAMES_AT + 12, 0);
   for (const chunk of chunks) arena.bytes.fill(0xaa, chunk.base, chunk.base + chunk.size);
-  // No handle class table (every handle live, none described), CHECK off.
+  // No handle class table (every handle live, none described), CHECK off;
+  // the tables indexed by handle (no old part, the window from 0).
   wr32(CLASSES_AT, 0);
   wr32(CLASSES_AT + 4, 0);
+  for (let i = 0; i < 4; i++) wr32(HANDLES_AT + 4 * i, 0);
   wr32(CHECK_AT, 0);
   classRowHost = null;
   iteratorCount = () => 0;
@@ -3620,6 +3624,62 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
     same(value(R.INT, callNode(k, 1)), 77, `${why}: the JavaScript path`);
     same(count('callBegin'), 1, `${why}: js_call_begin`);
   }
+}
+
+// ---- Handle slots (script-vm-handle-slots.mjs, docs/map-memory.md "The handle tables") -----
+// A level's tables cover its own handles (the window, from `first`) and the
+// handles live below `first` when it attached (the old part: open-addressed
+// keys JavaScript builds and Rust probes). Every other handle below `first`
+// was released before: its class entry is RELEASED, so a pointer holding it
+// reads None, as in a table indexed by handle.
+{
+  const FIRST = 6000, live = new Set();
+  // clustered runs and scattered handles, as the script process's are
+  for (let h = 1; h < 600; h += 3) live.add(h);
+  for (let i = 0; i < 400; i++) live.add(1 + (Math.imul(i + 1, 2654435761) >>> 0) % (FIRST - 1));
+  const slots = new HandleSlots(arena), read = handle => (wr32(LOCALS + 44, handle), objectOf(w(K.LOCAL_OBJECT, 44)));
+  reset();
+  slots.attach(HANDLES_AT, FIRST, [...live, FIRST + 3, 0]);
+  same(slots.oldCapacity >= 2 * live.size && (slots.oldCapacity & slots.oldCapacity - 1) === 0, true, 'the old part: a power of two, at most half full');
+  same(slots.old.size, live.size, 'only the live handles below the first are old keys');
+  let [classes, capacity] = slots.grow(0, 0, 4, FIRST);
+  const setClasses = () => { wr32(CLASSES_AT, classes); wr32(CLASSES_AT + 4, capacity); };
+  setClasses();
+  let wrong = [];
+  for (let h = 1; h < FIRST; h++) if (read(h) !== (live.has(h) ? h : 0)) wrong.push(h);
+  same(wrong.join(), '', 'below the first: an old key reads itself, any other handle None (RELEASED)');
+  same(read(0), 0, 'None reads None');
+  same(read(FIRST + 7), FIRST + 7, 'a window handle reads itself');
+  same(read(FIRST + capacity), FIRST + capacity, 'a handle beyond the window is live');
+  // A release after the attach: the entry at its slot.
+  const old = [...live][123], mine = FIRST + 9;
+  wr32(classes + 4 * slots.slot(old, capacity), RELEASED);
+  wr32(classes + 4 * slots.slot(mine, capacity), RELEASED);
+  same([read(old), read(mine)].join(), '0,0', 'an old key and a window handle released since the attach read None');
+  same(count('classRow') + count('cast'), 0, 'no import for a read');
+  // A class row at an old key's slot: casts decided in Rust.
+  const kept = [...live][77];
+  wr32(classes + 4 * slots.slot(kept, capacity), classRow(CLS.C));
+  same(objectOf(castOf(CR.B, (wr32(LOCALS + 44, kept), w(K.LOCAL_OBJECT, 44)))), kept, 'an old key\'s row: a cast to a base class');
+  same(objectOf(castOf(CR.E, (wr32(LOCALS + 44, kept), w(K.LOCAL_OBJECT, 44)))), 0, 'an old key\'s row: a cast to another class');
+  same(count('classRow') + count('cast'), 0, 'the old key\'s casts read its row');
+  // The window grows to twice the handle: the old part and the window's entries move with it.
+  [classes, capacity] = slots.grow(classes, capacity, 4, FIRST + capacity + 5);
+  setClasses();
+  same([read(old), read(mine), read(kept), read([...live][5]), read(FIRST + 1)].join(), `0,0,${kept},${[...live][5]},${FIRST + 1}`,
+    'the grown table keeps the old part and the window');
+  same(rd32(classes + 4 * slots.slot(kept, capacity)), rowAddresses.get(CLS.C), 'the row moved with its slot');
+  // The state table over the same slots: an old key's filled entry is read without js_state; a handle without a slot asks it.
+  const [states, stateCapacity] = slots.grow(0, 0, 16, FIRST);
+  wr32(STATES_AT, states); wr32(STATES_AT + 4, stateCapacity); wr32(STATES_AT + 8, 0);
+  const row = arena.alloc(16);
+  wr32(row, 77); wr32(row + 4, 1); wr32(row + 8, nameId('Patrolling'));
+  wr32(states + 16 * slots.slot(kept, stateCapacity), row);
+  infos.set(kept, THIRD_IMG);
+  nativeHost.state = () => assert.fail('js_state for a filled old entry');
+  const onKept = expr => E.context(node(), (wr32(LOCALS + 44, kept), w(K.LOCAL_OBJECT, 44)), expr);
+  same(value(R.BOOL, w(K.NAME_EQ, node(), onKept(w(K.STATE_NAME, node())), w(K.LIT_NAME, nameId('patrolling')))), true,
+    'GetStateName reads an old key\'s entry at its slot');
 }
 
 // ---- Coverage ---------------------------------------------------------------------------
