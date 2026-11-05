@@ -579,14 +579,16 @@ export class ActorTickHost {
       stop = x.level_tick_batch();
     } catch (error) {
       x.__stack_pointer.value = pointer;
-      // as `run` unwinds its tick, when one was in flight (a descriptor's host call throws before it)
-      if (view.getUint32(at + 4 * L_HANDLE, true) !== 0) {
+      // as `run` unwinds its tick, when one was in flight (a descriptor's host call throws before it); the run's actors may have
+      // grown the arena, whose new buffer `view` does not see: its current view
+      const arena = this.vm.arena;
+      if (arena.view.getUint32(at + 4 * L_HANDLE, true) !== 0) {
         x.tick_unwind(0);
-        view.setUint32(at + 4 * L_HANDLE, 0, true);
+        arena.view.setUint32(at + 4 * L_HANDLE, 0, true);
       }
       this.vm.pawnPhysics?.end(c);
       this.vm.actorPhysics?.end(c);
-      out.current = view.getUint32(at + 4 * L_CURRENT, true);
+      out.current = arena.view.getUint32(at + 4 * L_CURRENT, true);
       c.clear();
       throw error;
     } finally {
@@ -594,23 +596,26 @@ export class ActorTickHost {
       batching = null;
     }
     c.clear();
+    // The run's actors may have grown the arena (a new buffer, `view` detached): read through its current view from here, and again
+    // after each deferred node's allocation.
+    const arena = this.vm.arena;
     // `run`'s DEFER tail for each deferred slot, in the run's order.
-    const deferred = view.getUint32(at + 4 * L_DEFERRED, true);
+    const deferred = arena.view.getUint32(at + 4 * L_DEFERRED, true);
     for (let k = 0; k < deferred; k++) {
-      const slot = view.getUint32(this.levelDeferred + 4 * k, true);
-      const receiver = identityOfHandle(view.getUint32(this.listAt + 4 + 4 * slot, true));
+      const slot = arena.view.getUint32(this.levelDeferred + 4 * k, true);
+      const receiver = identityOfHandle(arena.view.getUint32(this.listAt + 4 + 4 * slot, true));
       const node = services.allocateDeferredActor();
       if (node !== null && typeof node !== 'object') throw new Error('Original deferred-actor allocation result is not provided');
       if (node) { node.actor = receiver; node.next = level.deferredHead; }
       level.deferredHead = node;
     }
     if (STATS) {
-      const ticked = view.getUint32(at + 4 * L_TICKED, true), why = BATCH_STOPS[stop] ?? stop;
+      const ticked = arena.view.getUint32(at + 4 * L_TICKED, true), why = BATCH_STOPS[stop] ?? stop;
       stats.calls += ticked; stats.defer += deferred; stats.batched += ticked;
       stats.batchStops.set(why, (stats.batchStops.get(why) ?? 0) + 1);
     }
-    out.next = view.getUint32(at + 4 * L_NEXT, true);
-    out.progress = view.getInt32(at + 4 * L_PROGRESS, true);
+    out.next = arena.view.getUint32(at + 4 * L_NEXT, true);
+    out.progress = arena.view.getInt32(at + 4 * L_PROGRESS, true);
     out.stop = stop;
     return true;
   }
