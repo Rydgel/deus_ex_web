@@ -177,6 +177,12 @@ const CASTS = new Map([
   [0x44, [K.FLOAT_TO_INT, 'float', 'int']],
 ]);
 
+/** 'rust' (default), 'js' or 'verify': GLOBAL_CALLS / DEUS_EX_GLOBAL_CALLS. EX_GlobalFunction (0x38, `Global.F(...)`) is lowered to
+ * the CALL kind as virtual calls are, with the state skipped in its resolution (runtime.lookup(receiver, name, true): UObject::
+ * execGlobalFunction's FindFunctionChecked(Name, 1)); 'js' keeps the JavaScript kind (the whole node evaluated by the JavaScript
+ * VM); 'verify' is 'rust' and checks each resolution against the class chain (script-vm-rust.mjs `callRecord`). */
+export const globalCallMode = () => (typeof process !== 'undefined' && process.env?.GLOBAL_CALLS) || globalThis.DEUS_EX_GLOBAL_CALLS || 'rust';
+
 // A call's argument and result kinds (interp.rs CALL).
 const PARAM_KIND = {int: 1, bool: 2, float: 3, object: 4, byte: 5};
 const RESULT_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4};
@@ -281,6 +287,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return id;
   };
   const hasIterator = entries.some(entry => entry.node.op === 0x2f);
+  const globalCalls = globalCallMode() !== 'js';
   const version = fieldImageCellVersion();
   let missingField = false, rustStatements = 0, inContext = false;
   // Imports the lowered code is expected to make (JavaScript leaves, fields
@@ -427,7 +434,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       return typed(kind, [code, ...expr(n.value, operandKind)]);
     }
     if (op === 'native') return native(n);
-    if (op === 0x1b || op === 0x1c) return call(n, !inContext);
+    if (op === 0x1b || op === 0x1c || (op === 0x38 && globalCalls)) return call(n, !inContext);
     return null;
   }
   const typed = (kind, words, canonical = true) => ({kind, words, canonical});
@@ -483,14 +490,15 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
 
   // A script call whose function is known here: final calls by operand,
   // virtual calls on SELF by name from the running object (an override has
-  // the same signature). JavaScript resolves the call again when it runs and
-  // leaves it to JavaScript when that function's signature differs.
+  // the same signature), global calls (0x38) the same with the state skipped.
+  // JavaScript resolves the call again when it runs and leaves it to
+  // JavaScript when that function's signature differs.
   function call(n, receiverIsSelf) {
     if (!Array.isArray(n.args)) return null;
     let record = null;
     try {
       if (n.op === 0x1c) record = operand(n);
-      else if (n.op === 0x1b && receiverIsSelf && instance) record = runtime.lookup(instance, n.name, false);
+      else if ((n.op === 0x1b || n.op === 0x38) && receiverIsSelf && instance) record = runtime.lookup(instance, n.name, n.op === 0x38);
     } catch { return null; }
     const target = record?.function, signature = target && functionSignature(target, runtime.classLoader);
     if (!signature || n.args.length > signature.params.length) return null;
@@ -874,7 +882,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
           const words = vectorCompound(n);
           if (words) return [K.S_EXPR, ...words];
         }
-        if (n.op === 0x1b || n.op === 0x1c) {
+        if (n.op === 0x1b || n.op === 0x1c || (n.op === 0x38 && globalCalls)) {
           const lowered = call(n, true);
           if (lowered) return [K.S_EXPR, ...lowered.words];
         }

@@ -108,6 +108,8 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // and sky passes drawn whole and planned and stamped by the frustum.
 // ?iteratorFrames=off keeps the root frame's render-iterator items in every
 // child frame (each frame's SetupDynamics builds its own otherwise).
+// ?globalCalls=js keeps EX_GlobalFunction calls (`Global.Tick(...)`) in the JavaScript VM (script-vm-lower.mjs globalCallMode);
+// ?globalCalls=verify runs them in Rust and checks each resolution against the class chain.
 // ?workerBusy=1 keeps the simulation worker's event queue non-empty (sim-worker.mjs), so Firefox never
 // arms the worker's idle GC timer (docs/play-frame-cost.md "October 14, later"); it costs one core.
 // ?navSearch=js keeps FindPathToward's open-list search in JavaScript, ?navSearch=verify runs both bodies and compares them (nav.rs,
@@ -119,7 +121,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

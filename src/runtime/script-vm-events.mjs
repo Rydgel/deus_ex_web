@@ -252,7 +252,7 @@ export class EventHost {
     const vm = this.vm, caller = vm.run(frame), n = caller.nodes[node], runtime = vm.runtime, services = caller.services;
     const receiver = handle === caller.selfHandle ? caller.self : identityOfHandle(handle);
     if (receiver === null) return js;
-    const record = n.op === 0x1c ? services.operand(caller.compiled.script, n) : runtime.lookup(receiver, n.name, false);
+    const record = vm.callRecord(n, receiver, caller);
     const fn = record?.function;
     if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
       fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
