@@ -19,6 +19,7 @@ import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray, mapExportAdmitted, releaseMapPropertyTags } from '../runtime/script-map-properties.mjs';
 import { MapActorHost, releasePendingTables } from '../runtime/host-accessors.mjs';
+import { markMoverValues } from '../runtime/actor-pose-fields.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
 import { wheelMessage } from './wheel-input.mjs';
@@ -114,7 +115,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // box (brushCollisionBounds), not from hulls.
       actor.collider = collider;
       actor.position = v.Location.map(Math.fround);
-      actor.collisionValues = { ...v, get Location() { return actor.position; }, get Rotation() { return actor.rotation ?? v.Rotation; } };
+      actor.collisionValues = markMoverValues({ ...v, get Location() { return actor.position; }, get Rotation() { return actor.rotation ?? v.Rotation; } }, actor);
       collision.movers.push(actor);
     } else {
       Object.assign(actor, { position: [...v.Location], radius: v.CollisionRadius ?? 0, height: v.CollisionHeight ?? 0 });
@@ -215,6 +216,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
     musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null,process});
+  // The level queries' hash moves into the interpreter's instance, where its candidate and filter tests read the object image.
+  collision.adoptRuntime(doors.scriptRuntime.runtime.scriptVm);
   releaseMapPropertyTags(map, actors.values());
   releasePendingTables(actors.values());
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');

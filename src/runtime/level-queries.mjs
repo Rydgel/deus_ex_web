@@ -58,8 +58,10 @@ const lineageKey = kind => {
  */
 export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   levelInfo = standalone({ id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] }),
-  kernel = true } = {}) {
-  const store = kernel ? kernelHashStore() : null;
+  kernel = true, lineKernel = null } = {}) {
+  // `lineKernel`: the runtime's line-check kernel once it exists (collision-kernel.mjs runtimeLineKernel), else the
+  // trace kernel's own instance holds the buckets until `adoptKernel`.
+  const store = kernel ? kernelHashStore(lineKernel) : null;
   const hash = !store ? createCollisionHash() : HASH_DIFFERENTIAL
     ? createDifferentialHash(createCollisionHash({ store }), createCollisionHash()) : createCollisionHash({ store });
   const valuesOf = actor => actor.collisionValues ?? actor.values;
@@ -135,6 +137,8 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   };
   return {
     levelInfo, hash, addActor, removeActor, ...points,
+    /** The hash's buckets move to the runtime's instance (collision-kernel.mjs KernelHashStore.adopt). */
+    adoptKernel(lineKernel) { store?.adopt(lineKernel); },
     /** The model the world checks trace now (above): a world hit's Item is a
      * node of it, and its `surfaces` (with the tracker's) hold that node's
      * iSurf. */

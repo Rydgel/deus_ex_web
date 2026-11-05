@@ -91,6 +91,10 @@ export const RENDER_FIELDS = Object.freeze([
   ['AnimSequence', 'engine.actor.animsequence', 'name'],
   // ULevel::DestroyActor's SetOwner/EndTouch scan (render.rs destroy_scan): a fixed array of four pointers.
   ['Touching', 'engine.actor.touching', 'pointer[4]'],
+  // The collision hash's candidate and filter reads (hash.rs image_cylinder, image_accept).
+  ['CollisionRadius', 'engine.actor.collisionradius', 'float'],
+  ['CollisionHeight', 'engine.actor.collisionheight', 'float'],
+  ['bProjTarget', 'engine.actor.bprojtarget', 'bool'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]` / `pointer[4]`, a fixed array of four contiguous
@@ -197,6 +201,8 @@ export class RenderScanHost {
   }
   /** js_render_class (no script runs). */
   classWord(handle) {
+    // The table first: a class row's word is computed against it (the collision hash asks before any render scan has).
+    this.table();
     const vm = this.vm, address = vm.classRow(handle);
     if (!address) return;
     const identity = identityOfHandle(handle), runtime = this.runtime;

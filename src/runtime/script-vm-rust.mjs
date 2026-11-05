@@ -22,6 +22,7 @@
  */
 import { probeIndex } from '../unreal/probe-names.mjs';
 import {instantiateScriptVm} from './script-vm-kernel.mjs';
+import {lineCheckImports} from './trace-kernel.mjs';
 import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT, scriptRunCount} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
@@ -678,6 +679,8 @@ export class RustScriptVm {
       return run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle));
     };
     return {
+      // hash.rs's imports (collision-kernel.mjs): the level queries' hash runs in this instance once it is adopted.
+      ...lineCheckImports,
       ...vm.perception.imports(enter, leave, STATS ? count : null),
       ...vm.aiEvents.imports(),
       ...vm.loco.imports(),

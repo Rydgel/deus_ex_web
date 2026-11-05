@@ -60,7 +60,8 @@ export function loadTraceKernel() {
 // the query in flight (collision-kernel.mjs sets the host).
 let lineCheckHost = null;
 export const setLineCheckHost = host => { lineCheckHost = host; };
-const lineCheckImports = {
+/** hash.rs's imports (collision-kernel.mjs): the trace kernel's instance and a runtime's interpreter instance both declare them. */
+export const lineCheckImports = {
   lc_candidate: id => lineCheckHost.candidate(id),
   lc_mover: id => lineCheckHost.mover(id),
   lc_accept: id => lineCheckHost.accept(id),
@@ -85,6 +86,15 @@ async function load() {
     const s = kernel.stats;
     console.error(`trace kernel differential: ${s.ray} rays, ${s.extent} extents compared; ${s.fallback} handed back; ${s.models} models uploaded, ${s.ineligible} left to JavaScript; ${s.bounds} brush boxes compared (brush-bounds.mjs), ${s.boundsFallback} handed back`);
   });
+  return kernel;
+}
+
+/** A trace kernel over a runtime's interpreter instance and its object arena, for the collision hash that reads the
+ * runtime's object image (collision-kernel.mjs `runtimeLineKernel`). The arena grows with the level's objects, so the
+ * kernel's views and its store's follow each growth (the arena's listeners, cleared when the level is disposed). */
+export function createRuntimeTraceKernel(exports, arena) {
+  const kernel = new TraceKernel(exports, arena, {reclaim: false, sine: false});
+  arena.listeners.push(() => kernel.grown());
   return kernel;
 }
 
@@ -148,9 +158,14 @@ export function traceModelLayout(model) {
 }
 
 class TraceKernel {
-  constructor(exports, arena) {
+  /** `reclaim` false: the arena is a runtime's object arena (createRuntimeTraceKernel), whose released ranges become
+   * reusable only at the level tick's `reclaim()`, when no reference to one is live; `sine` false: its instance has the
+   * sine table already. */
+  constructor(exports, arena, {reclaim = true, sine = true} = {}) {
     this.x = exports;
     this.arena = arena;
+    // The hash store (collision-kernel.mjs) whose views follow this arena's growth.
+    this.store = null;
     // The shadow stack's base, where a call from JavaScript starts
     // (collision-kernel.mjs restores it after an import throws).
     this.stackBase = exports.__stack_pointer.value;
@@ -159,13 +174,18 @@ class TraceKernel {
     this.lastBase = 0;
     // No kernel call is in flight when a finalizer runs, so the range is
     // reusable at once.
-    this.registry = new FinalizationRegistry(({base, size}) => { arena.release(base, size); arena.reclaim(); });
+    this.registry = new FinalizationRegistry(({base, size}) => { arena.release(base, size); if (reclaim) arena.reclaim(); });
     this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0, bounds: 0, boundsFallback: 0};
     // Tracked models (collisionModel objects) -> {base, wordsAt, wordCount, generation, count}.
     this.trackedModels = new WeakMap();
     this.views();
     // Core FGlobalMath's float32 sine table (coords.mjs), for bounds.rs's ToWorld.
-    new Uint32Array(this.arena.memory.buffer, exports.sine_ptr(), 0x4000).set(new Uint32Array(rotationSineTable().buffer));
+    if (sine) new Uint32Array(this.arena.memory.buffer, exports.sine_ptr(), 0x4000).set(new Uint32Array(rotationSineTable().buffer));
+  }
+  /** The arena's memory grew: every view re-derived, the store's too. */
+  grown() {
+    this.views();
+    this.store?.views();
   }
   /** Re-derive the result and owner views after the memory grew. */
   views() {

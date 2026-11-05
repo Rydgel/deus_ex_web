@@ -149,6 +149,13 @@ const SHARED=Object.freeze({
   set(v){const view=this[VIEW];for(const [name,mask] of MOTION_BOOLS)view.put(name,Boolean(v&mask));}},
 });
 
+/** Whether `actor` is a spawned actor whose `values` and `collisionValues` are its collision view's: Location,
+ * CollisionRadius and CollisionHeight read its field storage (the image, for a class linked at its retail offsets). */
+export const hasCollisionViewValues=actor=>{
+ const view=actor[VIEW];
+ return view!==undefined&&actor.collisionValues!==undefined&&actor.collisionValues[VIEW]===view&&actor.values===actor.collisionValues;
+};
+
 /** Whether `actor.base` is the spawned view's own Base member (a read of its Base field and nothing else). */
 export const hasViewBase=actor=>actor[VIEW]!==undefined&&Object.getOwnPropertyDescriptor(actor,'base')?.get===fieldGetter('Base');
 

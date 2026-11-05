@@ -1898,7 +1898,11 @@ back.
 
   The code is address-based (a header pointer and model pointers). A later
   stage can therefore instantiate the same code on a runtime's arena and
-  upload the BSP there.
+  upload the BSP there. **That stage is done (2026-11-05):** the level
+  queries' hash moves into the runtime's interpreter instance once it exists,
+  and answers a candidate's cylinder, `isMover` and the filter's class and
+  collision-bit tests from the object image where the image holds what
+  `valuesOf(actor)` reads ([the hash reads the image](collision-hash.md#the-hash-reads-the-image-2026-11-05)).
 * **Memory.** Per level queries object:
   * an 80-byte header: table, links, stamps, the scratch, the scan cache,
     and the `querying` and `busy` words;
@@ -2544,11 +2548,12 @@ Not moved, and why:
   unchanged. 00_Intro does: `CameraPoint.Idle` sets `Player.bCollideWorld =
   False`, and FarMoveActor's FindSpot gate must see it, or the cut to the
   clone's tank is refused ([conversation camera](conversation-camera.md)).
-* **The collision kernel** still reads a candidate's `collisionBits` through
-  `lc_accept` and `lc_candidate`. The hash kernel lives in the trace
-  kernel's own instance and memory, not a runtime arena (R3-b B0), so it
-  cannot address the image. Rust reads it there only once the kernel runs on
-  the runtime's arena.
+* **The collision kernel** read a candidate's `collisionBits` through
+  `lc_accept` and `lc_candidate` until 2026-11-05: the hash kernel lived in
+  the trace kernel's own instance and memory, which cannot address the image.
+  It now runs on the runtime's arena and reads the collision word, with the
+  cylinder, from the image where the actor's `valuesOf` and `collisionBits`
+  are those cells (collision-hash.md "The hash reads the image").
 * VisibleActors tested bHidden through `actorFlags & 2`, a bit no host word
   ever carried. "VisibleActors bHidden" below fixes that.
 

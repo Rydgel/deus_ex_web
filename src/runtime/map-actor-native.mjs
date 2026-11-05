@@ -23,6 +23,7 @@
  */
 
 import { flagWordsOf } from './actor-flag-words.mjs';
+import { markLiveCylinder } from './actor-pose-fields.mjs';
 
 /** The +0x1dc word from serialized/default property values. */
 export function collisionFlagsFrom(values) {
@@ -61,10 +62,10 @@ export function linkLiveCollision(queries, host) {
   const values = host.values ?? {};
   const registered = Boolean(host.flags & 1);
   if (registered) queries.removeActor(host);
-  host.collisionValues = { ...values,
+  host.collisionValues = markLiveCylinder({ ...values,
     get Location() { return host.position; },
     get CollisionRadius() { return host.radius ?? values.CollisionRadius ?? 0; },
-    get CollisionHeight() { return host.height ?? values.CollisionHeight ?? 0; } };
+    get CollisionHeight() { return host.height ?? values.CollisionHeight ?? 0; } }, host);
   if (registered) queries.addActor(host);
 }
 

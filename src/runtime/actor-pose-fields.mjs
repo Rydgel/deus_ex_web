@@ -175,6 +175,39 @@ export function resetPoseField(host, prop) {
   set.set(index, set.fallback(index));
 }
 
+// A map host's live collision values (linkLiveCollision, linkDecorationCollision): Location, CollisionRadius and
+// CollisionHeight getters over the host's pose members. The marker names the host they read.
+const LIVE_CYLINDER = Symbol('liveCylinder');
+/** Mark `values`, the `collisionValues` a map host was just given, as reading `host`'s pose members. */
+export function markLiveCylinder(values, host) {
+  Object.defineProperty(values, LIVE_CYLINDER, {value: host});
+  return values;
+}
+/** Whether `host`'s collision cylinder is its image's: its `collisionValues` are the live values marked for it, and its
+ * position, collision radius and collision height are installed pose members (accessors over image cells). */
+export function liveCylinderInImage(host) {
+  const set = host[POSES];
+  return host.collisionValues?.[LIVE_CYLINDER] === host && set !== undefined && !released(set.instance)
+    && set.fields[BY_PROP.get('position').index] !== undefined && set.fields[BY_PROP.get('radius').index] !== undefined
+    && set.fields[BY_PROP.get('height').index] !== undefined;
+}
+
+// A map mover's collision values (game.mjs): Location and Rotation getters over the host's pose members, every other
+// member (PrePivot, PostScale, MainScale) a copy of the serialized values that nothing writes.
+const MOVER_VALUES = Symbol('moverValues');
+/** Mark `values`, the `collisionValues` a mover host was just given, as reading `host`'s pose members. */
+export function markMoverValues(values, host) {
+  Object.defineProperty(values, MOVER_VALUES, {value: host});
+  return values;
+}
+/** Whether `host`'s brush pose is its image's: its `collisionValues` are the marked mover values, and its position
+ * and rotation are installed pose members. */
+export function moverPoseInImage(host) {
+  const set = host[POSES];
+  return host.collisionValues?.[MOVER_VALUES] === host && set !== undefined && !released(set.instance)
+    && set.fields[BY_PROP.get('position').index] !== undefined && set.fields[BY_PROP.get('rotation').index] !== undefined;
+}
+
 /** Whether `prop` is a pose member name. */
 export const isPoseProp = prop => BY_PROP.has(prop);
 

@@ -2,6 +2,7 @@ import { traceRay } from './ray.mjs';
 import { brushToWorld } from './coords.mjs';
 import { traceExtent } from './extent-trace.mjs';
 import { createLevelQueries } from './level-queries.mjs';
+import { runtimeLineKernel } from './collision-kernel.mjs';
 import { pointCheck, modelPointCheck } from './point-check.mjs';
 import { findSpot } from './fitting.mjs';
 import { primitivePointCheck } from './primitive-collision.mjs';
@@ -207,8 +208,16 @@ export class CollisionWorld {
   constructor(model) { this.bsp = new BspCollider(model); this.movers = []; this.actors = []; }
   registerActors(actors) {
     this.queries = createLevelQueries(this.bsp.model, actors, {
-      extentCheck: traceExtent, levelInfo: this.queries?.levelInfo,
+      extentCheck: traceExtent, levelInfo: this.queries?.levelInfo, lineKernel: this.lineKernel ?? null,
     });
+  }
+  /** The script runtime's interpreter instance now exists (`vm`: its RustScriptVm, null without one): the level queries'
+   * hash, now and after every later registerActors, lives in it (collision-kernel.mjs runtimeLineKernel). */
+  adoptRuntime(vm) {
+    const kernel = runtimeLineKernel(vm);
+    if (!kernel) return;
+    this.lineKernel = kernel;
+    this.queries?.adoptKernel(kernel);
   }
   lineCheck(start, end, extent, flags, extra = 0, source = null) {
     if (!this.queries) throw new Error('Level actors must be registered before native level queries');

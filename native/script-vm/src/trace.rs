@@ -87,6 +87,10 @@ static mut EXTENT_STACK: [ExtentEntry; EXTENT_CAP] = [ExtentEntry { index: 0, pa
 /// The native hull's 64-plane capacity (extent-trace.mjs `leaf`).
 static mut HULL: [[f64; 4]; 64] = [[0.0; 4]; 64];
 
+/// Set the owned model's ToWorld (the host's `setOwner`, for hash.rs's mover memo).
+pub(crate) fn set_owner(coords: &[f64; 12]) {
+    unsafe { *addr_of_mut!(OWNER) = *coords };
+}
 #[no_mangle]
 pub extern "C" fn trace_owner_ptr() -> *mut f64 {
     addr_of_mut!(OWNER) as *mut f64
