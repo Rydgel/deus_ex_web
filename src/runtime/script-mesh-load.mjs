@@ -199,6 +199,92 @@ export function serializeLodMesh(object, archive, s) {
   object.meshSerializedEnd = archive.tell();
 }
 
+/* Destruction: docs/mesh-destruction.md. PurgeGarbage's second pass calls the scalar deleting destructor (vtable +0x0c: UMesh
+ * 0x1031c120, ULodMesh 0x1031c930), which runs the complete destructor below and then UObject::operator delete. Its first pass has
+ * already destroyed the object (ConditionalDestroy: UObject::Destroy, neither mesh class overrides it) and, for a package the same
+ * collection unloads, run ULinkerLoad::Destroy, whose DetachAllLazyLoaders(0) left the mesh's lazy arrays with no archive. */
+const LAZY_DESTRUCTORS = new Map([[0x54, 0x1031a150], [0x6c, 0x1031a550], [0x90, 0x1031aab0], [0xc0, 0x1031af90]]);
+// ~UMesh 0x10319ed0: the members in reverse declaration order, each with its element size.
+const UMESH_MEMBERS = [[0xe4, 4], [0xd8, 4], [0xc0, 'lazy'], [0xb4, 16], [0xa8, 28], [0x90, 'lazy'], [0x84, 'sequences'],
+  [0x6c, 'lazy'], [0x54, 'lazy']];
+// ~ULodMesh 0x1031c1f0, before its call to ~UMesh.
+const LODMESH_MEMBERS = [[0x1a0, 2], [0x174, 8], [0x168, 8], [0x15c, 4], [0x150, 2], [0x144, 8], [0x138, 2], [0x12c, 2]];
+
+/** Core FArray::Remove 0x101454f0 over a mesh array's byte storage: nothing for a zero count; the shift, Num, and the shrink to
+ * Num with Realloc when 3*Num < 2*Max or the slack is 16 KB or more, and the slack is over 64 elements or Num is 0. */
+export function removeMeshArray(a, index, amount, size, s) {
+  if (!amount) return;
+  if (index < 0 || amount < 0 || index + amount > a.num) fail('FArray::Remove outside a mesh array');
+  a.data.copyWithin(index * size, (index + amount) * size, a.num * size);
+  a.num -= amount;
+  if ((a.num * 3 < a.max * 2 || (a.max - a.num) * size >= 0x4000) && (a.max - a.num > 64 || a.num === 0)) {
+    a.max = a.num;
+    call(s, 'arrayRealloc', a, size);
+  }
+}
+
+// TArray<T>::~TArray (inline, or Core FArray::~FArray 0x10107200 after an inline Remove): Remove(0, Num), GMalloc Free of a nonzero
+// Data, then Data, Max and Num zeroed in that order.
+function destroyArray(a, size, s) {
+  call(s, 'arrayRemove', a, 0, a.num, size);
+  if (a.data) call(s, 'freeArray', a, size);
+  a.data = null; a.max = 0; a.num = 0;
+}
+// TLazyArray<T>::~TLazyArray (four bodies identical but for the vtable and sizeof(T)): the vtable, DetachLazyLoader through the
+// archive's vtable +0x3c when SavedAr is nonzero, then the TArray at +0xc.
+function destroyLazy(offset, lazy, s) {
+  const [, size, vtable] = LAZY.find(row => row[0] === offset);
+  lazy.vtable = vtable;
+  if (lazy.archive) call(s, 'detach', lazy.archive, lazy);
+  destroyArray(lazy.array, size, s);
+}
+// TArray<FMeshAnimSeq>::Remove 0x1031bb40 runs ~FMeshAnimSeq (0x1031bf10: its Notifys TArray at +0x14, 8-byte elements) on each
+// removed sequence in index order before FArray::Remove(…, 0x20); then the member's Free and zeroing.
+function destroySequences(a, s) {
+  const notifies = a.notifyArrays ?? [];
+  for (let i = 0; i < a.num; i++) destroyArray(notifies[i], 8, s);
+  call(s, 'arrayRemove', a, 0, a.num, 32);
+  if (a.data) call(s, 'freeArray', a, 32);
+  a.data = null; a.max = 0; a.num = 0;
+  // Play's projections of the freed sequences (their names and notifies) go with them.
+  a.notifyArrays = []; a.sequences = []; a.nameReferences = [];
+}
+
+/** UMesh::~UMesh 0x10319ed0: the UMesh vtable and ConditionalDestroy, the members (each lazy array's destructor detaching it
+ * from its linker), then ~UPrimitive inlined (its vtable and ConditionalDestroy) and ~UObject (Core, IAT 0x10599b04). */
+export function destroyMesh(object, s) {
+  write(object, 0, 0x104290b8, s);
+  call(s, 'conditionalDestroy', object);
+  for (const [offset, size] of UMESH_MEMBERS) {
+    const member = read(object, offset, s);
+    if (size === 'lazy') destroyLazy(offset, member, s);
+    else if (size === 'sequences') destroySequences(member, s);
+    else {
+      destroyArray(member, size, s);
+      // the Textures array's projection (its texture references) goes with its data
+      if (offset === 0xd8) member.references = [];
+    }
+  }
+  write(object, 0, 0x1042655c, s);
+  call(s, 'conditionalDestroy', object);
+  call(s, 'objectDestructor', object);
+}
+
+/** ULodMesh::~ULodMesh 0x1031c1f0: the ULodMesh vtable and ConditionalDestroy, its own arrays from +0x1a0 down to +0x12c, then
+ * ~UMesh. */
+export function destroyLodMesh(object, s) {
+  write(object, 0, 0x1042942c, s);
+  call(s, 'conditionalDestroy', object);
+  for (const [offset, size] of LODMESH_MEMBERS) destroyArray(read(object, offset, s), size, s);
+  destroyMesh(object, s);
+}
+
+export const MESH_DESTRUCTION = Object.freeze({
+  umesh: Object.freeze({body: 0x10319ed0, thunk: 0x1030280b, deleting: 0x1031c120, size: 0x12c}),
+  lodmesh: Object.freeze({body: 0x1031c1f0, thunk: 0x10303922, deleting: 0x1031c930, size: 0x1b0}),
+  lazyDestructors: LAZY_DESTRUCTORS,
+});
+
 /** Typed host storage service; native Num/Max decisions remain above. */
 export function reallocateMeshArray(a, size) {
   const old = a.data;

@@ -147,6 +147,37 @@ before calling `Realloc(4)`. The linker binding leaves those data movement and
 allocator calls as explicit services, so a host cannot silently replace them
 with an array splice or an implicit allocation.
 
+## Detach all: the linker's destruction
+
+`ULinkerLoad::Destroy` (the UObject vtable `0x1017a490`, slot `+0x24`: body
+`0x10162730`) runs in PurgeGarbage's first pass for a linker the collection
+unloads. Unless `ULinkerLoad+0xd0` has `0x2000` it logs `Unloading: %s` with
+the root's full name, then calls `DetachAllLazyLoaders(0)` (thunk `0x101012df`,
+body `0x10162f80`), then `DetachExport(i)` (`0x101022b6`) for every export whose
+object is non-null, removes itself from `GObjLoaders`, deletes its reader and
+calls `UObject::Destroy`.
+
+`0x10162f80` takes `this` = the linker and one argument, `Load`:
+
+```text
+for (i = 0; i < LazyLoaders.Num; i++)          ; Num (+0x4dc) reread each pass
+    loader = LazyLoaders(i)
+    if (Load) loader->vtable[0]()              ; FLazyLoader::Load
+    loader +0x04 = 0                           ; SavedAr
+    loader +0x08 = 0                           ; SavedPos
+LazyLoaders: an empty element loop, Num = 0, Max = 0, Realloc(4)
+```
+
+No `Remove` and no log happen. With `Load` 0 (the destroy path) every loader
+still attached to the linker keeps its storage but loses its archive, so when
+PurgeGarbage's second pass destroys that loader's owner its destructor finds a
+null `SavedAr` and does not call `DetachLazyLoader` ([mesh
+destruction](mesh-destruction.md)). `detachAllLinkerLazyLoaders(archive, load)`
+translates the body; a nonzero `load` needs the loaders' Load virtual as an
+explicit `loadLazyLoader` service. `native-linker-lazy-loader-oracle.py`'s
+`detach-all` case runs the original body over `[A, B, A]` (Max 5): both loaders
+end with zero fields, the array with Num 0, Max 0 and one `Realloc(4)`.
+
 ## Reader forwarding and load/seek behavior
 
 The custom archive's raw and position methods all use the reader pointer at

@@ -6,6 +6,8 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {readObject} from '../src/unreal/objects.mjs';
 import {createScriptLoadGraph} from '../src/runtime/script-load-graph.mjs';
 import {readLodMeshFrame} from '../src/runtime/lodmesh-payload.mjs';
+import {destroyLodMesh, MESH_DESTRUCTION} from '../src/runtime/script-mesh-load.mjs';
+import {LAZY_OFFSETS, hex, recordingDestroyServices, destroyedState, nativeDestroyedState} from './mesh-destruction-trace.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const root = gameDirectory(), python = process.env.DEUS_EX_NATIVE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -85,8 +87,11 @@ for (const [packageName, index, frames] of [['DeusExCharacters', 669, [0, 71, 36
     assert.ok(archive.lazyLoaderArray.data.slice(0, archive.lazyLoaderArray.num).includes(lazy));
   }
   assert.equal(mesh.arrays.get(0x60).num, 0, 'PostLoad also preserves deferred mesh vertices');
-  rows.push({object, mesh, constructor, constructorEvents, queued: queued.length, frames,
-    spec: {name: `${packageName}.${entry.name}`, start: entry.serialOffset, version: asset.pkg.version,
+  // The collection's destruction (docs/mesh-destruction.md): the first row in a linker the collection keeps, beside three loaders of
+  // other objects; the second in a linker it unloads (DetachAllLazyLoaders first).
+  const destruction = rows.length === 0 ? {foreign: 3, foreignMax: 5} : {detachAll: true};
+  rows.push({object, mesh, constructor, constructorEvents, queued: queued.length, frames, linker, packageName,
+    spec: {name: `${packageName}.${entry.name}`, start: entry.serialOffset, version: asset.pkg.version, destroy: true, ...destruction,
       prefixSize: stored.reader.offset, nameMap: linker.names, objectMap, lazy: 1, loadDeferred: true, frames,
       payload: Buffer.from(asset.bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize)).toString('base64')}});
 }
@@ -151,7 +156,49 @@ for (let i = 0; i < rows.length; i++) {
   assert.equal(graph.loadExport(row.spec.name.split('.')[0], graph.slotOf(row.object, 0x14) + 1), row.object);
   assert.equal(row.object.meshPayload, row.mesh, 'repeated load preserves the same mesh view');
 }
+// PurgeGarbage's second pass on each mesh, against the original ~ULodMesh run after the same loads (native-mesh-load-oracle.py).
+const meshView = object => ({member: offset => object.instanceValues.get(offset), vtable: () => graph.slotOf(object, 0)});
+{
+  // A kept linker: the translation with recording services, its archive holding three other loaders before the mesh's four as
+  // the original's does (the original Attach growth gave Max 40).
+  const row = rows[0], native = reference.cases[0].destroy, archive = row.linker.archive, view = meshView(row.object);
+  const foreign = [0, 1, 2].map(i => ({name: `foreign[${i}]`, archive, savedPosition: 0}));
+  assert.deepEqual(native.before, {num: 7, max: 40, entries: ['foreign[0]', 'foreign[1]', 'foreign[2]', '0x54', '0x6c', '0x90', '0xc0']});
+  const a = archive.lazyLoaderArray;
+  a.data = [...foreign, ...LAZY_OFFSETS.map(view.member)]; a.data.length = 40; a.num = 7; a.max = 40;
+  const {services, events, loaders} = recordingDestroyServices({...view, archive, foreign,
+    read: (object, offset) => offset < 0x28 ? graph.slotOf(object, offset) : object.instanceValues.get(offset),
+    write(object, offset, value) { if (offset < 0x28) graph.writeSlot(object, offset, value); else object.instanceValues.set(offset, value); }});
+  destroyLodMesh(row.object, services);
+  assert.deepEqual(events, native.events, 'the original ~ULodMesh call sequence');
+  assert.ok(events.filter(e => e.op === 'Detach').length === 4 && native.archive.entries.length === 3);
+  assert.deepEqual(destroyedState({...view, archive, loaders}), nativeDestroyedState(native), 'the state the original destructor leaves');
+  assert.deepEqual(view.member(0x84).sequences, []);
+  assert.deepEqual(view.member(0xd8).references, []);
+}
+{
+  // An unloaded linker through Play's binding: graph.destroyLinker (ULinkerLoad::Destroy's DetachAllLazyLoaders(0)) leaves the mesh's
+  // loaders without an archive, and graph.destroyPurged runs ~ULodMesh with no DetachLazyLoader.
+  const row = rows[1], native = reference.cases[1].destroy, archive = row.linker.archive, view = meshView(row.object);
+  const loaders = new Map(LAZY_OFFSETS.map(offset => [view.member(offset), hex(offset)]));
+  assert.ok(archive.lazyLoaderArray.num >= 4, 'the mesh\'s four loaders are attached beside the scope\'s others');
+  assert.throws(() => graph.destroyPurged(row.object), /purged/);
+  graph.detachExport(row.object);
+  assert.equal(graph.destroyLinker(row.packageName.toLowerCase()), true);
+  assert.equal(graph.linkers.has(row.packageName.toLowerCase()), false);
+  assert.deepEqual({num: archive.lazyLoaderArray.num, max: archive.lazyLoaderArray.max}, {num: native.detachAll.archive.num, max: native.detachAll.archive.max});
+  for (const offset of LAZY_OFFSETS) {
+    assert.deepEqual([view.member(offset).archive, view.member(offset).savedPosition], native.detachAll.lazy[hex(offset)]);
+  }
+  assert.equal(native.events.some(event => event.op === 'Detach'), false);
+  assert.equal(graph.destroyPurged(row.object), true);
+  assert.deepEqual(destroyedState({...view, archive, loaders}), nativeDestroyedState(native), 'the state the original destructor leaves');
+  assert.equal(row.mesh.arrays.get(0x60).num, 0, 'the payload view reads the destroyed arrays');
+}
+assert.equal(MESH_DESTRUCTION.lodmesh.body, 0x1031c1f0);
+
 assert.deepEqual(graph.assertions, []);
 assert.deepEqual(graph.warnings.filter(w => w.kind !== 'exists'), []);
 console.log(`PASS native mesh load graph: 3 original class default images, full constructor/array data, ` +
-  `${rows.map(row => row.queued).join('/')} objects through complete EndLoad scopes, canonical textures and retained lazy archives.`);
+  `${rows.map(row => row.queued).join('/')} objects through complete EndLoad scopes, canonical textures and retained lazy archives; ` +
+  `~ULodMesh's call order and end state in a kept and an unloaded linker.`);

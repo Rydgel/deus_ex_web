@@ -3,6 +3,15 @@
 Uses the original array vtables and Core linker attachment, unlike the older
 sequence-only probe. File I/O, allocation, UObject's tagged prefix and compact
 name/object reference resolution are explicit external services.
+
+A case with `destroy` then runs the class's complete destructor (~ULodMesh
+0x1031c1f0 or ~UMesh 0x10319ed0) as PurgeGarbage's second pass does: the
+first pass's ConditionalDestroy flag (0x00800000) is set so Core's own
+ConditionalDestroy returns at once, Core's FArray::Remove/Realloc and the
+archive's DetachLazyLoader run, and ~UObject (IAT 0x10599b04) is a recorded
+stub. `detachAll` first runs ULinkerLoad::DetachAllLazyLoaders(0) (0x10162f80),
+the call a linker unloaded by the same collection makes in the first pass.
+`foreign` pre-fills the archive's lazy-loader array with other loaders.
 """
 import base64
 import hashlib
@@ -32,8 +41,10 @@ class Probe(texture.Probe):
         vt = self.read(self.archive, 'I')[0]
         for offset, name in [(0x18, 'ObjectRef'), (0x1c, 'NameRef')]:
             self.write(vt + offset, 'I', self.stub(name, b'\xc2\x04\x00'))
+        self.write(0x10599b04, 'I', self.stub('ObjectDtor', b'\xc3'))
         self.transfers = []
         self.array_info = {}
+        self.destroying = None
 
     def compact_ref(self):
         at = self.position - self.start
@@ -48,9 +59,43 @@ class Probe(texture.Probe):
         self.position = self.start + at
         return -value if first & 128 else value
 
+    def label(self, address):
+        names = self.destroying
+        if address in names['arrays']:
+            return names['arrays'][address]
+        if address == self.archive + 0x434:
+            return 'archive'
+        return hex(address)
+
+    def on_destroy_instruction(self, cpu, address, stack, this, name):
+        names = self.destroying
+        if address == 0x1014fdb0:
+            self.events.append({'op': 'ConditionalDestroy', 'vtable': self.read(this, 'I')[0]})
+        elif name == 'ObjectDtor':
+            self.events.append({'op': 'ObjectDtor', 'vtable': self.read(this, 'I')[0]})
+        elif address == 0x101454f0:
+            index, count, element_size = self.read(stack + 4, '3I')
+            self.events.append({'op': 'Remove', 'array': self.label(this), 'index': index, 'count': count,
+                                'elementSize': element_size})
+        elif name == 'Free':
+            self.events.append({'op': 'Free', 'data': names['data'].get(self.read(stack + 4, 'I')[0], 'other')})
+        elif address == 0x10162dd0:
+            self.events.append({'op': 'Detach', 'loader': names['loaders'].get(self.read(stack + 4, 'I')[0], 'other')})
+            return True
+        elif address == 0x10145440:
+            self.events.append({'op': 'Realloc', 'array': self.label(this), 'elementSize': self.read(stack + 4, 'I')[0],
+                                'num': self.read(this + 4, 'I')[0], 'max': self.read(this + 8, 'I')[0]})
+            return True
+        return False
+
     def on_instruction(self, cpu, address, size, data):
         stack, this = cpu.reg_read(UC_X86_REG_ESP), cpu.reg_read(UC_X86_REG_ECX)
         name = self.stub_names.get(address)
+        if self.destroying and self.on_destroy_instruction(cpu, address, stack, this, name):
+            # the base probe would record its own Detach/Realloc event too
+            result = super().on_instruction(cpu, address, size, data)
+            self.events.pop()
+            return result
         if name in ['ObjectRef', 'NameRef']:
             dst = self.read(stack + 4, 'I')[0]
             value = self.compact_ref()
@@ -91,6 +136,51 @@ class Probe(texture.Probe):
                 'attached': self.read(self.object + offset + 4, 'I')[0] == self.archive}
                      for offset in [0x54, 0x6c, 0x90, 0xc0]}}
 
+    def archive_loaders(self):
+        data, num, maximum = self.array(self.archive + 0x434)
+        names = self.destroying['loaders'] if self.destroying else {}
+        entries = [self.read(data + 4 * i, 'I')[0] for i in range(num)]
+        return {'num': num, 'max': maximum, 'entries': [names.get(e, self.foreign_names.get(e, hex(e))) for e in entries]}
+
+    def destroy(self, config):
+        """PurgeGarbage's second pass on the mesh (see the module note)."""
+        obj = self.object
+        arrays, data = {}, {}
+        lazy_offsets = [0x54, 0x6c, 0x90, 0xc0]
+        for offset in self.ARRAYS:
+            ptr, num, _ = self.array(obj + offset)
+            arrays[obj + offset] = hex(offset)
+            if ptr:
+                data[ptr] = hex(offset)
+            if offset == 0x84:
+                for i in range(num):
+                    header = ptr + i * 32 + 20
+                    arrays[header] = f'0x84[{i}].notifies'
+                    notify_ptr = self.read(header, 'I')[0]
+                    if notify_ptr:
+                        data[notify_ptr] = f'0x84[{i}].notifies'
+        loaders = {obj + offset: hex(offset) for offset in lazy_offsets}
+        self.destroying = {'arrays': arrays, 'data': data, 'loaders': loaders}
+        before = self.archive_loaders()
+        self.events = []
+        if config.get('detachAll'):
+            self.call(0x10162f80, self.archive - 0xa4, struct.pack('<I', 0))
+        detach_all = {'events': self.events, 'archive': self.archive_loaders(),
+                      'lazy': {hex(o): [self.read(obj + o + 4, 'I')[0], self.read(obj + o + 8, 'i')[0]] for o in lazy_offsets}}
+        self.events = []
+        # PurgeGarbage's first pass destroyed the object: ConditionalDestroy's flag (docs/script-destroy.md).
+        self.write(obj + 0x1c, 'I', self.read(obj + 0x1c, 'I')[0] | 0x00800000)
+        self.call(0x1030280b if self.OBJECT_SIZE == 0x12c else 0x10303922, obj, b'')
+        events = self.events
+        self.destroying = None
+        self.events = []
+        return {'before': before, 'detachAll': detach_all if config.get('detachAll') else None, 'events': events,
+                'archive': {**self.archive_loaders()},
+                'vtable': self.read(obj, 'I')[0],
+                'lazy': {hex(o): {'vtable': self.read(obj + o, 'I')[0], 'archive': self.read(obj + o + 4, 'I')[0],
+                                  'savedPosition': self.read(obj + o + 8, 'i')[0]} for o in lazy_offsets},
+                'arrays': {hex(o): list(self.array(obj + o)) for o in self.ARRAYS}}
+
     def initialize_object(self, config):
         self.cpu.mem_write(self.object, b'\0' * 0x600)
         self.call(self.CONSTRUCTOR, self.object, b'')
@@ -105,6 +195,16 @@ class Probe(texture.Probe):
             self.CONSTRUCTOR, self.SERIALIZE, self.OBJECT_SIZE = Probe.CONSTRUCTOR, Probe.SERIALIZE, Probe.OBJECT_SIZE
             self.ARRAYS = Probe.ARRAYS
         self.write(self.archive + 0x434, '3I', 0, 0, 0)
+        self.foreign_names = {}
+        if config.get('foreign'):
+            # other loaders already attached to the linker (their objects are not this mesh)
+            count, maximum = config['foreign'], config.get('foreignMax', config['foreign'])
+            block = self.realloc(0, maximum * 4)
+            for i in range(count):
+                loader = self.alloc(0x20)
+                self.foreign_names[loader] = f'foreign[{i}]'
+                self.write(block + 4 * i, 'I', loader)
+            self.write(self.archive + 0x434, '3I', block, count, maximum)
         self.write(self.archive + 4, 'I', config.get('version', 68))
         self.write(self.archive + 0xc, 'I', 1)
         self.write(self.archive + 0x10, 'I', 0)
@@ -149,6 +249,8 @@ class Probe(texture.Probe):
                     self.cpu.reg_write(reg, value)
                 self.call(0x10355779, count, b'')
                 result['frames'][str(frame)] = base64.b64encode(bytes(self.cpu.mem_read(cache + 20, count * 12))).decode()
+        if config.get('destroy'):
+            result['destroy'] = self.destroy(config)
         return result
 
 

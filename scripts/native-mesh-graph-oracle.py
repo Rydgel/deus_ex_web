@@ -93,13 +93,16 @@ class Probe(mesh.Probe):
     def run(self, config):
         self.name_map = config.get('nameMap', list(range(65536)))
         self.object_map = config.get('objectMap', {})
-        result = super().run(config)
+        result = super().run({**config, 'destroy': False})
         # Read the original object's virtual PostLoad slot; no assumed base
         # dispatch based only on class ancestry.
         fn = self.read(self.read(self.object, 'I')[0] + 0x20, 'I')[0]
         result['postLoadVirtual'] = fn
         self.call(fn, self.object, b'')
         result['postFlags'] = self.read(self.object + 0x1c, 'I')[0]
+        # The collection's destruction comes last (native-mesh-load-oracle.py `destroy`).
+        if config.get('destroy'):
+            result['destroy'] = self.destroy(config)
         return result
 
 

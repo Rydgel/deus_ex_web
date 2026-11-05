@@ -334,8 +334,13 @@ export function createProcessCollection(process) {
       unloaded = [...knownPackages(registry)].filter(key => !held.has(key) && key !== level.name?.toLowerCase()).sort();
       unloaded = process.unloadPackages(unloaded);
     }
+    // PurgeGarbage's second pass: each purged object's scalar deleting destructor, after the first pass destroyed every object and
+    // every unloaded linker (ULinkerLoad::Destroy, graph.destroyLinker). A purged mesh's lazy arrays leave the linker the collection
+    // keeps (docs/mesh-destruction.md); the order among the purged records changes nothing (DetachLazyLoader removes by identity).
+    let destroyed = 0;
+    for (const record of purged) if (graph.destroyPurged(record)) destroyed++;
     return { marked: marked.size, purged: purged.size, classes, classIdentities, resources, forgotten: forgotten.length, unloaded,
-      demoted: demoted.size, markMs: Math.round(markMs), ms: Math.round(performance.now() - start) };
+      demoted: demoted.size, destroyed, markMs: Math.round(markMs), ms: Math.round(performance.now() - start) };
   }
 
   return { references, mark, collect, recordOfIdentity };

@@ -2,8 +2,9 @@
 
 This extends the original payload work in `script-mesh-payload.md` to native
 class defaults, constructor state, the retained linker archive and EndLoad.
-It does not implement mesh rendering, save archives, destructor/allocator release
-or complete Play load finalization.
+It does not implement mesh rendering, save archives or complete Play load
+finalization. The destructors, run for meshes the LoadMap collection purges,
+are [mesh destruction](mesh-destruction.md).
 
 ## Original contract established before integration
 

@@ -119,7 +119,9 @@ MB once the classes stop growing (1,258 classes after the 83, the same count in 
 **Row 7.4.1's sequence in the page** (`--maps` the Island and Training ten times, forced collections): every Training arrival holds
 the same process state (990 classes, the same 46 packages and the same page store), and the page's heaps are flat. The total rises
 9.6 MB a round trip in Chromium (902 to 988 MB at Training) and 8.1 in Firefox (731 to 804 MB): about half of it the level's object
-arena (32 to 76 MB at Training, the same in both browsers) and the rest the purged meshes' lazy arrays, both below.
+arena (32 to 76 MB at Training, the same in both browsers) and the rest the purged meshes' lazy arrays, both below. With the meshes
+destroyed as the original destroys them (2026-11-05, below) the rise is 6.9 MB a round trip in Chromium (899 to 961 MB) and 5.2 in
+Firefox (728 to 775 MB).
 
 **Without forced collections** both browsers now reach the 83rd map. Firefox's content process still climbs (1.2 to 8.5 GB) because
 Gecko's collector runs every five to seven maps under a page that never idles (inline mode: the simulation and the drawing on one
@@ -139,15 +141,28 @@ garbage large. Bounding it touches the Rust interpreter's table lookups (`class_
 and a released handle's RELEASED entry is what makes its pointers read None) or the never-reused rule: paged tables, or tables over
 the handles a level can reach, with the process's own handles answered another way. Not done here.
 
-## Left: purged meshes' lazy arrays
+## Purged meshes' lazy arrays (fixed 2026-11-05)
 
-The rest of the round trips' rise (about 1.4 MB a travel) is in the worker's ArrayBuffers outside the Wasm memories and the packages.
+The rest of the round trips' rise (about 1.4 MB a travel) was in the worker's ArrayBuffers outside the Wasm memories and the packages.
 Heap snapshots of the worker at the second and the tenth Training arrival (`--snapshots 4,20`, heap-families.mjs) put it under the
 level's actors: 1,630 ArrayBuffers (12.9 MB) then 2,046 (35.6 MB), reached through an actor's mesh identity, its load record, a lazy
 array there and its `archive`, the linker archive of the mesh's package: `archive.lazyLoaderArray` (ULinkerLoad's LazyLoaders, +0x434)
-holds more than 396 lazy arrays, each with the bytes it loaded (`array.data`, up to 1.1 MB). The collection purges a level's meshes
-(their records are detached, and the next visit loads them again from the same held package, DeusExCharacters among them), but nothing
-detaches the purged meshes' lazy arrays from that archive, so every generation stays. In the original the collection destroys the
-mesh, and a lazy array's destruction detaches it (FArchive::DetachLazyLoader `0x10162dd0`, as Play runs it for FSoundData and for a
-texture's mips: script-texture-load.mjs `destroyLazy`); UMesh's and ULodMesh's destructors in Engine.dll are not traced, so Play does
-not do it yet. Not done here: it needs that trace first.
+held more than 396 lazy arrays, each with the bytes it loaded (`array.data`, up to 1.1 MB). The collection purged a level's meshes
+(their records detached, and the next visit loads them again from the same held package, DeusExCharacters among them), but nothing
+detached the purged meshes' lazy arrays from that archive, so every generation stayed.
+
+In the original the collection destroys the mesh: PurgeGarbage's second pass runs ~ULodMesh and ~UMesh, and each TLazyArray's
+destructor calls its archive's DetachLazyLoader; a linker the same collection unloads has already detached every loader in its
+Destroy (DetachAllLazyLoaders(0)). [Mesh destruction](mesh-destruction.md) records the trace and how Play now runs both, compared call
+by call with the original destructors in Unicorn. In Node the held linkers' lazy-loader arrays went 768, 1,032, 1,092, 1,300, 1,360
+loaders over DX, Training and the Island twice (+268 a round trip, all purged LodMeshes'); now 752, 956, 808, 956, 808. In the page
+(Chromium, worker, the same 21 arrivals with forced collections, `.cache/perf/map-memory/rt-destroy*`): the actors' family holds 9.3
+MB of backing stores in 1,530 ArrayBuffers at the second Training arrival and 10.5 MB in 1,530 at the tenth (12.9 MB in 1,630 and
+35.6 MB in 2,046 before); the total at Training goes
+899 to 961 MB (902 to 988 before), the worker's buffers 408 to 463 MB (411 to 492), and the slope over the last eleven arrivals is 3.6
+MB a map (5.0 before; worker buffers 3.3, 4.7 before). Firefox (inline, the same arrivals): 728 to 775 MB at Training (731 to 804
+before), slope 3.5 MB a map (4.9 before), no error in either browser. What is left is the handle tables' growth above, including the
+step at the eighth round trip where the level's arena grows by half (in every run).
+
+The other resources the collection purges (textures, sounds, music, fonts) attach no lazy loader in Play: the graph leaves their
+records unloaded (RF_NeedLoad), so no other kind accumulates on a held linker.

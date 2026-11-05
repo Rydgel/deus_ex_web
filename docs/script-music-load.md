@@ -45,8 +45,10 @@ OriginalSize)`. Unlike USound, UMusic does not raise `GLazyLoad` around its
 Serialize, so the lazy array's `Load` (`0x1030cbb0`) reads the song at once.
 `PostLoad` (`0x10370df0`) only forwards to `UObject::PostLoad`. `Destroy`
 (`0x10370d20`) unregisters the music from the audio subsystem before
-`UObject::Destroy`; loaded resources are outside the host's purge set, so it is
-not reached.
+`UObject::Destroy`. Play's LoadMap collection runs no Destroy or destructor
+for a purged Music record (Play's graph leaves music unloaded there:
+[mesh destruction](mesh-destruction.md#other-purged-resources)), so it is not
+reached.
 
 `src/runtime/script-music-load.mjs` translates the constructor and the loading
 Serialize; the load graph registers the class, constructs and serializes

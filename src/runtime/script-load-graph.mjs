@@ -22,13 +22,14 @@ import {conditionalPostLoad, postLoadObject, postLoadField, postLoadStruct,
 import {beginScriptLoad, endScriptLoad} from './script-static-load-object.mjs';
 import {resolveNameNative} from './script-resolve-name.mjs';
 import {createScriptPackage} from './script-package-construction.mjs';
-import {attachLinkerLazyLoader, detachLinkerLazyLoader} from './script-linker-lazy-loader.mjs';
+import {attachLinkerLazyLoader, detachLinkerLazyLoader, detachAllLinkerLazyLoaders} from './script-linker-lazy-loader.mjs';
 import {constructTexture, constructPalette, serializeTexture, serializePalette,
   postLoadTexture, loadTextureLazyBytes, removeResourceArray} from './script-texture-load.mjs';
 import {MUSIC_NATIVE, constructMusic, serializeMusic} from './script-music-load.mjs';
 import {constructSoundNative} from './script-sound-construction.mjs';
 import {FONT_NATIVE, constructFont, serializeFont} from './script-font-load.mjs';
-import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray, constructMesh, serializeMesh} from './script-mesh-load.mjs';
+import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray, constructMesh, serializeMesh,
+  destroyMesh, destroyLodMesh, removeMeshArray, MeshLoadBoundaryError} from './script-mesh-load.mjs';
 import {meshPayloadView} from './lodmesh-payload.mjs';
 import {serializeSoundLifecycle, serializeSoundByteArray} from './script-sound-lifecycle.mjs';
 import {loadLazyByteArray} from './script-lazy-byte-array.mjs';
@@ -828,6 +829,19 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     referenceToken: object => addr(object) ?? 0,
     getLazyLoad: () => meshLoadServices.getLazyLoad(),
     attach: (archive, lazy) => attachLinkerLazyLoader(archive, lazy, textureServices),
+    // The destructors (docs/mesh-destruction.md): FArray::Remove over the byte storage, GMalloc Free, the archive's DetachLazyLoader.
+    arrayRemove: (array, index, amount, size) => removeMeshArray(array, index, amount, size, meshServices),
+    freeArray: array => { array.data = null; },
+    // DetachLazyLoader's "Detachment inconsistency: %i (%s)" line (GLog) is a graph warning.
+    detach: (archive, lazy) => detachLinkerLazyLoader(archive, lazy, {...textureServices,
+      log: (current, detail) => warnings.push({kind: 'detach-inconsistency', removed: detail.removed, linker: current.linker?.packageName})}),
+    // PurgeGarbage's first pass destroyed the record (its UObject::Destroy's SetLinker(NULL) is detachExport), so each
+    // ConditionalDestroy in the destructor returns at once; a mesh destroyed outside the collection is not modelled.
+    conditionalDestroy(object) {
+      if (!object.detached) throw new MeshLoadBoundaryError('Mesh destruction outside the collection\'s purge is not modelled');
+    },
+    // ~UObject's unhash and slot release are detachExport's, which the purge ran; operator delete is the host's garbage collector.
+    objectDestructor() {},
   };
   // UMusic: its Data is the same TLazyArray<BYTE> the texture mips hold.
   const musicServices = {
@@ -1473,6 +1487,28 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       recordsByAddress.delete(addr(record));
       loadEdges?.delete(record);
       record.detached = true;
+    },
+    /** PurgeGarbage's second pass for a purged record (docs/mesh-destruction.md): the scalar deleting destructor of a constructed
+     * mesh (vtable +0x0c: ~ULodMesh or ~UMesh, then UObject::operator delete), which detaches its lazy arrays from a linker the
+     * collection keeps. Other kinds' destructors are not run here (none of theirs attaches a lazy loader in Play: the original-loaded
+     * walk leaves their records unloaded, RF_NeedLoad). Returns whether a destructor ran. */
+    destroyPurged(record) {
+      if (!record.detached) throw new Error('Only a record the collection purged is destroyed');
+      const kind = record.resourceConstructed;
+      if ((kind !== 'Engine.LodMesh' && kind !== 'Engine.Mesh') || fullName(classRecordOf(record)) !== kind) return false;
+      (kind === 'Engine.LodMesh' ? destroyLodMesh : destroyMesh)(record, meshServices);
+      return true;
+    },
+    /** ULinkerLoad::Destroy (0x10162730) for a linker the collection unloads: DetachAllLazyLoaders(0) (0x10162f80) leaves every
+     * lazy loader still attached to it without an archive, before the second pass destroys their owners. Its exports were detached
+     * by the purge (a linker with a loaded export is not unloaded), and its "Unloading" log line, GObjLoaders entry and Loader
+     * deletion are host lifetime: the graph forgets the linker. */
+    destroyLinker(name) {
+      const linker = linkers.get(name);
+      if (!linker) return false;
+      if (linker.archive) detachAllLinkerLazyLoaders(linker.archive, 0, textureServices);
+      linkers.delete(name);
+      return true;
     },
     /** Imports resolved to a detached record forget it (they resolve again on their next use), and so does the GObjLoaded queue Play's
      * lazy loads leave (suspendLoadQueue): the collection runs outside a load, where the original's queue is empty. */

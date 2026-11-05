@@ -28,6 +28,8 @@ export const LINKER_LAZY_LOADER_CONTRACT = freeze({
     outerLazyLoaderArrayOffset: 0x4d8,
     attach: freeze({ thunk: 0x101017d0, body: 0x10162bf0, slot: 0x38 }),
     detach: freeze({ thunk: 0x10101a5a, body: 0x10162dd0, slot: 0x3c }),
+    // ULinkerLoad::DetachAllLazyLoaders(INT Load); ULinkerLoad::Destroy (0x10162730) calls it with 0.
+    detachAll: freeze({ thunk: 0x101012df, body: 0x10162f80, linkerDestroy: 0x10162730 }),
   }),
   lazyLoader: freeze({ archiveOffset: 0x04, savedPositionOffset: 0x08 }),
   array: freeze({
@@ -591,7 +593,63 @@ export function detachLinkerLazyLoader(archive, loader, services = {}, context =
   };
 }
 
+/** Execute Core's ULinkerLoad::DetachAllLazyLoaders body at 0x10162f80.  ULinkerLoad::Destroy (0x10162730), which
+ * PurgeGarbage's first pass reaches for a linker it unloads, calls it with `load` 0 before detaching the linker's exports: every
+ * attached loader then has a null archive when the second pass destroys its owner.  A nonzero `load` first calls each loader's
+ * vtable slot 0 (Load), an explicit `loadLazyLoader` service. */
+export function detachAllLinkerLazyLoaders(archive, load = 0, services = {}, context = {}) {
+  requireArchive(archive);
+  const bound = serviceSet(archive, services);
+  const run = runFor(bound, context.run ?? null);
+  const {array, num: initialNum, max: initialMax} = validateArchiveArray(archive, bound);
+  const address = LINKER_LAZY_LOADER_CONTRACT.archive.detachAll.body;
+  const loaders = [];
+  // 0x10162faa rereads Num (linker +0x4dc) on every iteration.
+  for (let index = 0; index < readArrayHeader(array, bound).num; index += 1) {
+    const loader = arrayElement(array, index, bound);
+    loaders.push(loader);
+    if (load) {
+      const loadLoader = requiredCallback(bound, archive, ['loadLazyLoader'], {
+        operation: 'FLazyLoader::Load', address, slot: '+0x00', branch: 'detach-all-load',
+      });
+      emit(run, {operation: 'lazy-loader-load', address, index, loader});
+      loadLoader(loader, {archive, index});
+    }
+    // 0x10162fca/0x10162fcd: SavedAr then SavedPos.
+    loaderWrite(loader, LINKER_LAZY_LOADER_CONTRACT.lazyLoader.archiveOffset,
+      ['archive', 'lazyLoaderArchive', 'externalService'], 0, bound, run, 'FLazyLoader archive', address);
+    loaderWrite(loader, LINKER_LAZY_LOADER_CONTRACT.lazyLoader.savedPositionOffset,
+      ['savedPosition', 'lazyField08', 'savedPos'], 0, bound, run, 'FLazyLoader saved position', address);
+  }
+  // TArray<FLazyLoader*>::Empty (0x10162fd3..0x10162feb): an empty element loop, Num then Max zeroed, Realloc(4).
+  arrayWrite(array, LINKER_LAZY_LOADER_CONTRACT.array.numOffset, ARRAY_NUM_NAMES, 0, bound, 'FArray.Num');
+  emit(run, {operation: 'array-num-write', address, offset: LINKER_LAZY_LOADER_CONTRACT.array.numOffset, value: 0});
+  arrayWrite(array, LINKER_LAZY_LOADER_CONTRACT.array.maxOffset, ARRAY_MAX_NAMES, 0, bound, 'FArray.Max');
+  emit(run, {operation: 'array-max-write', address, offset: LINKER_LAZY_LOADER_CONTRACT.array.maxOffset, value: 0});
+  const realloc = requiredCallback(bound, archive, ['arrayRealloc', 'reallocateArray'], {
+    operation: 'FArray::Realloc', address: LINKER_LAZY_LOADER_CONTRACT.array.reallocThunk, branch: 'detach-all-empty',
+  });
+  emit(run, {
+    operation: 'array-realloc', address: LINKER_LAZY_LOADER_CONTRACT.array.reallocThunk,
+    body: LINKER_LAZY_LOADER_CONTRACT.array.reallocBody, elementSize: LINKER_LAZY_LOADER_CONTRACT.array.elementSize,
+    num: 0, max: 0, branch: 'detach-all-empty',
+  });
+  realloc(array, LINKER_LAZY_LOADER_CONTRACT.array.elementSize, {archive, oldNum: initialNum, oldMax: initialMax, newNum: 0, newMax: 0, body: address});
+  return {
+    kind: 'ULinkerLoad.DetachAllLazyLoaders',
+    nativeBody: address,
+    archive,
+    load: load ? 1 : 0,
+    loaders,
+    initialNum,
+    initialMax,
+    final: readArrayHeader(array, bound),
+    operations: run.operations,
+  };
+}
+
 export const attachLazyLoader = attachLinkerLazyLoader;
 export const detachLazyLoader = detachLinkerLazyLoader;
+export const detachAllLazyLoaders = detachAllLinkerLazyLoaders;
 
 export default createLinkerLoadArchive;

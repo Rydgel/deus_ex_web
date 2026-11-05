@@ -112,7 +112,7 @@ export class ScriptClassLoader {
   unloadPackages(names) {
     const graph = this.graph, roots = new Set();
     for (const name of names) {
-      graph.linkers.delete(name);
+      graph.destroyLinker(name);
       if (this.levelPrepared.delete(name)) graph.packageAssets.delete(name);
       const root = graph.packageRoots.get(name);
       if (root) { roots.add(root); graph.packageRoots.delete(name); this.identities.delete(root); }

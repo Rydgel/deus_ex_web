@@ -1,7 +1,7 @@
 """Execute the original ULinkerLoad lazy-loader bodies in x86 Unicorn.
 
-The oracle runs Core.dll's ULinkerLoad::AttachLazyLoader and
-ULinkerLoad::DetachLazyLoader bodies.  FArray::Realloc, FArray::Remove, the
+The oracle runs Core.dll's ULinkerLoad::AttachLazyLoader,
+ULinkerLoad::DetachLazyLoader and ULinkerLoad::DetachAllLazyLoaders bodies.  FArray::Realloc, FArray::Remove, the
 reader Tell slot and GLog::Logf are explicit harness boundaries: their
 arguments and publication order are recorded, and the small array operations
 are serviced by the probe so the original linker bodies can complete.  No
@@ -22,6 +22,7 @@ _SPEC.loader.exec_module(_NATIVE)
 
 ATTACH_BODY = 0x10162BF0
 DETACH_BODY = 0x10162DD0
+DETACH_ALL_BODY = 0x10162F80      # ULinkerLoad::DetachAllLazyLoaders(INT Load); this = the linker.
 ARCHIVE_VTABLE = 0x1017A430
 ARRAY_OFFSET = 0x4D8              # ULinkerLoad +0x4d8 == archive +0x434.
 READER_OFFSET = 0x4E4             # ULinkerLoad +0x4e4 == archive +0x440.
@@ -57,6 +58,13 @@ DEFAULT_CASES = [
             {'operation': 'detach', 'loader': 'C'},
         ],
     },
+    {
+        # ULinkerLoad::Destroy's call: every loader's SavedAr/SavedPos zeroed, the array emptied.
+        'id': 'detach-all',
+        'initial': ['A', 'B', 'A'],
+        'max': 5,
+        'operations': [{'operation': 'detachAll', 'load': 0}],
+    },
 ]
 
 
@@ -67,6 +75,7 @@ class LinkerLazyLoaderProbe(_NATIVE.NativeCollision):
         super().__init__(Path(root))
         self.events = []
         self.linker = None
+        self.current_operation = None
         self.tell_value = 0
         self.tell_stub = self.alloc(16)
         self.cpu.mem_write(self.tell_stub, b'\xc3')
@@ -162,7 +171,7 @@ class LinkerLazyLoaderProbe(_NATIVE.NativeCollision):
             array = cpu.reg_read(_NATIVE.UC_X86_REG_ECX)
             stack = cpu.reg_read(_NATIVE.UC_X86_REG_ESP)
             element_size = self.read(stack + 4, 'I')[0]
-            self.emulate_realloc(array, element_size, 'attach')
+            self.emulate_realloc(array, element_size, self.current_operation)
             # Realloc is thiscall with ret 4; skip the allocator body while
             # preserving the caller's exact return convention.
             self.return_from_call(8)
@@ -231,11 +240,18 @@ class LinkerLazyLoaderProbe(_NATIVE.NativeCollision):
         self.write(loader + 8, 'I', saved_position)
         return loader
 
-    def run_native(self, archive, operation, loader):
-        body = ATTACH_BODY if operation == 'attach' else DETACH_BODY
+    def run_native(self, archive, operation, loader, load=0):
         before = len(self.events)
-        self.call(body, archive, struct.pack('<I', loader))
+        self.current_operation = operation
+        if operation == 'detachAll':
+            self.call(DETACH_ALL_BODY, self.linker, struct.pack('<I', load))
+        else:
+            self.call(ATTACH_BODY if operation == 'attach' else DETACH_BODY, archive, struct.pack('<I', loader))
         return self.events[before:]
+
+    def loaders(self, symbols):
+        return {name: {'archive': self.read(loader + 4, 'I')[0], 'savedPosition': self.read(loader + 8, 'I')[0]}
+                for name, loader in symbols.items()}
 
     def state(self, loader):
         data, num, max_count = self.array_header(self.linker + ARRAY_OFFSET)
@@ -271,19 +287,22 @@ class LinkerLazyLoaderProbe(_NATIVE.NativeCollision):
             operation_results = []
             for operation in operations:
                 kind = operation.get('operation', case.get('operation'))
-                if kind not in ('attach', 'detach'):
+                if kind not in ('attach', 'detach', 'detachAll'):
                     raise ValueError(f'Unsupported oracle operation {kind!r}')
                 loader = symbol(operation.get('loader', case.get('loader', 'A')))
                 if 'tell' in operation:
                     self.tell_value = int(operation['tell'])
                 self.events = []
-                native_events = self.run_native(archive, kind, loader)
+                native_events = self.run_native(archive, kind, loader, int(operation.get('load', 0)))
                 state = self.state(loader)
+                names = {value: name for name, value in symbols.items()}
+                state['array']['names'] = [names.get(value) for value in state['array']['values']]
                 operation_results.append({
                     'operation': kind,
                     'loaderName': operation.get('loader', case.get('loader', 'A')),
                     'events': native_events,
                     'state': state,
+                    'loaders': self.loaders(symbols),
                 })
             results.append({'id': case.get('id', f'case-{len(results)}'), 'operations': operation_results})
         return results
@@ -299,6 +318,7 @@ def main():
         'contract': {
             'attachBody': ATTACH_BODY,
             'detachBody': DETACH_BODY,
+            'detachAllBody': DETACH_ALL_BODY,
             'archiveVtable': ARCHIVE_VTABLE,
             'arrayOffset': ARRAY_OFFSET,
             'reallocBody': REALLOC_BODY,

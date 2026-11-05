@@ -7,6 +7,9 @@ import { readObject, exportAt } from '../src/unreal/objects.mjs';
 import {decodeLodMesh} from '../src/runtime/lodmesh.mjs';
 import {decodeLodMeshPayload, readLodMeshFrame} from '../src/runtime/lodmesh-payload.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {destroyMesh} from '../src/runtime/script-mesh-load.mjs';
+import {createLinkerLoadArchive} from '../src/runtime/script-linker-lazy-loader.mjs';
+import {LAZY_OFFSETS, MESH_ARRAY_OFFSETS, hex, recordingDestroyServices, destroyedState, nativeDestroyedState} from './mesh-destruction-trace.mjs';
 
 const root = gameDirectory(), rows = [];
 for (const [packageName, index, modes, frames] of [
@@ -27,7 +30,7 @@ for (const [packageName, index, modes, frames] of [
     spec: {name: `${packageName}.${entry.name}:${lazy}`, version: pkg.version,
       start: entry.serialOffset, prefixSize: readObject(pkg, bytes, index).reader.offset,
       payload: bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize).toString('base64'),
-      lazy: Number(lazy), loadDeferred: lazy, frames: frames ?? undefined, classic: !frames}});
+      lazy: Number(lazy), loadDeferred: lazy, frames: frames ?? undefined, classic: !frames, destroy: !frames}});
 }
 // Loading-only remap branch: reverse each of LightSwitch's two 22-vertex frames.
 // Original serializer processes the modified payload too; this is not an
@@ -96,8 +99,29 @@ for (let i = 0; i < rows.length; i++) {
   }
   for (const frame of row.frames)
     sameBytes(readLodMeshFrame(mesh, frame), native.frames[frame], `${row.spec.name} original unpack frame ${frame}`);
-  if (row.spec.classic) continue;
+  if (row.spec.classic) {
+    // The collection's ~UMesh (docs/mesh-destruction.md) on the same object, its lazy arrays attached to a linker archive as the
+    // original's four Attaches left them (Num 4, Max 33).
+    const native = output.cases[i].destroy, values = new Map([[0, native.vtable]]);
+    const member = offset => values.get(offset);
+    for (const offset of LAZY_OFFSETS) values.set(offset, mesh.lazyArrays.get(offset).lazy);
+    for (const offset of MESH_ARRAY_OFFSETS) values.set(offset, mesh.arrays.get(offset).source);
+    const archive = createLinkerLoadArchive({linker: {}, reader: {},
+      array: {data: Object.assign(LAZY_OFFSETS.map(member), {length: 33}), num: 4, max: 33}});
+    for (const offset of LAZY_OFFSETS) member(offset).archive = archive;
+    assert.deepEqual(native.before, {num: 4, max: 33, entries: LAZY_OFFSETS.map(hex)});
+    const {services, events, loaders} = recordingDestroyServices({member, vtable: () => values.get(0), archive, classic: true,
+      read: (_, offset) => values.get(offset), write: (_, offset, value) => values.set(offset, value)});
+    values.set(0, 0x104290b8);
+    destroyMesh({}, services);
+    assert.deepEqual(events, native.events, `${row.spec.name} the original ~UMesh call sequence`);
+    assert.equal(events.filter(e => e.op === 'Detach').length, 4);
+    assert.deepEqual(destroyedState({member, vtable: () => values.get(0), archive, loaders, classic: true}), nativeDestroyedState(native),
+      `${row.spec.name} the state the original ~UMesh leaves`);
+    continue;
+  }
   assert.throws(() => readLodMeshFrame(mesh, -1), /out of range/);
   assert.throws(() => readLodMeshFrame(mesh, mesh.frameCount), /out of range/);
 }
-console.log(`${rows.length} original DLL mesh comparisons passed: full arrays/scalars/bounds, deferred loading, remap and signed vertex frames.`);
+console.log(`${rows.length} original DLL mesh comparisons passed: full arrays/scalars/bounds, deferred loading, remap and signed vertex frames; ` +
+  `~UMesh's call order and end state on the ${rows.filter(row => row.spec.classic).length} classic rows.`);
