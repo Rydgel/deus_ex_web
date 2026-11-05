@@ -697,6 +697,110 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
     }
 }
 
+// A mover's block (`mover_reads`): status, Location, Rotation, then the pair last given to the tracker and whether there is one.
+const MV_STATUS: u32 = 0;
+const MV_LOCATION: u32 = 1;
+const MV_ROTATION: u32 = 4;
+const MV_LAST: u32 = 7;
+const MV_LAST_VALID: u32 = 13;
+const MVS_OK: u32 = 1;
+const MVS_MOVING: u32 = 2;
+const MVS_CHANGED: u32 = 4;
+const MOVER_FIELDS: u64 = 1 << R_BHIDDEN
+    | 1 << R_OWNER
+    | 1 << R_BONLYOWNERSEE
+    | 1 << R_BOWNERNOSEE
+    | 1 << R_BSTATIC
+    | 1 << R_BRUSH
+    | 1 << R_LOCATION
+    | 1 << R_ROTATION;
+
+/// render-visibility.mjs dynamicActorRoute on the moving brush `a` (handle `h`) in a root frame (Recursion 0, HighDetailActors set,
+/// a running level) for the view actor `viewer`, with `view_target` and `behind` (bBehindView): whether the route is 'moving-brush'.
+/// The excluded actor is the ViewTarget, else the view actor, unless bBehindView. None when an owner on the walk cannot be read in
+/// the image or the walk is too long.
+fn moving_brush(a: &Obj, h: u32, viewer: u32, view_target: u32, behind: bool) -> Option<bool> {
+    if !behind && h == view_target {
+        return Some(false);
+    }
+    let excluded = if behind {
+        0
+    } else if view_target != 0 {
+        view_target
+    } else {
+        viewer
+    };
+    if h == excluded || a.flag(R_BHIDDEN) {
+        return Some(false);
+    }
+    let mut owned = false;
+    let mut owner = h;
+    let mut steps = 0;
+    while owner != 0 {
+        if owner == viewer {
+            owned = true;
+            break;
+        }
+        steps += 1;
+        if steps > OWNER_WALK {
+            return None;
+        }
+        owner = if owner == h {
+            a.pointer(R_OWNER)
+        } else {
+            let o = Obj::of(owner);
+            if !o.has(1 << R_OWNER) {
+                return None;
+            }
+            o.pointer(R_OWNER)
+        };
+    }
+    if a.flag(R_BONLYOWNERSEE) && (!owned || behind) {
+        return Some(false);
+    }
+    if owned && a.flag(R_BOWNERNOSEE) && !behind {
+        return Some(false);
+    }
+    Some(a.pointer(R_BRUSH) != 0 && !a.flag(R_BSTATIC))
+}
+
+/// SetupDynamics' moving brushes' reads (sim-session.mjs updateMovers) for `count` (handle, block) pairs at `pairs`: per block the
+/// status (OK when every field is read in the image; MOVING when dynamicActorRoute gives 'moving-brush'; CHANGED when moving and
+/// the Location and Rotation words differ from the pair the host last gave the tracker, or it gave none), and the Location and
+/// Rotation words. The host writes the last pair (MV_LAST, MV_LAST_VALID) when it gives them to the tracker.
+#[no_mangle]
+pub extern "C" fn mover_reads(pairs: u32, count: u32, viewer: u32, view_target: u32, behind: u32) {
+    for k in 0..count {
+        let h = load32(pairs.wrapping_add(8 * k));
+        let block = load32(pairs.wrapping_add(8 * k + 4));
+        let word = |i: u32| block.wrapping_add(4 * i);
+        store32(word(MV_STATUS), 0);
+        let a = Obj::of(h);
+        if !a.has(MOVER_FIELDS) {
+            continue;
+        }
+        let Some(moving) = moving_brush(&a, h, viewer, view_target, behind != 0) else {
+            continue;
+        };
+        let mut status = MVS_OK;
+        if moving {
+            status |= MVS_MOVING;
+            let valid = load32(word(MV_LAST_VALID)) != 0;
+            let mut changed = !valid;
+            for i in 0..3 {
+                let (location, rotation) = (a.word(R_LOCATION, i), a.word(R_ROTATION, i));
+                store32(word(MV_LOCATION + i), location);
+                store32(word(MV_ROTATION + i), rotation);
+                changed |= location != load32(word(MV_LAST + i)) || rotation != load32(word(MV_LAST + 3 + i));
+            }
+            if changed {
+                status |= MVS_CHANGED;
+            }
+        }
+        store32(word(MV_STATUS), status);
+    }
+}
+
 const FAR_MOVE_FIELDS: u64 = 1 << R_BSTATIC
     | 1 << R_BMOVABLE
     | 1 << R_BDELETEME

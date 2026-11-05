@@ -9,7 +9,10 @@
 // readPixels. The CPU run must give the GPU run's pixels exactly.
 // Host measurement of the page against itself, not an original-game reference.
 //
-//   node scripts/validate-mesh-path-frames.mjs [--frames 90] [--case N] [--shots DIR]
+//   node scripts/validate-mesh-path-frames.mjs [--frames 90] [--case N] [--shots DIR] [--query '&actorPlumbing=verify'] [--plumbing]
+//
+// --query adds URL parameters to every run; --plumbing adds one run with ?actorPlumbing=js (the actor layer's reference host
+// plumbing, actor-plumbing.mjs), whose pixels must be the default run's (docs/firefox-actors-phase.md "Host plumbing").
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -53,7 +56,7 @@ async function run(browser, testCase, query) {
   await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   try {
     await page.clock.install({time: INSTALL});
-    await page.goto(debugUrl(`${url}/?hold=1&seed=1&sim=inline${query}`));
+    await page.goto(debugUrl(`${url}/?hold=1&seed=1&sim=inline${option('query', '')}${query}`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     await page.evaluate(map => { const menu = document.getElementById('map'); menu.value = map; menu.dispatchEvent(new Event('change')); }, testCase.map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
@@ -92,7 +95,8 @@ try {
   for (const [index, testCase] of CASES.entries()) {
     if (option('case', null) !== null && Number(option('case')) !== index) continue;
     const gpu = await run(browser, testCase, ''), again = await run(browser, testCase, ''), cpu = await run(browser, testCase, '&gpuMesh=0');
-    for (const side of [gpu, again, cpu]) {
+    const reference = process.argv.includes('--plumbing') ? await run(browser, testCase, '&actorPlumbing=js') : null;
+    for (const side of [gpu, again, cpu, ...(reference ? [reference] : [])]) {
       assert.deepEqual(side.errors, [], `${testCase.name}: page errors`); assert.equal(side.error, null, `${testCase.name}: runtime error`);
       assert.equal(side.preserved, true, `${testCase.name}: the renderer patch keeps the drawing buffer`);
       assert.ok(side.drawn > 0, `${testCase.name}: the frame drew pixels`);
@@ -115,6 +119,7 @@ try {
       await writeFile(`${option('shots')}/${testCase.name.replace(/\W+/g, '-')}-${label}.png`, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
         chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
     }
+    if (reference) assert.equal(diff(gpu.pixels, reference.pixels).bytes, 0, `${testCase.name}: the reference plumbing draws the default run's pixels`);
     assert.equal(reproduces.bytes, 0, `${testCase.name}: the GPU scenario reproduces its own pixels (${reproduces.bytes} bytes differ)`);
     assert.equal(paths.bytes, 0, `${testCase.name}: the CPU path draws the GPU path's pixels (${paths.bytes} bytes differ, up to ${paths.max})`);
     summary.push(`${testCase.name}: ${gpu.width}x${gpu.height} identical${testCase.differing ? `, ${gpu.differing} child-frame draws of another LOD state` : ''}, anim ${gpu.anim.toFixed(4)}`);

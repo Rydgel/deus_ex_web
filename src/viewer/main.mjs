@@ -114,6 +114,8 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // arms the worker's idle GC timer (docs/play-frame-cost.md "October 14, later"); it costs one core.
 // ?navSearch=js keeps FindPathToward's open-list search in JavaScript, ?navSearch=verify runs both bodies and compares them (nav.rs,
 // script-vm-nav.mjs).
+// ?actorPlumbing=js keeps the reference bodies of the actor layer's host plumbing (record skipping, the pair table, the candidate
+// pack, the movers' reads: actor-plumbing.mjs); ?actorPlumbing=verify checks the new bodies against them as it goes.
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
@@ -121,7 +123,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -2325,6 +2327,12 @@ async lodProbe(args) {
 meshLod() {
   const draw = npcPreview?.draw;
   return draw ? [...draw.bindings.values()].map(binding => binding.lodStats()) : null;
+},
+/** Validation only: a digest of what the page's actor mesh layer holds for every binding (actor-mesh-draw.mjs drawState). */
+async meshDrawDigest() {
+  const state = npcPreview?.draw.drawState();
+  if (state === undefined) return null;
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(state)))].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 },
 /** Validation only: the actor mesh layer's passes record what each binding
  * has drawn in them (actor-mesh-draw.mjs setPassProbe); with no argument the

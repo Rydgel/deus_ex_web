@@ -22,6 +22,8 @@ import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { filterMovingLight, movingLightInView, surfaceLightClass, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
+import { MOVER } from '../runtime/brush-tracker.mjs';
+import { actorPlumbing } from './actor-plumbing.mjs';
 import { TRACKED_MOVER_MIRRORS, childFramesMode, iteratorFramesMode } from './mirror-passes.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
@@ -318,6 +320,33 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // ShinySurfaces are set in Play.
   // With `setupCount`, Setup runs on that many packed candidates first and
   // `sprites` lists Frame->Sprite's keys (RenderNext order).
+  // The movers' reads in Rust (actor-plumbing.mjs `movers`, render.rs mover_reads): one pass over the movers' (handle, block) pairs
+  // gives each one's route and its Location and Rotation words, and whether they differ from the pair last given to the tracker.
+  // An unchanged mover is not given again: Update(mover) with the Location and Rotation the tracker already holds finds nothing
+  // moved (SavedPos and SavedRot are what the last call that found a move, or the construction, left: brush-tracker.mjs, tracker.rs
+  // update), lists nothing and rebuilds nothing, so the call is a no-op apart from the status word the host does not read.
+  const plumbing = actorPlumbing();
+  const MV = { STATUS: 0, LOCATION: 1, LAST: 7, LAST_VALID: 13, WORDS: 14, OK: 1, MOVING: 2, CHANGED: 4 };
+  let moverView = null;
+  const moverWords = arena => (moverView?.buffer === arena.memory.buffer ? moverView : (moverView = new Uint32Array(arena.memory.buffer)));
+  /** The movers' (handle, block) pairs and blocks in the arena, made once for `movers` (a tracker's set; null without the Rust pass). */
+  function moverBlocks(movers) {
+    if (movers.native !== undefined) return movers.native;
+    const arena = runtime.scriptVm?.arena, render = runtime.scriptVm?.render, n = movers.actors.length;
+    if (!plumbing.movers || !arena || !render || !n || typeof render.x?.mover_reads !== 'function') return (movers.native = null);
+    const pairs = arena.alloc(8 * n), blocks = arena.alloc(4 * MV.WORDS * n);
+    movers.actors.forEach((actor, i) => {
+      arena.view.setUint32(pairs + 8 * i, handleOf(actor), true);
+      arena.view.setUint32(pairs + 8 * i + 4, blocks + 4 * MV.WORDS * i, true);
+    });
+    return (movers.native = { arena, render, pairs, blocks, n });
+  }
+  function dropMoverBlocks(movers) {
+    const native = movers?.native;
+    if (!native) return;
+    native.arena.release(native.pairs, 8 * native.n); native.arena.release(native.blocks, 4 * MV.WORDS * native.n);
+    movers.native = null;
+  }
   // SetupDynamics' moving brushes (0x10b230d5): Update for every mover its
   // level-actor pass admits (render-visibility.mjs dynamicActorRoute,
   // 0x10b22e1f-0x10b22f2d), in Level.Actors order, at 24 bits, with the
@@ -338,6 +367,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       behindView, viewTarget };
     const { actors, indices } = trackerMovers;
     trackerMovers.admitted = 0;
+    const native = moverBlocks(trackerMovers);
+    const ready = native && native.render.moverReads(native.pairs, native.n, { viewer, viewTarget, behind: behindView });
+    const words = ready ? moverWords(native.arena) : null, base = ready ? native.blocks >>> 2 : 0;
     for (let i = 0; i < actors.length; i++) {
       const actor = actors[i];
       if (indices[i] < 0) continue;
@@ -346,12 +378,46 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         indices[i] = level.actors.indexOf(actor);
         if (indices[i] < 0) continue;
       }
+      const at = ready ? base + MV.WORDS * i : -1;
+      if (at >= 0 && words[at + MV.STATUS] & MV.OK) {
+        const status = words[at + MV.STATUS];
+        if (plumbing.verify) verifyMoverRead(tracker, i, actor, status, words, at, route, read);
+        if (!(status & MV.MOVING)) continue;
+        trackerMovers.admitted++;
+        if (!(status & MV.CHANGED)) continue;
+        tracker.setMoverFrom(i, words, at + MV.LOCATION);
+        tracker.update(i);
+        const after = moverWords(native.arena);
+        after.copyWithin(at + MV.LAST, at + MV.LOCATION, at + MV.LOCATION + 6); after[at + MV.LAST_VALID] = 1;
+        continue;
+      }
       if (dynamicActorRoute(actor, route) !== 'moving-brush') continue;
       trackerMovers.admitted++;
       const location = read(actor, 'Location');
       for (let k = 0; k < 3; k++) f32b[k] = location[k];
       tracker.setMover(i, { locationBits: [u32b[0], u32b[1], u32b[2]], rotation: read(actor, 'Rotation') });
       tracker.update(i);
+      // (the tracker holds what the host gave it here, not the pair mover_reads compares with)
+      if (ready) moverWords(native.arena)[base + MV.WORDS * i + MV.LAST_VALID] = 0;
+    }
+  }
+  // ACTOR_PLUMBING=verify: mover_reads' route and words against dynamicActorRoute and readNamed, and, for a moving mover whose update
+  // is skipped, the Location and Rotation the tracker holds against the words (the premise of the skip).
+  function verifyMoverRead(tracker, i, actor, status, words, at, route, read) {
+    const moving = dynamicActorRoute(actor, route) === 'moving-brush';
+    if (moving !== Boolean(status & MV.MOVING)) throw new Error(`ACTOR_PLUMBING=verify: mover ${actor.name} moving is ${!moving} in Rust, ${moving} by dynamicActorRoute`);
+    if (!moving) return;
+    const location = read(actor, 'Location'), rotation = read(actor, 'Rotation');
+    for (let k = 0; k < 3; k++) {
+      f32b[k] = location[k];
+      if (words[at + MV.LOCATION + k] !== u32b[k]) throw new Error(`ACTOR_PLUMBING=verify: mover ${actor.name} Location word ${k} differs`);
+      if (words[at + MV.LOCATION + 3 + k] !== rotation[k] >>> 0) throw new Error(`ACTOR_PLUMBING=verify: mover ${actor.name} Rotation word ${k} differs`);
+    }
+    if (!(status & MV.CHANGED)) {
+      const held = tracker.moverWords(i);
+      for (let k = 0; k < 6; k++)
+        if (held[MOVER.LOCATION + k] !== words[at + MV.LOCATION + k])
+          throw new Error(`ACTOR_PLUMBING=verify: mover ${actor.name} is skipped, but the tracker holds word ${k} ${held[MOVER.LOCATION + k]}, not ${words[at + MV.LOCATION + k]}`);
     }
   }
   const f32b = new Float32Array(3), u32b = new Uint32Array(f32b.buffer);
@@ -1090,7 +1156,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         items: claims(rawItems, rawItems.drawnIds),
         frames: plan.frames.map(({ rawItems: rows, drawnIds, ...frame }) => ({ ...frame, items: claims(rows, drawnIds) })) }));
     },
-    setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; sentRevisions = null; },
+    setOcclusion(value, movers = null) { dropMoverBlocks(trackerMovers); occlusion = value; trackerMovers = movers; sentRevisions = null; },
     setOcclusionRebuild(rebuild, drop = null) { rebuildOcclusion = rebuild; dropOcclusion = drop; },
     /** Validation (strobeProbe in main.mjs, scripts/validate-strobe-child-frames-play.mjs): the Strobe lists of the
      * light-map Strobe calls. `mainOnly` scans the main frame's surfaces alone (the first version's behavior,

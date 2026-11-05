@@ -129,6 +129,16 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       group.mesh.visible=false;}
   }
   function hideBatched(){for(const group of groups)if(group.batchEntry)batches.set(group.batchEntry,false);}
+  /** Everything a hidden record can change on this binding, as one string (ACTOR_PLUMBING=verify: a plain hidden record that
+   * follows one must leave it as it is, actor-mesh-sim.mjs hiddenRun; validate-sim-split.mjs --draw-state compares it per frame). */
+  const hiddenState=()=>JSON.stringify([root.visible,latest.visible,latest.childOnly,latest.cameraPoints===null,appliedLodKey,
+    mainLighting===null,variantLit,variantCpu,flipSide,mode,gpuHandle!==null,
+    groups.map(group=>[group.mesh.visible,group.twin?.visible??null,group.batchEntry?group.batchEntry.visible:null])]);
+  function applyQuiet(draw,record,cameraPosition,words){
+    const before=hiddenState(),changed=draw.apply({id:record.id,visible:record.visible,childOnly:record.childOnly},cameraPosition,words);
+    if(hiddenState()!==before)throw new Error(`ACTOR_PLUMBING=verify: a hidden record after a hidden record changed ${actorName}`);
+    return changed;
+  }
   const setSpheres=words=>{
     if(!words)return;
     groups.forEach((group,i)=>{const at=i*4;group.geometry.boundingSphere.center.set(words[at],words[at+1],words[at+2]);
@@ -371,7 +381,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     toCpu();
     if(ready&&record.lod!==undefined)lodUVs();
   }
-  return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,leaveGpu,
+  return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,leaveGpu,drawState:hiddenState,
     get viewDependent(){return creation.environment&&mode==='cpu'&&!creation.classic;},
     /** Validation access (main.mjs meshLod): the faces this binding's
      * geometry draws under the LOD and their distinct vertices, the groups
@@ -403,6 +413,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
      * when the record holds offsets into them. */
     apply(record,cameraPosition,words=null){
       if(disposed)return false;
+      if(record.quiet===true)return applyQuiet(this,record,cameraPosition,words);
       const plan=typeof record.plan==='number'?{...words,at:record.plan}:record.plan;
       const lighting=typeof record.lighting==='number'?{...words,at:record.lighting}:record.lighting;
       latest.visible=record.visible;latest.childOnly=record.childOnly;
@@ -520,6 +531,8 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
      * (lodStats), tagged with the pass's number and the decision's frame;
      * `takePassProbe` returns and clears the records. */
     setPassProbe(on){passProbe=on?[]:null;},
+    /** Validation only: every binding's drawn state (actor-mesh-draw.mjs createMeshDraw hiddenState), one line each. */
+    drawState(){let out='';for(const [id,draw] of bindings)out+=`${id}:${draw.drawState()}\n`;return out;},
     takePassProbe(){const records=passProbe;if(passProbe)passProbe=[];return records;},
     /** A binding's creation record: its GPU slot now, its meshes when built. */
     create(creation){
