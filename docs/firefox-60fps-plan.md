@@ -158,6 +158,34 @@ the Gecko profiles:
 Porting the glue would save 0.05 to 0.1 ms, under the 5% rule. x87 emulation as a whole is 0.1 to 0.4 ms of a frame on the four
 maps. The order above follows these figures.
 
+### The collision hash reads the image (2026-11-05)
+
+The perception and walking-prelude line checks ran in Rust, but the hash they ran in could not read the object image, so it
+called JavaScript once per candidate actor (`candidate`), per joined hit (`isMover`) and per examined hit (filter). On
+Wan Chai's scan route (1,500 ticks) that was 1,022,815, 45,098 and 116,623 crossings; they now number 7,014, 0 and 51
+(the player's facade, which stays JavaScript, is 6,264 of the candidates). Details, the actor kinds and what each one
+reads are in [the collision hash reads the image](collision-hash.md#the-hash-reads-the-image-2026-11-05).
+
+* **How.** The level queries' hash moves into the runtime's interpreter instance once it exists (`collision.adoptRuntime`, the
+  cells re-added in their first-add order, so every visit order is kept), where hash.rs answers: a live cylinder from the
+  image's Location, CollisionRadius and CollisionHeight (spawned actors' collision views and map actors with live
+  collision), a map actor that never moved from its serialized numbers while the image still holds the same floats, a mover
+  brush's ToWorld from a memo keyed by the image's Location and Rotation, `isMover` and the filter's class flag from the
+  lineage, and the filter's owner chain from one walk per query. Anything else, or any field the receiver table does not hold
+  in the image as `readNamed` reads it, goes to the JavaScript import as before.
+* **Switch.** `COLLISION_HOST=js|verify|rust` (`?collisionHost=`, default rust). `verify` runs every import beside the image's
+  answer and throws on a difference.
+* **Checked.** State digests equal in `js`, `rust` and `verify` on the five baseline maps and on the longer route (Wan Chai,
+  Island, bunker; 7.8 million Wan Chai answers compared in `verify`); `validate-collision-kernel` (also with the hash in
+  a runtime's instance, and after the move), `validate-trace-kernel`, `validate-tracked-collision`,
+  `validate-brush-bounds-kernel`, `validate-native-walking-surface` (17 cases) and the unit tests pass.
+* **Size.** The imports took about 0.5 ms a tick on Wan Chai, 0.3 on the Island and 0.2 on the bunker in Node (the figure counts
+  the timers' own cost); the Firefox profiles showed 1.10 and 0.64 ms inclusive on Wan Chai's slow tenth and the rest. The
+  browser A/B is not part of this step.
+* **Left.** The player's cylinder (its facade); the perception light check still enters through
+  `lightLineCheck` in JavaScript, which could now call `lc_line` from Rust directly; the filter's collision bits are read
+  from the image only for an actor with a live or serialized cylinder.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

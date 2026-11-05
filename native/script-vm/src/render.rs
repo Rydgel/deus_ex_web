@@ -63,7 +63,7 @@ const R_STYLE: usize = 22;
 const R_SCALEGLOW: usize = 23;
 const R_BANIMBYOWNER: usize = 24;
 const R_BPARTICLES: usize = 25;
-const R_ROTATION: usize = 26;
+pub(crate) const R_ROTATION: usize = 26;
 const R_ANIMFRAME: usize = 27;
 const R_BLENDANIMFRAME: usize = 28;
 // SetupForActor's reads; Region's members are entries of their own.
@@ -76,9 +76,9 @@ const R_BMESHENVIROMAP: usize = 34;
 const R_BMESHCURVY: usize = 35;
 const R_BUNLIT: usize = 36;
 // The noncolliding FarMoveActor (`far_move`).
-const R_BCOLLIDEACTORS: usize = 37;
-const R_BBLOCKACTORS: usize = 38;
-const R_BBLOCKPLAYERS: usize = 39;
+pub(crate) const R_BCOLLIDEACTORS: usize = 37;
+pub(crate) const R_BBLOCKACTORS: usize = 38;
+pub(crate) const R_BBLOCKPLAYERS: usize = 39;
 const R_BCOLLIDEWORLD: usize = 40;
 const R_BCOLLIDEWHENPLACING: usize = 41;
 const R_STANDINGCOUNT: usize = 42;
@@ -87,7 +87,11 @@ const R_OLDLOCATION: usize = 44;
 const R_BJUSTTELEPORTED: usize = 45;
 // FDynamicSprite::Setup's sequence name (`mesh_reads`).
 const R_ANIMSEQUENCE: usize = 46;
-const FIELD_COUNT: usize = 47;
+// The collision hash's candidate and filter reads (hash.rs).
+pub(crate) const R_COLLISIONRADIUS: usize = 47;
+pub(crate) const R_COLLISIONHEIGHT: usize = 48;
+pub(crate) const R_BPROJTARGET: usize = 49;
+const FIELD_COUNT: usize = 50;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT

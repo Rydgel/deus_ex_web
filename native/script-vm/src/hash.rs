@@ -18,7 +18,7 @@
 //! Math.min and Math.max. `x ** 2` is `x * x` (fdlibm pow's y == 2 case;
 //! scripts/validate-collision-kernel.mjs checks V8 agrees).
 //!
-//! Live actor state is never cached here. The three imports are the
+//! Live actor state is never cached here. Three imports are the
 //! JavaScript reads the reference makes at the same points
 //! (src/runtime/collision-kernel.mjs): a candidate's cylinder or brush
 //! (`valuesOf(actor)` and its Location, CollisionRadius, CollisionHeight or
@@ -36,7 +36,9 @@
 //!               primitive hits, before the join)
 //! Registration ids are the host's (dense, reused after removal).
 
-use core::ptr::addr_of_mut;
+use core::ptr::{addr_of, addr_of_mut};
+use crate::render::{Obj, R_BBLOCKACTORS, R_BBLOCKPLAYERS, R_BCOLLIDEACTORS, R_BPROJTARGET, R_COLLISIONHEIGHT, R_COLLISIONRADIUS, R_LOCATION,
+    R_ROTATION};
 use crate::trace::{self, abs, f, js_max, js_min, pow2, sqrt, TraceHit};
 
 const NONE: u32 = u32::MAX;
@@ -88,7 +90,11 @@ struct Header {
     /// lc_scan's cache epoch, and the per-registration cache.
     epoch: u32,
     cache: u32,
-    _pad: [u32; 2],
+    /// Per registration id, DESC_WORDS words (`reg_cap` entries): the image
+    /// identity of a live cylinder or brush, the descriptor flags below and a
+    /// mover's memo record. 0: none.
+    images: u32,
+    _pad: u32,
 }
 const _: () = assert!(core::mem::size_of::<Header>() == 80);
 
@@ -127,6 +133,160 @@ pub extern "C" fn lc_answer_ptr() -> *mut f64 {
 #[no_mangle]
 pub extern "C" fn lc_test_ptr() -> *mut f64 {
     addr_of_mut!(TEST) as *mut f64
+}
+
+// Answers from the object image (docs/firefox-60fps-plan.md, "The collision
+// hash reads the image"). The host describes each registration in the
+// header's `images` table (collision-kernel.mjs):
+/// Words per registration descriptor: [handle, flags, memo record, 0].
+const DESC_WORDS: usize = 4;
+/// The registration's class facts are known: D_MOVER and the filter flag
+/// below are valid (its lineage, which never changes).
+const D_KIND: u32 = 1;
+/// isMover(actor): the lineage includes Engine.Mover.
+const D_MOVER: u32 = 2;
+/// The registration's cylinder is its image's: its Location, CollisionRadius
+/// and CollisionHeight are the cells `valuesOf(actor)` reads, and `handle`
+/// names the image identity.
+const D_IMAGE: u32 = 4;
+/// The registration is a mover brush whose pose (Location and Rotation) is
+/// its image's, and whose other ToWorld inputs never change: the memo record
+/// (BRUSH_RECORD bytes, host-allocated) holds the pose and ToWorld the host
+/// computed for it last. The memo answers while the image's pose is that one.
+const D_BRUSH: u32 = 8;
+/// The registration is a map actor whose cylinder `valuesOf` reads from its
+/// serialized values (no `collisionValues`): the memo record holds those five
+/// numbers (f64 Location x3, CollisionRadius, CollisionHeight), and the image
+/// must still hold them (as float32s) for the registration to answer with
+/// them.
+const D_STATIC: u32 = 16;
+/// The SingleLineCheck filter flag of the first of LevelInfo (4), Pawn (1),
+/// Mover (2) and ZoneInfo (8) the lineage includes, or 0 (none), in bits 8..12.
+const D_FILTER_SHIFT: u32 = 8;
+/// MODE: answer from the image (0), or also run the import and let the host
+/// compare (1, VERIFY: every answer the image gives is exposed to it first).
+static mut MODE: u32 = 0;
+const VERIFY_MODE: u32 = 1;
+/// The query in flight, written by the host before each Rust entry:
+/// [valid, flags, the world actor is in the source's owner chain, chain
+/// length, chain registration ids...]. `valid` 0 sends every filter test to
+/// lc_accept.
+static mut CTX: [u32; 16] = [0; 16];
+const CTX_CHAIN: usize = 4;
+/// VERIFY's image answers for the import about to run: [candidate (0 none, 1
+/// a cylinder: x, y, z, radius, height follow; 2 a brush: its model address
+/// follows, its ToWorld is BRUSH), x, y, z, radius, height, mover (0 none, 1
+/// false, 2 true), accept (same)].
+static mut IMAGE: [f64; 8] = [0.0; 8];
+static mut BRUSH: [f64; 12] = [0.0; 12];
+/// Counts of the answers given from the image: cylinder candidates, movers,
+/// accepts, brush candidates, serialized-values candidates.
+static mut STATS: [u32; 8] = [0; 8];
+
+#[no_mangle]
+pub extern "C" fn lc_mode(mode: u32) {
+    unsafe { MODE = mode };
+}
+#[no_mangle]
+pub extern "C" fn lc_ctx_ptr() -> *mut u32 {
+    addr_of_mut!(CTX) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn lc_image_ptr() -> *mut f64 {
+    addr_of_mut!(IMAGE) as *mut f64
+}
+#[no_mangle]
+pub extern "C" fn lc_stats_ptr() -> *mut u32 {
+    addr_of_mut!(STATS) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn lc_brush_ptr() -> *mut f64 {
+    addr_of_mut!(BRUSH) as *mut f64
+}
+
+/// A registration's descriptor: (handle, flags, memo record), zeros when it
+/// has none.
+#[inline(always)]
+unsafe fn describe(hp: *mut Header, id: u32) -> (u32, u32, u32) {
+    let images = core::ptr::read_volatile(addr_of_mut!((*hp).images));
+    if images == 0 {
+        return (0, 0, 0);
+    }
+    let entry = (images as usize as *const u32).add(DESC_WORDS * id as usize);
+    (*entry, *entry.add(1), *entry.add(2))
+}
+
+/// The fields a cylinder candidate reads from the image.
+const CYLINDER_FIELDS: u64 = 1 << R_LOCATION | 1 << R_COLLISIONRADIUS | 1 << R_COLLISIONHEIGHT;
+/// The fields the filter's `collisionBits` reads (the +0x1dc word without
+/// bCollideWorld).
+const BITS_FIELDS: u64 = 1 << R_BCOLLIDEACTORS | 1 << R_BBLOCKACTORS | 1 << R_BBLOCKPLAYERS | 1 << R_BPROJTARGET;
+
+/// A candidate's cylinder as `valuesOf(actor)` reads it, from its image:
+/// None when the host described no live cylinder for the registration, or
+/// the image does not hold the fields as readNamed reads them (a host
+/// receiver, a bound key, a released identity). The cells are float32s.
+unsafe fn image_cylinder(hp: *mut Header, id: u32) -> Option<[f64; 5]> {
+    let (handle, flags, _) = describe(hp, id);
+    if flags & D_IMAGE == 0 {
+        return None;
+    }
+    let o = Obj::of(handle);
+    if !o.has(CYLINDER_FIELDS) {
+        return None;
+    }
+    let w = |field: usize, i: u32| f32::from_bits(o.word(field, i)) as f64;
+    Some([w(R_LOCATION, 0), w(R_LOCATION, 1), w(R_LOCATION, 2), w(R_COLLISIONRADIUS, 0), w(R_COLLISIONHEIGHT, 0)])
+}
+
+/// A map actor's serialized-values cylinder (the numbers `valuesOf(actor)` reads: its record), when the image
+/// holds the same Location, CollisionRadius and CollisionHeight: None for any difference (an actor the image has
+/// moved, a field the image does not hold as readNamed reads it, NaN), where `lc_candidate` answers.
+unsafe fn image_static(hp: *mut Header, id: u32) -> Option<[f64; 5]> {
+    let (handle, flags, record) = describe(hp, id);
+    if flags & D_STATIC == 0 || record == 0 {
+        return None;
+    }
+    let o = Obj::of(handle);
+    if !o.has(CYLINDER_FIELDS) {
+        return None;
+    }
+    let held = record as usize as *const f64;
+    let w = |field: usize, i: u32| f32::from_bits(o.word(field, i)) as f64;
+    let image = [w(R_LOCATION, 0), w(R_LOCATION, 1), w(R_LOCATION, 2), w(R_COLLISIONRADIUS, 0), w(R_COLLISIONHEIGHT, 0)];
+    let mut answer = [0.0; 5];
+    for i in 0..5 {
+        answer[i] = *held.add(i);
+        if image[i] != answer[i] {
+            return None;
+        }
+    }
+    Some(answer)
+}
+
+/// A mover brush's model address and ToWorld from its memo, when the image's
+/// Location (float bits) and Rotation (int32s) are the ones the memo was
+/// computed for: u32 words [Location x3, Rotation x3, model, valid], then 12
+/// f64s at byte 32.
+unsafe fn image_brush(hp: *mut Header, id: u32) -> Option<(u32, [f64; 12])> {
+    let (handle, flags, record) = describe(hp, id);
+    if flags & D_BRUSH == 0 || record == 0 {
+        return None;
+    }
+    let words = record as usize as *const u32;
+    if *words.add(7) == 0 {
+        return None;
+    }
+    let o = Obj::of(handle);
+    if !o.has(1 << R_LOCATION | 1 << R_ROTATION) {
+        return None;
+    }
+    for i in 0..3 {
+        if o.word(R_LOCATION, i as u32) != *words.add(i) || o.word(R_ROTATION, i as u32) != *words.add(3 + i) {
+            return None;
+        }
+    }
+    Some((*words.add(6), *((record as usize + 32) as *const [f64; 12])))
 }
 
 #[inline(always)]
@@ -184,7 +344,7 @@ pub unsafe extern "C" fn hash_init(h: u32, keys: u32, heads: u32, table_cap: u32
     link_cap: u32, stamps: u32, scratch: u32, cache: u32, reg_cap: u32) {
     let hd = &mut *(h as usize as *mut Header);
     *hd = Header { keys, heads, table_cap, table_used: 0, link_reg, link_next, link_cap, link_top: 0, link_free: NONE,
-        links_live: 0, stamps, reg_cap, stamp: 0, querying: 0, busy: 0, scratch, epoch: 0, cache, _pad: [0; 2] };
+        links_live: 0, stamps, reg_cap, stamp: 0, querying: 0, busy: 0, scratch, epoch: 0, cache, images: 0, _pad: 0 };
     for i in 0..table_cap {
         *at(keys, i) = EMPTY;
     }
@@ -847,17 +1007,99 @@ impl Query {
     unsafe fn cached(&self, id: u32) -> *mut Cached {
         (core::ptr::read_volatile(addr_of_mut!((*self.hp).cache)) as usize as *mut Cached).add(id as usize)
     }
+    /// The filter test of one examined hit (singleLineCheck's body in
+    /// line-filter.mjs) from the registration's descriptor, the query's
+    /// context and, for a class none of the four filter flags names, the
+    /// image's collision bits: None where the host gave no context or the
+    /// registration has no descriptor, or the image does not hold the bits as
+    /// readNamed reads them (lc_accept answers then).
+    unsafe fn image_accept(&self, id: u32) -> Option<bool> {
+        let ctx = addr_of!(CTX) as *const u32;
+        if *ctx == 0 {
+            return None;
+        }
+        let flags = *ctx.add(1);
+        if id == WORLD {
+            // The world actor's class is LevelInfo (filter flag 4).
+            return Some(*ctx.add(2) == 0 && flags & 4 != 0);
+        }
+        let (handle, descriptor, _) = describe(self.hp, id);
+        if descriptor & D_KIND == 0 {
+            return None;
+        }
+        for i in 0..*ctx.add(3) as usize {
+            if *ctx.add(CTX_CHAIN + i) == id {
+                return Some(false);
+            }
+        }
+        let filter = descriptor >> D_FILTER_SHIFT & 15;
+        if filter != 0 {
+            return Some(flags & filter != 0);
+        }
+        if flags & 0x10 == 0 {
+            return Some(false);
+        }
+        if flags & 0x20 != 0 {
+            if descriptor & D_IMAGE == 0 {
+                return None;
+            }
+            let o = Obj::of(handle);
+            if !o.has(BITS_FIELDS) {
+                return None;
+            }
+            let bits = o.flag(R_BCOLLIDEACTORS) as u32 | (o.flag(R_BBLOCKACTORS) as u32) << 2
+                | (o.flag(R_BBLOCKPLAYERS) as u32) << 3 | (o.flag(R_BPROJTARGET) as u32) << 4;
+            if bits & 0x10 == 0 && bits & 0x0c != 0x0c {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
     /// lc_candidate, or a cylinder cached earlier in this scan. Returns the
     /// kind and the geometry (a brush's model address in [5]).
     unsafe fn candidate(&self, id: u32) -> (i32, [f64; 6]) {
-        if self.epoch != 0 {
+        let verify = MODE == VERIFY_MODE;
+        // A cylinder read earlier in this scan, from the image or the import: nothing changes in a scan, and a
+        // cached answer costs less than the image's receiver and class lookups.
+        if self.epoch != 0 && !verify {
             let c = self.cached(id);
             if (*c).cylinder == self.epoch {
                 let g = (*c).geometry;
                 return (C_CYLINDER, [g[0], g[1], g[2], g[3], g[4], 0.0]);
             }
         }
+        let (cylinder, counter) = match image_cylinder(self.hp, id) {
+            Some(g) => (Some(g), 0),
+            None => (image_static(self.hp, id), 4),
+        };
+        if let Some(g) = cylinder {
+            if !verify {
+                STATS[counter] += 1;
+                if self.epoch != 0 {
+                    let c = self.cached(id);
+                    (*c).cylinder = self.epoch;
+                    (*c).geometry = g;
+                }
+                return (C_CYLINDER, [g[0], g[1], g[2], g[3], g[4], 0.0]);
+            }
+            let image = addr_of_mut!(IMAGE) as *mut f64;
+            *image = 1.0;
+            for i in 0..5 {
+                *image.add(1 + i) = g[i];
+            }
+        } else if let Some((model, coords)) = image_brush(self.hp, id) {
+            if !verify {
+                STATS[3] += 1;
+                trace::set_owner(&coords);
+                return (C_BRUSH_OWNED, [0.0, 0.0, 0.0, 0.0, 0.0, model as f64]);
+            }
+            let image = addr_of_mut!(IMAGE) as *mut f64;
+            *image = 2.0;
+            *image.add(1) = model as f64;
+            *addr_of_mut!(BRUSH) = coords;
+        }
         let kind = lc_candidate(id);
+        *(addr_of_mut!(IMAGE) as *mut f64) = 0.0;
         let cand = addr_of_mut!(CAND) as *const f64;
         let geometry = [*cand, *cand.add(1), *cand.add(2), *cand.add(3), *cand.add(4), *cand.add(5)];
         // A brush's ToWorld is in OWNER for this trace only: brushes are
@@ -870,13 +1112,24 @@ impl Query {
         (kind, geometry)
     }
     unsafe fn mover(&self, id: u32) -> bool {
-        if self.epoch != 0 {
+        let (_, flags, _) = describe(self.hp, id);
+        let verify = MODE == VERIFY_MODE;
+        if flags & D_KIND != 0 {
+            let answer = flags & D_MOVER != 0;
+            if !verify {
+                STATS[1] += 1;
+                return answer;
+            }
+            *(addr_of_mut!(IMAGE) as *mut f64).add(6) = 1.0 + answer as u32 as f64;
+        }
+        if self.epoch != 0 && !verify {
             let c = self.cached(id);
             if (*c).mover == self.epoch {
                 return (*c).is_mover != 0;
             }
         }
         let is_mover = lc_mover(id) != 0;
+        *(addr_of_mut!(IMAGE) as *mut f64).add(6) = 0.0;
         if self.epoch != 0 {
             let c = self.cached(id);
             (*c).mover = self.epoch;
@@ -885,19 +1138,29 @@ impl Query {
         is_mover
     }
     unsafe fn accept(&mut self, id: u32) -> bool {
+        let verify = MODE == VERIFY_MODE;
+        if let Some(answer) = self.image_accept(id) {
+            if !verify {
+                STATS[2] += 1;
+                return answer;
+            }
+            *(addr_of_mut!(IMAGE) as *mut f64).add(7) = 1.0 + answer as u32 as f64;
+        }
         if id == WORLD {
-            if self.world_accept == 0 || self.epoch == 0 {
+            if self.world_accept == 0 || self.epoch == 0 || verify {
                 self.world_accept = if lc_accept(id) != 0 { 2 } else { 1 };
             }
+            *(addr_of_mut!(IMAGE) as *mut f64).add(7) = 0.0;
             return self.world_accept == 2;
         }
-        if self.epoch != 0 {
+        if self.epoch != 0 && !verify {
             let c = self.cached(id);
             if (*c).accept == self.epoch {
                 return (*c).accepted != 0;
             }
         }
         let accepted = lc_accept(id) != 0;
+        *(addr_of_mut!(IMAGE) as *mut f64).add(7) = 0.0;
         if self.epoch != 0 {
             let c = self.cached(id);
             (*c).accept = self.epoch;

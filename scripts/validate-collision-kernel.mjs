@@ -26,7 +26,16 @@
  *    throw or answer as the JavaScript does.
  *
  * COLLISION_CASES (default 20000) scales the seeded cases; COLLISION_ONLY
- * (pieces, hash, levels; comma-separated) runs some sections. */
+ * (pieces, hash, levels; comma-separated) runs some sections.
+ * COLLISION_INSTANCE=runtime holds the levels' kernel hashes in a runtime's
+ * interpreter instance (a fresh object arena; collision-kernel.mjs
+ * runtimeLineKernel's placement), where the fixtures' registrations answer
+ * isMover and the filter's class and owner-chain tests from their
+ * descriptors; =adopt makes them in the trace kernel's instance and moves
+ * them (`adoptKernel`, rebuilding every cell's list). The reference is the
+ * JavaScript either way. Fixture actors have no image identity, so the
+ * cylinder and brush image reads are exercised in Play (bench-sim with
+ * COLLISION_HOST=verify). */
 import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
 import path from 'node:path';
@@ -42,6 +51,9 @@ import {primitiveLineHit} from '../src/runtime/primitive-collision.mjs';
 import {primitiveCollisionBounds, brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {traceExtent} from '../src/runtime/extent-trace.mjs';
 import {kernelHashStore, lineResultDifference, kernelStats} from '../src/runtime/collision-kernel.mjs';
+import {ObjectArena} from '../src/runtime/script-object-arena.mjs';
+import {instantiateScriptVm} from '../src/runtime/script-vm-kernel.mjs';
+import {createRuntimeTraceKernel, lineCheckImports} from '../src/runtime/trace-kernel.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {walkingSurfacePrelude, walkingSurfaceTextures, surfaceScanInputs, scanSurface} from '../src/runtime/walking-surface.mjs';
@@ -396,7 +408,14 @@ for (const name of only('levels') ? ['00_Training', '01_NYC_UNATCOIsland'] : [])
     actors.push(twin);
   }
   const options = {extentCheck: traceExtent};
-  const k = createLevelQueries(model, actors, options);
+  let lineKernel = null;
+  if (process.env.COLLISION_INSTANCE) {
+    const arena = new ObjectArena(), exports = await instantiateScriptVm(arena.memory, lineCheckImports);
+    lineKernel = createRuntimeTraceKernel(exports, arena);
+    lineKernel.imageHost = true;
+  }
+  const k = createLevelQueries(model, actors, process.env.COLLISION_INSTANCE === 'runtime' ? {...options, lineKernel} : options);
+  if (process.env.COLLISION_INSTANCE === 'adopt') k.adoptKernel(lineKernel);
   // The JavaScript reference, with the same level info object.
   const levelInfo = k.levelInfo;
   const jq = createLevelQueries(model, [], {...options, kernel: false, levelInfo});

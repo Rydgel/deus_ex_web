@@ -89,6 +89,10 @@ export const RENDER_FIELDS = Object.freeze([
   // FDynamicSprite::Setup's GetAnimSeq name (actor-mesh-sim.mjs packSetup): the
   // name's word, its folded id (script-name-ids.mjs nameCellWord).
   ['AnimSequence', 'engine.actor.animsequence', 'name'],
+  // The collision hash's candidate and filter reads (hash.rs image_cylinder, image_accept).
+  ['CollisionRadius', 'engine.actor.collisionradius', 'float'],
+  ['CollisionHeight', 'engine.actor.collisionheight', 'float'],
+  ['bProjTarget', 'engine.actor.bprojtarget', 'bool'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]`, a fixed array of four contiguous floats. */
@@ -194,6 +198,8 @@ export class RenderScanHost {
   }
   /** js_render_class (no script runs). */
   classWord(handle) {
+    // The table first: a class row's word is computed against it (the collision hash asks before any render scan has).
+    this.table();
     const vm = this.vm, address = vm.classRow(handle);
     if (!address) return;
     const identity = identityOfHandle(handle), runtime = this.runtime;

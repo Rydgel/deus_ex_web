@@ -1,4 +1,5 @@
 import { falling } from './falling.mjs';
+import { markLiveCylinder } from './actor-pose-fields.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { decorationLanded, playerContactLanding } from './landing.mjs';
 import { moveQuery } from './move-query.mjs';
@@ -20,10 +21,10 @@ export function linkDecorationCollision(queries, host) {
   // non-colliding export keeps its word and stays out until SetCollision.
   const registered = Boolean(host.flags & 1);
   if (registered) queries.removeActor(host);
-  host.collisionValues = { ...values,
+  host.collisionValues = markLiveCylinder({ ...values,
     get Location() { return host.position; },
     get CollisionRadius() { return host.radius ?? values.CollisionRadius ?? 0; },
-    get CollisionHeight() { return host.height ?? values.CollisionHeight ?? 0; } };
+    get CollisionHeight() { return host.height ?? values.CollisionHeight ?? 0; } }, host);
   if (registered) queries.addActor(host);
 }
 
