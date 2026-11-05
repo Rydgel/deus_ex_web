@@ -174,6 +174,11 @@ field as a UFunction and reports a missing/invalid function. Consequently:
 * Global dispatch bypasses the active state and uses class lookup.
 * Final dispatch uses the embedded function object directly.
 
+The two wrappers were re-disassembled on 2026-11-05: `0x101301e0` and `0x10130300` are the same 20 instructions, the lookup
+flag (`push 0` at `0x101301e9`, `push 1` at `0x10130309`) the only difference. The JavaScript VM's `lookup(receiver, name, global)`
+is this resolution, and the Rust VM's `CALL` resolves a 0x38 node with it too
+([rust-core.md](rust-core.md#november-5-global-function-calls-through-the-rust-call-path-implemented)).
+
 `Context` changes the ECX receiver for lookup and the eventual call but does
 not mutate the frame's `Object`; nested CallFunction argument expressions still
 use the caller frame Object. This is the observed receiver/context split.

@@ -898,6 +898,26 @@ writes), about 1.8 µs an actor there.
   level (rare, about 0.7 ms a call in Node, so it lands in single frames), the tick's event gate (`js_event_gate`, which reads
   Level and bBegunPlay in JavaScript), the zone render time (`js_tick_zone_time`) and reflected field reads.
 
+### November 5: global function calls through the Rust call path (implemented)
+
+The census's `js effect 0x38` (EX_GlobalFunction: `Global.Tick(DeltaTime)` and its siblings in state-level overrides) was a
+JavaScript node, so each call ran `compileCall`, `runtime.invoke` and `callFunction` in JavaScript, and the callee's lowered body
+re-entered Rust through `vm.resume`. It is now a `CALL` like a virtual call:
+
+* **Original.** `execGlobalFunction` (Core `0x10130300`) is `execVirtualFunction` (`0x101301e0`) with `push 1` for the lookup
+  flag where the virtual call pushes `push 0` (the rest is identical); flag 1 makes `FindObjectField` skip the state table
+  (docs/script-execution.md "Function opcodes and lookup order"). `runtime.lookup(receiver, name, true)` is that lookup.
+* **Lowering and begin.** `script-vm-lower.mjs` `call()` resolves a 0x38 node on SELF with `lookup(instance, name, true)` for the
+  signature id; `beginCall` and `callDecision` resolve it with `callRecord` (`lookup(receiver, name, true)`, the final call's
+  operand for 0x1c). The call cache's key (caller code, node, class row, state row) covers it unchanged. Native, singular,
+  boundary, out-parameter, non-scalar-parameter and class-receiver calls stay on the JavaScript path, as for virtual calls.
+  No Rust changed.
+* **Switch.** `GLOBAL_CALLS=js|verify|rust` / `?globalCalls=` (default rust); `verify` compares each global resolution with the
+  class chain and throws on a difference.
+* **Verified.** Digests equal in all three modes on the five baseline maps and the long route; with
+  `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1 GLOBAL_CALLS=verify` the five baselines match (17,561 resolutions verified);
+  `validate-script-vm-interp`. Census and sizes: docs/firefox-60fps-plan.md "Global function calls run in Rust".
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

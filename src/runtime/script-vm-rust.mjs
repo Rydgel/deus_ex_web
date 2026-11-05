@@ -27,7 +27,7 @@ import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT, scriptRunCount} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
-import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
+import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling, globalCallMode} from './script-vm-lower.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {AiEventHost} from './script-vm-aievent.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
@@ -122,8 +122,8 @@ function shape(run, n, depth = 2) {
   if (depth <= 0) return opName(n) + type;
   const kids = n.op === 'native' ? n.args : n.op === 0x19 || n.op === 0x12 ? [n.context, n.value]
     : n.op === 0x0f || n.op === 0x14 ? [n.left, n.right]
-    : n.op === 0x1a ? [n.right, n.left] : n.op === 0x1b || n.op === 0x1c ? [] : 'value' in n && typeof n.value === 'object' ? [n.value] : [];
-  const name = n.op === 0x1b || n.op === 0x1c ? ` ${n.name ?? ''}` : '';
+    : n.op === 0x1a ? [n.right, n.left] : n.op === 0x1b || n.op === 0x1c || n.op === 0x38 ? [] : 'value' in n && typeof n.value === 'object' ? [n.value] : [];
+  const name = n.op === 0x1b || n.op === 0x1c || n.op === 0x38 ? ` ${n.name ?? ''}` : '';
   return `${opName(n)}${type}${name}${kids?.length ? `(${kids.map(k => shape(run, k, depth - 1)).join(', ')})` : ''}`;
 }
 // bench-sim clears its measurements after the warm-up ticks.
@@ -1084,8 +1084,7 @@ export class RustScriptVm {
   beginCall(callerId, node, handle, sig) {
     const caller = this.run(callerId), n = caller.nodes[node], runtime = this.runtime, services = caller.services;
     const receiver = handle === caller.selfHandle ? caller.self : this.identity(handle);
-    const record = n.op === 0x1c ? services.operand(caller.compiled.script, n)
-      : runtime.lookup(receiver, n.name, false);
+    const record = this.callRecord(n, receiver, caller);
     const fn = record?.function;
     if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
       fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
@@ -1105,6 +1104,19 @@ export class RustScriptVm {
     this.depth = id + 1;
     if (STATS) count('call in rust');
     return id;
+  }
+  /** runtime.invoke's resolution of the CALL node `n` on `receiver`: a final call's operand; a virtual call by name in the receiver's
+   * state, then its class; a global call (EX_GlobalFunction) by name in the class only, ignoring the state (execGlobalFunction's
+   * FindFunctionChecked(Name, 1)). GLOBAL_CALLS=verify compares a global call's record with the class chain's. */
+  callRecord(n, receiver, caller) {
+    if (n.op === 0x1c) return caller.services.operand(caller.compiled.script, n);
+    const global = n.op === 0x38, record = this.runtime.lookup(receiver, n.name, global);
+    if (global && receiver?.kind !== 'Class' && globalCallMode() === 'verify') {
+      const direct = this.runtime.lookupMember(this.runtime.instance(receiver).cls, 'methods', n.name);
+      if (record !== direct) throw new Error(`GLOBAL_CALLS=verify: Global.${n.name} on handle ${handleOf(receiver)} resolved ${record?.key}, the class chain has ${direct?.key}`);
+      if (STATS) count('global call verified');
+    }
+    return record;
   }
   jsCall(n, why) {
     if (STATS) count(`call in js (${why}) ${opName(n)} ${n.name ?? ''}`);
