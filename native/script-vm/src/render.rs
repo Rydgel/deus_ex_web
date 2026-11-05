@@ -85,7 +85,9 @@ const R_STANDINGCOUNT: usize = 42;
 const R_BRUSH: usize = 43;
 const R_OLDLOCATION: usize = 44;
 const R_BJUSTTELEPORTED: usize = 45;
-const FIELD_COUNT: usize = 46;
+// FDynamicSprite::Setup's sequence name (`mesh_reads`).
+const R_ANIMSEQUENCE: usize = 46;
+const FIELD_COUNT: usize = 47;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -463,6 +465,10 @@ const MB_SETUP_FLAGS: u32 = MB_ZONE + 4;
 const MB_DRAWTYPE: u32 = MB_ZONE + 5;
 const MB_OWN_PARTICLES: u32 = MB_ZONE + 6;
 const MB_OWN_ANIMFRAME: u32 = MB_ZONE + 7;
+/// The actor's own AnimSequence word (its folded name id, 0 for None),
+/// valid with MS_ANIMSEQ: Setup's GetAnimSeq looks the name up only when
+/// it changes.
+const MB_ANIMSEQ: u32 = MB_ZONE + 8;
 /// The numeric pose: animation actor, bParticles, DrawScale, Location,
 /// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
 const POSE_WORDS: u32 = 17;
@@ -474,6 +480,7 @@ const MS_DRAWN: u32 = 2;
 const MS_DRAWN_CHILD: u32 = 4;
 const MS_CHANGED: u32 = 8;
 const MS_SETUP: u32 = 16;
+const MS_ANIMSEQ: u32 = 32;
 const MESH_SETUP_FIELDS: u64 = 1 << R_REGION_ZONE
     | 1 << R_REGION_ILEAF
     | 1 << R_REGION_ZONENUMBER
@@ -556,7 +563,7 @@ fn drawn_in_world(a: &Obj, h: u32, player: u32, behind: bool, view_target: u32, 
 /// MB_LAST_VALID and a numeric pose word differs from the last), Mesh,
 /// Style, ScaleGlow, Location, PrePivot, DrawScale, the animation actor
 /// (bAnimByOwner ? Owner ?? self : self), the numeric pose and the actor's
-/// own DrawType, bParticles and AnimFrame (FDynamicSprite::Setup's).
+/// own DrawType, bParticles, AnimFrame and AnimSequence (FDynamicSprite::Setup's).
 #[no_mangle]
 pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, view_target: u32) {
     for k in 0..count {
@@ -644,6 +651,10 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
                 | (a.flag(R_BUNLIT) as u32) << 3
                 | (a.flag(R_BSPECIALLIT) as u32) << 4;
             store32(word(MB_SETUP_FLAGS), flags);
+        }
+        if a.has(1 << R_ANIMSEQUENCE) {
+            status |= MS_ANIMSEQ;
+            store32(word(MB_ANIMSEQ), load32(a.at(R_ANIMSEQUENCE)));
         }
         store32(word(MB_STATUS), status);
     }

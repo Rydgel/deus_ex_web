@@ -86,6 +86,9 @@ export const RENDER_FIELDS = Object.freeze([
   ['Brush', 'engine.actor.brush', 'pointer'],
   ['OldLocation', 'engine.actor.oldlocation', 'vector'],
   ['bJustTeleported', 'engine.actor.bjustteleported', 'bool'],
+  // FDynamicSprite::Setup's GetAnimSeq name (actor-mesh-sim.mjs packSetup): the
+  // name's word, its folded id (script-name-ids.mjs nameCellWord).
+  ['AnimSequence', 'engine.actor.animsequence', 'name'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]`, a fixed array of four contiguous floats. */

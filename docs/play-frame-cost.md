@@ -1800,3 +1800,13 @@ The whole frame's median moves more between two runs of one build than this chan
 `begin`'s shared walk) varied by up to 0.8 ms between rounds on the Island (4.98 and 5.78 ms on master). The Airfield's sprite
 phase is the laser iterator's CurrentItem in JavaScript (0.65 ms a frame): in Rust since (lasers.md "CurrentItem in Rust"), the
 Airfield's sprite phase is 0.60 ms.
+
+**AnimSequence in the mesh reads.** FDynamicSprite::Setup's candidate (actor-mesh-sim.mjs `packSetup`) read every drawn mesh
+actor's AnimSequence through JavaScript each frame for GetAnimSeq's lookup: 0.13 to 0.20 ms a frame on the four maps. The name's
+four image bytes hold its folded id (script-name-ids.mjs `nameCellWord`, written with the name by every name store), so
+render.rs `mesh_reads` now copies that word into the block (MB_ANIMSEQ, with MS_ANIMSEQ when the image holds the field), and
+`packSetup` reads the name and looks it up only when the word changes: an unchanged word is the same name up to case, which
+`setupSequence` ignores. Under `?renderScan=verify` the mesh reads' check compares the word with the name's id and `packSetup`
+compares the kept sequence with a fresh lookup; both held for 40 s on the Island and Battery Park, and
+`validate-sprite-setup` (298 Play candidates packed from the mesh reads against the original Setup) and
+`validate-actor-mesh-scene` pass. Battery Park's `packSetup` went from 0.265 to 0.069 ms a frame.

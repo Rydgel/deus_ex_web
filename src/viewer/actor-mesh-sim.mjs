@@ -17,6 +17,7 @@ import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
 import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
 import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
+import {nameCellWord} from '../runtime/script-name-ids.mjs';
 import {FieldReader,fieldReaders,hasReader} from './actor-fields.mjs';
 import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum,newGroupBoxes,VIEW_BOX_AT} from './gpu-mesh-bounds.mjs';
 import {meshFaceGroups,resolveMeshSkin,resolveMeshSkinNow} from './actor-mesh-skins.mjs';
@@ -32,8 +33,8 @@ import {registerAllocationSiteWarmer} from '../runtime/allocation-site-warmup.mj
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
-  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54};
-const MB_WORDS=55,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
+  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54,ANIMSEQ:55};
+const MB_WORDS=56,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16,MS_ANIMSEQ=32;
 
 /** A plain texture reference for the page's asset store. */
 const wordView=new DataView(new ArrayBuffer(4));
@@ -634,6 +635,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
       for(const [word,values] of floats)values.forEach((value,i)=>{if(u32[at+word+i]!==bitsOf(value))fail(`word ${word+i}`);});
       const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
       if(u32[at+MB.ANIMACTOR]!==handleOf(animationActor))fail('animation actor');
+      if(status&MS_ANIMSEQ&&u32[at+MB.ANIMSEQ]!==nameCellWord(own.AnimSequence()))fail('AnimSequence');
     }
     const groupBits=()=>{
       const bits=new Array(groups.size);
@@ -656,17 +658,17 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
      * rule: the player in a mirror). */
     const childAdmitted=(reads,at=blockAt(reads))=>Boolean(childVisible)&&(at>=0?Boolean(reads.views().u32[at+MB.STATUS]&MS_DRAWN_CHILD)
       :childVisible(actor,own));
-    // GetAnimSeq's last answer (setupSequence) for Setup's candidate.
-    let setupName,setupHit=null;
+    // GetAnimSeq's last answer (setupSequence) for Setup's candidate, and the
+    // name and the name word (this frame's block: its folded id) it was for.
+    let setupName,setupWord=-1,setupHit=null;
     /** FDynamicSprite::Setup's candidate words (bsp-occlusion.mjs SETUP) at
      * `at`: the actor's own fields from this frame's block, or read; for a
      * render-iterator item (`item`) its snapshot's Location, Rotation and
      * DrawScale, which DrawActorSprite would write into the actor. */
     function packSetup({u32,f32,i32},at,key,record,reads,item=null){
       u32[at+SETUP.KEY]=key>>>0;u32[at+SETUP.MESH]=record>>>0;u32[at+SETUP.TEXTURE]=0;u32[at+SETUP.USIZE]=0;u32[at+SETUP.VSIZE]=0;
-      const b=item?-1:blockAt(reads);
+      const b=item?-1:blockAt(reads),w=b>=0?reads.views().u32:null;
       if(b>=0){
-        const w=reads.views().u32;
         u32[at+SETUP.DRAWTYPE]=w[b+MB.DRAWTYPE];
         for(let k=0;k<3;k++){
           u32[at+SETUP.LOCATION+k]=w[b+MB.LOCATION+k];u32[at+SETUP.ROTATION+k]=w[b+MB.POSE+6+k];
@@ -681,8 +683,17 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         f32[at+SETUP.DRAWSCALE]=item?item.drawScale:own.DrawScale();u32[at+SETUP.PARTICLES]=own.bParticles()?1:0;
         f32[at+SETUP.ANIMFRAME]=own.AnimFrame();
       }
-      const name=own.AnimSequence();
-      if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
+      // (an unchanged word is an unchanged name up to case, which setupSequence ignores: the name is read only when it changes)
+      if(b>=0&&w[b+MB.STATUS]&MS_ANIMSEQ){
+        const word=w[b+MB.ANIMSEQ];
+        if(word!==setupWord){setupWord=word;setupName=own.AnimSequence();setupHit=setupSequence(payload.sequences,setupName);}
+        else if(reads.verify&&setupHit!==setupSequence(payload.sequences,own.AnimSequence()))
+          throw new Error(`RENDER_SCAN=verify: ${actorName} AnimSequence's sequence differs from its name word's`);
+      }else{
+        const name=own.AnimSequence();
+        if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
+        setupWord=-1;
+      }
       u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
     }
     // (made once per binding: inside meshChanged it made a context object at every call, for every binding of every frame)
