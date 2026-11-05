@@ -1680,7 +1680,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         try { frame.renderRect = { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
       }
       if (!stopped()) {
-        try { live.lights = game.movingLights(); frame.lights = live.lights.map(plainLight); } catch (error) { fail(error); }
+        try {
+          // One walk of Level.Actors for the moving lights, the sprite scan and the mesh admission (script-vm-render.mjs `share`).
+          const viewer = game.player.collisionActor;
+          runtime.scriptVm?.render?.share(runtime.levelFor(viewer).actors, { viewer, viewTarget: runtime.readNamed(viewer, 'ViewTarget'), firstPerson: true });
+          live.lights = game.movingLights(); frame.lights = live.lights.map(plainLight);
+        } catch (error) { fail(error); }
       }
       const rect = frame.renderRect;
       // The page draws the world (and asks for the sky frame) unless the

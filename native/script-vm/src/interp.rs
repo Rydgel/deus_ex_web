@@ -471,7 +471,15 @@ static mut CHECK: u32 = 0;
 static mut VECTOR_IO: [u32; 3] = [0; 3];
 static mut RESULT3: [u32; 3] = [0; 3];
 static mut CHECK_VALUES: [f64; 10] = [0.0; 10];
+/// Script bodies begun here (`statements`, `vm_statement`): with the
+/// JavaScript VM's count (script-vm.mjs scriptRunCount), a host test that no
+/// script ran between two points (script-vm-render.mjs `share`).
+static mut SCRIPT_RUNS: u32 = 0;
 
+#[no_mangle]
+pub extern "C" fn vm_script_runs_ptr() -> *mut u32 {
+    addr_of_mut!(SCRIPT_RUNS)
+}
 #[no_mangle]
 pub extern "C" fn vm_runaway_ptr() -> *mut u32 {
     addr_of_mut!(RUNAWAY)
@@ -1162,6 +1170,7 @@ impl Run {
     /// RESULT) or the index of an S_YIELD statement, which the JavaScript
     /// loop executes (and counts) before re-entering.
     pub(crate) fn statements(&mut self, entry: u32) -> i32 {
+        unsafe { SCRIPT_RUNS = SCRIPT_RUNS.wrapping_add(1) };
         let code = self.code;
         let count = unsafe { *code };
         let mut cursor = entry;
@@ -2510,5 +2519,6 @@ pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, e
 pub extern "C" fn vm_statement(code: u32, frame: u32, locals: u32, self_handle: u32, index: u32) -> i32 {
     let code = code as usize as *const u32;
     let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
+    unsafe { SCRIPT_RUNS = SCRIPT_RUNS.wrapping_add(1) };
     run.statement(index)
 }

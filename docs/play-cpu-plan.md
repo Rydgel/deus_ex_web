@@ -143,7 +143,11 @@ Estimate −5 to −7 ms.
      longer than the bound: that consumer evaluates the actor as today). The
      viewer, its ViewTarget and the first-person flag are arguments, read
      again after each iterator. A pass over 2,600 actors in Rust costs tens
-     of microseconds, so three passes cost nothing measurable.
+     of microseconds, so three passes cost nothing measurable. (Corrected
+     2026-11-05: that is a warm pass. In the frame each pass runs cold and
+     cost 0.1 to 0.27 ms; the light, sprite and mesh kinds now share one
+     batched walk while no script runs between them: play-frame-cost.md
+     "The render scans, 2026-11-05".)
 3. **SetupForActor in Rust.**
    - The light fade caches move into Rust memory, keeping the sort and the
      120/8/16 limits.

@@ -13,6 +13,10 @@
  * - the [count, handle...] list of a Level.Actors array, rebuilt when the
  *   array, its length or actorsEpoch (base-epoch.mjs) changes.
  *
+ * - the frame's shared pass (`share`): the light, sprite and mesh
+ *   consumers' kinds in one walk, which each consumer's own scan then takes
+ *   while nothing that scan reads can have changed (below).
+ *
  * RENDER_SCAN=js in Node or ?renderScan=js in the viewer keeps every
  * consumer's JavaScript loop; RENDER_SCAN=verify (?renderScan=verify)
  * scans in Rust and also evaluates every actor the scan covered with
@@ -23,6 +27,7 @@ import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell} from './scrip
 import {classRecordId, fieldKeyId} from './script-vm-lower.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {actorsEpoch} from './base-epoch.mjs';
+import {receiverEpoch} from './receiver-epoch.mjs';
 
 /** The fields render.rs reads (R_*), in index order: [spelling, key, kind]. */
 export const RENDER_FIELDS = Object.freeze([
@@ -92,6 +97,10 @@ const cellIs = (cell, kind) => kind === 'float[4]'
  * bits these. */
 export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_AMBIENT = 16,
   RENDER_JS = 32, RENDER_SHIFT = 6;
+/** Input only (render.rs K_THROUGH): an ITERATOR entry does not end the scan. */
+const RENDER_THROUGH = 64;
+/** The kinds the frame's shared pass serves. */
+const SHARED_KINDS = RENDER_LIGHT | RENDER_SPRITE | RENDER_ITERATOR | RENDER_MESH;
 const COMPUTED = 0x80000000;
 
 /** 'rust' (default), 'js' or 'verify'. */
@@ -120,6 +129,7 @@ export class RenderScanHost {
     this.listCapacity = 0;
     this.out = 0;
     this.outCapacity = 0;
+    this.shared = null;
   }
   attach(exports) {
     this.x = exports;
@@ -218,6 +228,12 @@ export class RenderScanHost {
     if (mode === 'js') return null;
     this.table();
     if (!this.complete) return null;
+    const entries = this.served(actors, start, kinds, viewer, viewTarget, firstPerson)
+      ?? this.walk(actors, start, kinds, viewer, viewTarget, firstPerson);
+    if (mode === 'verify') this.verify(actors, entries, {start, kinds, viewer, viewTarget, firstPerson});
+    return entries;
+  }
+  walk(actors, start, kinds, viewer, viewTarget, firstPerson) {
     const list = this.listFor(actors), count = actors.length;
     if (count + 1 > this.outCapacity) {
       if (this.out) this.vm.arena.release(this.out, 4 * this.outCapacity);
@@ -226,9 +242,58 @@ export class RenderScanHost {
     }
     const written = this.x.render_scan(list, start, kinds, viewer ? handleOf(viewer) : 0,
       viewTarget ? handleOf(viewTarget) : 0, firstPerson ? 1 : 0, this.out);
-    const entries = new Uint32Array(this.vm.arena.memory.buffer, this.out, written).slice();
-    if (mode === 'verify') this.verify(actors, entries, {start, kinds, viewer, viewTarget, firstPerson});
-    return entries;
+    return new Uint32Array(this.vm.arena.memory.buffer, this.out, written).slice();
+  }
+  /** The frame's shared pass (sim-session.mjs, before game.movingLights):
+   * the moving-light, sprite (with `viewer`, `viewTarget` and
+   * `firstPerson`, as the sprite scan passes them) and mesh kinds of every
+   * actor of `actors` in one walk, through the iterators. The three
+   * consumers run in that order in the frame, each a walk of every actor,
+   * cold: one walk reads each actor once. A consumer's scan takes its kinds
+   * from it (`served`) once, from index 0, while nothing the walk read can
+   * have changed: the same array, length and actorsEpoch, the same
+   * receiver epoch and no script body begun since (scriptRuns). The sprite
+   * kinds' entries end at the first ITERATOR entry, as a walk of their own
+   * does: the sprite scan runs that iterator and walks on from the next
+   * actor itself. The other kinds stay: an iterator sprite-scan.mjs runs
+   * (ParticleIterator, LaserIterator) writes without script only the
+   * iterator, its items' snapshot fields (Location, Rotation, DrawScale,
+   * ScaleGlow, through FarMoveActor for particles) and a particle proxy's
+   * bHidden, none of which the light or mesh kinds read; any script it runs
+   * moves scriptRuns and an actor it spawns moves actorsEpoch. An iterator
+   * added there must keep to that. What the image cannot answer stays
+   * RENDER_JS, as in a scan of its own (every consumer tests such an actor
+   * itself). */
+  share(actors, {viewer = null, viewTarget = null, firstPerson = true}) {
+    this.shared = null;
+    if (renderScanMode() === 'js') return;
+    this.table();
+    if (!this.complete) return;
+    const entries = this.walk(actors, 0, SHARED_KINDS | RENDER_THROUGH, viewer, viewTarget, firstPerson);
+    this.shared = {actors, count: actors.length, actorsEpoch: actorsEpoch(), receiverEpoch: receiverEpoch(),
+      runs: this.vm.scriptRuns(), viewer, viewTarget, firstPerson, entries, served: 0};
+  }
+  /** A scan's entries from the shared pass, or null when it cannot serve
+   * them (see `share`): what a walk of its own would return. */
+  served(actors, start, kinds, viewer, viewTarget, firstPerson) {
+    const shared = this.shared;
+    if (!shared || start !== 0 || (kinds & ~SHARED_KINDS) || (shared.served & kinds)) return null;
+    if (shared.actors !== actors || shared.count !== actors.length || shared.actorsEpoch !== actorsEpoch()
+      || shared.receiverEpoch !== receiverEpoch() || shared.runs !== this.vm.scriptRuns()) {
+      this.shared = null;
+      return null;
+    }
+    const sprites = kinds & (RENDER_SPRITE | RENDER_ITERATOR);
+    if (sprites && (shared.viewer !== viewer || shared.viewTarget !== viewTarget || shared.firstPerson !== firstPerson)) return null;
+    shared.served |= kinds;
+    const keep = kinds | RENDER_JS, low = (1 << RENDER_SHIFT) - 1, all = shared.entries, out = [];
+    for (let i = 0; i < all.length; i++) {
+      const bits = all[i] & keep;
+      if (!bits) continue;
+      out.push((all[i] & ~low) | bits);
+      if (bits & RENDER_ITERATOR) break;
+    }
+    return Uint32Array.from(out);
   }
   /** CycleActors' scan step in Rust (render.rs cycle_scan) over `actors`
    * for class record `base`: {kind (0 exhausted, 1 found, 2 untested),

@@ -23,7 +23,7 @@
 import { probeIndex } from '../unreal/probe-names.mjs';
 import {instantiateScriptVm} from './script-vm-kernel.mjs';
 import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle} from './script-object-handles.mjs';
-import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './script-vm.mjs';
+import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT, scriptRunCount} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
@@ -336,6 +336,7 @@ export class RustScriptVm {
   attach() {
     const x = this.exports;
     this.runawayAt = x.vm_runaway_ptr();
+    this.scriptRunsAt = x.vm_script_runs_ptr();
     this.budgetAt = x.vm_budget_ptr();
     this.resultAt = x.vm_result_ptr();
     this.undefAt = x.vm_float_undef_ptr();
@@ -891,6 +892,11 @@ export class RustScriptVm {
       this.lowerings.set(compiled, entry);
     }
     return entry.lowered;
+  }
+  /** Script bodies begun so far, in JavaScript and in this interpreter:
+   * unchanged between two points when no script ran between them. */
+  scriptRuns() {
+    return scriptRunCount() + this.arena.view.getUint32(this.scriptRunsAt, true);
   }
   /** resumeCompiled for a function frame, with lowered statements in Rust. */
   resume(frame, compiled, lowered) {

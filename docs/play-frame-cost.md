@@ -1751,3 +1751,51 @@ No family left is large: the object image's field reads from JavaScript (`readIn
 and the like) add up to about 0.9 ms, from many callers, none over 0.15 ms. Bringing the Island under 8.3 ms here takes about
 0.4 to 0.6 ms, several of these families. The Mac's tick measured about 1.35 times faster than this host's (bench-sim, 2026-10-03),
 which would put the worst map near 6.6 ms there; row 7.2.1 is the Mac's.
+
+## The render scans, 2026-11-05
+
+The four maps over 8.3 ms (the Island, Battery Park, the Airfield, Wan Chai's market) all had the render scan
+(script-vm-render.mjs, render.rs `render_scan`) as their largest single cost in the worker profiles of 2026-11-04: 0.34 to 0.64 ms
+a frame, four walks of every Level.Actors entry (the moving lights in `begin`, the sprite scan, the mesh admission and Galaxy's
+ambient scan), each 0.08 to 0.22 ms. A walk is cheap warm and expensive cold, and each comes after other work in the frame. In
+bench-sim on the Island (2,616 actors; `.work/perf/scan-cold.mjs` sweeps 64 MB before each repetition), a single-kind walk took
+about 50 µs warm and 190 µs cold, about 75 ns an actor: the actors' words came from memory one actor after another.
+
+Two changes, both host structure (the entries each consumer receives are the same):
+
+- **Batches.** `render_scan` reads 16 actors' objects, then one byte of the first field each requested kind tests (LightType,
+  bHidden, RenderIteratorClass, DrawType, Mesh, AmbientSound) with volatile loads, then evaluates them: the misses of a batch
+  overlap. Cold walks went from 194 to 127 µs (light), 137 to 118 (sprite), 193 to 115 (mesh) and 190 to 114 (ambient), with the
+  same 198,800 entries over the repetitions. Batches of 32 and touching the receiver table or more fields gained nothing.
+- **One walk for three consumers.** `RenderScanHost.share` walks the light, sprite (with the viewer, its ViewTarget and first
+  person, as the sprite scan passes them) and mesh kinds at once before `game.movingLights`, through the iterators (render.rs
+  K_THROUGH). A consumer's own `scan` takes its kinds from it once, from index 0, while the array, its length, actorsEpoch, the
+  receiver epoch and the count of script bodies begun (script-vm.mjs `scriptRunCount` plus interp.rs SCRIPT_RUNS, both counted
+  where a body starts) are unchanged; the sprite kinds end at the first ITERATOR entry, as a walk of their own does. In the
+  original, SetupDynamics evaluates the moving-light gate and the sprite admission in one loop. The iterators sprite-scan.mjs runs
+  (ParticleIterator, LaserIterator) write without script only their items' snapshot fields and a particle proxy's bHidden, none
+  of which the light or mesh kinds read. On the Island the 13 laser iterators run script every frame (their Init), so the mesh
+  admission walks on its own there; Galaxy's ambient scan comes after the HUD's script and always walks.
+
+`?renderScan=verify` (every served or walked entry against the consumers' own readNamed tests at the consumer's time) ran 40 s of
+the scan route on the Island and 02_NYC_Street (particles) without a difference; `validate-iterator-frames-play` and
+`validate-sprite-tiles-play` pass. On the Airfield `?renderScan=verify` stops on `LaserProxy0 word 4 differs in mesh_reads` on
+master (2c93fe2d) as on this change: the mesh reads' verify of a laser proxy whose Location the laser items move, an older issue
+of that check.
+
+Interleaved A/B, master (2c93fe2d) against the change, two rounds of the frame-time route per map, mean worker phase ms a frame:
+
+| Map | round | sprites | actors | audio | the three | worker p50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Island | 1 | 0.287 → 0.144 | 2.336 → 2.249 | 0.404 → 0.340 | 3.03 → 2.73 | 9.3 → 9.1 |
+| Island | 2 | 0.253 → 0.137 | 2.052 → 2.163 | 0.343 → 0.338 | 2.65 → 2.64 | 8.0 → 8.7 |
+| Battery Park | 1 | 0.203 → 0.109 | 2.386 → 2.232 | 0.594 → 0.458 | 3.18 → 2.80 | 9.0 → 8.0 |
+| Battery Park | 2 | 0.191 → 0.121 | 2.841 → 2.302 | 0.580 → 0.534 | 3.61 → 2.96 | 9.1 → 8.7 |
+| Airfield | 1 | 0.867 → 0.828 | 2.289 → 2.138 | 0.311 → 0.285 | 3.47 → 3.25 | 8.1 → 8.0 |
+| Airfield | 2 | 1.024 → 0.923 | 2.275 → 2.224 | 0.346 → 0.306 | 3.65 → 3.45 | 9.1 → 8.5 |
+| Wan Chai | 1 | 0.138 → 0.066 | 1.584 → 1.639 | 0.239 → 0.232 | 1.96 → 1.94 | 7.6 → 7.7 |
+| Wan Chai | 2 | 0.141 → 0.069 | 1.633 → 1.588 | 0.243 → 0.226 | 2.02 → 1.88 | 7.7 → 7.6 |
+
+The whole frame's median moves more between two runs of one build than this change: the level tick (not touched; it includes
+`begin`'s shared walk) varied by up to 0.8 ms between rounds on the Island (4.98 and 5.78 ms on master). The Airfield's sprite
+phase is the laser iterator's CurrentItem in JavaScript (0.65 ms a frame), next.

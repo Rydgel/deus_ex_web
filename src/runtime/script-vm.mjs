@@ -79,6 +79,12 @@ export const initScriptRunaway = () => { scriptRunaway = 0; };
 export const scriptRunawayCount = () => scriptRunaway;
 // The Rust interpreter's copy of the counter comes back through this.
 export const setScriptRunaway = value => { scriptRunaway = value; };
+// Host bookkeeping, not an original counter: script bodies begun through
+// resumeCompiled (the Rust interpreter counts its own, interp.rs SCRIPT_RUNS).
+// An unchanged sum means no script ran between two points of a frame
+// (script-vm-render.mjs `share`).
+let scriptRuns = 0;
+export const scriptRunCount = () => scriptRuns;
 // The arithmetic below rounds to the x87 precision control (x87-precision.mjs:
 // 64 bits on the game thread, 24 inside the render pass). x87-pc24.mjs's
 // explicit p24 forms are the same rounding for code ported at 24 bits.
@@ -1351,6 +1357,7 @@ function buildEngine(compiled) {
     } else evNode(n,frame,instance);
   }
   function resumeCompiled(frame) {
+    scriptRuns++;
     const vm = frame.services.scriptVm;
     if (vm !== undefined) {
       const lowered = vm.lowering(compiled, frame);

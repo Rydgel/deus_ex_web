@@ -104,6 +104,9 @@ const K_ITERATOR: u32 = 4;
 const K_MESH: u32 = 8;
 const K_AMBIENT: u32 = 16;
 const K_JS: u32 = 32;
+/// Input only: with ITERATOR requested, an ITERATOR entry does not end the
+/// scan (the frame's shared pass, script-vm-render.mjs `share`).
+const K_THROUGH: u32 = 64;
 
 const LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_BDELETEME
@@ -148,6 +151,7 @@ fn rfield(field: usize) -> [u32; 3] {
 
 /// An actor the scan reads: its receiver info, binding set and the row's
 /// render word (0 for a HOST or undescribed object).
+#[derive(Clone, Copy)]
 pub(crate) struct Obj {
     info: u32,
     bind: u32,
@@ -155,6 +159,7 @@ pub(crate) struct Obj {
 }
 
 impl Obj {
+    const NONE: Obj = Obj { info: 0, bind: 0, fields: 0 };
     pub(crate) fn of(handle: u32) -> Obj {
         let (info, bind) = receiver(handle);
         let mut row = class_entry(handle);
@@ -215,6 +220,17 @@ impl Obj {
     /// A pointer as readNamed yields it: a released handle is None.
     fn pointer(&self, field: usize) -> u32 {
         live(load32(self.at(field)))
+    }
+    /// Read a byte of each field of `set` this object's image holds, for
+    /// its cache line only (a volatile read is never removed).
+    #[inline(always)]
+    fn touch(&self, set: u64) {
+        let set = set & self.fields;
+        for field in [R_BHIDDEN, R_DRAWTYPE, R_RENDERITERATOR, R_LIGHTTYPE, R_MESH, R_AMBIENTSOUND] {
+            if set & 1 << field != 0 {
+                unsafe { core::ptr::read_volatile(self.at(field) as usize as *const u8) };
+            }
+        }
     }
 }
 
@@ -278,9 +294,20 @@ fn sprite(a: &Obj, h: u32, viewer: u32, view_target: u32, first_person: bool) ->
     Some(if draw_type == 1 || draw_type == 7 { K_SPRITE } else { 0 })
 }
 
+/// Actors per batch of `render_scan`. A walk over Level.Actors runs cold:
+/// each consumer's comes after other work in the frame, so an actor's words
+/// come from memory, and evaluated one actor after another their misses
+/// came one after another too. A batch's objects, and a byte of the first
+/// field each requested kind tests, are read first, in loops of independent
+/// loads whose misses overlap; the evaluation then reads what is cached.
+/// The objects read ahead of an ITERATOR entry that ends the scan only fill
+/// the host's tables (js_class_row, js_render_class, js_receiver: no script
+/// runs), as the walk itself would.
+const BATCH: usize = 16;
+
 /// Scan `list` ([count, handle...]) from `start` for `kinds`, writing
 /// entries to `out`; returns the number written. With ITERATOR requested,
-/// the scan ends after the first ITERATOR entry.
+/// the scan ends after the first ITERATOR entry, unless THROUGH is.
 #[no_mangle]
 pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, view_target: u32, first_person: u32, out: u32) -> u32 {
     let count = load32(list);
@@ -298,49 +325,75 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
         need |= AMBIENT_FIELDS;
     }
     let sprites = kinds & (K_SPRITE | K_ITERATOR) != 0;
+    // The field each kind tests first (the sprite admission's usual path).
+    let mut first = 0u64;
+    if kinds & K_LIGHT != 0 {
+        first |= 1 << R_LIGHTTYPE;
+    }
+    if sprites {
+        first |= 1 << R_BHIDDEN | 1 << R_RENDERITERATOR | 1 << R_DRAWTYPE;
+    }
+    if kinds & K_MESH != 0 {
+        first |= 1 << R_MESH;
+    }
+    if kinds & K_AMBIENT != 0 {
+        first |= 1 << R_AMBIENTSOUND;
+    }
     let mut written = 0u32;
     let mut emit = |index: u32, bits: u32| {
         crate::interp::store32(out.wrapping_add(written.wrapping_mul(4)), index << 6 | bits);
         written += 1;
     };
+    let mut handles = [0u32; BATCH];
+    let mut objs = [Obj::NONE; BATCH];
     let mut index = start;
     while index < count {
-        let h = live(load32(list.wrapping_add(4).wrapping_add(index.wrapping_mul(4))));
-        let i = index;
-        index += 1;
-        if h == 0 {
-            continue;
+        let n = (count - index).min(BATCH as u32) as usize;
+        for k in 0..n {
+            let h = live(load32(list.wrapping_add(4).wrapping_add((index + k as u32).wrapping_mul(4))));
+            handles[k] = h;
+            objs[k] = if h == 0 { Obj::NONE } else { Obj::of(h) };
         }
-        let a = Obj::of(h);
-        if !a.has(need) {
-            emit(i, K_JS);
-            continue;
+        for a in &objs[..n] {
+            a.touch(first);
         }
-        let mut bits = 0;
-        if kinds & K_LIGHT != 0 && light(&a) {
-            bits |= K_LIGHT;
-        }
-        if kinds & K_MESH != 0 && a.pointer(R_MESH) != 0 {
-            bits |= K_MESH;
-        }
-        if kinds & K_AMBIENT != 0 && a.pointer(R_AMBIENTSOUND) != 0 {
-            bits |= K_AMBIENT;
-        }
-        if sprites && h != viewer {
-            match sprite(&a, h, viewer, view_target, first_person != 0) {
-                None => {
-                    emit(i, K_JS);
-                    continue;
+        for k in 0..n {
+            let (h, i) = (handles[k], index + k as u32);
+            if h == 0 {
+                continue;
+            }
+            let a = &objs[k];
+            if !a.has(need) {
+                emit(i, K_JS);
+                continue;
+            }
+            let mut bits = 0;
+            if kinds & K_LIGHT != 0 && light(a) {
+                bits |= K_LIGHT;
+            }
+            if kinds & K_MESH != 0 && a.pointer(R_MESH) != 0 {
+                bits |= K_MESH;
+            }
+            if kinds & K_AMBIENT != 0 && a.pointer(R_AMBIENTSOUND) != 0 {
+                bits |= K_AMBIENT;
+            }
+            if sprites && h != viewer {
+                match sprite(a, h, viewer, view_target, first_person != 0) {
+                    None => {
+                        emit(i, K_JS);
+                        continue;
+                    }
+                    Some(kind) => bits |= kind & kinds,
                 }
-                Some(kind) => bits |= kind & kinds,
+            }
+            if bits != 0 {
+                emit(i, bits);
+                if bits & K_ITERATOR != 0 && kinds & K_THROUGH == 0 {
+                    return written;
+                }
             }
         }
-        if bits != 0 {
-            emit(i, bits);
-            if bits & K_ITERATOR != 0 {
-                break;
-            }
-        }
+        index += n as u32;
     }
     written
 }
