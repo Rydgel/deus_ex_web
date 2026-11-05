@@ -261,6 +261,28 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   simulation's HUD paint as well as the page's draw. Firefox's excess over Chrome is 0.7 to 1.0 ms, spread across about 95 script
   events a frame. No port was made; the profiling tools are in `scripts/` (gecko-phase.mjs, gecko-phase-diff.mjs,
   hitch-phase-means.mjs, wasm-names.mjs, hud-census.mjs).
+* **The frame-time set, headless Firefox, 2026-11-05 ~23:00** (master df9dcc3d, `frame-time-set.mjs --browser firefox`, page frame
+  from 5 s after the map; headless, so the page frame stands in for the row's drawn interval):
+
+  | Map | page p50 | page p95 | tick | actors | HUD | render |
+  |---|---:|---:|---:|---:|---:|---:|
+  | Training | 9 | 12 | 3.4 | 1.1 | 2.3 | 0.3 |
+  | Island | 16 | 23 | 7.6 | 2.9 | 2.4 | 1.7 |
+  | Bar | 9 | 12 | 4.3 | 1.0 | 2.3 | 0.5 |
+  | Battery Park | 17 | 21 | 6.9 | 2.6 | 1.5 | 2.6 |
+  | Airfield | 18 | 21 | 6.9 | 3.0 | 2.4 | 1.1 |
+  | Wan Chai market | 14 | 19 | 7.2 | 2.6 | 2.3 | 0.9 |
+  | Ship | 12 | 15 | 5.3 | 1.7 | 2.2 | 0.8 |
+  | Chateau | 11 | 13 | 4.3 | 2.0 | 2.2 | 0.9 |
+  | Everett | 8 | 10 | 3.7 | 1.8 | 1.2 | 0.7 |
+  | Area 51 bunker | 14 | 23 | 6.1 | 2.7 | 2.7 | 1.5 |
+
+  Five maps are still over 16.7 ms at p95: the Island and the bunker by about 6 ms, Battery Park and the Airfield by 4, Wan Chai by 2.
+  What is left in the tick is spread thin. A new profile of the Island's and the bunker's slow ticks (master df9dcc3d) shows on the
+  bunker spawning (+0.8 ms), the decal attach in Rust (+0.8) and destroying (+0.4); everything else is under 0.3 ms per family. The
+  HUD and actors phases have no family at 0.5 ms either ([HUD](#the-hud-phase-2026-11-05), [actors](firefox-actors-phase.md)). The
+  remaining gap is a programme of sub-5% steps, the Rust core's long road (the player's tick, window-event dispatch, the
+  native-heap path, x87 fast paths), not one more family.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
