@@ -1810,3 +1810,26 @@ render.rs `mesh_reads` now copies that word into the block (MB_ANIMSEQ, with MS_
 compares the kept sequence with a fresh lookup; both held for 40 s on the Island and Battery Park, and
 `validate-sprite-setup` (298 Play candidates packed from the mesh reads against the original Setup) and
 `validate-actor-mesh-scene` pass. Battery Park's `packSetup` went from 0.265 to 0.069 ms a frame.
+
+## The frame-time set on 2026-11-05 (Linux)
+
+`node scripts/frame-time-set.mjs` on the Linux host after the render scans' shared batched walk (16a23988), the laser
+iterator's CurrentItem in Rust (95f9139a) and AnimSequence in the mesh reads (0f6d1eeb), at 0f6d1eeb, the same route and machine
+as on 2026-11-04 (a quiet machine; the Claude app used about 0.7 of a core).
+
+| Map | page p50 | worker p50 | 2026-11-04 | 7.2.1 |
+| --- | ---: | ---: | ---: | --- |
+| 00_Training | 2.0 | 4.3 | 4.6 | under |
+| 01_NYC_UNATCOIsland | 2.6 | 8.4 | 8.7 to 8.9 | over |
+| 02_NYC_Bar | 2.1 | 4.9 | 5.1 | under |
+| 02_NYC_BatteryPark | 6.5 | 8.2 | 9.0 | under |
+| 03_NYC_Airfield | 3.1 | 8.2 | 9.0 | under |
+| 06_HongKong_WanChai_Market | 1.9 | 8.2 | 8.5 | under |
+| 09_NYC_Ship | 2.7 | 6.5 | 7.0 | under |
+| 10_Paris_Chateau | 2.4 | 5.8 | 6.1 | under |
+| 11_Paris_Everett | 1.8 | 4.6 | 5.0 | under |
+| 15_Area51_Bunker | 3.1 | 7.9 | 7.9 | under |
+
+Nine of ten under 8.3 ms; no shader program built during play; no gap over 100 ms. Three maps sit 0.1 ms under the bound and a
+run's median moves by up to 0.8 ms between runs of one build (the A/B above), so on this host those three are not settled either
+way. Row 7.2.1 is the Mac's.
