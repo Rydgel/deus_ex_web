@@ -380,6 +380,12 @@ frame's maps still go through `framePass`'s copies, which its pass's end undoes 
   * Battery Park: the page frame p50 24 → 20 ms, p95 28 → 24 ms;
   * the Bar: p50 12 → 9 ms, p95 14 → 11 ms.
 
+**The fogged-surface test (2026-11-05).** `update` asks each fog map whether it has a nonzero texel, for the frame's fogged-surface
+sets that the detail pass reads. `texels.some(Boolean)` called back once per byte in Firefox, 1.26 ms of Battery Park's 2.38 ms fog
+phase. `anyFog` loops over 32-bit words instead, with the same answer. Battery Park in Firefox, three sessions after the change
+against the three tiles sessions above: the fog phase 2.44 to 2.54 → 1.24 to 1.34 ms, the page frame p50 20 to 21 → 17 to 18 ms and
+p95 23 to 24 → 21 to 22 ms. validate-volumetric-fog-play passes.
+
 ## Mesh fog
 
 Recovered 2026-10-06 from Render.dll, D3DDrv.dll (`9e0f8a42…d8ac9f`) and

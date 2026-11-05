@@ -169,7 +169,9 @@ maps. The order above follows these figures.
   slowest tenth is 0.4 to 1.0 ms shorter.
 * **2026-11-05, step 3: volumetric fog's uploads** ([fog](volumetric-fog.md#uploads-2026-11-05)). A frame's fog maps go up as
   their tiles, not as whole atlas pages: Battery Park 8.3 MB a frame → 0.14 MB. Firefox inline, three interleaved pairs: Battery
-  Park's page frame p50 24 → 20 ms and p95 28 → 24 ms; the Bar's p50 12 → 9 ms and p95 14 → 11 ms.
+  Park's page frame p50 24 → 20 ms and p95 28 → 24 ms; the Bar's p50 12 → 9 ms and p95 14 → 11 ms. Then the fogged-surface test,
+  `texels.some(Boolean)` called back per byte, became a word loop: Battery Park's fog phase 2.45 → 1.25 ms and its page frame p50
+  20 → 17 ms.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.

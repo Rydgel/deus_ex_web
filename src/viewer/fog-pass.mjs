@@ -140,6 +140,17 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       pixels[dst + 2] = texels[src]; pixels[dst + 3] = texels[src + 3];
     }
   }
+  /** Whether a fog map has a nonzero byte (texels.some(Boolean), which in Firefox calls back for every byte: 1.26 ms of Battery
+   * Park's frame): a loop over 32-bit words where the bytes are aligned. */
+  function anyFog(texels) {
+    const words = texels.byteOffset % 4 === 0 ? Math.floor(texels.length / 4) : 0;
+    if (words) {
+      const view = new Uint32Array(texels.buffer, texels.byteOffset, words);
+      for (let i = 0; i < words; i++) if (view[i] !== 0) return true;
+    }
+    for (let i = words * 4; i < texels.length; i++) if (texels[i] !== 0) return true;
+    return false;
+  }
   let scratch = new Uint8Array(0);
   /** A rectangle of a page's texels as one tightly packed view (light-atlas.mjs rectangle). */
   function rectangle(pixels, x, y, width, height) {
@@ -330,7 +341,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
             note('frameCase', { ...what, mover: item.mover, polygon: item.polygon }, texels, input, missFlag, coords);
           });
           childMaps.set(frame.index, maps);
-          foggedSurfaces.set(frame.index, new Set(maps.filter(map => map.texels.some(Boolean)).map(map => map.surface.surfaceIndex)));
+          foggedSurfaces.set(frame.index, new Set(maps.filter(map => anyFog(map.texels)).map(map => map.surface.surfaceIndex)));
         }
       }
       // The root frame, drawn last.
@@ -342,7 +353,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       for (const surface of surfaces) surface.mainVisible = surface.mesh.visible = false;
       levelMaps(drawn, frustum, coords, frameLights, state, (surface, texels) => {
         const { record, tile, mesh, fogPage } = surface;
-        if (texels.some(Boolean)) rootFogged.add(surface.surfaceIndex);
+        if (anyFog(texels)) rootFogged.add(surface.surfaceIndex);
         writeTile(fogPage.pixels, size, tile.x, tile.y, record, texels);
         dirty.add(fogPage); written.push(surface);
         surface.mainVisible = mesh.visible = true; stats.drawn++; stats.texels += record.width * record.height;
