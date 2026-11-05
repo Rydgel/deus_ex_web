@@ -73,21 +73,27 @@ The slow ticks are script work, not collections and not JIT warm-up. They are th
 doses, mostly in the first 20 to 30 s after a map. The headed set is not re-run here: the profiles are headless, the steps' A/Bs compare
 the tick's phase means (which a headless run measures), and the headed set is taken again for the rows' verdict (step 6).
 
-**1 and 2. The tick: its slow frames and its steady cost, one family at a time**, in this order of measured size:
-* **Decals.** `AttachDecal`, `ReattachDecal` and `DetachDecal` reach the host as whole calls (`js effect 0x1b`), then
-  `execAttachDecal`'s JavaScript before the Rust attach. They are the largest fallback in the census of the Island, the bunker and
-  Wan Chai, and they appear in the slow frames of the Island (+0.3 ms) and the bunker (+0.9 ms).
-* **Spawning and destroying actors** (`spawnActor`, `destroyActor` in JavaScript): +1.7 ms in the bunker's slow frames.
-* **Global function calls** (`0x38`, `Global.X` in state code) and **state code stepped in the JavaScript VM** (`js_step`, Island
-  +0.7 ms; the bunker's state processing +0.8 ms).
-* **The actor iterators:** `AllActors` (native 304), with its per-actor `isA` in JavaScript (Island +0.6 ms), and `CycleActors`
-  (native 1002, 27,000 calls in 20 s on the Island).
-* **Frequent natives the Rust VM hands back:** `GetPlayerPawn` (native 720, 51,000 calls in 20 s on the Island),
-  `StartConversation` calls (Wan Chai, 8,000 in 20 s), and string natives (Wan Chai: one nested string expression, 67,000 calls).
-* **Perception's light level** in Rust (`percep::light_level` under `ai_tick`, Battery Park +1.1 ms): Rust's own cost, so look at the
-  algorithm, not a crossing.
+**1 and 2. The tick: its slow frames and its steady cost, one family at a time**, in this order of measured size (corrected
+2026-11-05 after [the decals check](#decals-are-already-in-rust-2026-11-05); the figures are the slow tenth's extra per frame, then
+the steady frames' cost, from the step 0 profiles):
+* **The actor iterators.** `ForEach AllActors`, `CycleActors` and `RadiusActors` statements are lowered to `js_step` and run in the
+  JavaScript VM (`stepCompiled`), with `AllActors`' per-actor `isA` and `createIterator` there. The extra is Island +0.8 (of it
+  `AllActors`' `isA` scan +0.5), Battery Park +0.6, bunker +0.4 and Wan Chai +0.3. The steady cost is 0.2 to 0.4.
+  This family is on all four maps.
+* **Perception's light line checks.** The AI event manager's tick (Battery Park +1.1, Wan Chai +0.5) runs perception's light level
+  in Rust (`percep::light_level`), whose line checks come back to JavaScript: `lightLineCheck` → `lineCheck` in the JavaScript
+  collision kernel, which the Rust trace calls back (`candidate`) for each candidate actor. On Battery Park those JavaScript parts are
+  about half of the +1.1.
+* **The walking prelude's surface scan** (`walkingSurfacePrelude` → `surfaceScan`, the same collision kernel): Wan Chai +0.5 and
+  1.1 steady, 0.24 to 0.55 steady elsewhere.
+* **Spawning and destroying actors** (`spawnActor`, `destroyScriptActor` in JavaScript): bunker +1.7.
+* **Frequent natives the Rust VM hands back:** `GetPlayerPawn` (native 720, 51,000 calls in 20 s on the Island), `StartConversation`
+  calls (Wan Chai, 8,000 in 20 s), and string natives (Wan Chai: one nested string expression, 67,000 calls).
 * **What runs outside the Rust batch** (1.1 to 1.3 ms in steady frames): the player's tick, which still runs in JavaScript, and the
   level's host work around the batch.
+* **Not a port: decals.** They are already Rust. The decal attach is 0.78 of `AttachDecal`'s 0.90 ms in the bunker's slow frames and
+  averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster means changing the Rust algorithm, and only the bunker
+  would gain much.
 * Expected: the slow tenth's 4.3 to 8.6 ms by more than half, and 2 to 4 ms of the median. Each family's A/B decides its share.
 
 **3. Uploads and fog on the page** (Battery Park, the Bar, the Ship).
@@ -137,6 +143,20 @@ correlations of 0.90 to 0.96 between a frame's tick phase and its samples at clo
   `AttachDecal` (Island 905 ms, bunker 1,421 ms plus `ReattachDecal` 863 ms, Wan Chai 422 ms over the 1,200 ticks), then global
   function calls (`0x38`, 200 to 320 ms), `StartConversation` in Wan Chai (371 ms), and `GetPlayerPawn` (native 720) by count.
   Battery Park's census is not usable: headless, every tick stops at the viewport size before the first frame.
+* **But the census counts time inclusive** of the work under a fallback call, Rust included. Read a `js effect` row as the call's
+  whole cost, not as JavaScript; the profiles split it ([decals](#decals-are-already-in-rust-2026-11-05)).
+
+### Decals are already in Rust (2026-11-05)
+
+The census above put `AttachDecal` first, but its `js effect` time is the whole call: the Rust attach under it included. Split by
+the Gecko profiles:
+* `execAttachDecal`'s JavaScript glue (argument reads, the tracker's mover rotations, the store's IO, the `SurfList` copy) is
+  about 10% of the call.
+* The Rust `decal_attach` is the rest. In the bunker it averages 0.55 ms per drawn frame: `decal::find_surface` with its x87
+  `Ext` arithmetic is 0.5 ms of that, `gather_nodes` the rest. On the Island it averages 0.11 ms.
+
+Porting the glue would save 0.05 to 0.1 ms, under the 5% rule. x87 emulation as a whole is 0.1 to 0.4 ms of a frame on the four
+maps. The order above follows these figures.
 
 ## How each step is measured
 
@@ -148,5 +168,6 @@ correlations of 0.90 to 0.96 between a frame's tick phase and its samples at clo
 ## Open questions
 
 * Whether Battery Park can reach 16 ms inline. Steps 1 to 4 as estimated take its p50 from 26 to 13 to 19 ms. That is not enough
-  unless its slow tenth falls by more than half as well. Its tail is mostly perception's light level, which is already in Rust.
+  unless its slow tenth falls by more than half as well. Its tail is mostly perception's light level, half of it the JavaScript line
+  checks.
 * The Mac: its tick was about 1.35 times this host's in Chrome. Firefox there is unmeasured since October.
