@@ -102,7 +102,9 @@ the steady frames' cost, from the step 0 profiles):
 * Move volumetric fog's per-frame map update (2.4 ms on Battery Park) to the GPU if it can stay exact.
 * Expected: 4 to 7 ms on Battery Park, about 2 ms on the Bar and the Ship.
 
-**4. HUD and actors** (2 to 3.4 ms each, about twice Chrome's).
+**4. HUD and actors** (2 to 3.4 ms each, about twice Chrome's). The actors half is measured (2026-11-05,
+[firefox-actors-phase.md](firefox-actors-phase.md)): `p.actors` is the simulation's `w.actors` (2.2 to 2.7 ms) plus the page's 0.5 to 0.6,
+and no family reaches 0.5 ms.
 * The HUD's script windows, and the actor admission and SetupForActor passes, by profile.
 * Expected: 1 to 2 ms.
 
