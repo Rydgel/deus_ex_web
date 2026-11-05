@@ -1514,6 +1514,19 @@ export async function createScriptDoors({
       catch (error) { npcFailures.set(actor, String(error?.message ?? error)); throw error; }
       finally { collectSpawned(from); }
     },
+    // aroundActorTick over the Rust level loop's run of actors (runtime.processActorBatch): liveConPlay.withLifecycle passes each
+    // tick through (nativeWindowFacade), and a run ends after an actor that changes Level.Actors, so the actors spawned during it
+    // are collected after that actor, as aroundActorTick collects them; the actor whose tick threw is recorded as a failure.
+    aroundActorBatch: (actors, start, delta, options) => {
+      const from = level.actors.length;
+      try { return runtime.processActorBatch(actors, start, delta, options); }
+      catch (error) {
+        const failed = runtime.levelBatchOut?.current ?? -1;
+        if (failed >= 0 && actors[failed]) npcFailures.set(actors[failed], String(error?.message ?? error));
+        throw error;
+      }
+      finally { collectSpawned(from); }
+    },
   };
 
   // Non-Pawn AActor::performPhysics (actor-physics.mjs), reached from the

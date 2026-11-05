@@ -19,6 +19,13 @@
  *   at the same points), the JavaScript reads and writes for fields outside
  *   the mask, the hand-backs, and ACTOR_TICK_DIFFERENTIAL's replay.
  *
+ * `batch` runs ULevel::Tick's actor loop over a run of Level.Actors in Rust
+ * (level_loop.rs): each actor whose descriptor (what `run` takes from
+ * `describe`) is current is ticked there with no JavaScript, and the host's
+ * per-actor chain runs only for the others. LEVEL_LOOP=js (Node) or
+ * ?levelLoop=js keeps the chain for every actor; LEVEL_LOOP=verify describes
+ * every actor again and throws when a current descriptor differs.
+ *
  * ACTOR_TICK_KERNEL=js keeps the JavaScript body. ACTOR_TICK_DIFFERENTIAL=1
  * records every callback with the actor's fields before and after it, and
  * every read of state outside the actor (the zone render time, the owner's
@@ -38,11 +45,25 @@ import {animationTickView} from './script-anim.mjs';
 import {propertyReference, propertyCodec} from './script-values.mjs';
 import {setScriptRunaway} from './script-vm.mjs';
 import {probeNames} from '../unreal/probe-names.mjs';
+import {receiverEpoch} from './receiver-epoch.mjs';
+import {actorsEpoch, onActorsEpoch} from './base-epoch.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.ACTOR_TICK_KERNEL === 'js' || globalThis.DEUS_EX_ACTOR_TICK_KERNEL === 'js';
 const DIFFERENTIAL = env.ACTOR_TICK_DIFFERENTIAL === '1';
 const STATS = DIFFERENTIAL || env.ACTOR_TICK_STATS === '1';
+/** The level loop (level_loop.rs): 'rust' (default), 'js' or 'verify'. */
+export const levelLoopMode = () => env.LEVEL_LOOP || globalThis.DEUS_EX_LEVEL_LOOP || 'rust';
+
+// LEVEL_IO (level_loop.rs): two doubles, then these words, then the deferred slots.
+const L_LIST = 0, L_DESC = 1, L_START = 2, L_ROWS = 3, L_VERSION = 4, L_TICK_TYPE = 5, L_TICK_TAG = 6, L_EVENTS = 7,
+  L_ACTORS_EPOCH = 8, L_VERIFY = 9, L_NEXT = 10, L_PROGRESS = 11, L_CURRENT = 12, L_HANDLE = 13, L_FLAGS = 14, L_TICKED = 15,
+  L_DEFERRED = 16, L_WORDS = 17, ROW_WORDS = 5;
+/** An actor JavaScript ticks (level_loop.rs JS_TICK). */
+const JS_TICK = 0x80000000;
+// The batch in progress, whose LEVEL_IO mirrors actorsEpoch.
+let batching = null;
+onActorsEpoch(epoch => { if (batching) batching.vm.arena.view.setUint32(batching.levelWords + 4 * L_ACTORS_EPOCH, epoch, true); });
 
 /** The fields the Rust body reads (tick.rs F_*), in index order: [the
  * spelling the JavaScript body reads, key, cell kind, fixed-array element
@@ -183,13 +204,16 @@ const PROBES = ['Tick', 'EnemyNotVisible'];
 const S_VIEWROTATION = 0;
 
 const stats = {calls: 0, handback: new Map(), defer: 0, callbacks: 0, get: 0, set: 0, statements: 0, animation: 0,
-  verified: 0, compared: 0, mismatches: 0, imports: new Map()};
+  verified: 0, compared: 0, mismatches: 0, imports: new Map(), batched: 0, batchStops: new Map()};
+// level_loop.rs STOP_*
+const BATCH_STOPS = ['end', 'JavaScript actor', 'list changed', 'hand-back', 'deferred list full'];
 const counted = STATS ? name => stats.imports.set(name, (stats.imports.get(name) ?? 0) + 1) : null;
 if (STATS) process.on('exit', () => {
   const handbacks = [...stats.handback].map(([why, n]) => `${why} ${n}`).join(', ') || 'none';
   process.stderr.write(`actor tick kernel: ${stats.calls} calls, handed back: ${handbacks}; ${stats.defer} deferred, ` +
     `${stats.callbacks} callbacks, ${stats.get} JavaScript reads, ${stats.set} writes, ${stats.statements} statements, ` +
-    `${stats.animation} animation phases in JavaScript` +
+    `${stats.animation} animation phases in JavaScript; level loop: ${stats.batched} ticked in Rust runs, runs ended by ` +
+    `${[...stats.batchStops].map(([why, n]) => `${why} ${n}`).join(', ') || 'none'}` +
     (DIFFERENTIAL ? `; differential: ${stats.verified} ticks replayed, ${stats.compared} field states compared, ` +
       `${stats.mismatches} mismatches\n` : '\n'));
 });
@@ -238,10 +262,14 @@ class TickContext {
     // pawn-physics-kernel.mjs: the walk contexts' depth while they are pushed.
     this.pawnDepth = undefined;
     this.fallDepth = undefined;
+    // A level loop batch's context (`batch`): the actor is the one Rust ticks now (LEVEL_IO's handle), bound when an import asks.
+    this.batch = false;
+    this.handle = 0;
   }
   clear() {
     this.receiver = null; this.instance = null; this.services = null; this.level = null;
     this.view = null; this.notify = null; this.log = null;
+    this.batch = false; this.handle = 0;
   }
 }
 
@@ -263,6 +291,10 @@ export class ActorTickHost {
     // an import's `ctx` indexes it.
     this.contexts = [];
     this.depth = 0;
+    // The level loop's copy of Level.Actors with a descriptor per slot (level_loop.rs), kept per array, length and actorsEpoch,
+    // and the interned descriptor rows.
+    this.listKey = null; this.listAt = 0; this.descAt = 0; this.listBytes = 0; this.descBytes = 0;
+    this.rowIds = new Map(); this.rowsAt = 0; this.rowCapacity = 0;
   }
   attach(x) {
     this.x = x;
@@ -276,6 +308,10 @@ export class ActorTickHost {
     // tick_record's arguments (tick.rs TickArgs): seconds and time at +0 and +8, then the words ctx, handle, base, mask lo, mask hi,
     // flags, tick type, tick tag and events from +16.
     this.argsAt = x.tick_args_ptr();
+    // The level loop's LEVEL_IO: seconds and time at +0 and +8, the L_* words from +16, the deferred slots after them.
+    this.levelAt = typeof x.level_io_ptr === 'function' ? x.level_io_ptr() : 0;
+    this.levelWords = this.levelAt + 16;
+    this.levelDeferred = this.levelWords + 4 * L_WORDS;
     this.vm.arena.view.setUint32(x.tick_empty_name_ptr(), nameCellWord(''), true);
     // The probe index of each js_tick_probing name, for tick.rs `probing`.
     const probes = x.tick_probe_names_ptr();
@@ -504,6 +540,158 @@ export class ActorTickHost {
     }
     return result;
   }
+  /** The level loop's run of `actors` from `start` (level-tick.mjs tickStandaloneLevel), each actor `run` would tick in Rust ticked
+   * by level_loop.rs with no JavaScript: true with `out` = {next, progress, stop} (the actors before `next` ticked, their deferred
+   * nodes linked as `run` links them), or false when the loop cannot run here and every actor takes `run`. `out.current` names
+   * the slot whose tick threw. */
+  batch(actors, start, seconds, entry, out) {
+    if (!this.levelAt || DIFFERENTIAL || this.depth !== 0 || levelLoopMode() === 'js') return false;
+    const services = entry.services, level = services.level, tickType = entry.tickType;
+    // `run`'s gates on the level, the same for every actor of the run.
+    if (typeof seconds !== 'number' || (tickType !== 0 && tickType !== 1 && tickType !== 2) || !level ||
+      level.netMode !== 0 || level.demoRecDriver !== null || (level.tickTag !== 0 && level.tickTag !== 1) ||
+      typeof level.timeSeconds !== 'number') return false;
+    this.table();
+    this.listFor(actors);
+    const view = this.vm.arena.view, at = this.levelWords, x = this.x;
+    view.setFloat64(this.levelAt, seconds, true);
+    view.setFloat64(this.levelAt + 8, level.timeSeconds, true);
+    view.setUint32(at + 4 * L_LIST, this.listAt, true);
+    view.setUint32(at + 4 * L_DESC, this.descAt, true);
+    view.setUint32(at + 4 * L_START, start, true);
+    view.setUint32(at + 4 * L_ROWS, this.rowsAt, true);
+    view.setUint32(at + 4 * L_VERSION, this.version, true);
+    view.setUint32(at + 4 * L_TICK_TYPE, tickType, true);
+    view.setUint32(at + 4 * L_TICK_TAG, level.tickTag, true);
+    view.setUint32(at + 4 * L_EVENTS, this.vm.events.allowed(services), true);
+    view.setUint32(at + 4 * L_ACTORS_EPOCH, actorsEpoch(), true);
+    view.setUint32(at + 4 * L_VERIFY, levelLoopMode() === 'verify' ? 1 : 0, true);
+    const c = this.contexts[0] ??= new TickContext();
+    c.receiver = null; c.instance = null; c.services = services; c.level = level; c.view = null; c.notify = null; c.log = null;
+    c.timeSeconds = level.timeSeconds; c.tickTag = level.tickTag; c.seconds = seconds; c.tickType = tickType; c.flags = 0;
+    c.batch = true; c.handle = 0;
+    // As `run`: the shadow stack pointer to restore if an import throws through the Rust frames.
+    const pointer = this.vm.depth === 0 ? this.stackTop : x.__stack_pointer.value;
+    this.depth = 1;
+    batching = this;
+    let stop;
+    try {
+      stop = x.level_tick_batch();
+    } catch (error) {
+      x.__stack_pointer.value = pointer;
+      // as `run` unwinds its tick, when one was in flight (a descriptor's host call throws before it)
+      if (view.getUint32(at + 4 * L_HANDLE, true) !== 0) {
+        x.tick_unwind(0);
+        view.setUint32(at + 4 * L_HANDLE, 0, true);
+      }
+      this.vm.pawnPhysics?.end(c);
+      this.vm.actorPhysics?.end(c);
+      out.current = view.getUint32(at + 4 * L_CURRENT, true);
+      c.clear();
+      throw error;
+    } finally {
+      this.depth = 0;
+      batching = null;
+    }
+    c.clear();
+    // `run`'s DEFER tail for each deferred slot, in the run's order.
+    const deferred = view.getUint32(at + 4 * L_DEFERRED, true);
+    for (let k = 0; k < deferred; k++) {
+      const slot = view.getUint32(this.levelDeferred + 4 * k, true);
+      const receiver = identityOfHandle(view.getUint32(this.listAt + 4 + 4 * slot, true));
+      const node = services.allocateDeferredActor();
+      if (node !== null && typeof node !== 'object') throw new Error('Original deferred-actor allocation result is not provided');
+      if (node) { node.actor = receiver; node.next = level.deferredHead; }
+      level.deferredHead = node;
+    }
+    if (STATS) {
+      const ticked = view.getUint32(at + 4 * L_TICKED, true), why = BATCH_STOPS[stop] ?? stop;
+      stats.calls += ticked; stats.defer += deferred; stats.batched += ticked;
+      stats.batchStops.set(why, (stats.batchStops.get(why) ?? 0) + 1);
+    }
+    out.next = view.getUint32(at + 4 * L_NEXT, true);
+    out.progress = view.getInt32(at + 4 * L_PROGRESS, true);
+    out.stop = stop;
+    return true;
+  }
+  /** The level loop's `[count, handle...]` copy of `actors` and its slots' descriptors, rebuilt when the array, its length or
+   * actorsEpoch changes (every structural change of a Level.Actors array advances it); a slot keeps the descriptor its actor had
+   * (level_loop.rs `level_desc_carry`). */
+  listFor(actors) {
+    const count = actors.length, epoch = actorsEpoch(), key = this.listKey;
+    if (key && key.actors === actors && key.count === count && key.epoch === epoch) return;
+    const arena = this.vm.arena, listBytes = 4 + 4 * count, descBytes = 16 * count;
+    const listAt = arena.alloc(listBytes), descAt = arena.alloc(descBytes), view = arena.view;
+    view.setUint32(listAt, count, true);
+    for (let i = 0; i < count; i++) view.setUint32(listAt + 4 + 4 * i, actors[i] ? handleOf(actors[i]) : 0, true);
+    this.x.level_desc_carry(this.listAt, this.descAt, listAt, descAt);
+    if (this.listAt) { arena.release(this.listAt, this.listBytes); arena.release(this.descAt, this.descBytes); }
+    this.listAt = listAt; this.descAt = descAt; this.listBytes = listBytes; this.descBytes = descBytes;
+    this.listKey = {actors, count, epoch};
+  }
+  /** js_tick_describe: slot `index`'s descriptor, [receiver epoch, table version, image base, row], from what `run` checks and
+   * `describe` returns for the actor; JS_TICK for one `run` hands back before its tick (no image, the PlayerPawn, a ScriptedPawn
+   * with SP fields outside its image). Under LEVEL_LOOP=verify a current descriptor must be the one written now. */
+  describeSlot(index, handle) {
+    const identity = identityOfHandle(handle), runtime = this.runtime;
+    const instance = identity === null || typeof identity !== 'object' ? undefined : identity[runtime.instanceKey] ?? runtime.instances.get(identity);
+    let base = 0, row;
+    if (instance === undefined || this.host(instance)) row = this.row(0, 0, 0, 0, JS_TICK);
+    else {
+      const d = this.describe(instance, identity), w = d.words;
+      const js = d.flags & C_PLAYERPAWN || d.scripted && (!(d.flags & C_SCRIPTEDPAWN) || d.splo !== SP_FULL_LO || d.sphi !== SP_FULL_HI);
+      base = instance.base;
+      row = this.row(w[0], w[1], w[2], w[3], (d.flags | (js ? JS_TICK : 0)) >>> 0);
+    }
+    const view = this.vm.arena.view, at = this.descAt + 16 * index, epoch = receiverEpoch() >>> 0;
+    if (view.getUint32(at, true) === epoch && view.getUint32(at + 4, true) === this.version &&
+      (view.getUint32(at + 8, true) !== base || view.getUint32(at + 12, true) !== row))
+      throw new Error(`Level loop: the descriptor of ${identity?.name ?? handle} is stale (base ${view.getUint32(at + 8, true)}, row ` +
+        `${view.getUint32(at + 12, true)}; now ${base}, ${row})`);
+    view.setUint32(at, epoch, true);
+    view.setUint32(at + 4, this.version, true);
+    view.setUint32(at + 8, base, true);
+    view.setUint32(at + 12, row, true);
+  }
+  /** The row index of `[lo, hi, splo, sphi, flags]` (level_loop.rs), entered once. */
+  row(lo, hi, splo, sphi, flags) {
+    const key = `${lo},${hi},${splo},${sphi},${flags}`;
+    let row = this.rowIds.get(key);
+    if (row !== undefined) return row;
+    row = this.rowIds.size;
+    const arena = this.vm.arena;
+    if (row >= this.rowCapacity) {
+      const capacity = Math.max(64, this.rowCapacity * 2), base = arena.alloc(4 * ROW_WORDS * capacity);
+      if (this.rowsAt) {
+        arena.bytes.copyWithin(base, this.rowsAt, this.rowsAt + 4 * ROW_WORDS * this.rowCapacity);
+        arena.release(this.rowsAt, 4 * ROW_WORDS * this.rowCapacity);
+      }
+      this.rowsAt = base; this.rowCapacity = capacity;
+      // a batch in progress reads the rows from LEVEL_IO
+      arena.view.setUint32(this.levelWords + 4 * L_ROWS, base, true);
+    }
+    const view = arena.view, at = this.rowsAt + 4 * ROW_WORDS * row;
+    view.setUint32(at, lo, true); view.setUint32(at + 4, hi, true); view.setUint32(at + 8, splo, true); view.setUint32(at + 12, sphi, true);
+    view.setUint32(at + 16, flags, true);
+    this.rowIds.set(key, row);
+    return row;
+  }
+  /** Tick context `i`, as an import of the tick (or of the physics it calls) takes it. */
+  contextAt(i) {
+    const c = this.contexts[i];
+    if (c.batch) this.bind(c);
+    return c;
+  }
+  /** A batch context's actor: the one level_loop.rs ticks now, bound when one of its imports runs. */
+  bind(c) {
+    const handle = this.vm.arena.view.getUint32(this.levelWords + 4 * L_HANDLE, true);
+    if (c.handle === handle) return;
+    const receiver = identityOfHandle(handle), runtime = this.runtime;
+    c.handle = handle; c.receiver = receiver;
+    c.instance = receiver[runtime.instanceKey] ?? runtime.instances.get(receiver);
+    c.flags = this.vm.arena.view.getUint32(this.levelWords + 4 * L_FLAGS, true) & ~JS_TICK;
+    c.view = null; c.notify = null;
+  }
   view(c) {
     return c.view ??= this.runtime.animationTick(c.receiver);
   }
@@ -569,8 +757,9 @@ export class ActorTickHost {
     this.vm.arena.view.setFloat64(this.f64At + 8 * index, value, true);
   }
   imports() {
-    const host = this, context = i => host.contexts[i];
+    const host = this, context = i => host.contextAt(i);
     return {
+      js_tick_describe: (index, handle) => host.describeSlot(index, handle),
       js_tick_zone_time(i) {
         counted?.('js_tick_zone_time');
         const c = context(i), value = c.level.zoneLastRenderTime(c.receiver);

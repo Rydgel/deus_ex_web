@@ -208,3 +208,46 @@ animation phase in a held capture differs run to run only because the held
 level still ticks the animation once per frame the page ran
 ([visual acceptance](visual-acceptance.md#cpu-and-gpu-mesh-paths-jcs-reflection-2026-10-08-a-capture-artifact-fixed-in-the-tool)).
 
+
+## The actor loop in Rust (2026-11-05)
+
+A host restructuring of the loop above, with no new original behavior: `tickStandaloneLevel`'s pass over Level.Actors from
+`FirstDynamicActor` asks `services.tickActors` (script-runtime.mjs `processActorBatch`, wrapped by the doors' `aroundActorBatch`)
+to tick a run of actors in Rust before it ticks one through `tickActor`. `native/script-vm/src/level_loop.rs` walks the run in the
+loop's order, skips null slots, and ticks each actor with tick.rs `tick_actor` and the arguments actor-tick-kernel.mjs `run`
+would pass, so the per-actor JavaScript chain (processLevelTick's `tickActor`, `aroundActorTick`, the two `withLifecycle`
+pass-throughs, `processActorTick`, `run`'s instance lookup, gates, `describe` and argument writes) runs only for the actors
+JavaScript ticks.
+
+- **Descriptors.** The kernel keeps its own `[count, handle...]` copy of the array (per array, length and actorsEpoch) and a
+  descriptor per slot: `[receiver epoch, table version, image base, row]`, the row interning `run`'s masks and class flags.
+  A descriptor is current while the receiver epoch (interp.rs RECEIVERS) and the tick table's version are the ones it was written
+  under: the epoch advances on every attach, binding, poison, restore and free, which are the events that change `run`'s
+  `host` test and `describe`'s masks. Rust asks the host (`js_tick_describe`) for any other; on the Island's scan route the
+  receiver epoch moved in 1 of 299 ticks. A rebuilt list keeps each actor's descriptor (`level_desc_carry`, a forward search
+  within 64 slots, Level.Actors keeping its order).
+- **Where a run ends.** At an actor `run` would hand back before its tick (no image, the PlayerPawn, a ScriptedPawn with SP fields
+  outside its image), at a prelude hand-back (JavaScript then ticks that actor through the whole chain, which hands it back
+  again before any effect), after an actor whose tick changed Level.Actors (actorsEpoch, mirrored into LEVEL_IO through
+  `onActorsEpoch`; the loop goes on from the next slot over the array as it now is), when 64 deferred slots are pending, or at
+  the copy's end.
+- **What the host does after a run.** It links the deferred actors into `level.deferredHead` in the run's order, as `run`'s DEFER
+  tail does for each, adds the run's progress, and the doors collect actors spawned during it (`collectSpawned`, which
+  `aroundActorTick` runs after every actor: a run ends after the actor that spawned). When a tick throws, the host unwinds as
+  `run` does and records the failing slot's actor in `npcFailures`.
+- **Callbacks.** A run's tick context binds its actor when an import first asks (`contextAt`, from LEVEL_IO's current handle),
+  so the callbacks see the receiver, instance and services `run` would have set.
+
+`LEVEL_LOOP=js` (Node) or `?levelLoop=js` keeps the chain for every actor; `LEVEL_LOOP=verify` describes every actor again and
+throws when a current descriptor differs from the one written now. `ACTOR_TICK_DIFFERENTIAL` runs no batch, and neither does a
+runtime whose `processActorTick` was replaced (validate-play-frame, validate-gm-trench-play-anim and validate-loadmap-startup
+observe or fail each tick there), as Rust dispatches events only while `processEvent` is the runtime's own.
+
+**Checks.** `bench-sim` digests (every script property of every actor after 60 + 300 ticks) are equal with `LEVEL_LOOP=js`, the
+Rust loop and `verify` on the Island (`5adb254a07b1ed6f`), and between js and Rust on Training, Battery Park, the Airfield, Wan Chai
+and the Area 51 bunker (Battery Park's headless bench errors on every tick in both: a script asks for the viewport size before a
+frame was drawn). `validate-level-tick` (31 original ULevel.Tick references), `validate-actor-tick-kernel` (22,683 replayed
+ticks, 0 mismatches), `validate-play-frame`, `validate-anim-dilation-play`, `validate-gm-trench-play-anim`,
+`validate-loadmap-startup`, `validate-script-lights` and `validate-travel-endings` pass, and `?levelLoop=verify` held for 40 s of
+the frame-time route on the Island (Chromium worker and Firefox inline) and Battery Park (Chromium). On the Island's scan route 98.3% of the kernel's ticks run inside Rust runs (276,134 of 280,932;
+the rest are the player and the deferred second pass), about two runs a tick.

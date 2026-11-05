@@ -21,6 +21,7 @@ mod computer;
 mod dispatch;
 mod interp;
 mod level;
+mod level_loop;
 mod fire;
 mod fall;
 mod fly;

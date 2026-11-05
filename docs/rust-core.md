@@ -877,6 +877,26 @@ Measured first ([rotating-brushes](rotating-brushes.md), "Cost"): the three spin
 * Interleaved A/B (six process pairs, medians of 400-tick blocks, the fans on): 1.36 ms per tick in JavaScript, 1.10 ms with the kernel, -0.26 ms.
 * Left: the encroachment query's per-candidate brush `PointCheck` (a JavaScript callback from the Rust hash) and `moveTranslatingMover`'s push services, about 0.25 ms for three fans.
 
+### November 5: ULevel::Tick's actor loop in Rust (implemented)
+
+Measured first: a Gecko profile of Firefox's inline Island frame (docs/play-frame-cost.md "Row 7.2.2 headed") put about 8% of
+the frame in the JavaScript each of the 780 actors a tick passed before Rust's tick (processLevelTick's `tickActor`,
+`aroundActorTick`, two `withLifecycle` pass-throughs, `processActorTick`, `run`'s instance lookup, gates, `describe` and argument
+writes), about 1.8 µs an actor there.
+
+* `native/script-vm/src/level_loop.rs` ticks a run of Level.Actors with tick.rs `tick_actor`, from a per-slot descriptor
+  (`run`'s image base, masks and flags, valid under the receiver epoch and the tick table's version) beside the kernel's copy
+  of the array; the host chain runs for the actors JavaScript ticks, and after a run the host links its deferred actors and
+  collects what it spawned (docs/script-level-tick.md "The actor loop in Rust"). `LEVEL_LOOP=js|verify`, `?levelLoop=`.
+* Verified: `bench-sim` digests equal across js, Rust and verify on six maps; `validate-level-tick`, `validate-actor-tick-kernel`;
+  `?levelLoop=verify` for 40 s on the Island (both browsers) and Battery Park (Chromium).
+* Interleaved A/B, three 40 s scan runs per arm on the Island, headless, with another session's validators loading the
+  machine (absolute times are high): Firefox inline page frame 22.16 → 21.36 ms (tick 10.97 → 10.25), Chrome worker frame
+  10.65 → 10.38 ms (tick 6.38 → 6.08). 98.3% of the kernel's ticks now run inside Rust runs.
+* Left in the tick, by a profile of the new loop: `AllActors` (native 304) testing `isA` in JavaScript for every actor of the
+  level (rare, about 0.7 ms a call in Node, so it lands in single frames), the tick's event gate (`js_event_gate`, which reads
+  Level and bBegunPlay in JavaScript), the zone render time (`js_tick_zone_time`) and reflected field reads.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

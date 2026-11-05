@@ -90,8 +90,8 @@ const C_WEAPON: u32 = 4;
 const C_SCRIPTEDPAWN: u32 = 8;
 
 // Results besides the body's 0 and 1.
-const HANDBACK: i32 = -1;
-const DEFER: i32 = -2;
+pub(crate) const HANDBACK: i32 = -1;
+pub(crate) const DEFER: i32 = -2;
 
 // js_tick_event events; Tick, UpdateEyeHeight and UpdateTactics take the
 // delta, the others no argument.
@@ -137,6 +137,14 @@ pub extern "C" fn tick_fields_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn tick_state_ptr() -> *mut u32 {
     addr_of_mut!(T_STATE) as *mut u32
+}
+/// The scripted-pawn field mask of the next tick (T_STATE[5] and [6]), as the
+/// host writes it before `tick_record` (level_loop.rs).
+pub(crate) fn set_sp_mask(lo: u32, hi: u32) {
+    unsafe {
+        (*addr_of_mut!(T_STATE))[5] = lo;
+        (*addr_of_mut!(T_STATE))[6] = hi;
+    }
 }
 #[no_mangle]
 pub extern "C" fn tick_f64_ptr() -> *mut f64 {

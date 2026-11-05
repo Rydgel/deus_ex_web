@@ -236,7 +236,7 @@ export class PawnPhysicsHost {
       pawnPhysicsTail(actor, pawn, delta, services, pawnDispatch(actor, pawn, services), stage);
     };
     return {
-      js_pawn_begin: i => host.begin(tick().contexts[i]),
+      js_pawn_begin: i => host.begin(tick().contextAt(i)),
       js_pawn_walk(depth, delta) {
         if (STATS) stats.walks++;
         const c = tick().contexts.find(c => c?.pawnDepth === depth);
@@ -264,7 +264,7 @@ export class PawnPhysicsHost {
         rest(depth, stage, delta);
       },
       js_pawn_end(i) {
-        const c = tick().contexts[i];
+        const c = tick().contextAt(i);
         host.end(c);
         tick().refresh(c);
       },

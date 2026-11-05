@@ -1891,3 +1891,10 @@ Worker mode is no way out for Firefox today. Headed, `?sim=worker&workerBusy=1`,
 and 19 ms p95, so the drawn interval p95 stays at 21 ms (66 fps), with 3 gaps over 150 ms (up to 200 ms); Battery Park's page
 and worker overlap (page p50 14 ms, worker 12 ms) and its p95 falls from 31 to 17 ms (passes), with 2 gaps over 150 ms. The
 freezes are the worker's non-incremental major GCs measured on 2026-10-31 (docs/sim-worker.md), so 7.2.4 would get worse.
+
+**The level loop in Rust (2026-11-05).** The per-actor chain above is gone for the actors Rust ticks
+([level tick](script-level-tick.md#the-actor-loop-in-rust-2026-11-05)). Interleaved headless A/B on the Island's scan route, three
+40 s runs per arm, medians of the run means, with another session's validators running on the machine: Firefox inline page
+frame 22.16 → 21.36 ms (tick 10.97 → 10.25 ms), Chrome worker frame 10.65 → 10.38 ms (tick 6.38 → 6.08 ms). About half of
+the 8% the profile attributed to the chain: the per-actor work that remains is the crossings the actors' own ticks make
+(`AllActors`' `isA`, the event gate, the zone render time).

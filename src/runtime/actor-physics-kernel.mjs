@@ -220,7 +220,7 @@ export class ActorPhysicsHost {
     // The reference's host, built where an import needs its own body.
     const adapter = c => c.adapter ??= spawnedFallingAdapter(runtime, c.actor);
     return {
-      js_fall_begin: i => host.begin(tick().contexts[i]),
+      js_fall_begin: i => host.begin(tick().contextAt(i)),
       js_fall_move(depth, dx, dy, dz) {
         const c = context(depth), result = playerMove(c.actor, [dx, dy, dz], c.ops), v = io();
         const normal = result.hit?.normal ?? [0, 0, 0];
@@ -258,7 +258,7 @@ export class ActorPhysicsHost {
         actorPhysicsTail(c.actor, delta, c.services);
       },
       js_fall_end(i) {
-        const c = tick().contexts[i];
+        const c = tick().contextAt(i);
         host.end(c);
         tick().refresh(c);
       },

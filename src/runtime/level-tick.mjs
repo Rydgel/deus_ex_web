@@ -101,7 +101,11 @@ export function tickStandaloneLevel(level,seconds,tickType,services) {
     }
     let progress=0;
     level.deferredHead=null;
+    // Host work: `tickActors` (level_loop.rs) ticks the actors from i it can, in order, and returns the slot it stopped at (one
+    // JavaScript ticks, or the one after an actor that changed this array) with their progress; null leaves every actor to tickActor.
     for(let i=level.firstDynamicActor;i<level.actors.length;i++) {
+      const run=services.tickActors?.(level.actors,i,delta,tickType)??null;
+      if(run){progress=(progress+run.progress)|0;i=run.next;if(i>=level.actors.length)break;}
       const actor=level.actors[i];
       if(actor)progress=(progress+tickActor(actor,delta,tickType))|0;
     }

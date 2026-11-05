@@ -22,10 +22,13 @@
  * `riderEpochOf(mover)` is the count a mover's rider list records beside the
  * epoch, so a Base change elsewhere in the level leaves the list in use. */
 let epoch = 0, actors = 0;
+const listeners = [];
 export const baseEpoch = () => epoch;
 export const actorsEpoch = () => actors;
-export const bumpBaseEpoch = () => { epoch++; actors++; };
-export const bumpActorsEpoch = () => { actors++; };
+/** Call `listener(actorsEpoch)` after every advance (the Rust level loop's mirror, actor-tick-kernel.mjs `batch`). */
+export const onActorsEpoch = listener => { listeners.push(listener); };
+export const bumpBaseEpoch = () => { epoch++; actors++; for (const listener of listeners) listener(actors); };
+export const bumpActorsEpoch = () => { actors++; for (const listener of listeners) listener(actors); };
 const changes = new WeakMap();
 export const riderEpochOf = mover => changes.get(mover) ?? 0;
 export function noteBaseChange(oldBase, newBase) {

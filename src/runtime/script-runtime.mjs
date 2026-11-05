@@ -4578,6 +4578,22 @@ export class ScriptRuntime {
     if(this.isScriptedPawn(receiver)&&!scriptedPawnTick(receiver,seconds,entry.tickType,this.scriptedPawnTickServices(entry.services)))return 1;
     return tickStandaloneActor(receiver,seconds,entry.tickType,entry.services);
   }
+  /** processActorTick over a run of a level loop's actors from `start` (actor-tick-kernel.mjs `batch`, level_loop.rs): {next,
+   * progress, stop, current}, the actors before `next` ticked as processActorTick ticks them, or null when the kernel cannot run
+   * the run here. `current` is the slot whose tick threw (-1 otherwise). */
+  processActorBatch(actors,start,seconds,options){
+    const kernel=this.scriptVm?.actorTick;
+    // Only while processActorTick is the runtime's own: a host that replaces it (validators observing each tick) sees every one.
+    if(!kernel?.enabled||Object.hasOwn(this,'processActorTick')||this.levelTickActorOptions?.has(options)!==true)return null;
+    let entry=this.levelTickActorServices?.get(options);
+    if(!entry){
+      entry=this.actorTickServices(options);
+      (this.levelTickActorServices??=new WeakMap()).set(options,entry);
+    }
+    const out=this.levelBatchOut??={next:0,progress:0,stop:0,current:-1};
+    out.current=-1;
+    return kernel.batch(actors,start,seconds,entry,out)?out:null;
+  }
   /** Whether the actor's class is DeusEx.ScriptedPawn or derives from it (cached by class). */
   isScriptedPawn(receiver) {
     const cls=(receiver?.[this.instanceKey]??this.instances.get(receiver))?.cls;
@@ -4640,6 +4656,14 @@ export class ScriptRuntime {
     // Every actor of this scheduler tick receives the same nativeServices
     // snapshot; one options object per tick type replaces a copy per actor.
     const actorOptions=new Map();
+    const optionsFor=type=>{
+      let options=actorOptions.get(type);
+      if(!options){
+        actorOptions.set(type,options={...nativeServices,level,tickType:type});
+        (this.levelTickActorOptions??=new WeakSet()).add(options);
+      }
+      return options;
+    };
     return tickStandaloneLevel(level,seconds,tickType,{
       ...nativeServices,
       read:(actor,name)=>this.readNamed(actor,name),
@@ -4649,13 +4673,16 @@ export class ScriptRuntime {
         return false;
       },
       tickActor:(actor,delta,type)=>{
-        let options=actorOptions.get(type);
-        if(!options){
-          actorOptions.set(type,options={...nativeServices,level,tickType:type});
-          (this.levelTickActorOptions??=new WeakSet()).add(options);
-        }
+        const options=optionsFor(type);
         // (no closure per actor: aroundActorTick takes the arguments of the tick it wraps)
         return nativeServices.aroundActorTick?nativeServices.aroundActorTick(actor,delta,options):this.processActorTick(actor,delta,options);
+      },
+      // The Rust level loop over a run of the actors (processActorBatch), with aroundActorBatch's bookkeeping when the host wraps
+      // each tick; null where it cannot run, and tickActor ticks each actor.
+      tickActors:(actors,start,delta,type)=>{
+        const options=optionsFor(type);
+        if(nativeServices.aroundActorTick)return nativeServices.aroundActorBatch?nativeServices.aroundActorBatch(actors,start,delta,options):null;
+        return this.processActorBatch(actors,start,delta,options);
       },
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       resetInputProperties:actor=>this.resetActorInput(actor),

@@ -92,7 +92,8 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // iterator's CurrentItem (laser-kernel.mjs), ?meshLight= for
 // SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
 // CycleActors (script-iterators.mjs) and ?levelScan= for the level loop's
-// DistanceFromPlayer and compaction passes (level.rs), ?farMove= for the
+// DistanceFromPlayer and compaction passes (level.rs), ?levelLoop= for its
+// actor loop (level_loop.rs, actor-tick-kernel.mjs `batch`), ?farMove= for the
 // noncolliding FarMoveActor (render.rs far_move), ?particles= for
 // execUpdateParticles (particles.rs), ?gcNative= for the HUD's GC state
 // and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
@@ -112,7 +113,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
-for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['meshLight','DEUS_EX_MESH_LIGHT'],
+for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
