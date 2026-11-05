@@ -40,8 +40,8 @@ that host code about twice as slowly as V8.
 * 12.4 ms in the bunker.
 
 Every other phase together adds 2 to 5 ms. So the medians are close to the bound, but the tails are not. The bunker shows it best:
-its p50 is 16 ms and its p95 is 34. What the slow ticks hold has not been measured yet: collection slices, minor collections, or
-script work such as `AllActors`' class scan, which costs about 0.7 ms per call and runs only now and then.
+its p50 is 16 ms and its p95 is 34. What the slow ticks hold is in [step 0's results](#step-0-what-the-slow-ticks-hold-2026-11-05):
+script work, mostly in the first 20 to 30 s after a map, not collections.
 
 **What has to go, per map**, to bring the page p95 from its value to about 16 ms:
 * Island, about 7 ms;
@@ -68,23 +68,27 @@ worth at least 5% of Firefox's frame on one failing map, about 0.8 ms, as judged
 ports are bit-exact: equal state digests on the five-map set, and the validators of the family touched. Each step is verified in
 Chrome's worker mode too.
 
-**0. Baseline and the tails** (measurement only).
-* Re-run the headed Firefox set on current master: the level loop and the class-field change have landed since f2f1cb6f.
-* Take Gecko profiles of the Island, Wan Chai, the bunker and Battery Park with the hitch log (`hitch-run.mjs --profile`), and
-  attribute the slowest 10% of ticks by function and by collection marker (`gecko-gaps.mjs`, `gecko-gc.mjs`).
-* Output: a table of what the slow ticks hold, and the order of steps 1 and 2.
+**0. Baseline and the tails** (measurement only): done 2026-11-05, [results below](#step-0-what-the-slow-ticks-hold-2026-11-05).
+The slow ticks are script work, not collections and not JIT warm-up. They are the same families as the steady tick, in larger
+doses, mostly in the first 20 to 30 s after a map. The headed set is not re-run here: the profiles are headless, the steps' A/Bs compare
+the tick's phase means (which a headless run measures), and the headed set is taken again for the rows' verdict (step 6).
 
-**1. The tick's spikes** (the p95's main term, 3 to 12 ms).
-* Port the families step 0 names, most likely script work that runs on some frames only, such as `AllActors`' per-actor `isA`
-  in JavaScript, and AI or timer bursts that go through `js_eval`.
-* If collection slices dominate instead, cut the tick's allocation per frame. Firefox's slices follow the allocation rate.
-* Expected: most of the 6 to 12 ms in the slow tenth.
-
-**2. The tick's steady host work** (Firefox 6.7 to 9.9 ms, Chrome about 4).
-* Port the Rust core's remaining callbacks by measured size: `js_eval`'s script calls and natives (11% of the Island's frame),
-  the host's field reads (`instance`, `readInstanceField`, `namedHandle`), `js_walk_prelude`, `js_object`, the event gate, the zone
-  time, and the player's tick, which still runs in JavaScript (about 6%).
-* Expected: 2 to 4 ms of the median.
+**1 and 2. The tick: its slow frames and its steady cost, one family at a time**, in this order of measured size:
+* **Decals.** `AttachDecal`, `ReattachDecal` and `DetachDecal` reach the host as whole calls (`js effect 0x1b`), then
+  `execAttachDecal`'s JavaScript before the Rust attach. They are the largest fallback in the census of the Island, the bunker and
+  Wan Chai, and they appear in the slow frames of the Island (+0.3 ms) and the bunker (+0.9 ms).
+* **Spawning and destroying actors** (`spawnActor`, `destroyActor` in JavaScript): +1.7 ms in the bunker's slow frames.
+* **Global function calls** (`0x38`, `Global.X` in state code) and **state code stepped in the JavaScript VM** (`js_step`, Island
+  +0.7 ms; the bunker's state processing +0.8 ms).
+* **The actor iterators:** `AllActors` (native 304), with its per-actor `isA` in JavaScript (Island +0.6 ms), and `CycleActors`
+  (native 1002, 27,000 calls in 20 s on the Island).
+* **Frequent natives the Rust VM hands back:** `GetPlayerPawn` (native 720, 51,000 calls in 20 s on the Island),
+  `StartConversation` calls (Wan Chai, 8,000 in 20 s), and string natives (Wan Chai: one nested string expression, 67,000 calls).
+* **Perception's light level** in Rust (`percep::light_level` under `ai_tick`, Battery Park +1.1 ms): Rust's own cost, so look at the
+  algorithm, not a crossing.
+* **What runs outside the Rust batch** (1.1 to 1.3 ms in steady frames): the player's tick, which still runs in JavaScript, and the
+  level's host work around the batch.
+* Expected: the slow tenth's 4.3 to 8.6 ms by more than half, and 2 to 4 ms of the median. Each family's A/B decides its share.
 
 **3. Uploads and fog on the page** (Battery Park, the Bar, the Ship).
 * Find what uploads 4 to 9 MB a frame. The hitch log counts bytes but not resources, so give its GL wrapper a per-target count.
@@ -106,6 +110,34 @@ Chrome's worker mode too.
 * After steps 0 to 2, check the route: if the bunker's or Battery Park's tails still miss and are collection-bound, reconsider
   route C.
 
+## Step 0: what the slow ticks hold (2026-11-05)
+
+Headless Firefox 155, inline, the census route (`hitch-run.mjs --mode scan --god --seconds 60 --profile`), master at 9283543f, a quiet
+machine. `scripts/gecko-slow-ticks.mjs` joins each drawn frame of the hitch log to the profile's main-thread samples, with
+correlations of 0.90 to 0.96 between a frame's tick phase and its samples at clock offsets of 0 to 2 ms. It then compares the slowest
+10% of frames by tick with the rest. Profiles and runs are in `.cache/perf/ff-ticks/` (outside Git).
+
+| Map | tick, slow tenth | tick, rest | collector markers in a frame (slow, rest) | What the slow frames add (ms per frame) |
+|---|---:|---:|---|---|
+| Island | 13.3 | 8.5 | 0.27, 0.14 | `js_eval` +0.9, `js_step` +0.7, `AllActors`' iterator and `isA` +0.6, decals +0.3, HUD root tick +0.3, walking prelude +0.3 |
+| Wan Chai market | 13.0 | 8.7 | 0.42, 0.18 | `js_eval` +1.3, Rust +0.6, walking prelude +0.5 |
+| Area 51 bunker | 14.3 | 5.7 | 1.02, 0.16 | `js_eval` +3.1, of which `destroyActor` +1.0, decals +0.9, `spawnActor` +0.7; state code +0.8 |
+| Battery Park | 12.3 | 7.8 | 0.26, 0.35 | Rust +1.1 (`percep::light_level` under `ai_tick`), `js_tick_resume` +0.4, physics +0.3 |
+
+* **Collections are not the tail.** Their markers hold 0.3 to 1.0 ms of a slow frame, against 4.5 to 8.6 ms more tick.
+* **The slow frames come early.** The tick's mean per 5 s falls on all four maps, for example the Island's from 12.1 ms (5 to 10
+  s after the map) to 6.5 ms (60 s). Chrome's worker tick falls too, from 5.4 to 3.7 ms on the Island in the headed run.
+* **It is not JIT warm-up.** The Island loaded after Wan Chai in the same page, so with its host code already compiled, has the same
+  early ticks: 12.3, 10.7 and 10.3 ms at 5, 10 and 15 s, against 12.1, 11.2 and 11.0 cold. Its steady tick is about 1 ms lower (5.6
+  against 6.5 to 6.8 ms).
+* **What it is, then:** the level's own work after arrival, such as the start-of-mission InfoLink, the mission title's text, NPCs
+  setting off, effects spawning, and shadows reattaching their decals while pawns move. That is original behavior, so it stays.
+  Its cost is that most of it still runs in JavaScript.
+* **The census agrees** (Node, `SCRIPT_VM_STATS`, 5 to 25 s after the map on the scan route). The largest JavaScript fallbacks are
+  `AttachDecal` (Island 905 ms, bunker 1,421 ms plus `ReattachDecal` 863 ms, Wan Chai 422 ms over the 1,200 ticks), then global
+  function calls (`0x38`, 200 to 320 ms), `StartConversation` in Wan Chai (371 ms), and `GetPlayerPawn` (native 720) by count.
+  Battery Park's census is not usable: headless, every tick stops at the viewport size before the first frame.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
@@ -115,7 +147,6 @@ Chrome's worker mode too.
 
 ## Open questions
 
-* What the slow ticks hold (step 0). The estimates for steps 1 and 5 depend on it.
-* Whether Battery Park can reach 16 ms inline. Steps 2 to 4 as estimated take its p50 from 26 to 13 to 19 ms. That is not enough
-  unless step 1 shortens its tail as well.
+* Whether Battery Park can reach 16 ms inline. Steps 1 to 4 as estimated take its p50 from 26 to 13 to 19 ms. That is not enough
+  unless its slow tenth falls by more than half as well. Its tail is mostly perception's light level, which is already in Rust.
 * The Mac: its tick was about 1.35 times this host's in Chrome. Firefox there is unmeasured since October.
