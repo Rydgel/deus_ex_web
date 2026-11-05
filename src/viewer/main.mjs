@@ -92,7 +92,8 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // iterator's CurrentItem (laser-kernel.mjs), ?meshLight= for
 // SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
 // CycleActors and ?actorScan= for AllActors and RadiusActors (script-iterators.mjs),
-// ?destroyScan= for DestroyActor's SetOwner/EndTouch scan (script-destroy.mjs), ?levelScan= for the level loop's
+// ?destroyScan= for DestroyActor's SetOwner/EndTouch scan (script-destroy.mjs), ?fogUpload=page for
+// whole fog pages (fog-pass.mjs), ?levelScan= for the level loop's
 // DistanceFromPlayer and compaction passes (level.rs), ?levelLoop= for its
 // actor loop (level_loop.rs, actor-tick-kernel.mjs `batch`), ?farMove= for the
 // noncolliding FarMoveActor (render.rs far_move), ?particles= for
@@ -115,7 +116,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
-  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
   ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH']]) {
@@ -795,7 +796,7 @@ function viewportWorldPass(command) {
     try {
       world.fog.update({ location: command.location, rotation: command.rotation }, viewportFrustum(command),
         new Set(cameraFog === 'off' ? [] : Array.from(plan.visibility.nodes, node => world.nodeSurface[node])),
-        { moverItems: cameraFog ? null : plan.visibility.moverItems ?? null, fogZone: world.fogZone, frames: childFog && cameraFog !== 'off' ? frames : null, nodeSurface: world.nodeSurface });
+        { moverItems: cameraFog ? null : plan.visibility.moverItems ?? null, fogZone: world.fogZone, frames: childFog && cameraFog !== 'off' ? frames : null, nodeSurface: world.nodeSurface, renderer });
       const { drawn, texels, movers, frameMaps, moverItems } = world.fog.stats; fogMaps = { drawn, texels, movers, frameMaps, moverItems };
     } catch (error) { pauseForRuntimeError(error); }
   }
@@ -2338,6 +2339,8 @@ fog() {
   const fog = world?.fog;
   return fog ? { stats: { ...fog.stats }, visibleMeshes: fog.root.children.filter(object => object.visible).length } : null;
 },
+// Each fog page's GPU texture read back against its pixels (fog-pass.mjs pagesMatch): the texels that differ.
+fogPages() { return world?.fog ? world.fog.pagesMatch(renderer) : null; },
 /** Validation only: the 3D view's projection from the pass frame (on, the
  * default) or from the FOV and the constant pixel centre (off). */
 frameProjection(on) { frameProjection = Boolean(on); },
@@ -2727,7 +2730,7 @@ function drawFrame(snap, time) {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
         drawnSurfaces, { moverItems: visible?.moverItems ?? null, fogZone: world.fogZone, frames: childFog ? frames : null,
-          nodeSurface: world.nodeSurface });
+          nodeSurface: world.nodeSurface, renderer });
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');

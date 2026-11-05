@@ -59,7 +59,7 @@ try {
   await page.evaluate(() => window.deusExViewer.placeProbe({ location: [-900, -330, 80], rotation: [0, 25000, 0] }));
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   await frames(90);
-  report = await page.evaluate(() => ({ ...window.deusExViewer.fog(),
+  report = await page.evaluate(() => ({ ...window.deusExViewer.fog(), pages: window.deusExViewer.fogPages(),
     runtimeError: window.deusExViewer.status().runtimeError?.message ?? null }));
   const on = await page.screenshot();
   if (shots) await page.screenshot({path: `${shots}/fog-${map}.png`});
@@ -85,11 +85,18 @@ try {
     await frames(30);
     await page.evaluate(() => window.deusExViewer.placeProbe({ location: [-122, -1008, 60], rotation: [0, 0, 0] }));
     await frames(60);
-    report.mirror = await page.evaluate(() => ({ stats: window.deusExViewer.fog().stats,
+    report.mirror = await page.evaluate(() => ({ stats: window.deusExViewer.fog().stats, pages: window.deusExViewer.fogPages(),
       mirrors: window.deusExViewer.status().mirrors, runtimeError: window.deusExViewer.status().runtimeError?.message ?? null }));
     if (shots) await page.screenshot({path: `${shots}/fog-10_Paris_Club-mirror.png`});
   }
   report.pageErrors = errors;
+  // The fog pages on the GPU equal their pixels at the end of a frame (fog-pass.mjs: whole pages, then the written tiles; a child
+  // frame's copies are undone by its pass's end), on the bar and after the mirror frames.
+  for (const [where, pages] of [['02_NYC_Bar', report.pages], ['10_Paris_Club', report.mirror?.pages]]) {
+    if (!pages) continue;
+    const differing = pages.filter(page => page.differ > 0);
+    assert.deepEqual(differing, [], `${where}: fog pages on the GPU differ from their pixels: ${JSON.stringify(differing)}`);
+  }
 } finally { await browser.close(); await server?.close(); }
 const moverCase = report.mover?.stats.moverCase ?? null, frameCase = report.mirror?.stats.frameCase ?? null;
 const brief = c => c && { ...c, texels: `${c.texels.length / 4} texels` };
@@ -149,4 +156,4 @@ if (report.mirror) {
     ? `; 10_Paris_Club mirror frame ${frameCase.frame}: ${report.mirror.stats.frameMaps} child maps, surface ${frameCase.surface}'s ${frameCase.width}x${frameCase.height} map equal to Render.dll's loop`
     : `; mirror frame ${frameCase.frame}: ${report.mirror.stats.frameMaps} maps (no native probe environment for the oracle)`;
 }
-console.log(`validate-volumetric-fog-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.drawn} of ${report.stats.surfaces} fog surfaces, ${report.stats.texels} texels${moverNote}${mirrorNote})`);
+console.log(`validate-volumetric-fog-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.drawn} of ${report.stats.surfaces} fog surfaces, ${report.stats.texels} texels${moverNote}${mirrorNote}; fog pages equal to their pixels on the GPU: ${report.pages?.filter(page => page.differ === 0).length ?? 0} on the bar, ${report.mirror?.pages?.filter(page => page.differ === 0).length ?? 0} after the mirror)`);

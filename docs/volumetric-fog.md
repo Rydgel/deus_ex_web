@@ -356,6 +356,30 @@ Unverified or host choices, noted:
   (children first), but within a frame its surface order differs, which can
   change boundary texels.
 
+### Uploads (2026-11-05)
+
+A level surface's fog map is written into its padded tile of an atlas page (`writeTile`). Until this change every page with a written
+tile was then re-uploaded whole (`texture.needsUpdate`). On Battery Park that was 18 page uploads a frame, 8.3 MB and 4.4 ms of
+Firefox's frame (`.work/perf/upload-sources.mjs`, WebGL uploads by call site), while the frame's fog maps hold about 45,000 texels.
+
+A page's texels change only in `writeTile`. So once a page's texture is on the GPU and current, `update` now sends only the padded
+tiles it wrote, each as a tightly packed view through three's state cache, as the light atlas does. Firefox copies a call's whole
+source view whatever the unpack state selects (light-atlas.mjs `flush`), so `copyTextureToTexture` from the page's pixels would
+have copied the page once per tile.
+
+A page whose texture has never been uploaded, or whose full upload three still owes, is still uploaded whole, and that upload reads
+the same pixels. The whole-page path also covers a caller without a renderer and `?fogUpload=page` (`FOG_UPLOAD=page`). A child
+frame's maps still go through `framePass`'s copies, which its pass's end undoes from the page pixels.
+
+* **Checks:** `deusExViewer.fogPages()` (fog-pass.mjs `pagesMatch`) reads each page back from the GPU and compares it with its pixels.
+  It found 0 differing texels on Battery Park in both modes, after turns of the view. validate-volumetric-fog-play now asserts the
+  same on the Bar and after the Paris Club's mirror frames, and passes in worker and inline mode, with the Bar's fog surfaces, the
+  mover map and the mirror frame's maps equal to Render.dll's loop.
+* **Cost:** Battery Park's uploads went from 8.3 MB and 4.36 ms a frame to about 0.14 MB and 0.15 ms for the fog tiles (Firefox,
+  headless). Firefox inline on the census route, three interleaved pairs (`hitch-ab.mjs`, `?fogUpload=page` against the default):
+  * Battery Park: the page frame p50 24 → 20 ms, p95 28 → 24 ms;
+  * the Bar: p50 12 → 9 ms, p95 14 → 11 ms.
+
 ## Mesh fog
 
 Recovered 2026-10-06 from Render.dll, D3DDrv.dll (`9e0f8a42…d8ac9f`) and

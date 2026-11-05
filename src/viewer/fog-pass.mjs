@@ -32,6 +32,9 @@ import { FOG_RENDER_ORDER, FOG_RENDER_ORDER_LAST, FOG_RENDER_ORDER_MASKED } from
  * then the mover items' in draw-list order. The display ramp maps the
  * finished frame after the pass blends (display-ramp.mjs), unless
  * ?gamma=material. */
+/** 'tiles' (default): a page whose texture is on the GPU takes only the tiles the frame wrote (copyTextureToTexture from its
+ * pixels); 'page' re-uploads every written page whole (?fogUpload=page). */
+const fogUploadMode = () => globalThis.DEUS_EX_FOG_UPLOAD || (typeof process !== 'undefined' && process.env?.FOG_UPLOAD) || 'tiles';
 export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, notes, kernel = null }) {
   const root = new THREE.Group(), surfaces = [], lights = [], pages = new Map(), moverPolygons = new Map();
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
@@ -136,6 +139,30 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       pixels[dst] = texels[src + 2]; pixels[dst + 1] = texels[src + 1];
       pixels[dst + 2] = texels[src]; pixels[dst + 3] = texels[src + 3];
     }
+  }
+  let scratch = new Uint8Array(0);
+  /** A rectangle of a page's texels as one tightly packed view (light-atlas.mjs rectangle). */
+  function rectangle(pixels, x, y, width, height) {
+    const row = width * 4;
+    if (width === size) return pixels.subarray(y * size * 4, (y + height) * size * 4);
+    if (scratch.length < row * height) scratch = new Uint8Array(row * height);
+    for (let r = 0; r < height; r++) {
+      const start = ((y + r) * size + x) * 4;
+      scratch.set(pixels.subarray(start, start + row), r * row);
+    }
+    return scratch.subarray(0, row * height);
+  }
+  /** Unit 0 and the unpack state copyTextureToTexture would set for a page (the pages are DataTextures with flipY false, no
+   * premultiplied alpha, alignment 4), through three's state cache; rectangles arrive tightly packed. */
+  function beginUpload(renderer) {
+    const gl = renderer.getContext(), state = renderer.state, texture = pages.values().next().value.texture;
+    state.activeTexture(gl.TEXTURE0);
+    state.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, texture.flipY);
+    state.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, texture.premultiplyAlpha);
+    state.pixelStorei(gl.UNPACK_ALIGNMENT, texture.unpackAlignment);
+    for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS', 'UNPACK_SKIP_IMAGES'])
+      state.pixelStorei(gl[name], 0);
+    return { gl, state };
   }
   /** The root frame's texels of a page as an upload source (never uploaded itself). */
   function mainSource(fogPage) {
@@ -280,7 +307,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * are computed in that order, the root frame last, with the early-out
      * flag carried through. `framePass(frame, renderer)` puts a child
      * frame's maps in place for its pass. */
-    update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null } = {}) {
+    update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null, renderer = null } = {}) {
       stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null; stats.moverItems = [];
       childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
       for (const slot of items) slot.mesh.visible = false;
@@ -310,14 +337,14 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const [x, y, z] = getAxes(view.rotation.map(v => v | 0));
       // ViewCoords (0,1,0), (0,0,-1), (1,0,0) under the view rotation.
       const coords = { origin: view.location.map(Math.fround), x: y, y: z.map(v => -v), z: x };
-      const frameLights = lightsFor(coords), dirty = new Set(), rootFogged = new Set();
+      const frameLights = lightsFor(coords), dirty = new Set(), written = [], rootFogged = new Set();
       foggedSurfaces.set(0, rootFogged);
       for (const surface of surfaces) surface.mainVisible = surface.mesh.visible = false;
       levelMaps(drawn, frustum, coords, frameLights, state, (surface, texels) => {
         const { record, tile, mesh, fogPage } = surface;
         if (texels.some(Boolean)) rootFogged.add(surface.surfaceIndex);
         writeTile(fogPage.pixels, size, tile.x, tile.y, record, texels);
-        dirty.add(fogPage);
+        dirty.add(fogPage); written.push(surface);
         surface.mainVisible = mesh.visible = true; stats.drawn++; stats.texels += record.width * record.height;
       });
       moverMaps(moverItems, fogZone, coords, frameLights, state, 0, (item, texels, input, missFlag, basis) => {
@@ -331,7 +358,49 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
           uvRange: [Math.min(...uv.map(p => p[0])), Math.min(...uv.map(p => p[1])), Math.max(...uv.map(p => p[0])), Math.max(...uv.map(p => p[1]))] },
           texels, input, missFlag, coords);
       });
-      for (const fogPage of dirty) fogPage.texture.needsUpdate = true;
+      // The written tiles to the GPU. A page's texels change only here (writeTile), so once its texture is on the GPU and current
+      // it follows its pixels through the padded tiles this frame wrote, each sent as a tightly packed view: Firefox copies the
+      // whole source view per call whatever the unpack state selects (light-atlas.mjs flush), and the whole page re-uploaded was
+      // size * size * 4 bytes for each written page (Battery Park: 8.3 MB a frame, 4.4 ms in Firefox; docs/volumetric-fog.md
+      // "Uploads"). A page never uploaded, or one whose full upload three still owes (that upload reads these pixels), takes
+      // the whole page; so does every page without a renderer (a caller outside the frame) or with ?fogUpload=page.
+      const tiles = renderer && fogUploadMode() === 'tiles';
+      let upload = null;
+      for (const fogPage of dirty) {
+        const texture = fogPage.texture;
+        if (!tiles) { texture.needsUpdate = true; continue; }
+        const properties = renderer.properties.get(texture);
+        fogPage.current = Boolean(properties.__webglTexture) && properties.__version === texture.version && texture.version > 0;
+        if (!fogPage.current && texture.version === (properties.__version ?? 0)) texture.needsUpdate = true;
+      }
+      if (tiles) for (const surface of written) {
+        const fogPage = surface.fogPage;
+        if (!fogPage.current) continue;
+        upload ??= beginUpload(renderer);
+        const { gl, state } = upload, properties = renderer.properties.get(fogPage.texture);
+        state.bindTexture(gl.TEXTURE_2D, properties.__webglTexture, gl.TEXTURE0);
+        const { record, tile } = surface, width = record.width + 2, height = record.height + 2;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, tile.x - 1, tile.y - 1, width, height, gl.RGBA, gl.UNSIGNED_BYTE,
+          rectangle(fogPage.pixels, tile.x - 1, tile.y - 1, width, height));
+      }
+    },
+    /** Debugging: each page's texture read back from the GPU against its pixels (the texels that differ), after a frame. */
+    pagesMatch(renderer) {
+      const gl = renderer.getContext(), out = [], buffer = new Uint8Array(size * size * 4);
+      for (const [index, fogPage] of pages) {
+        const texture = renderer.properties.get(fogPage.texture).__webglTexture;
+        if (!texture) { out.push({ index, uploaded: false }); continue; }
+        const fb = gl.createFramebuffer(), previous = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+        gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, previous); gl.deleteFramebuffer(fb);
+        let differ = 0;
+        for (let i = 0; i < buffer.length; i += 4)
+          if (buffer[i] !== fogPage.pixels[i] || buffer[i + 1] !== fogPage.pixels[i + 1] || buffer[i + 2] !== fogPage.pixels[i + 2] || buffer[i + 3] !== fogPage.pixels[i + 3]) differ++;
+        out.push({ index, differ });
+      }
+      return out;
     },
     /** The surfaces of frame `index` (0 the root) with a fog map this update, a Set, or null when none was computed. */
     fogged(index) { return foggedSurfaces.get(index) ?? null; },
