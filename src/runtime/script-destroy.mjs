@@ -60,6 +60,27 @@ function nextTouch(callbacks, read, actor, receiver, from) {
   return -1;
 }
 
+/** 'rust' (default), 'js' or 'verify': DESTROY_SCAN / DEUS_EX_DESTROY_SCAN, the SetOwner/EndTouch scan below. */
+export const destroyScanMode = () => (typeof process !== 'undefined' && process.env?.DESTROY_SCAN) || globalThis.DEUS_EX_DESTROY_SCAN || 'rust';
+
+// The SetOwner/EndTouch scan's next slot at or after `from` that may need its body: a host `scan(actors, from, receiver)` (the
+// Rust core's destroy_scan over the image's Owner and Touching cells) passes over the slots whose Owner is not `receiver` and
+// whose Touching slots do not hold it, as the body would do nothing there; verify checks each slot passed over with the reads
+// the body makes.
+function nextOwnedOrTouching(callbacks, read, actors, from, receiver) {
+  const mode = callbacks.destroyScan ? destroyScanMode() : 'js';
+  if (mode === 'js') return from;
+  const index = callbacks.destroyScan(actors, from, receiver);
+  if (mode === 'verify') {
+    for (let i = from; i < index; i++) {
+      const child = actors[i];
+      if (present(child) && (read(child, 'Owner') === receiver || nextTouch(callbacks, read, child, receiver, 0) >= 0))
+        throw new Error(`DESTROY_SCAN=verify: Rust passed over ${child.name} (slot ${i}), which holds ${receiver.name}`);
+    }
+  }
+  return index;
+}
+
 function deleted(read, receiver) {
   return flag(read(receiver, 'bDeleteMe'));
 }
@@ -171,7 +192,8 @@ export function destroyScriptActor(receiver, options, netForce = false) {
   // Re-read the live array on every iteration. SetOwner and EndTouch are one
   // combined native scan: callbacks can synchronously alter ownership, touch
   // slots, actor slots, and script state before the next scan entry.
-  for (let i = 0; i < actors.length; i++) {
+  for (let i = nextOwnedOrTouching(callbacks, read, actors, 0, receiver); i < actors.length;
+    i = nextOwnedOrTouching(callbacks, read, actors, i + 1, receiver)) {
     const child = actors[i];
     if (!present(child)) continue;
     if (read(child, 'Owner') === receiver) {

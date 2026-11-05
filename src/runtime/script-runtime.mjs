@@ -3219,6 +3219,8 @@ export class ScriptRuntime {
       read:(actor,name)=>this.readNamed(actor,name),
       write:(actor,name,value)=>this.writeNamed(actor,name,value),
       touching:(actor,target,from)=>this.touchingSlot(actor,target,from),
+      // The SetOwner/EndTouch scan in the Rust core (script-destroy.mjs nextOwnedOrTouching, render.rs destroy_scan).
+      destroyScan:this.scriptVm?.render?(actors,from,receiver)=>this.scriptVm.render.destroyScan(actors,from,receiver):null,
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       isProbing:(actor,name)=>this.isProbing(actor,name),
       // ULevel::DestroyActor detaches the target's Base and every based child
@@ -4965,7 +4967,9 @@ export class ScriptRuntime {
         return createCycleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
           scan:render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null});
       }
-      if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
+      // AllActors' and RadiusActors' class tests run in the Rust core's CycleActors scan (script-iterators.mjs scanActors).
+      const render=this.scriptVm?.render,scan=render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null;
+      if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,scan});
       // execVisibleCollidingActors 0x103e55b0: the list is the collision hash's ActorRadiusCheck 0x103589e0
       // (collision-hash-radius.mjs), filtered by class, bHidden and Model->FastLineCheck.
       if(call.index===312)return createVisibleCollidingActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
@@ -4987,10 +4991,11 @@ export class ScriptRuntime {
     }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');
-    const tag=this.lookupMember(this.actorClass,'fields','Tag');
+    const tag=this.lookupMember(this.actorClass,'fields','Tag'),render=this.scriptVm?.render;
     return createAllActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,
       isA:(actor,base)=>this.classIsA(this.instance(actor).cls,base),
       tagOf:actor=>this.fieldReference(actor,tag).get(),
+      scan:render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null,
     });
   }
   /** processEvent's Level gate, after GIsScriptable: false when the event

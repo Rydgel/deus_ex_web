@@ -89,11 +89,14 @@ export const RENDER_FIELDS = Object.freeze([
   // FDynamicSprite::Setup's GetAnimSeq name (actor-mesh-sim.mjs packSetup): the
   // name's word, its folded id (script-name-ids.mjs nameCellWord).
   ['AnimSequence', 'engine.actor.animsequence', 'name'],
+  // ULevel::DestroyActor's SetOwner/EndTouch scan (render.rs destroy_scan): a fixed array of four pointers.
+  ['Touching', 'engine.actor.touching', 'pointer[4]'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
- * kind, or `float[4]`, a fixed array of four contiguous floats. */
-const cellIs = (cell, kind) => kind === 'float[4]'
-  ? cellKind(cell) === 'fixed' && cellKind(cell.element) === 'float' && cell.element.offset === 0 &&
+ * kind, or `float[4]` / `pointer[4]`, a fixed array of four contiguous
+ * floats or pointers. */
+const cellIs = (cell, kind) => kind === 'float[4]' || kind === 'pointer[4]'
+  ? cellKind(cell) === 'fixed' && cellKind(cell.element) === kind.slice(0, -3) && cell.element.offset === 0 &&
     cell.stride === 4 && cell.dim === 4
   : cellKind(cell) === kind;
 /** Entry kinds: `entry >>> RENDER_SHIFT` is the Level.Actors index, the low
@@ -307,6 +310,13 @@ export class RenderScanHost {
     this.x.cycle_scan(list, cursor, steps, bound, classRecordId(base), this.cycleOut);
     const view = this.vm.arena.view, at = this.cycleOut;
     return {kind: view.getUint32(at, true), cursor: view.getUint32(at + 4, true), steps: view.getUint32(at + 8, true)};
+  }
+  /** DestroyActor's SetOwner/EndTouch scan in Rust (render.rs destroy_scan): from `from`, the first index of `actors` whose
+   * actor holds `receiver` as its Owner or in a Touching slot, or that the image cannot answer; `actors.length` when none.
+   * No script runs. */
+  destroyScan(actors, from, receiver) {
+    this.table();
+    return this.x.destroy_scan(this.listFor(actors), from, handleOf(receiver));
   }
   /** tickStandaloneLevel's DistanceFromPlayer pass (level.rs
    * level_distance) over `actors` from `start` for the player's Location

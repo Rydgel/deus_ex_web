@@ -127,6 +127,25 @@ slot that is already null is skipped, but an otherwise non-null actor is filtere
 only by class ancestry and optional exact tag. The native also does not sort or
 deduplicate actors.
 
+## The class test in Rust (2026-11-05)
+
+`next()` (script-iterators.mjs `scanActors`, shared with `RadiusActors`) takes its class matches from the Rust core:
+`script-vm-render.mjs cycleScan` over `render.rs cycle_scan`, the scan `CycleActors` already used. It runs over the arena copy of
+`Level.Actors` (`listFor`, rebuilt when the array, its length or `actorsEpoch` changes) and tests each handle's class row for
+`BaseClass`'s record id, the same chain `classIsA` walks. Started at the saved index with the slots left as its bound, it never
+wraps. It returns each match, or an actor whose class row it lacks, which the JavaScript `isA` then tests. The tag
+comparison (and `RadiusActors`' distance test) stays in JavaScript and runs only on class matches. No script runs during a
+scan, so one read of the array serves it.
+
+* **Modes:** `ACTOR_SCAN=js` (`?actorScan=js` in Play) keeps the JavaScript loop. `ACTOR_SCAN=verify` runs both from the same
+  index and throws on a different actor or index.
+* **Checks:** bench-sim digests are unchanged on five maps. Verify mode compared 140 `AllActors` and 338 `RadiusActors` iterators on
+  the Island, 129 and 168 in the Area 51 bunker and 100 `AllActors` in Wan Chai over 1,500 ticks of the census route, with no
+  difference. validate-native-radius-actors (10 cases), the iterator unit tests and the frob, trigger, light, DataLink, door and
+  patrol validators pass.
+* **Cost:** Firefox inline on the Island's census route, three interleaved pairs: the slowest tenth of ticks 11.63 → 10.72 ms, the
+  tick's mean 7.59 → 7.33 ms ([Firefox 60 fps plan](firefox-60fps-plan.md)).
+
 ## Body control flow and unwind
 
 Once a matching actor is published, native 304 dispatches body bytes beginning at

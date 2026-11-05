@@ -28,6 +28,46 @@ function isNoneName(value) {
   return value === 0 || nameText(value) === 'none';
 }
 
+/** AllActors' and RadiusActors' scan (ACTOR_SCAN=js keeps the JavaScript loop, verify runs both and compares): the first actor
+ * of `array` from `start` that is not null, whose class reaches `baseClass` (`isA`) and that `accept` takes, with the index after
+ * it ({actor: null, index: array.length} when none is left). `scan(array, cursor, steps, bound, base)` runs the null and class
+ * tests in the Rust core (script-vm-render.mjs cycleScan, render.rs cycle_scan over the image's class rows, the same chain
+ * classIsA walks): started at `start` with the actors left as its bound it never wraps, and it returns each class match, or an
+ * actor it has no class row for, which `isA` tests here. `accept` (the tag, the distance) reads only, so both loops may run. */
+export const actorScanMode = () => (typeof process !== 'undefined' && process.env?.ACTOR_SCAN) || globalThis.DEUS_EX_ACTOR_SCAN || 'rust';
+function scanActors(array, start, baseClass, isA, accept, scan) {
+  const mode = scan ? actorScanMode() : 'js';
+  const loop = () => {
+    let index = start;
+    while (index < array.length) {
+      const actor = array[index++];
+      if (actor === null || actor === undefined) continue;
+      if (!isA(actor, baseClass)) continue;
+      if (!accept(actor)) continue;
+      return {actor, index};
+    }
+    return {actor: null, index};
+  };
+  if (mode === 'js') return loop();
+  let found = {actor: null, index: start};
+  for (let index = start; ;) {
+    if (index >= array.length) { found = {actor: null, index}; break; }
+    const result = scan(array, index, 0, array.length - index, baseClass);
+    index = result.cursor;
+    if (result.kind === 0) { found = {actor: null, index}; break; }
+    const actor = array[index - 1];
+    if (result.kind === 2 && !isA(actor, baseClass)) continue;
+    if (!accept(actor)) continue;
+    found = {actor, index}; break;
+  }
+  if (mode === 'verify') {
+    const expected = loop();
+    if (expected.actor !== found.actor || expected.index !== found.index)
+      throw new Error(`ACTOR_SCAN=verify: Rust ${found.actor?.name ?? 'none'}@${found.index}, JavaScript ${expected.actor?.name ?? 'none'}@${expected.index}`);
+  }
+  return found;
+}
+
 /**
  * Create the native 304 controller for one compiled AllActors expression.
  *
@@ -46,6 +86,7 @@ export function createAllActorsIterator({
   levelFor,
   isA,
   tagOf,
+  scan = null,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('AllActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('AllActors requires levelFor');
@@ -71,6 +112,8 @@ export function createAllActorsIterator({
   const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
 
   let index = 0;
+  const anyTag = isNoneName(matchTag), tagText = anyTag ? null : nameText(matchTag);
+  const acceptTag = anyTag ? () => true : actor => nameText(tagOf(actor)) === tagText;
 
   function clearOut() {
     if (outReference) outReference.set(null);
@@ -85,22 +128,17 @@ export function createAllActorsIterator({
   return {
     next() {
       clearOut();
-      while (true) {
-        const level = levelFor(receiver);
-        const actors = level?.actors;
-        if (!actors || typeof actors.length !== 'number') {
-          throw new TypeError('AllActors levelFor(receiver) must provide an actors array');
-        }
-        if (index >= actors.length) return false;
-
-        const actor = actors[index++];
-        if (actor === null || actor === undefined) continue;
-        if (!isA(actor, baseClass)) continue;
-        if (!isNoneName(matchTag) && nameText(tagOf(actor)) !== nameText(matchTag)) continue;
-
-        publish(actor);
-        return true;
+      // No script runs during the scan, so one read of the array serves it.
+      const level = levelFor(receiver);
+      const actors = level?.actors;
+      if (!actors || typeof actors.length !== 'number') {
+        throw new TypeError('AllActors levelFor(receiver) must provide an actors array');
       }
+      const found = scanActors(actors, index, baseClass, isA, acceptTag, scan);
+      index = found.index;
+      if (!found.actor) return false;
+      publish(found.actor);
+      return true;
     },
   };
 }
@@ -278,6 +316,7 @@ export function createRadiusActorsIterator({
   actorClass,
   levelFor,
   isA,
+  scan = null,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('RadiusActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('RadiusActors requires levelFor');
@@ -291,6 +330,12 @@ export function createRadiusActorsIterator({
   const locationDefault = receiver.position.map(f32);
   const loc = ((argumentCount > 3 ? refValue(evaluateArgument(3)) : undefined) ?? locationDefault).map(f32);
   const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+  const within = actor => {
+    const p = actor.position;
+    const dx = f32(p[0]) - loc[0], dy = f32(p[1]) - loc[1], dz = f32(p[2]) - loc[2];
+    const sum = radius + f32(actor.radius ?? 0);
+    return sum * sum > dx * dx + dy * dy + dz * dz;
+  };
 
   let index = 0;
   return {
@@ -299,18 +344,11 @@ export function createRadiusActorsIterator({
       const level = levelFor(receiver), actors = level?.actors;
       if (!actors || typeof actors.length !== 'number')
         throw new TypeError('RadiusActors levelFor(receiver) must provide an actors array');
-      while (index < actors.length) {
-        const actor = actors[index++];
-        if (actor === null || actor === undefined) continue;
-        if (!isA(actor, baseClass)) continue;
-        const p = actor.position;
-        const dx = f32(p[0]) - loc[0], dy = f32(p[1]) - loc[1], dz = f32(p[2]) - loc[2];
-        const sum = radius + f32(actor.radius ?? 0);
-        if (!(sum * sum > dx * dx + dy * dy + dz * dz)) continue;
-        outActor.set(actor);
-        return true;
-      }
-      return false;
+      const found = scanActors(actors, index, baseClass, isA, within, scan);
+      index = found.index;
+      if (!found.actor) return false;
+      outActor.set(found.actor);
+      return true;
     },
   };
 }

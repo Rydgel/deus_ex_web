@@ -288,6 +288,18 @@ after EndState, the target SetBase, Destroyed, each SetOwner, each EndTouch,
 and final LostChild callback, matching the recovered reentrant exits. The
 native based-child loop has no target-flag check after a child SetBase call.
 
+**The Owner/Touching scan in Rust (2026-11-05).** The combined scan reads every slot's `Owner` and four `Touching`
+pointers, two generic reads for each of a level's two thousand or so actors on each destroy. Those slots now come from the Rust core:
+`render.rs destroy_scan` (through `script-vm-render.mjs destroyScan`) returns the next slot at or after an index whose
+actor has the target as its Owner or in a Touching slot, or whose Owner or Touching the image does not answer (a bound or host
+receiver). The adapter runs the unchanged body on that slot and asks again from the next one, so the array is re-read after
+every callback as before (`listFor` rebuilds the arena copy when `actorsEpoch` moves). A slot passed over would have run no
+callback. `Touching` joined the render field table as a `pointer[4]` cell, and a released pointer reads None (`live`), never the
+target. `DESTROY_SCAN=js` (`?destroyScan=js`) keeps the JavaScript loop. `DESTROY_SCAN=verify` re-reads each slot passed over
+with the body's own reads and throws if one held the target. Checked against unchanged digests on five maps, verify on the census
+route of the Island, Wan Chai and the bunker (the bunker destroys 247 actors on it), the destroy unit tests and the
+world-destroy, spawn-Touching, lifecycle and cleanup validators.
+
 If `StandingCount` is absent while a live actor still has `Base === receiver`,
 the adapter throws before mutating the target relationship. A provided
 collision hash must expose `checkActorNotReferenced`, and must expose

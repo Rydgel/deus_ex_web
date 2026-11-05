@@ -87,7 +87,10 @@ const R_OLDLOCATION: usize = 44;
 const R_BJUSTTELEPORTED: usize = 45;
 // FDynamicSprite::Setup's sequence name (`mesh_reads`).
 const R_ANIMSEQUENCE: usize = 46;
-const FIELD_COUNT: usize = 47;
+// ULevel::DestroyActor's SetOwner/EndTouch scan (`destroy_scan`): the four
+// Touching pointers.
+const R_TOUCHING: usize = 47;
+const FIELD_COUNT: usize = 48;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -439,6 +442,36 @@ pub extern "C" fn cycle_scan(list: u32, cursor: u32, steps: u32, bound: u32, rid
     store32(out, kind);
     store32(out.wrapping_add(4), cursor);
     store32(out.wrapping_add(8), steps);
+}
+
+/// ULevel::DestroyActor's scan for the actors it hands SetOwner(None) and
+/// EndTouch (script-destroy.mjs, Engine.dll DestroyActor) over `list`
+/// ([count, handle...]): from `from`, the index of the first slot whose actor
+/// has `receiver` as its Owner or in one of its four Touching slots, or whose
+/// Owner or Touching the image does not answer (a bound or host receiver, a
+/// class without those cells: JavaScript reads it); the count when no such
+/// slot is left. Null slots are passed over. A pointer reads its handle as
+/// `live` makes it (a released target is None, never `receiver`).
+#[no_mangle]
+pub extern "C" fn destroy_scan(list: u32, from: u32, receiver: u32) -> u32 {
+    let count = load32(list);
+    let mut index = from;
+    while index < count {
+        let h = load32(list.wrapping_add(4).wrapping_add(index.wrapping_mul(4)));
+        if h != 0 {
+            let a = Obj::of(h);
+            if !a.has(1 << R_OWNER | 1 << R_TOUCHING) || a.pointer(R_OWNER) == receiver {
+                return index;
+            }
+            for slot in 0..4 {
+                if live(a.word(R_TOUCHING, slot)) == receiver {
+                    return index;
+                }
+            }
+        }
+        index += 1;
+    }
+    count
 }
 
 // mesh_reads block words (npc-mesh-preview.mjs MESH_BLOCK).
