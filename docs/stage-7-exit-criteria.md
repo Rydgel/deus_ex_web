@@ -129,13 +129,13 @@ heading with `placeProbe`'s ViewRotation write.
 "Frame work" is the page's `animate` and the worker's `w.dur`, per frame. 7.2.1 takes the larger of the two medians, since in
 worker mode the two run side by side and the slower bounds the frame rate.
 
-## The scoreboard (2026-11-04)
+## The scoreboard (2026-11-05)
 
 | Clause | PASS | PARTIAL | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
 | 7.2 Frame time | 0 | 2 | 2 | 1 | 0 |
-| 7.3 Loading time | 0 | 2 | 1 | 0 | 0 |
+| 7.3 Loading time | 0 | 3 | 0 | 0 | 0 |
 | 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
 | 7.5 Audio | 0 | 2 | 0 | 0 | 0 |
 | 7.6 Window and input | 0 | 4 | 0 | 0 | 0 |
@@ -144,7 +144,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 4 | 22 | 3 | 5 | 3 |
+| **Total** | 4 | 23 | 2 | 5 | 3 |
 
 ## The rows
 
@@ -177,7 +177,7 @@ plays sound.
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs --start original --folder ([load time](load-time.md#the-stage-7-rows-2026-11-04-linux)) | Mac | weak: passes on Linux, 2026-11-04, the production build with the folder given at the picker: Chromium 4.7 to 4.8 s, Firefox 6.1 to 6.3 s (the dev server adds 1.5 to 2 s); the Mac not run | PARTIAL |
 | 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel --maps all (the 83 maps) | Mac | weak: passes on Linux, 2026-11-04: all 83 arrive; Chromium median 2.23 s, max 4.30 s (Paris Metro); Firefox, the production build in fresh browsers of about 20 maps, median 4.17 s, max 8.73 s (on a machine under a background load, 11.6 s); the Mac not run | PARTIAL |
-| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs --saves (the internet corpus's 39 slots of one playthrough, each by `loadgame N`) | Mac | Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 5.22 s, every slot under the bound but the Island's Save0001, cold 7.94 to 8.19 s (median 8.05 of six runs): the page's world build 1.3 s and the simulation's createGame 5.5 s, one after the other on its one thread; the Mac not run | FAIL |
+| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs --saves (the internet corpus's 39 slots of one playthrough, each by `loadgame N`) | Mac | weak: passes on Linux, 2026-11-05, the production build, a quiet machine, once each class's fields are linked once per level attach ([load time](load-time.md#row-733-each-classs-fields-linked-once-2026-11-05)): Firefox in one page, the 39 slots all loaded: median 4.74 s, max 6.87 s (the Island's Save0001), cold six slots 5.30 to 6.70 s; Chromium cold six slots 2.06 to 2.86 s (its 39 in one page not rerun: 2026-11-04, median 2.13 s, max 4.20 s) (2026-11-04: Firefox missed the bound on Save0001 alone, cold 7.94 to 8.19 s, its createGame 5.5 s, now 4.2 s); the Mac not run | PARTIAL |
 
 ### 7.4 Memory and long sessions (D5)
 

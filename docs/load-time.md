@@ -92,7 +92,8 @@ Save0001's Load Game reaches the Island's first frame in 8.05 s (median of six).
 * the meshes, 0.35 s;
 * the first frame, 0.24 s.
 
-Every other slot is under the bound.
+Every other slot is under the bound. Since 2026-11-05 Firefox passes too:
+[each class's fields linked once](#row-733-each-classs-fields-linked-once-2026-11-05).
 
 Paris Metro by travel, step by step (dev server, the busy machine):
 
@@ -145,6 +146,47 @@ memory a map keeps after it is left is already in the plateau. A process that vi
 7.4.1 and 7.4.2 have to answer: [memory across many maps](map-memory.md) found four faults (in Firefox every left level stayed
 alive through the interpreter's process-wide WeakRef walks, the cause of the OOM) and fixed them; both browsers now reach the 83rd map
 without forced collections (Firefox's tree at most 9.4 GB, Chromium's 7.4), and two slower growths are left.
+
+## Row 7.3.3: each class's fields linked once, 2026-11-05
+
+Firefox missed row 7.3.3 only on the Island's slot (Save0001), at 7.91 to 8.08 s cold on 7053406c (three runs, a quiet machine; 7.94
+to 8.19 s on 2026-11-04). A Gecko profile of an unminified build of the same tree (`vite build --minify false`, so the profile names
+functions) over that load's `createGame` (6.2 s profiled, 5.5 s not):
+* `attach` in `createScriptDoors` was 35 % inclusive;
+* `field` (`ScriptRuntime.field`, linking one property record) was 12.9 % self, 15.2 % inclusive, three quarters of it from `attach`;
+* the promise machinery itself (`promise callback` with no script frame under it) was 10.4 % self.
+
+`attach` waited on `Promise.all` of `runtime.field` for every property of the actor's class and its ancestors, once per actor. The
+link's result stays on the property's record, so from the second actor of a class on, each of those calls only made and awaited
+an already-settled promise.
+`createScriptDoors` now keeps one `Promise.all` per class for the level's attach (`classFieldsLinked`): the first actor of a class
+links its fields as before, and the later ones wait on that settled promise. A failed link still rejects for each actor of the class.
+This is host plumbing: what is linked, and when the first actor of a class waits for it, are unchanged.
+
+* **State:** bench-sim's digests are unchanged on five maps (60 warm and 300 ticks, render feedback): the Island `5adb254a07b1ed6f`,
+  Training `07816ec472f29b84`, the Airfield `46ed0d32ae5b56af`, Wan Chai's market `80d27b37e0944d88`, the Area 51 bunker
+  `764a7bdffd2ebe59`.
+* **Time:** the cold Save0001 Load Game in Firefox (production build, three runs each, one after the other on a quiet machine):
+  8.01 → 6.82 s to the first drawn frame (median); `createGame` 5.4 to 5.5 → 4.2 to 4.4 s. The world build (1.3 s), the actors (0.36
+  to 0.41 s), the meshes (0.34 s) and the first frame (0.21 to 0.23 s) are as before. The logo map's load is dominated by class
+  loading and changes little (`createGame` 5.2 to 5.3 → 5.0 to 5.2 s).
+
+**The row again** (2026-11-05, the production build, a quiet machine, the same slots as on 2026-11-04):
+
+| | Firefox, inline | Chromium, worker |
+| --- | --- | --- |
+| cold, six slots (each the first load of a fresh page) | 5.30 to 6.70 s (Save0001 6.70) | 2.06 to 2.86 s |
+| the 39 slots in one page | median 4.74 s, max 6.87 s (Save0001) | not rerun |
+
+Every slot run loaded (the 39 in Firefox's page, the six cold ones in both browsers) and none is over the bound: 7.3.3 passes on
+Linux. On 2026-11-04 Firefox's figures were median 5.22
+s and max 8.05 s in one page, cold 5.84 to 8.00 s; Chromium's cold figures that day (2.85 to 4.12 s) were from the busy machine.
+
+**A validator race found on the way.** `validate-inline-restore-play.mjs` failed once with the change, with another validator running
+beside it: after `LoadGame -1` it counted none of the eight Plant2s the slot holds. The level left is `00_training` too and still
+ready when the command returns, so its wait can pass before the load begins and read the old level: the likely cause, not
+reproduced. It now waits for the next world (`status().revision`). Without the fix it passed in two of three runs with the change and in three of three without (two of them under the same
+parallel load); with the fix, three of three with the change under that load, and once in Chromium's worker mode.
 
 ## Why a map change costs this much
 
@@ -210,6 +252,11 @@ come from the capture session's own earlier loads.
   Island by travel 5.59 → 4.59 s to the first drawn frame, Training again
   1.77 → 1.53 s; Player start's step after a load went from 0.2–1.1 s to
   about 1 ms.
+
+* 2026-11-05: `createScriptDoors` links each class's fields once per level
+  attach instead of awaiting every property's link again for each actor
+  ([row 7.3.3](#row-733-each-classs-fields-linked-once-2026-11-05)). Firefox's
+  cold Load Game of the Island's slot 8.01 → 6.82 s.
 
 ## Open
 

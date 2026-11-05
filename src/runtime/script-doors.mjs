@@ -1052,6 +1052,17 @@ export async function createScriptDoors({
     if (collision || actor || motion) installActorFlagWords(host, runtime.instance(host), {collision, actor, motion});
   }
 
+  // Every field of a class linked (runtime.field, whose result stays on the field's record): the first actor of the class waits for
+  // its fields as before, and the later ones wait on that one settled promise instead of a promise per property of the class and its
+  // ancestors (on the Island's Load Game in Firefox, createGame 5.5 -> 4.3 s: docs/load-time.md "Row 7.3.3").
+  // A failed link rejects for each actor of the class, as the per-field promises did. Host plumbing only.
+  const linkedClasses = new Map();
+  function classFieldsLinked(cls, fields) {
+    let linked = linkedClasses.get(cls);
+    if (!linked) linkedClasses.set(cls, linked = Promise.all(fields.map(field => runtime.field(field))));
+    return linked;
+  }
+
   async function attach(identity, cls, role) {
     if (!identity || typeof identity !== 'object') return null;
     const existing = identities.get(identity);
@@ -1062,7 +1073,7 @@ export async function createScriptDoors({
     if (role === 'mover') moversByObject.set(identity, record);
     record.callbackView = { actor: identity, mover: identity, name: identity.name, values: identity.values };
     const fields = classFields(cls);
-    await Promise.all(fields.map(field => runtime.field(field)));
+    await classFieldsLinked(cls, fields);
     record.initialProperty = await prepareMapProperties(runtime, asset, identity, cls, actorByIndex);
     runtime.applyInitialProperties(identity, record.initialProperty);
     for (const field of fields) {

@@ -61,9 +61,9 @@ add('7.3.1', 'navigation to the logo map\'s first frame ≤ 10 s (Chrome and Fir
 add('7.3.2', 'a travel arrival\'s first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map', 'H', 'PARTIAL',
   {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --travel --maps all (the 83 maps)'],
     weak: 'passes on Linux, 2026-11-04: all 83 arrive; Chromium median 2.23 s, max 4.30 s (Paris Metro); Firefox, the production build in fresh browsers of about 20 maps, median 4.17 s, max 8.73 s (on a machine under a background load, 11.6 s); the Mac not run'});
-add('7.3.3', 'Load Game to the first frame ≤ 8 s', 'H', 'FAIL',
+add('7.3.3', 'Load Game to the first frame ≤ 8 s', 'H', 'PARTIAL',
   {decision: 'D4', machine: MAC, proof: ['profile-map-load.mjs --saves (the internet corpus\'s 39 slots of one playthrough, each by `loadgame N`)'],
-    weak: 'Linux, 2026-11-04, the production build: every slot loads in both; Chromium median 2.13 s, max 4.20 s, cold 2.85 to 4.12 s (passes); Firefox median 5.22 s, every slot under the bound but the Island\'s Save0001, cold 7.94 to 8.19 s (median 8.05 of six runs): the page\'s world build 1.3 s and the simulation\'s createGame 5.5 s, one after the other on its one thread; the Mac not run'});
+    weak: 'passes on Linux, 2026-11-05, the production build, a quiet machine, once each class\'s fields are linked once per level attach ([load time](load-time.md#row-733-each-classs-fields-linked-once-2026-11-05)): Firefox in one page, the 39 slots all loaded: median 4.74 s, max 6.87 s (the Island\'s Save0001), cold six slots 5.30 to 6.70 s; Chromium cold six slots 2.06 to 2.86 s (its 39 in one page not rerun: 2026-11-04, median 2.13 s, max 4.20 s) (2026-11-04: Firefox missed the bound on Save0001 alone, cold 7.94 to 8.19 s, its createGame 5.5 s, now 4.2 s); the Mac not run'});
 
 // 7.4 Memory and long sessions (D5) -----------------------------------------------------------------------------------------------------
 add('7.4.1', 'ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope', 'P', 'PARTIAL',

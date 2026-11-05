@@ -90,9 +90,12 @@ try {
   await settle(500);
   assert.equal((await actorsOf(victim)).length, 0, `KillAll ${victim} leaves none`);
   const saves = await page.evaluate(() => window.deusExViewer.saves?.() ?? null).catch(() => null);
+  // The level left is 00_training too, and still ready when the command returns (the travel starts after it): wait for the next world
+  // (`revision` counts the worlds swapped in), or a load slower than the settle below was read as the old level.
+  const revision = await page.evaluate(() => window.deusExViewer.status().revision);
   await exec(['LoadGame -1']);
-  await page.waitForFunction(() => { const s = window.deusExViewer.status(); return s.ready && s.map?.toLowerCase() === '00_training' && document.getElementById('gate').hidden; },
-    null, { timeout: 120000, polling: 100 }).catch(async error => {
+  await page.waitForFunction(revision => { const s = window.deusExViewer.status(); return s.revision > revision && s.ready && s.map?.toLowerCase() === '00_training'
+    && document.getElementById('gate').hidden; }, revision, { timeout: 120000, polling: 100 }).catch(async error => {
     const view = await page.evaluate(() => ({ status: window.deusExViewer.status(), gate: document.getElementById('gate')?.hidden, message: document.getElementById('gate-message')?.textContent,
       toast: document.getElementById('toast')?.textContent }));
     throw new Error(`the loaded game did not arrive: ${JSON.stringify({ ...view, status: { map: view.status.map, ready: view.status.ready, runtimeError: view.status.runtimeError?.message ?? null } })}; saves ${JSON.stringify(saves)?.slice(0, 300)}; page errors ${errors.join(' | ')}`);
