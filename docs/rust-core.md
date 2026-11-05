@@ -11,7 +11,8 @@ the full validator sweep, and `bench-sim` state digests
 
 ## Why now
 
-The goal is 120 fps (8.3 ms per frame) on the largest maps. On September 29,
+The goal was 120 fps (8.3 ms per frame) on the largest maps; on November 5 the
+user set it to 60 fps (16.7 ms, AGENTS.md). On September 29,
 running UNATCO Island (`01_NYC_UNATCOIsland`, `--bypass`) in the browser
 measured about 46 to 50 ms per frame. The simulation tick was 25 to 29 ms of
 that; the rest was actor meshes, the HUD and rendering.

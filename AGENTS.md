@@ -28,8 +28,9 @@ Keep delivery local. Do not deploy or push hosting updates unless the user asks.
 Keep original assets, extracted script sources, native binaries and local captures
 outside Git.
 
-Performance target (set 2026-09-30): 120 fps in Play, that is 8.3 ms of host
-work per frame on the reference machine (Apple M2 Pro, 1440×960). The Rust
+Performance target (set 2026-11-05; 120 fps and 8.3 ms from 2026-09-30): 60 fps
+in Play, that is 16.7 ms of host work per frame on the reference machine (Apple
+M2 Pro, 1440×960). The Rust
 core (WebAssembly over the object image) is where hot work moves. Move a
 family only after a measurement names it, keep its JavaScript body as the
 reference, and judge each change by interleaved A/B medians and browser

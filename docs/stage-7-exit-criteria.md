@@ -17,8 +17,9 @@ useful recovery paths.* The section lists:
 It asks the stage to close coverage gaps, not to postpone testing. The rows below fix what "declared", "supported", "stable"
 and "useful recovery" mean.
 
-AGENTS.md already declares one target: **120 fps in Play, 8.3 ms of host work per frame on the reference machine (Apple M2
-Pro, 1440×960)**, measured by interleaved A/B medians and browser phase timings. Fidelity takes precedence over any
+AGENTS.md declares one target: **60 fps in Play, 16.7 ms of host work per frame on the reference machine (Apple M2 Pro,
+1440×960)**, measured by interleaved A/B medians and browser phase timings. It was 120 fps (8.3 ms) from 2026-09-30 until the
+user set 60 fps on 2026-11-05 (D2 below). Fidelity takes precedence over any
 performance change. A speed change under 5% is not worth hours of work (the user, 2026-10-27).
 
 ## What the user decided (2026-10-28)
@@ -45,6 +46,11 @@ The user took each recommendation below. The alternatives are kept for the recor
    The alternative makes 60 fps the gate and keeps 120 fps as the tracked project target. Today the Island's worker frame
    is 12.2 ms (p50) on the Linux host, and the reference machine has not been measured since early October. Meeting 7.2.1
    is this stage's largest piece of work.
+
+   **2026-11-05:** the user made 60 fps the project's target ("60 fps is a good goal"), in AGENTS.md as well. Row 7.2.1
+   keeps AGENTS.md's target, so its bound is now 16.7 ms of median frame work; the 60 fps floor in every browser (7.2.2) is
+   unchanged. On Linux, Chrome's worker mode had all ten maps at 8.4 ms or less by then, and passed 7.2.2 headed on all ten;
+   Firefox's inline mode is what remains under the floor.
 3. **D3, hitches in Firefox.** The user parked Firefox's GC work on 2026-10-28 ([live heap](live-heap.md), steps 2 to 9).
    Inline, Firefox draws six to eight frames of 100 to 133 ms a minute on the Island (incremental GC slices; see
    [frame cost](play-frame-cost.md) "October 27").
@@ -159,7 +165,7 @@ plays sound.
 
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 7.2.1 | Chrome, worker: on each map of the frame-time set, the larger of the page's and the worker's median frame work ≤ 8.3 ms (AGENTS.md) | H | frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs) | Mac | needed: a Mac measurement. Indicative, Linux 2026-11-05 (0f6d1eeb, god mode, [frame cost](play-frame-cost.md#the-frame-time-set-on-2026-11-05-linux)): every map worker-bound; nine of ten under the bound (Training 4.3, the Bar 4.9, Battery Park 8.2, the Airfield 8.2, Wan Chai's market 8.2, the Ship 6.5, the Chateau 5.8, Everett 4.6, the bunker 7.9 ms), the Island over at 8.4 ms (2026-11-04: 8.7 to 8.9); one run's median moves by up to 0.8 ms between runs of one build; the Mac's tick was about 1.35 times this host's | MISSING |
+| 7.2.1 | Chrome, worker: on each map of the frame-time set, the larger of the page's and the worker's median frame work ≤ 16.7 ms (AGENTS.md: 60 fps since 2026-11-05, 8.3 ms before) | H | frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs) | Mac | needed: a Mac measurement. Indicative, Linux 2026-11-05 (0f6d1eeb, god mode, [frame cost](play-frame-cost.md#the-frame-time-set-on-2026-11-05-linux)): every map worker-bound and at most about half the bound (Training 4.3, the Bar 4.9, Battery Park 8.2, the Airfield 8.2, Wan Chai's market 8.2, the Ship 6.5, the Chateau 5.8, Everett 4.6, the bunker 7.9, the Island 8.4 ms; 2026-11-04: the Island 8.7 to 8.9); one run's median moves by up to 0.8 ms between runs of one build; the Mac's tick was about 1.35 times this host's | MISSING |
 | 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps' jitter) | H | frame-time-set.mjs --browser B --headed (a visible window: headless Chromium draws on a synthetic 60 Hz clock) | Mac | Linux, 2026-11-05 (f2f1cb6f, 240 Hz display, [frame cost](play-frame-cost.md#row-722-headed-2026-11-05-linux)): Chrome worker passes on all ten maps (p95 8.3 to 14.9 ms, 116 to 218 fps); Firefox inline fails on six (Island 21, Ship 21, Airfield 25, Wan Chai 25, Bunker 25, Battery Park 31 ms; 37 to 59 fps), its page frame about twice Chrome's worker frame (the level tick 1.8 to 2.4 times); the Mac and Safari not run | FAIL |
 | 7.2.3 | Chrome: from a map's first 5 s on, no drawn-frame gap over 100 ms in a 120 s roam | H | hitch-run.mjs --mode roam --seconds 120, hitch-summary.mjs | Mac | weak: Linux only: with all cores, no gap over 100 ms on the Island and WanChai Underworld; pinned to two cores (a loaded machine, where the user feels it on the Mac) 2 to 4 gaps over 100 ms a run, up to 350 ms, each the worker's major GC (2026-10-28, docs/live-heap.md); not on the Mac | PARTIAL |
 | 7.2.4 | Firefox inline: from a map's first 5 s on, no gap over 150 ms and at most two over 50 ms a minute (D3) | H | hitch-ab.mjs or hitch-run.mjs --browser firefox, hitch-summary.mjs, gecko-gaps.mjs (with --profile) | Mac, Linux | fails on its second half: on the Island, Linux, 2026-10-31 (d01854c9, after the live-heap work), three 100 s roams drew no gap over 150 ms and at most one over 100 ms (longest 84, 101, 101 ms), but 10 to 18 over 50 ms a minute (2026-10-28: 26 to 31 over 50 ms in 65 s, longest 133 ms). A Gecko profile of one roam puts 12 of its 31 on major-collection slices (5 to 80 ms, 11 in two collections) and 19 on no pause (long page frames: sim and draw on one thread, 17 to 20 ms median). The worker is no way out: its non-incremental collections freeze 14 times over 150 ms a roam (up to 366 ms) idle, and once every 25 to 40 s for 200 to 250 ms with ?workerBusy=1 (docs/hitch-log.md "Firefox") | FAIL |

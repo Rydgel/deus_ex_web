@@ -33,7 +33,7 @@ version. The rules every change follows are in [AGENTS.md](../AGENTS.md).
   Audio effects path). See [Galaxy music](galaxy-music.md) and
   [galaxy audio](galaxy-audio.md).
 
-Frame cost and the 120 fps target are tracked in
+Frame cost and the 60 fps target (120 fps until 2026-11-05) are tracked in
 [play frame cost](play-frame-cost.md) and the
 [Play CPU plan](play-cpu-plan.md).
 

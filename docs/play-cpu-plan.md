@@ -41,7 +41,7 @@ speed, so the plan removes JavaScript rather than tuning it.
 - Timing: three interleaved pairs on the Linux host with
   `node scripts/profile-play-browser.mjs --executable /usr/bin/chromium --size 1920x1080 --map 01_NYC_UNATCOIsland --no-profile`,
   checking `errors` and `stoppedAt`. At the end of each phase, A/B on the
-  M2 Pro too, since the 120 fps target is defined there.
+  M2 Pro too, since the frame target is defined there.
 - One commit per verified step. A full sweep (`--jobs 8 --mem-budget 16384`)
   ends each phase.
 

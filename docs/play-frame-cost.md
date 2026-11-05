@@ -1898,3 +1898,12 @@ freezes are the worker's non-incremental major GCs measured on 2026-10-31 (docs/
 frame 22.16 → 21.36 ms (tick 10.97 → 10.25 ms), Chrome worker frame 10.65 → 10.38 ms (tick 6.38 → 6.08 ms). About half of
 the 8% the profile attributed to the chain: the per-actor work that remains is the crossings the actors' own ticks make
 (`AllActors`' `isA`, the event gate, the zone render time).
+
+## The target moves to 60 fps, 2026-11-05
+
+The user set the project's frame target to 60 fps (16.7 ms of host work per frame on the reference machine, AGENTS.md); it
+was 120 fps (8.3 ms) from 2026-09-30. Row 7.2.1 follows AGENTS.md, so its bound is 16.7 ms of median frame work
+(`hitch-summary.mjs` judges it so); row 7.2.2, the 60 fps floor in every browser, is unchanged. The sections above that
+measure against 8.3 ms are kept as they were written. What the new target leaves: Chrome's worker mode had every map of
+the frame-time set at 8.4 ms or less on Linux and passed 7.2.2 headed on all ten maps (the Mac's tick was about 1.35 times
+Linux's), while Firefox's inline mode misses 7.2.2 on six maps ([above](#row-722-headed-2026-11-05-linux)).

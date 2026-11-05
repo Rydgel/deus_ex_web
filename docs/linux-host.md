@@ -1,7 +1,7 @@
 # Linux host (Omarchy / Arch, x86-64)
 
 How to run this project's reverse-engineering work on a second machine running
-Linux. The Mac remains the reference machine for the 120 fps target (AGENTS.md),
+Linux. The Mac remains the reference machine for the frame target (AGENTS.md),
 so take performance measurements there. On Linux, the real-x87 probes run on
 the CPU itself instead of under Rosetta.
 

@@ -7,7 +7,8 @@
 //   node scripts/hitch-summary.mjs RUN.json... [--skip 5] [--gaps LIMIT] (each drawn gap over LIMIT ms, with the worker's columns) [--json]
 //
 // The rows' verdicts (PASS or FAIL against the bound; a number is the reference machine's only, so a run elsewhere is indicative):
-//   7.2.1  the larger of the page's and the worker's median frame work <= 8.3 ms (AGENTS.md: 120 fps)
+//   7.2.1  the larger of the page's and the worker's median frame work <= 16.7 ms (AGENTS.md: 60 fps since 2026-11-05, 8.3 ms
+//          before)
 //   7.2.2  drawn-frame interval p95 <= 16.7 ms (60 fps), with 0.5 ms for the frame timestamps' jitter (a 60 Hz display's intervals
 //          scatter around 16.67 ms)
 //   7.2.3  Chromium: no gap over 100 ms
@@ -50,7 +51,7 @@ export function summarize(raw,{skip=skipMs,file=''}={}){
     fps:drawn.length/span,programs,cores,errors:raw.errors?.length??0,ended:raw.ended??null};
   const host=Math.max(fig.page.p50,fig.worker?.p50??0);
   fig.rows={
-    '7.2.1':{value:`${f1(host)} ms`,pass:host<=8.3},
+    '7.2.1':{value:`${f1(host)} ms`,pass:host<=16.7},
     '7.2.2':{value:`p95 ${f1(fig.interval.p95)} ms`,pass:fig.interval.p95<=16.7+0.5},
     ...(browser==='chromium'?{'7.2.3':{value:`${fig.over[100]} gaps over 100 ms`,pass:fig.over[100]===0}}
       :{'7.2.4':{value:`${fig.over[150]} over 150 ms, ${f1(fig.perMinute[50])} a minute over 50 ms`,pass:fig.over[150]===0&&fig.perMinute[50]<=2}}),
