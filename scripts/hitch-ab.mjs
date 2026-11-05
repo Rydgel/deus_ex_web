@@ -1,5 +1,5 @@
 // Interleaved A/B sessions (AGENTS.md: judge a change by interleaved medians): `--pairs` rounds of one scripts/hitch-run.mjs session per
-// arm, in turn, each arm adding its own URL switches. Each session writes <dir>/<prefix>-<arm>-<n>.json and, every 5 s, the CPU seconds
+// arm, in turn (the order reversed in every second round), each arm adding its own URL switches. Each session writes <dir>/<prefix>-<arm>-<n>.json and, every 5 s, the CPU seconds
 // of its process tree (<...>.cpu: "elapsed_s cpu_s"), which scripts/hitch-summary.mjs reads beside it.
 //
 //   node scripts/hitch-ab.mjs --arms "inline:sim=inline,worker:" --pairs 2 --prefix ff-island [--dir .cache/perf/hitch]
@@ -34,7 +34,9 @@ function cpuOfTree(root){
   return total;
 }
 
-for(let i=1;i<=pairs;i++)for(const arm of arms){
+// The arms' order alternates from pair to pair: sessions late in a pair ran slower (about 0.4 ms of Firefox's tick on the
+// Area 51 bunker, 2026-11-05, docs/firefox-60fps-plan.md "Progress"), which a fixed order folds into the difference.
+for(let i=1;i<=pairs;i++)for(const arm of i%2?arms:[...arms].reverse()){
   const out=`${dir}/${prefix}-${arm.name}-${i}`,args=['scripts/hitch-run.mjs',...pass,'--out',out];
   if(arm.query){const at=args.indexOf('--query');if(at<0)args.push('--query',arm.query);else args[at+1]=`${args[at+1]}&${arm.query}`;}
   const started=Date.now(),log=[];writeFileSync(`${out}.cpu`,'');
