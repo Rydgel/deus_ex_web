@@ -379,6 +379,16 @@ export class RenderScanHost {
     this.x.mesh_reads(pairs, count, player ? handleOf(player) : 0, behind ? 1 : 0, viewTarget ? handleOf(viewTarget) : 0);
     return true;
   }
+  /** SetupDynamics' moving brushes' reads (render.rs mover_reads) into each block of the `count` (handle, block) pairs at `pairs`
+   * (status, Location, Rotation words); false when they cannot run here (the mode is js, the table is not complete, the core
+   * predates them). */
+  moverReads(pairs, count, {viewer = null, viewTarget = null, behind = false}) {
+    if (renderScanMode() === 'js' || typeof this.x.mover_reads !== 'function') return false;
+    this.table();
+    if (!this.complete) return false;
+    this.x.mover_reads(pairs, count, viewer ? handleOf(viewer) : 0, viewTarget ? handleOf(viewTarget) : 0, behind ? 1 : 0);
+    return true;
+  }
   /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
    * (render.rs far_move) over the zone `model`: true when it moved the
    * actor, false when the JavaScript body must run (nothing was stored). */

@@ -7,7 +7,7 @@
  * fixed roam as hud-stream-digest.mjs (a forward hold, a turn every 90 ticks, a jump every 150) through the installed input bindings.
  *
  *   node scripts/frame-alloc-meter.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--pre-tick] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
+ *     [--pre-tick] [--time] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
  *
  * Without --sites: the heap-space size of V8's new space around each step (begin, lightFrame, sprites, actors, stamps, coronas, weapon,
  * hud) and around the whole call, as KB a frame (mean, median, p90). A frame a scavenge ran in is left out of that step's numbers;
@@ -113,15 +113,17 @@ const hashSnapshot = snapshot => {
 const STEPS = ['begin', 'lightFrame', 'sprites', 'actors', 'stamps', 'coronas', 'weapon', 'hud'];
 const newSpaceUsed = () => { for (const space of getHeapSpaceStatistics()) if (space.space_name === 'new_space') return space.space_used_size; return 0; };
 const a0 = newSpaceUsed(), a1 = newSpaceUsed(), overhead = a1 - a0;   // what one reading allocates before the next
+const stepMs = new Map(STEPS.map(name => [name, []]));
 const samples = new Map(STEPS.map(name => [name, []])), frameSamples = [], current = new Map(), series = [];
 let measuring = false;
 for (const name of STEPS) {
   const original = session[name];
   session[name] = function meterStep(...args) {
     if (!measuring || siteCount) return original.apply(this, args);
-    const before = newSpaceUsed();
+    const before = newSpaceUsed(), started = realNow();
     const result = original.apply(this, args);
-    const after = newSpaceUsed();
+    const spent = realNow() - started, after = newSpaceUsed();
+    stepMs.get(name).push(spent);
     current.set(name, after < before ? -1 : after - before - overhead);
     return result;
   };
@@ -205,6 +207,11 @@ if (!siteCount) {
     return `${name.padEnd(11)} mean ${kb(mean).padStart(8)}  trimmed ${kb(trimmed).padStart(8)}  median ${kb(quantile(sorted, .5)).padStart(8)}  p90 ${kb(quantile(sorted, .9)).padStart(8)}  p99 ${kb(quantile(sorted, .99)).padStart(8)} KB a frame  (${list.length} frames)`;
   };
   for (const name of STEPS) console.log(row(name, samples.get(name)));
+  // (--time: the wall time of each step in ms with the real clock, mean and median over the measured frames)
+  if (argv.includes('--time')) for (const name of STEPS) {
+    const sorted = [...stepMs.get(name)].sort((x, y) => x - y);
+    if (sorted.length) console.log(`time ${name.padEnd(11)} mean ${(sorted.reduce((x, y) => x + y, 0) / sorted.length).toFixed(3)} ms  median ${quantile(sorted, .5).toFixed(3)} ms  p90 ${quantile(sorted, .9).toFixed(3)} ms`);
+  }
   console.log(row('whole call', frameSamples), `; ${scavenged} frames left out for a scavenge`);
 }
 if (inspector) {

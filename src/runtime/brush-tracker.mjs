@@ -184,6 +184,12 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
       if (rotation) u.set(rotation.map(v => v >>> 0), o + MOVER.ROTATION);
       if (hidden !== undefined) u[o + MOVER.FLAGS] = hidden ? u[o + MOVER.FLAGS] | 2 : u[o + MOVER.FLAGS] & ~2;
     },
+    /** setMover's Location bits and Rotation from six words of `source` (a Uint32Array of another memory: the script VM's
+     * arena, where render.rs mover_reads leaves them) from index `at`. */
+    setMoverFrom(i, source, at) {
+      const u = words(), o = mover(i);
+      for (let k = 0; k < 3; k++) { u[o + MOVER.LOCATION + k] = source[at + k]; u[o + MOVER.ROTATION + k] = source[at + 3 + k]; }
+    },
     /** A mover's record words (validation and Play's mover drawing). */
     moverWords: i => words().slice(mover(i), mover(i) + MOVER.WORDS),
     /** Mover `i`'s revision: how many times Update has rebuilt it (the

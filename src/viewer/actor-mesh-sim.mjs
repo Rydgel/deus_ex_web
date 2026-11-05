@@ -30,6 +30,7 @@ import {createWeaponAttachments} from './actor-weapon-sim.mjs';
 import {classicMeshBindingSteps} from './actor-umesh-sim.mjs';
 import {lodMorphScalars,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
 import {registerAllocationSiteWarmer} from '../runtime/allocation-site-warmup.mjs';
+import {actorPlumbing} from './actor-plumbing.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
@@ -1094,6 +1095,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
 export async function createActorMeshSim(runtime,assets,asset,{kernel,player:playerSource,lighting=null,layout=null,
   childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,weaponOrder=null,weaponPath=null,onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
+  const plumbing=actorPlumbing();
   let kernelError=null;
   if(kernel===undefined) {
     try{kernel=await loadLodMeshKernel();}
@@ -1113,6 +1115,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   };
   const npcActors=[],propActors=[],errors=[];
   const actors=[],bindings=new Map();
+  // Bumped whenever `actors` gains or loses a binding (the pair table of meshReads follows it).
+  let actorsVersion=0;
   if(asset.name.toLowerCase()==='00_training') {
     // Measured GObjObjects identities from the same original Training
     // capture select fixtures and cache keys, never character-specific
@@ -1124,7 +1128,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(runtime.readNamed(actor,'bHidden'))continue;
         const binding=await bind(actor,{originalObjectIndex});
         binding.creation.visible=true;
-        npcActors.push(binding);actors.push(binding);bindings.set(actor,binding);emitCreation(binding);
+        npcActors.push(binding);actors.push(binding);actorsVersion++;bindings.set(actor,binding);emitCreation(binding);
       } catch(error) {npcErrors.push({actor:name,message:error.message});}
     }
     if(npcActors.length)errors.push(...npcErrors);
@@ -1165,6 +1169,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // resident (createMeshBindingNow), so not drawn in their first frame.
   const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,gpu:Boolean(layout),
     npcs:npcActors.length,props:0,skipped:[],triangles:0,late:[],
+    // the frames' records sent to the page, and the plain hidden ones compactRecords did not send (cumulative; under verify, the ones it
+    // sent marked as skippable)
+    records:0,hiddenSkipped:0,
     shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
   const refreshSummary=()=>{
     summary.actors=actors.map(actor=>actor.summary);summary.props=propActors.length;summary.npcs=npcActors.length;
@@ -1195,7 +1202,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const options={id:nextId++,kernel,lighting,layout,textures,lod,originalObjectIndex:synthetic++,visible:drawnInWorld,
       childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,reads:true};
     const take=binding=>{
-      bindings.set(actor,binding);actors.push(binding);(npc?npcActors:propActors).push(binding);refreshSummary();
+      bindings.set(actor,binding);actors.push(binding);actorsVersion++;(npc?npcActors:propActors).push(binding);refreshSummary();
       // Shown from admission, before its first update (as the layer did).
       binding.creation.visible=drawnInWorld(actor);
       emitCreation(binding);
@@ -1223,6 +1230,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     weapons.drop(binding);
     binding.dispose();bindings.delete(actor);onRelease(binding.id);
     for(const list of [actors,propActors,npcActors]){const at=list.indexOf(binding);if(at>=0)list.splice(at,1);}
+    actorsVersion++;
     refreshSummary();
   };
   // Level.Actors membership only changes with actorsEpoch (base-epoch.mjs),
@@ -1416,21 +1424,42 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // binding's block, or null when the pass cannot run (the script VM has no
   // render host, ?renderScan=js). Item bindings read the snapshot their item
   // writes, so they keep their own reads.
-  let pairs=0,pairsCapacity=0;
+  // The (handle, block) pairs are a function of the `actors` list alone (a binding's block is made with it and zeroed when it is
+  // retired, which takes it out of the list; an actor's handle never changes), so the table is written when the list changes
+  // (`actorsVersion`) and kept between frames. ACTOR_PLUMBING=no-pairs rewrites it every frame, and `verify` checks the kept
+  // table against a rewrite.
+  let pairs=0,pairsCapacity=0,pairsCount=0,pairsVersion=-1,pairsCheck=0;
+  const writePairs=(arena,at)=>{
+    let count=0;
+    for(const binding of actors){
+      if(!binding.block)continue;
+      arena.view.setUint32(at+8*count,handleOf(binding.actor),true);
+      arena.view.setUint32(at+8*count+4,binding.block,true);count++;
+    }
+    return count;
+  };
   const meshReads=()=>{
     const render=runtime.scriptVm?.render;
     if(!render||!actors.length)return null;
     const arena=runtime.scriptVm.arena;
     if(8*actors.length>pairsCapacity){
       if(pairs)arena.release(pairs,pairsCapacity);
-      pairsCapacity=Math.max(4096,16*actors.length);pairs=arena.alloc(pairsCapacity);
+      if(pairsCheck)arena.release(pairsCheck,pairsCapacity);
+      pairsCapacity=Math.max(4096,16*actors.length);pairs=arena.alloc(pairsCapacity);pairsCheck=0;pairsVersion=-1;
     }
-    let count=0;
-    for(const binding of actors){
-      if(!binding.block)continue;
-      arena.view.setUint32(pairs+8*count,handleOf(binding.actor),true);
-      arena.view.setUint32(pairs+8*count+4,binding.block,true);count++;
-    }
+    let count;
+    if(plumbing.pairs&&pairsVersion===actorsVersion){
+      count=pairsCount;
+      if(plumbing.verify){
+        // (the rewrite goes to a scratch of its own and is compared word by word)
+        if(!pairsCheck)pairsCheck=arena.alloc(pairsCapacity);
+        const expected=writePairs(arena,pairsCheck);
+        if(expected!==count)throw new Error(`ACTOR_PLUMBING=verify: the kept pair table has ${count} pairs, a rewrite ${expected}`);
+        for(let k=0;k<2*count;k++)
+          if(arena.view.getUint32(pairsCheck+4*k,true)!==arena.view.getUint32(pairs+4*k,true))
+            throw new Error(`ACTOR_PLUMBING=verify: the kept pair table differs from a rewrite at word ${k}`);
+      }
+    }else{count=writePairs(arena,pairs);pairsCount=count;pairsVersion=actorsVersion;}
     const {player,behind,viewTarget}=viewer();
     if(!render.meshReads(pairs,count,{player,behind,viewTarget}))return null;
     // Typed views of the arena's current buffer: a memory growth during an
@@ -1468,7 +1497,27 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const weaponList=weapons.bindings();
     for(let i=0;i<weaponList.length;i++)visit(weaponList[i],a,b,c,d);
   };
-  const passVisibilityOf=(binding,frustum,decisions)=>{const decision=binding.passVisibility(frustum);if(decision)decisions.set(binding.id,decision);};
+  // A plain hidden record ({id, visible: false, childOnly: false}: the only kind a binding the frame does not draw returns) sets the
+  // page's binding to a state that depends on nothing but the record: its record state hidden, its root and its batch entries
+  // hidden, the main frame's LOD and lighting state back (actor-mesh-draw.mjs apply). A second one finds that state and leaves it,
+  // unless a pass drew the binding in between (applyPass shows the root, selects a child frame's LOD state and lighting; a
+  // pass is made for a binding only when its last update drew it, in the main frame or in child frames alone: passVisibility,
+  // framePass), or a context loss converted it (leaveGpu). `hiddenRun[id]` is 1 from the plain hidden record sent for a binding until
+  // a record that is not one, a decision that draws it, or a context loss; compactRecords sends no plain hidden record while it
+  // is 1. A decision that hides (the shared NOT_IN_FRAME, or {root: false} of a viewport pass) leaves a hidden binding as it is: the
+  // page's applyPass sets the root and the batches hidden and returns before it reads anything else; a weapon's flipSide is the
+  // exception and counts as drawing. ACTOR_PLUMBING=no-hidden sends every record; `verify` sends them marked (`quiet`) and the page
+  // checks that each one changes nothing (actor-mesh-draw.mjs).
+  let hiddenRun=new Uint8Array(1024);
+  const setRun=(id,value)=>{
+    if(id>=hiddenRun.length){
+      if(!value)return;
+      const grown=new Uint8Array(2*Math.max(hiddenRun.length,id+1));grown.set(hiddenRun);hiddenRun=grown;
+    }
+    hiddenRun[id]=value;
+  };
+  const touchedBy=(binding,decision)=>{if(decision.root||decision.flipSide)setRun(binding.id,0);};
+  const passVisibilityOf=(binding,frustum,decisions)=>{const decision=binding.passVisibility(frustum);if(decision){decisions.set(binding.id,decision);touchedBy(binding,decision);}};
   const framePassOf=(binding,frustum,ids,frameIndex,decisions)=>{
     // A weapon is in the frame when its pawn is and had a hand there.
     const inFrame=!ids||(binding.attachedTo?weapons.inFrame(binding,ids,frameIndex):ids.has(binding.id));
@@ -1477,7 +1526,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       if(decision===NOT_IN_FRAME)decision={root:false};
       decision.flipSide=true;
     }
-    if(decision)decisions.set(binding.id,decision);
+    if(decision){decisions.set(binding.id,decision);touchedBy(binding,decision);}
   };
   // The records of a frame's update are gathered in these arrays (a push-grown array of a few hundred leaves its smaller stores
   // behind, and a filter made a second copy) and copied out once, exactly sized.
@@ -1492,10 +1541,28 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   const compactRecords=gathered=>{
     const items=gathered.items,total=gathered.n;
     let count=0;
-    for(let i=0;i<total;i++)if(items[i])count++;
+    if(plumbing.hidden){
+      for(let i=0;i<total;i++){
+        const record=items[i];
+        if(!record)continue;
+        if(record.visible===false&&record.childOnly===false){
+          if(record.id<hiddenRun.length&&hiddenRun[record.id]===1){
+            if(plumbing.verify){
+              if(Object.keys(record).length!==3)throw new Error(`ACTOR_PLUMBING=verify: the hidden record of binding ${record.id} carries more than id, visible and childOnly`);
+              record.quiet=true;count++;summary.hiddenSkipped++;
+            }
+            else{items[i]=undefined;summary.hiddenSkipped++;}
+            continue;
+          }
+          setRun(record.id,1);
+        }else setRun(record.id,0);
+        count++;
+      }
+    }else for(let i=0;i<total;i++)if(items[i])count++;
     const out=new Array(count);
     for(let i=0,k=0;i<total;i++){if(items[i])out[k++]=items[i];items[i]=undefined;}
     gathered.n=0;
+    summary.records+=count;
     return out;
   };
   return {actors,npcActors,propActors,summary,kernel,bindings,
@@ -1646,7 +1713,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     async ready(){await Promise.all(pending.values());},
     /** A context loss took the GPU mesh path's cache poses (docs/context-loss.md): every binding on that path leaves it.
      * The page applies the records in this order before any later frame's (actor-mesh-draw.mjs leaveGpu). */
-    leaveGpu(reason){return all().map(binding=>binding.leaveGpu(reason)).filter(Boolean);},
+    leaveGpu(reason){hiddenRun.fill(0);return all().map(binding=>binding.leaveGpu(reason)).filter(Boolean);},
     dispose(){disposed=true;weapons.dispose();for(const binding of all())binding.dispose();itemPools.clear();itemExtras.clear();},
   };
 }

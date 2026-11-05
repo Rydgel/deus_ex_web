@@ -16,6 +16,10 @@
 //     [--frames 240] [--every 60] [--walk] [--query a=1&b=2] [--query-a ...] [--query-b ...]
 //     [--preview weapon] [--mode inspect] (Inspect's free camera; --walk flies it)
 //     [--shots DIR] (writes each run's last frame as DIR/<hash>.png)
+//     [--draw-state] (also compares, at every checkpoint, a digest of what the page's actor mesh layer holds for every binding:
+//     page A, the same page again and page B must give the same sequence; docs/firefox-actors-phase.md "Host plumbing")
+//     [--pixels] (also reads the drawing buffer at every checkpoint, and compares page B's with page A's where the same page
+//     reproduces its own)
 //     [--via MAP] (one more run loads MAP first and travels to --map; its digests and pixels
 //     must equal page A's, so the previous map's host must leave nothing behind in the next)
 //
@@ -32,6 +36,7 @@ const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`)
 try { gameDirectory(); } catch { console.log('SKIP validate-sim-split: no installed game data'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), frames = Number(option('frames', 240)), every = Number(option('every', 60));
 const walk = process.argv.includes('--walk'), preview = option('preview', null), viewMode = option('mode', 'play');
+const drawState = process.argv.includes('--draw-state'), pixelsEach = process.argv.includes('--pixels');
 let server = null, a = option('a', null);
 if (!a) {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -52,6 +57,24 @@ const target = (base, extra) => {
   return url.href;
 };
 const INSTALL = new Date('2001-06-23T12:00:00Z').getTime(), START = INSTALL + 3600 * 1000;
+
+// The drawing buffer, bottom row first, hashed and as a PNG when asked: read with readPixels from the preserved buffer.
+const grab = (page, withPng) => page.evaluate(async withPng => {
+  const canvas = document.getElementById('scene'), gl = canvas.getContext('webgl2');
+  const width = gl.drawingBufferWidth, height = gl.drawingBufferHeight, pixels = new Uint8Array(width * height * 4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  const hex = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pixels))].map(b => b.toString(16).padStart(2, '0')).join('');
+  let png = null;
+  if (withPng) {
+    const out = document.createElement('canvas'); out.width = width; out.height = height;
+    const image = new ImageData(width, height);
+    for (let y = 0; y < height; y++) image.data.set(pixels.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+    out.getContext('2d').putImageData(image, 0, 0); png = out.toDataURL('image/png').split(',')[1];
+  }
+  // A preserved buffer that holds a drawn frame (the patch above can miss the call, and a cleared buffer reads all zero).
+  let drawn = 0; for (let i = 3; i < pixels.length; i += 4) drawn += pixels[i] !== 0;
+  return {hex, png, width, height, drawn, preserved: gl.getContextAttributes().preserveDrawingBuffer};
+}, withPng);
 
 const via = option('via', null);
 async function run(browser, url, first = null) {
@@ -100,29 +123,17 @@ async function run(browser, url, first = null) {
       // ?sim=worker draws each frame when the worker's snapshot arrives.
       await page.evaluate(() => window.deusExViewer.settled?.());
       if (frame % every === 0 || frame === frames) {
-        const state = await page.evaluate(async () => ({digest: await window.deusExViewer.stateDigest(),
-          error: window.deusExViewer.status().runtimeError?.message ?? null, camera: window.deusExViewer.status().position}));
+        const state = await page.evaluate(async wantDraw => ({digest: await window.deusExViewer.stateDigest(),
+          error: window.deusExViewer.status().runtimeError?.message ?? null, camera: window.deusExViewer.status().position,
+          draw: wantDraw ? await window.deusExViewer.meshDrawDigest() : undefined,
+          records: window.deusExViewer.status().npcPreview ? [window.deusExViewer.status().npcPreview.records, window.deusExViewer.status().npcPreview.hiddenSkipped] : null}), drawState);
+        if (pixelsEach) state.pixels = (await grab(page, false)).hex.slice(0, 16);
         digests.push({frame, ...state});
         if (state.error) break;
       }
     }
     // The drawing buffer, bottom row first, and as a PNG for --shots.
-    const frame = await page.evaluate(async withPng => {
-      const canvas = document.getElementById('scene'), gl = canvas.getContext('webgl2');
-      const width = gl.drawingBufferWidth, height = gl.drawingBufferHeight, pixels = new Uint8Array(width * height * 4);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      const hex = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pixels))].map(b => b.toString(16).padStart(2, '0')).join('');
-      let png = null;
-      if (withPng) {
-        const out = document.createElement('canvas'); out.width = width; out.height = height;
-        const image = new ImageData(width, height);
-        for (let y = 0; y < height; y++) image.data.set(pixels.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
-        out.getContext('2d').putImageData(image, 0, 0); png = out.toDataURL('image/png').split(',')[1];
-      }
-      // A preserved buffer that holds a drawn frame (the patch above can miss the call, and a cleared buffer reads all zero).
-      let drawn = 0; for (let i = 3; i < pixels.length; i += 4) drawn += pixels[i] !== 0;
-      return {hex, png, width, height, drawn, preserved: gl.getContextAttributes().preserveDrawingBuffer};
-    }, Boolean(option('shots', null)));
+    const frame = await grab(page, Boolean(option('shots', null)));
     assert.equal(frame.preserved, true, 'validate-sim-split: the renderer patch keeps the drawing buffer');
     assert.ok(frame.drawn > 0, 'validate-sim-split: the last frame drew pixels');
     const shot = frame.hex.slice(0, 16);
@@ -148,9 +159,21 @@ const sequence = side => side.digests.map(d => `${d.frame}:${d.digest}`).join(' 
 assert.equal(sequence(report.again), sequence(report.a), 'the same page twice gives the same digests (deterministic scenario)');
 assert.equal(sequence(report.b), sequence(report.a), 'page B gives page A\'s digests');
 if (report.chained) assert.equal(sequence(report.chained), sequence(report.a), `travelling from ${via} gives the digests of loading ${map} directly`);
+if (drawState) {
+  const draws = side => side.digests.map(d => `${d.frame}:${d.draw}`).join(' ');
+  assert.ok(report.a.digests.every(d => d.draw), 'validate-sim-split: the actor layer has bindings to digest');
+  assert.equal(draws(report.again), draws(report.a), 'the same page twice gives the same actor draw states');
+  assert.equal(draws(report.b), draws(report.a), 'page B holds page A\'s actor draw state at every checkpoint');
+}
+if (pixelsEach) {
+  const shots = side => side.digests.map(d => `${d.frame}:${d.pixels}`).join(' ');
+  if (shots(report.again) === shots(report.a)) assert.equal(shots(report.b), shots(report.a), 'page B draws page A\'s frame at every checkpoint');
+  else console.log('validate-sim-split: the same page drew different frames at some checkpoint; pixels per checkpoint not compared');
+}
 const pixels = report.again.shot === report.a.shot;
 if (pixels) {
   assert.equal(report.b.shot, report.a.shot, 'page B draws page A\'s last frame');
   if (report.chained) assert.equal(report.chained.shot, report.a.shot, `travelling from ${via} draws the frame of loading ${map} directly`);
 } else console.log('validate-sim-split: the same page drew different last frames; pixels not compared');
+console.log(`validate-sim-split: records sent / plain hidden records not sent at the last checkpoint: A ${JSON.stringify(report.a.digests.at(-1).records)}, B ${JSON.stringify(report.b.digests.at(-1).records)}`);
 console.log(`validate-sim-split: PASS (${map}, ${frames} frames${walk ? ' walking' : ''}, ${report.a.digests.length} digests${pixels ? ', same pixels' : ''})`);
