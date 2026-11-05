@@ -10,6 +10,8 @@ import { setScriptRotation } from './script-set-rotation.mjs';
 import { inRenderPass } from './render-precision.mjs';
 import { x87load, x87double, x87int32, x87neg, x87store, x87storeDouble, x87cmp } from './script-vm.mjs';
 import { p24add as x87add, p24mul as x87mul, p24div as x87div, p24sqrt as x87sqrt, r24prod } from './x87-pc24.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
+import { laserMode } from './laser-kernel.mjs';
 
 const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
 const ONE = x87double(1), ZERO = x87double(0);
@@ -132,6 +134,26 @@ function readLaserState(runtime, iterator, proxy) {
   };
 }
 
+/** CurrentItem in Rust (laser.rs, laser-kernel.mjs) once the kernel is loaded, else laserCurrentItem (LASER=js keeps it). Under
+ * LASER=verify the JavaScript body also runs, on a copy of the state with the appFrand values the Rust body drew, and a
+ * difference in the moves, the state or the draws throws. */
+function currentItem(state, ownerLocation, frand) {
+  const mode = laserMode(), kernel = mode === 'js' ? null : scriptVmKernel?.laser;
+  if (!kernel) return laserCurrentItem(state, ownerLocation, frand);
+  if (mode !== 'verify') return kernel.currentItem(state, ownerLocation, frand);
+  const copy = { ...state, prevLoc: state.prevLoc.slice(), prevRand: state.prevRand.slice(), savedLoc: state.savedLoc.slice(),
+    savedRot: state.savedRot.slice() }, draws = [];
+  const moves = kernel.currentItem(state, ownerLocation, () => { const v = frand(); draws.push(v); return v; });
+  let extra = 0;
+  const want = laserCurrentItem(copy, ownerLocation, () => draws.length ? draws.shift() : (extra++, 0));
+  const same = (a, b) => Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]))
+    : a && typeof a === 'object' ? Boolean(b) && Object.keys(a).every(key => same(a[key], b[key])) : Object.is(a, b);
+  for (const key of ['prevLoc', 'prevRand', 'savedLoc', 'savedRot', 'nextItem'])
+    if (!same(state[key], copy[key])) throw new Error(`LASER=verify: CurrentItem's ${key} differs in Rust`);
+  if (!same(moves, want) || draws.length || extra) throw new Error('LASER=verify: CurrentItem\'s moves or appFrand draws differ in Rust');
+  return moves;
+}
+
 function writeLaserState(runtime, iterator, state) {
   for (const name of ['prevLoc', 'prevRand', 'savedLoc', 'savedRot', 'nextItem']) runtime.writeNamed(iterator, name, state[name]);
 }
@@ -154,7 +176,7 @@ export function laserIteratorItems(runtime, iterator, owner, camera, { processEv
   for (let index = 0; index < max; index++) {
     runtime.writeNamed(iterator, 'Index', index);
     state.index = index;
-    const moves = laserCurrentItem(state, floatLocation(runtime, owner), frand);
+    const moves = currentItem(state, floatLocation(runtime, owner), frand);
     if (!moves) { items.push(snapshotOf(runtime, owner)); continue; }
     for (let m = 0; m < moves.length; m++) {
       const move = moves[m];

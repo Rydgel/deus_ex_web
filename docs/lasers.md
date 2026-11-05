@@ -102,6 +102,23 @@ case's doubles, and XLevel's two moves are recording stubs.
 - **Limitation.** Unicorn evaluates FPATAN in double precision, so the
   oracle's Rotation agrees with the host's only away from integer boundaries.
 
+## CurrentItem in Rust (2026-11-05)
+
+`native/script-vm/src/laser.rs` translates `laserCurrentItem` statement for statement onto the Rust x87 model (x87.rs) at
+precision control 24, set for the call and restored after it; `laser-kernel.mjs` runs it in the script VM kernel instance,
+passing the state through its `LASER_IO` words, with appFrand from the caller's stream and FPATAN as `Math.atan2`, as
+`vectorToRotator24` takes it. `laserIteratorItems` calls it once the kernel is loaded; `?laser=js` (LASER=js in Node) keeps the
+JavaScript body, and `?laser=verify` also runs that body on a copy of the state with the same appFrand values and throws on a
+difference in the moves, the state or the draws.
+
+- **Against the original.** `validate-native-laser.mjs` runs both bodies over its 160 iterators: all 5,348 items match the DLL's
+  CurrentItem in each (10,544 proxy moves, 2,805 random-beam items, 17,551 appFrand draws).
+- **In Play.** `?laser=verify` held for 40 s of the frame-time route on the Airfield and the Island; `validate-lasers-play` and
+  `validate-iterator-frames-play` pass.
+- **Cost.** On the Airfield CurrentItem took 0.65 ms of the worker frame in JavaScript (about 8 µs an item) and takes 0.18 ms in
+  Rust, the state's crossing included; the sprite phase went from 1.02 to 0.60 ms. The rest of the loop is the proxy's
+  FarMoveActor (its zone update, 0.11 ms) and the script `Init` (0.11 ms).
+
 ## Per frame
 
 OccludeFrame runs SetupDynamics again for every child frame, so a frame in

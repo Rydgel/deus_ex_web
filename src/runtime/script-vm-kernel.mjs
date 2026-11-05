@@ -13,6 +13,7 @@ import {rotationSineTable} from './coords.mjs';
 import {RESERVED} from './script-object-arena.mjs';
 import {createGalaxyUpdateKernel} from './galaxy-update-kernel.mjs';
 import {createComputerTickKernel} from './computer-tick-kernel.mjs';
+import {createLaserKernel, laserImports} from './laser-kernel.mjs';
 
 const f32io = new DataView(new ArrayBuffer(4));
 const bits = v => (f32io.setFloat32(0, Math.fround(v), true), f32io.getUint32(0, true));
@@ -57,7 +58,7 @@ async function load() {
   const module = await compileScriptVm();
   // The module's shadow stack and statics end below 2 MiB (build.rs).
   const memory = new WebAssembly.Memory({initial: 32});
-  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module), ...decalImports}});
+  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module), ...decalImports, ...laserImports}});
   return createScriptVmKernel(instance, memory);
 }
 
@@ -257,6 +258,8 @@ export function createScriptVmKernel(instance, memory) {
     // UGalaxyAudioSubsystem's PlaySound and Update arithmetic (galaxy.rs, docs/galaxy-audio.md "Update in Rust"), driven by
     // galaxy-audio.mjs; null when the loaded core predates it.
     galaxy: typeof x.galaxy_io_ptr !== 'function' ? null : createGalaxyUpdateKernel(x, memory),
+    // ULaserIterator::CurrentItem (laser.rs, laser-kernel.mjs), driven by script-laser.mjs laserIteratorItems.
+    laser: typeof x.laser_current_item !== 'function' ? null : createLaserKernel(x, memory),
     // XComputerWindow::Tick's blink and time arithmetic (computer.rs, computer-tick-kernel.mjs), driven by script-window-computer-playback.mjs.
     computer: typeof x.computer_io_ptr !== 'function' ? null : createComputerTickKernel(x, memory),
     // Render.dll's volumetric fog loop (fog.rs, docs/volumetric-fog.md):

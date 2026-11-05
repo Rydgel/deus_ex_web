@@ -1798,4 +1798,5 @@ Interleaved A/B, master (2c93fe2d) against the change, two rounds of the frame-t
 
 The whole frame's median moves more between two runs of one build than this change: the level tick (not touched; it includes
 `begin`'s shared walk) varied by up to 0.8 ms between rounds on the Island (4.98 and 5.78 ms on master). The Airfield's sprite
-phase is the laser iterator's CurrentItem in JavaScript (0.65 ms a frame), next.
+phase is the laser iterator's CurrentItem in JavaScript (0.65 ms a frame): in Rust since (lasers.md "CurrentItem in Rust"), the
+Airfield's sprite phase is 0.60 ms.

@@ -10,6 +10,7 @@ import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { laserCurrentItem } from '../src/runtime/script-laser.mjs';
+import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 // ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
 const assert = auditAssert();
 
@@ -51,16 +52,20 @@ const toBits = c => ({ ...c, ownerLocation: c.ownerLocation.map(bits), prevLoc: 
 const reference = JSON.parse(execFileSync(python, ['scripts/native-laser-oracle.py', gameDirectory()],
   { input: JSON.stringify(cases.map(toBits)), encoding: 'utf8', maxBuffer: 1 << 28 }));
 
+// Both bodies: laserCurrentItem and its Rust translation (laser.rs, laser-kernel.mjs), each on its own copy of every case.
+const kernel = (await loadScriptVmKernel()).laser;
+assert.ok(kernel, 'the script VM kernel has laser_current_item');
+const bodies = [['JavaScript', laserCurrentItem], ['Rust', kernel.currentItem]];
 let items = 0, moves = 0, randomItems = 0, saved = 0, draws = 0;
-cases.forEach((c, ci) => {
+for (const [body, currentItem] of bodies) cases.forEach((c, ci) => {
   const state = { beams: c.beams.map(b => ({ ...b, active: Boolean(b.active) })), index: 0, maxItems: c.maxItems,
     prevLoc: c.prevLoc.slice(), prevRand: c.prevRand.slice(), savedLoc: c.savedLoc.slice(), savedRot: c.savedRot.slice(),
     nextItem: c.nextItem, randomBeam: Boolean(c.randomBeam), hasProxy: c.hasProxy };
   const queue = c.frand.slice(), frand = () => { draws++; return queue.shift(); };
   c.indices.forEach((index, ii) => {
-    const expected = reference.results[ci][ii], where = `case ${ci} index ${index}`;
+    const expected = reference.results[ci][ii], where = `${body} case ${ci} index ${index}`;
     state.index = index;
-    const result = laserCurrentItem(state, c.ownerLocation, frand);
+    const result = currentItem(state, c.ownerLocation, frand);
     assert.equal(result ? 'proxy' : 'owner', expected.returned, `${where}: returned`);
     const calls = (result ?? []).map(m => m.location ? { far: [true, ...m.location.map(bits), 0, 0] }
       : { move: [true, [0, 0, 0], m.rotation, [0, 0, 0, 0]] });
@@ -75,6 +80,6 @@ cases.forEach((c, ci) => {
     if (state.savedLoc.some((v, i) => v !== c.ownerLocation[i])) saved++;
   });
 });
-assert.ok(randomItems > 1000 && saved > 100, 'cases reach the random beam and the savedLoc branch');
-console.log(`ULaserIterator::CurrentItem: ${items} items over ${cases.length} iterators match the original (${moves} proxy moves, ${randomItems} random-beam items, ${draws} appFrand draws).`);
+assert.ok(randomItems > 2000 && saved > 200, 'cases reach the random beam and the savedLoc branch');
+console.log(`ULaserIterator::CurrentItem: ${items / 2} items over ${cases.length} iterators match the original in JavaScript and in Rust (${moves / 2} proxy moves, ${randomItems / 2} random-beam items, ${draws / 2} appFrand draws each).`);
 if (assert.enabled) assert.report('validate-native-laser');

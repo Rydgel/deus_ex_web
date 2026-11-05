@@ -24,6 +24,7 @@ mod level;
 mod fire;
 mod fall;
 mod fly;
+mod laser;
 mod light;
 mod spatial;
 mod fog;

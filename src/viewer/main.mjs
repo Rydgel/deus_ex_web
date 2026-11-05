@@ -88,7 +88,8 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // The render scan (script-vm-render.mjs) filters Level.Actors in Rust for
 // the moving lights, sprites, mesh admission and Galaxy's ambient scan;
 // ?renderScan=js keeps the JavaScript loops, ?renderScan=verify checks every
-// scan against them. The same js/verify switches: ?meshLight= for
+// scan against them. The same js/verify switches: ?laser= for the laser
+// iterator's CurrentItem (laser-kernel.mjs), ?meshLight= for
 // SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
 // CycleActors (script-iterators.mjs) and ?levelScan= for the level loop's
 // DistanceFromPlayer and compaction passes (level.rs), ?farMove= for the
@@ -111,7 +112,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
-for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
+for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
