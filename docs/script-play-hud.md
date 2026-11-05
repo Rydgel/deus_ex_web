@@ -147,3 +147,13 @@ original bitmap-font glyph output. Native family layout, root tick, scene frame,
 actor-reference and GC validators cover their translation boundaries against
 the shipped DLL. Browser checks additionally cover native layout, pickup/belt
 selection, frob brackets, ammo, log placement and shared dialogue behavior.
+
+## What a paint costs (2026-11-05)
+
+One HUD paint runs about 95 original script events a frame over about 46 windows (70 of them `Extension.Window`'s empty DrawWindow
+and PostDrawWindow), then the console's PostRender. In Node the events take about 0.65 ms on the Island; the paint is 1.7 to 2.3 ms in
+Firefox (`w.hud`), against Chrome's 1.0 to 1.3. The cost is a flat spread over the Rust VM's JavaScript callbacks (`DrawText`, the
+`DrawTargetAugmentation` call, window field reads), the JavaScript around each event, and the window tree's native-heap access; no
+part is 0.5 ms. The split, the profiles and the parts a port could take are in
+[Firefox at 60 fps](firefox-60fps-plan.md#the-hud-phase-2026-11-05); `scripts/hud-census.mjs` prints a paint's events and
+fallbacks. The events themselves are unchanged: none is skipped, reordered or cached.

@@ -105,6 +105,8 @@ the steady frames' cost, from the step 0 profiles):
 **4. HUD and actors** (2 to 3.4 ms each, about twice Chrome's).
 * The HUD's script windows, and the actor admission and SetupForActor passes, by profile.
 * Expected: 1 to 2 ms.
+* **The HUD half is measured (2026-11-05, [below](#the-hud-phase-2026-11-05)): its excess over Chrome is 0.7 to 1.0 ms, not 1.4, and
+  it has no family of 0.5 ms.** The largest is 0.3 ms; the work is a flat spread of JavaScript behind the Rust VM's imports.
 
 **5. Collections for 7.2.4.**
 * With shorter frames, measure again how many gaps over 50 ms remain and which collections cause them.
@@ -184,6 +186,19 @@ maps. The order above follows these figures.
 
   The bunker has not moved: its slow frames are spawning, `js_eval` fallbacks and state code. The headed frame-time set (the rows'
   verdict) is still to be taken.
+* **2026-11-05, perception's light checks direct in Rust: tried, not merged.** A worker made `percep::light_level` call
+  the collision hash's `lc_line` itself (`hash::light_line`, `LIGHT_CHECK`; branch worktree-agent-a00ec61ffd7da6914, commit
+  98a405e9). The light-check imports fell to almost none (Island 4,673 → 0, Wan Chai 17,253 → 2 per 1,500 ticks), digests and verify
+  held, and the perception validators passed. Firefox inline, three interleaved pairs:
+  * Battery Park: the mean tick 6.95 ms with the imports, 7.27 ms without them, slower in every pair whichever arm ran first;
+  * Wan Chai: unchanged (7.18 and 7.22 ms).
+
+  The per-light-level preparation (`js_light_prepare`: the world model and the query's filter context) likely costs more than the
+  line checks it saves. Left on its branch. The tail on Battery Park is elsewhere.
+* **2026-11-05, the HUD phase: no family reaches 0.5 ms** ([below](#the-hud-phase-2026-11-05)). Firefox's `p.hud` holds the
+  simulation's HUD paint as well as the page's draw. Firefox's excess over Chrome is 0.7 to 1.0 ms, spread across about 95 script
+  events a frame. No port was made; the profiling tools are in `scripts/` (gecko-phase.mjs, gecko-phase-diff.mjs,
+  hitch-phase-means.mjs, wasm-names.mjs, hud-census.mjs).
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
@@ -226,6 +241,70 @@ Chromium's worker mode on Wan Chai ran 60 s without a page error (60 fps headles
 equal on the five maps, and `COLLISION_HOST`, `ACTOR_SCAN` and `DESTROY_SCAN` together in verify mode match on the long route of the
 Island, Wan Chai and the bunker. The collision, trace, tracked-collision, brush-bounds, walking-surface, walk-loop, destroy, load,
 travel, Play-frame and fog validators pass.
+### The HUD phase (2026-11-05)
+
+Headless Firefox 155, inline, the census route (`hitch-run.mjs --mode scan --god --seconds 60 --profile`), this tree at 6b977252,
+Gecko profiles joined to the hitch log by `scripts/gecko-phase.mjs` (the samples under an entry function, ms per drawn frame from
+5 s after the map). Runs and profiles are in `.cache/perf/hud/` (outside Git).
+
+**What `p.hud` is.** In inline mode the frame adds the simulation step's time to the page phase of the same name (main.mjs
+`drawFrame`: `framePhases[name] += ms`), so `p.hud` is the sum of two things the Chrome worker reports apart: `w.hud`, the
+simulation's HUD paint (`sim-session.mjs hud`: `game.hud.commands`, the window tree's DrawWindow and PostDrawWindow script events,
+then the console's PostRender; Galaxy's update runs inside it but is booked as `audio`), and the page's drawing of the command
+stream (`hudRenderer.render`, hud.mjs, with the flash and console passes). The "about 1.1 ms in Chrome's worker" above is
+only the second; the first is Chrome's `w.hud`.
+
+| Map | Firefox `p.hud` | of it `w.hud` | page draw | Chrome `w.hud` + `p.hud` (2026-11-05 set) |
+|---|---:|---:|---:|---:|
+| Island | 2.48 | 1.84 | 0.64 | 1.00 + 0.43 = 1.43 |
+| Bar | 2.47 | 1.81 | 0.66 | 1.18 + 0.53 = 1.71 |
+| Ship | 2.27 | 1.73 | 0.54 | 1.05 + 0.50 = 1.55 |
+| Area 51 bunker | 2.94 | 2.26 | 0.68 | 1.29 + 0.50 = 1.79 |
+
+The page's drawing is within 0.2 ms of Chrome's (0.1 ms of it is the hitch log's GL wrappers, in both), so Firefox's excess,
+0.7 to 1.0 ms, is the simulation half: 1.7 to 2.3 ms against 1.0 to 1.3, 1.6 to 1.8 times, the ratio of its other host JavaScript.
+
+**Where the Island's 1.84 ms of `w.hud` goes** (Firefox, ms a frame, inclusive, so the rows overlap):
+
+| Part | ms | What it is |
+|---|---:|---|
+| the window tree's draw (`host.draw`) | 1.60 | `paintWindows` → `drawTree` over about 46 windows, 95 script events a frame |
+| of it: the script events (`processEvent`) | 1.22 | 70 of the events are `Extension.Window`'s empty DrawWindow and PostDrawWindow (a `return`); the rest are the object belt's ten slots, the augmentation display, hit, damage, compass and ammo windows |
+| of those: the Rust VM's JavaScript callbacks (`js_eval`) | 0.64 | GC natives it does not run (`DrawText` 0.24, in the belt slots and labels), script calls it hands back (`DrawTargetAugmentation` with its `TraceLOS`, 0.37 with the other calls), 35 window width and height reads |
+| of those: JavaScript around each event | 0.30 | `processScript`'s lookup, `processEvent`'s gates, frame locals and `destroyFunctionLocals`, `resume`'s run bookkeeping |
+| of those: other imports and Rust itself | 0.28 | `js_bool`, `js_object`, `js_float` and tile emission 0.22; the bodies' own statements 0.06 |
+| the window tree outside the events | 0.38 | native-heap reads and writes (about 15,000 a frame in Node's count; `readAt`, `absolute`, `byteIndex` and `writeAt` 0.2), GC push, pop and copy, the family draws |
+| the console's PostRender | 0.22 | the player's and the console's PostRender events, with the canvas natives bound each frame |
+
+On the bunker the same tree plus a computer terminal's text spends 0.55 ms in `gcDrawText` (0.24 on the Island) and 2.26 ms in
+all; the rest matches the Island within 0.1 ms. `scripts/hud-census.mjs` counts a paint's events and the Rust VM's JavaScript
+fallbacks in Node: the belt slots and the augmentation display's PostDrawWindow are each about 30% of the events' time. The
+second is a final call to `DrawTargetAugmentation` that the lowering hands to JavaScript (`foreach Player.TraceActors`, string and
+struct locals), run every frame whether or not the augmentation is active.
+
+**Verdict: no family reaches 0.5 ms, so nothing is changed.** The most each could give is the whole of its time (a port saves a
+part of it), on the Island and, where it differs, the bunker:
+* `DrawText` and the GC state saves under it, in JavaScript: 0.24 (bunker 0.55). A Rust port of `gcDrawText` and `GetTextExtent`
+  would save perhaps 0.15 (0.35).
+* JavaScript around the events: 0.30, of which the 70 empty-bodied events are about 0.2. Skipping their bodies is the same
+  behavior (the body is a `return`) only if the gates, the `scriptRuns` count and the parameter's handle are kept; the rest needs
+  Rust dispatch of window events, as the tick events have.
+* `DrawTargetAugmentation` as a JavaScript call: 0.24 to 0.37, the largest single script function. Lowering the call needs string
+  and struct locals in a Rust frame block.
+* The native-heap accessors (a string `kind` switch and a Map lookup per access): 0.2 to 0.3. A typed path saves about 0.1.
+* The console's PostRender: 0.22; binding its canvas natives once saves under 0.1.
+* The page's three.js draw of about 55 tile batches: 0.55. A direct GL submit (one buffer, one state setup) would save perhaps 0.3.
+
+Together about 1.0 ms of the 1.8 to 2.3, a multi-step program (a Rust window-event dispatch with the GC natives and the tree's field
+reads behind it), each step under the 5% rule alone. If the HUD is taken up, start with Rust dispatch of window events plus a
+typed native-heap path: 0.3 to 0.4 ms for the two.
+
+**Tools added** (host measurement only): `scripts/gecko-phase.mjs` (a profile's samples under any entry function, by import, child,
+leaf, named frame or a top-down tree, over a run's drawn frames, or `--all` when the clock join is weak, as on the Bar),
+`scripts/gecko-phase-diff.mjs` (two such results side by side), `scripts/hitch-phase-means.mjs` (a run's phase means),
+`scripts/wasm-names.mjs` (a non-stripped module's names for `wasm-function[N]`), `scripts/hud-census.mjs`; and
+`globalThis.__scriptVmStats` under `SCRIPT_VM_STATS=1`, the maps the census reads between resets.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
