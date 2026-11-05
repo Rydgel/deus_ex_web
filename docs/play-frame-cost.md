@@ -1833,3 +1833,61 @@ as on 2026-11-04 (a quiet machine; the Claude app used about 0.7 of a core).
 Nine of ten under 8.3 ms; no shader program built during play; no gap over 100 ms. Three maps sit 0.1 ms under the bound and a
 run's median moves by up to 0.8 ms between runs of one build (the A/B above), so on this host those three are not settled either
 way. Row 7.2.1 is the Mac's.
+
+## Row 7.2.2 headed, 2026-11-05 (Linux)
+
+`node scripts/frame-time-set.mjs --browser B --headed` at f2f1cb6f on the Linux host: each map in a window on the user's
+1920x1080 240 Hz display (Hyprland), the window kept visible and on top, canvas 1440x960. Headless runs cannot answer this row:
+Chromium's headless frames come from a synthetic 60 Hz clock (every map of the 2026-11-05 set above read 16.7 to 16.8 ms), so
+the run must be headed. A covered or hidden window is not measured either: on a workspace that is not shown, Firefox draws
+nothing and the load waits (Battery Park's first run timed out there and was run again), and a covered Chromium window falls back
+to 60 Hz. Firefox's frame timestamps are whole milliseconds.
+
+| Map | Chrome worker p50 | Chrome interval p95 | Chrome fps | Firefox page p50 | Firefox interval p95 | Firefox fps | 7.2.2 Chrome | 7.2.2 Firefox |
+|---|---:|---:|---:|---:|---:|---:|---|---|
+| 00_Training | 3.9 | 8.3 | 218 | 9.0 | 13.0 | 104 | PASS | PASS |
+| 01_NYC_UNATCOIsland | 7.7 | 12.8 | 118 | 16.0 | 21.0 | 59 | PASS | FAIL |
+| 02_NYC_Bar | 4.5 | 8.4 | 205 | 13.0 | 17.0 | 74 | PASS | PASS |
+| 02_NYC_BatteryPark | 8.0 | 14.9 | 116 | 26.0 | 31.0 | 37 | PASS | FAIL |
+| 03_NYC_Airfield | 7.6 | 12.5 | 123 | 19.0 | 25.0 | 51 | PASS | FAIL |
+| 06_HongKong_WanChai_Market | 7.4 | 12.2 | 127 | 18.0 | 25.0 | 54 | PASS | FAIL |
+| 09_NYC_Ship | 6.3 | 10.3 | 146 | 17.0 | 21.0 | 57 | PASS | FAIL |
+| 10_Paris_Chateau | 5.3 | 8.6 | 174 | 13.0 | 17.0 | 73 | PASS | PASS |
+| 11_Paris_Everett | 4.4 | 8.4 | 191 | 10.0 | 13.0 | 95 | PASS | PASS |
+| 15_Area51_Bunker | 7.6 | 13.7 | 116 | 16.0 | 25.0 | 56 | PASS | FAIL |
+
+Chrome (worker) passes on every map with room: the drawn frames follow the worker's frame (the page's work overlaps it), no gap
+over 100 ms. Firefox (inline, its default) fails on six of ten: the page thread runs the simulation and the drawing one after the
+other, and its frame is about twice Chrome's worker frame. By phase (means of the hitch columns: Firefox's `p.*` over drawn
+frames, Chrome's `w.*` over worker frames and its whole page frame):
+
+| Phase | Firefox inline (ms) | Chrome (ms) | Ratio |
+|---|---:|---:|---:|
+| level tick, Island | 7.6 | 4.1 | 1.8 |
+| level tick, Wan Chai | 9.6 | 4.1 | 2.4 |
+| actors, Island | 3.0 | 2.0 | 1.5 |
+| HUD, Island | 2.3 | 1.1 | 2.1 |
+| render, textures and uploads: Island, Bar, Ship | 2.8, 5.9, 7.1 | page frame 2.5, 2.2, 2.7 | |
+
+The tick ratio is 1.8 to 2.4 on every map of the set.
+
+Bar, Ship and Battery Park upload about 4 MB of WebGL data a frame in both browsers (the hitch log's `gl.uploadMB`; its byte count
+takes a `bufferSubData` source's whole array, so the true figure may be smaller): 0.44 ms in Chrome, 2.3 to 2.5 ms in Firefox. A
+Gecko profile of the Island (`hitch-run.mjs --profile`, 60 s, page p50 18 ms under the profiler) is flat: no function holds more
+than 3% of the frame's samples. The Rust core's calls out to JavaScript (`fast exit trampoline`) hold 33% inclusive, and the
+largest self entries are the host's field reads (`instance`, `readInstanceField`, `namedHandle`, `readCell`, `readNamed`,
+`lookupMember`, `handleOf`), `texSubImage2D` (1.5%) and the Rust functions behind them. Six maps need their p95 from 21 to 31 ms
+down to 16.7, a cut of 20 to 45% of Firefox's page frame.
+
+Grouped by the import the Rust core called (the outermost Wasm-to-JavaScript crossing of each sample), a third of the Island's
+frame is JavaScript the Rust side calls back: `js_eval` 11.3% (about 1.9 ms: the script nodes the Rust VM hands to `evNode`, most
+of it `callFunction` and `invoke` of script functions, the HUD's `processScript`, and natives), `js_walk_prelude` 2.8%,
+`js_object` 2.0%, `js_step` 1.6%, `js_event_gate` 1.2%, `js_bool` 1.2%, `js_tick_zone_time` 1.1%, `js_move_riders` 1.0%, and a
+tail under 1% each. The natives under `invokeNative` are 7% of the frame and spread out: the window host's `handleNative` 1.8%,
+`execAttachDecal` 0.8%, `execSetLocation` 0.35%, then many under 0.3%. The JavaScript host costs Firefox about twice what it
+costs Chrome, so these crossings are where the Rust core would cut Firefox's frame most; the same ports cut Chrome's worker frame.
+
+Worker mode is no way out for Firefox today. Headed, `?sim=worker&workerBusy=1`, 60 s each: the Island's worker frame is 13 ms p50
+and 19 ms p95, so the drawn interval p95 stays at 21 ms (66 fps), with 3 gaps over 150 ms (up to 200 ms); Battery Park's page
+and worker overlap (page p50 14 ms, worker 12 ms) and its p95 falls from 31 to 17 ms (passes), with 2 gaps over 150 ms. The
+freezes are the worker's non-incremental major GCs measured on 2026-10-31 (docs/sim-worker.md), so 7.2.4 would get worse.

@@ -41,9 +41,9 @@ add('7.1.4', 'Safari, macOS', 'H', 'MISSING', {decision: 'D1', machine: MAC,
 add('7.2.1', 'Chrome, worker: on each map of the frame-time set, the larger of the page\'s and the worker\'s median frame work ≤ 8.3 ms (AGENTS.md)', 'H', 'MISSING',
   {decision: 'D2', machine: MAC, proof: ['frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs)'],
     need: 'a Mac measurement. Indicative, Linux 2026-11-05 (0f6d1eeb, god mode, [frame cost](play-frame-cost.md#the-frame-time-set-on-2026-11-05-linux)): every map worker-bound; nine of ten under the bound (Training 4.3, the Bar 4.9, Battery Park 8.2, the Airfield 8.2, Wan Chai\'s market 8.2, the Ship 6.5, the Chateau 5.8, Everett 4.6, the bunker 7.9 ms), the Island over at 8.4 ms (2026-11-04: 8.7 to 8.9); one run\'s median moves by up to 0.8 ms between runs of one build; the Mac\'s tick was about 1.35 times this host\'s'});
-add('7.2.2', 'every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps\' jitter)', 'H', 'MISSING',
-  {decision: 'D2', machine: MAC, proof: ['frame-time-set.mjs --browser B, headed (hitch-run.mjs --headed)'],
-    need: 'a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux'});
+add('7.2.2', 'every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps\' jitter)', 'H', 'FAIL',
+  {decision: 'D2', machine: MAC, proof: ['frame-time-set.mjs --browser B --headed (a visible window: headless Chromium draws on a synthetic 60 Hz clock)'],
+    weak: 'Linux, 2026-11-05 (f2f1cb6f, 240 Hz display, [frame cost](play-frame-cost.md#row-722-headed-2026-11-05-linux)): Chrome worker passes on all ten maps (p95 8.3 to 14.9 ms, 116 to 218 fps); Firefox inline fails on six (Island 21, Ship 21, Airfield 25, Wan Chai 25, Bunker 25, Battery Park 31 ms; 37 to 59 fps), its page frame about twice Chrome\'s worker frame (the level tick 1.8 to 2.4 times); the Mac and Safari not run'});
 add('7.2.3', 'Chrome: from a map\'s first 5 s on, no drawn-frame gap over 100 ms in a 120 s roam', 'H', 'PARTIAL',
   {machine: MAC, proof: ['hitch-run.mjs --mode roam --seconds 120', 'hitch-summary.mjs'],
     weak: 'Linux only: with all cores, no gap over 100 ms on the Island and WanChai Underworld; pinned to two cores (a loaded machine, where the user feels it on the Mac) 2 to 4 gaps over 100 ms a run, up to 350 ms, each the worker\'s major GC (2026-10-28, docs/live-heap.md); not on the Mac'});
