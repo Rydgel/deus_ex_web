@@ -1906,4 +1906,4 @@ was 120 fps (8.3 ms) from 2026-09-30. Row 7.2.1 follows AGENTS.md, so its bound 
 (`hitch-summary.mjs` judges it so); row 7.2.2, the 60 fps floor in every browser, is unchanged. The sections above that
 measure against 8.3 ms are kept as they were written. What the new target leaves: Chrome's worker mode had every map of
 the frame-time set at 8.4 ms or less on Linux and passed 7.2.2 headed on all ten maps (the Mac's tick was about 1.35 times
-Linux's), while Firefox's inline mode misses 7.2.2 on six maps ([above](#row-722-headed-2026-11-05-linux)).
+Linux's), while Firefox's inline mode misses 7.2.2 on six maps ([above](#row-722-headed-2026-11-05-linux)). The work for it: [Firefox at 60 fps](firefox-60fps-plan.md).

@@ -302,7 +302,8 @@ Causes: **stale**, the spec predates a change in Play and fails in every browser
 4. **A measurement pass on the Mac.** The frame-time set, the load census and the memory budget in every browser (7.2,
    7.3, 7.4.2) give each row its first status on the reference machine.
 5. **The performance work against 7.2.1.** Each step goes family by family, as a measurement names it, in the Rust core
-   (AGENTS.md), and only for gains over 5%.
+   (AGENTS.md), and only for gains over 5%. Since the target became 60 fps (2026-11-05), what is left is Firefox's: the
+   [Firefox 60 fps plan](firefox-60fps-plan.md) for rows 7.2.2 and 7.2.4.
 6. **The long session** (7.4.3) and the audio latency (7.5.2, which starts with the original's measurement). Both pass on Linux
    (2026-11-04: [long session](long-session.md), [sound start latency](audio-latency.md)); the Mac is left.
 7. **The gate.** The sweep, the browser suite and the earlier stages' gates on one commit (7.10).
