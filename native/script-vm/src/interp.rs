@@ -208,6 +208,8 @@ const S_ITER_NEXT: u32 = 7;
 const S_ITER_POP: u32 = 8;
 // A Return in a body with a foreach (R2b-6).
 const S_RETURN_ITER: u32 = 9;
+// A foreach over CycleActors whose iterator Rust owns (iter.rs).
+const S_FOREACH_CYCLE: u32 = 10;
 // Expression kinds.
 const LIT_INT: u32 = 20;
 const LIT_FLOAT: u32 = 21;
@@ -359,6 +361,10 @@ const AI_CAN_SEE: u32 = 202;
 const STATE_NAME: u32 = 203;
 const LAST_RENDERED: u32 = 204;
 const IN_STASIS: u32 = 205;
+// GetPlayerPawn (720) over the host-maintained cell (natives.rs player_pawn).
+const PLAYER_PAWN: u32 = 207;
+// A script call with struct out arguments (iter.rs).
+const CALL_OUT: u32 = 208;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -391,7 +397,7 @@ const UNREADABLE: u32 = 1;
 const CK_INT: u32 = 1;
 pub(crate) const CK_BOOL: u32 = 2;
 pub(crate) const CK_FLOAT: u32 = 3;
-const CK_OBJECT: u32 = 4;
+pub(crate) const CK_OBJECT: u32 = 4;
 const CK_CAST: u32 = 5;
 const CK_VECTOR: u32 = 6;
 const CK_ROTATOR: u32 = 7;
@@ -407,6 +413,8 @@ const ERR_OUTSIDE: u32 = 3;
 const ERR_KIND: u32 = 4;
 const ERR_DIV_OVERFLOW: u32 = 5;
 const ERR_RETURN_ITERATOR: u32 = 8;
+pub(crate) const ERR_OUT_STRUCT: u32 = 9;
+pub(crate) const ERR_FOREACH: u32 = 10;
 
 // CALL result kinds (also S_RETURN's) and argument kinds.
 const R_VOID: u32 = 0;
@@ -417,11 +425,12 @@ const R_OBJECT: u32 = 4;
 const R_VECTOR: u32 = 5;
 const R_ROTATOR: u32 = 6;
 const P_SKIP: u32 = 0;
-const P_INT: u32 = 1;
-const P_BOOL: u32 = 2;
-const P_FLOAT: u32 = 3;
+pub(crate) const P_INT: u32 = 1;
+pub(crate) const P_BOOL: u32 = 2;
+pub(crate) const P_FLOAT: u32 = 3;
 const P_OBJECT: u32 = 4;
-const P_BYTE: u32 = 5;
+pub(crate) const P_BYTE: u32 = 5;
+pub(crate) const P_STRUCT: u32 = 6;
 
 /// Core's runaway-loop limit (script-vm.mjs SCRIPT_RUNAWAY_LIMIT).
 const RUNAWAY_LIMIT: u32 = 10_000_000;
@@ -615,7 +624,7 @@ pub(crate) fn fround(v: f64) -> f64 {
     v as f32 as f64
 }
 #[inline(always)]
-fn float_of(bits: u32) -> f64 {
+pub(crate) fn float_of(bits: u32) -> f64 {
     f32::from_bits(bits) as f64
 }
 /// The float codec's store: `Math.fround(Number(v ?? 0))`.
@@ -825,7 +834,7 @@ pub(crate) fn to_int32(v: f64) -> i32 {
     (if bits >> 63 != 0 { low.wrapping_neg() } else { low }) as i32
 }
 #[inline(always)]
-fn merge_bool(word: u32, mask: u32, value: bool) -> u32 {
+pub(crate) fn merge_bool(word: u32, mask: u32, value: bool) -> u32 {
     if value {
         word | mask
     } else {
@@ -971,6 +980,8 @@ pub(crate) struct Run {
     /// A CALL's callee: an S_YIELD statement runs through js_step here
     /// instead of returning to the host.
     pub(crate) callee: bool,
+    /// The foreach this run owns (iter.rs), if any.
+    pub(crate) iter: crate::iter::Iter,
 }
 
 #[cold]
@@ -991,7 +1002,7 @@ impl Run {
         self.pc = unsafe { self.pc.add(words) };
     }
     #[inline(always)]
-    fn fail(&self, code: u32, node: u32) -> ! {
+    pub(crate) fn fail(&self, code: u32, node: u32) -> ! {
         fail(self.frame, code, node)
     }
     #[inline(always)]
@@ -1250,12 +1261,19 @@ impl Run {
         let code = self.code;
         let count = unsafe { *code };
         let mut cursor = entry;
+        // The actor list a CycleActors start found ready (iter.rs foreach_ready), for the statement that follows.
+        let mut list = 0;
         loop {
             // NEXT_NONE (u32::MAX) is never below the count.
             let inside = cursor < count;
             if inside {
                 self.pc = unsafe { code.add(*code.add(1 + 2 * cursor as usize) as usize) };
-                if self.op(0) == S_YIELD {
+                // A foreach start Rust cannot own here (iter.rs) is an S_YIELD: the JavaScript loop starts the iterator.
+                let kind = self.op(0);
+                if kind == S_FOREACH_CYCLE {
+                    list = self.foreach_ready();
+                }
+                if kind == S_YIELD || (kind == S_FOREACH_CYCLE && list == 0) {
                     if !self.callee {
                         return cursor as i32;
                     }
@@ -1309,7 +1327,7 @@ impl Run {
                 S_RETURN | S_RETURN_ITER => {
                     // stepCompiled: `if (frame.iterators.length) throw`
                     // before the value (a body with a foreach).
-                    if kind == S_RETURN_ITER && unsafe { js_iterators(self.frame) } != 0 {
+                    if kind == S_RETURN_ITER && (self.iter.active || unsafe { js_iterators(self.frame) } != 0) {
                         self.fail(ERR_RETURN_ITERATOR, 0);
                     }
                     let rkind = self.op(1);
@@ -1339,13 +1357,22 @@ impl Run {
                     return -1;
                 }
                 S_NOTHING => {}
+                S_FOREACH_CYCLE => cursor = self.foreach_start(cursor, list),
                 S_ITER_NEXT => {
-                    cursor = unsafe { js_iterator_next(self.frame) };
-                    self.self_fresh = false;
+                    if self.iter.active {
+                        cursor = self.foreach_next();
+                    } else {
+                        cursor = unsafe { js_iterator_next(self.frame) };
+                        self.self_fresh = false;
+                    }
                 }
                 S_ITER_POP => {
-                    unsafe { js_iterator_pop(self.frame) };
-                    self.self_fresh = false;
+                    if self.iter.active {
+                        self.iter.active = false;
+                    } else {
+                        unsafe { js_iterator_pop(self.frame) };
+                        self.self_fresh = false;
+                    }
                 }
                 _ => self.fail(ERR_KIND, kind),
             }
@@ -1494,7 +1521,7 @@ impl Run {
             INC_LOCAL_PRE | DEC_LOCAL_PRE | INC_LOCAL_POST => {
                 self.int(SELF);
             }
-            CALL => {
+            CALL | CALL_OUT => {
                 self.call(SELF);
             }
             crate::gc::GC_EFFECT => self.gc_effect(),
@@ -1506,18 +1533,27 @@ impl Run {
     /// executeScript) on receiver `r`. The value is in f64 form by the
     /// call's rkind: int as f64, bool 0/1, float, object handle; 0 for void.
     fn call(&mut self, r: Recv) -> f64 {
+        let with_out = self.op(0) == CALL_OUT;
         let (node, rkind, sig, argc) = (self.op(1), self.op(2), self.op(3), self.op(4));
         let args_len = self.op(5) as usize;
         if rkind > R_OBJECT {
             self.fail(ERR_KIND, rkind);
         }
-        self.skip(6);
+        // CALL_OUT: the sources of its struct out arguments (iter.rs).
+        let sources = if with_out { self.out_sources() } else { crate::iter::NO_SOURCES };
+        if !with_out {
+            self.skip(6);
+        }
         let receiver = self.handle(r);
         // CallFunction's FMemMark: the frame stack as it was before the push.
         let saved = frames_save();
         // The callee's run id, frame block, code and SELF: from the call
-        // cache (dispatch.rs), or js_call_begin and CALL_BLOCK.
-        let (callee, locals, code, callee_self, probe) =
+        // cache (dispatch.rs), or js_call_begin and CALL_BLOCK. A struct out
+        // argument whose source the image cannot address leaves the whole call
+        // to JavaScript, before anything is pushed or evaluated.
+        let (callee, locals, code, callee_self, probe) = if with_out && !self.out_addressable(&sources) {
+            (-1, 0, 0, 0, PROBE_NONE)
+        } else {
             match crate::dispatch::begin_call(self.frame, self.code as usize as u32, node, receiver, sig) {
                 Some(c) => (c.id as i32, c.locals, c.code, receiver, c.probe),
                 None => {
@@ -1528,7 +1564,8 @@ impl Run {
                     let block = addr_of!(CALL_BLOCK) as *const u32;
                     unsafe { (callee, *block, *block.add(1), *block.add(2), *block.add(3)) }
                 }
-            };
+            }
+        };
         if callee < 0 {
             // The JavaScript path performs the whole call, arguments included.
             self.skip(args_len);
@@ -1547,12 +1584,15 @@ impl Run {
         }
         // Parameters in order, each stored before the next is evaluated; the
         // arguments evaluate in the caller's run with the caller's SELF.
+        let mut outs = crate::iter::NO_OUTS;
         for _ in 0..argc {
             let (pkind, offset, mask) = (self.op(0), self.op(1), self.op(2));
             self.skip(3);
             let addr = locals.wrapping_add(offset);
             match pkind {
                 P_SKIP => {}
+                // A struct out parameter: copied in from its source now, back out after the callee (iter.rs).
+                P_STRUCT => self.out_struct_in(&sources, mask, addr, node, &mut outs),
                 P_INT => {
                     let v = self.int(SELF);
                     store32(addr, v as u32);
@@ -1579,6 +1619,8 @@ impl Run {
         // UObject::ProcessInternal (Core 0x1013f6c6-0x1013f6fe): a probe-named function does not run when its object's StateFrame
         // ProbeMask lacks the name's bit, whoever called it; the arguments are evaluated above, the frame is put back below.
         if probe != PROBE_NONE && !crate::natives::probing_name(callee_self, probe) {
+            // (callFunction still copies the out parameters back)
+            self.out_struct_back(&outs, node);
             frames_restore(saved);
             self.self_fresh = false;
             return 0.0;
@@ -1597,9 +1639,12 @@ impl Run {
             self_bind: 0,
             self_fresh: false,
             callee: true,
+            iter: crate::iter::NO_ITER,
         };
         run.statements(0);
         unsafe { BUDGET = caller_budget };
+        // callFunction copies the out parameters back, last first, after the result is taken.
+        self.out_struct_back(&outs, node);
         frames_restore(saved);
         self.self_fresh = false;
         // callFunction's copyValue(fn.result, value): undefined is the zero.
@@ -2102,7 +2147,7 @@ impl Run {
                 Some(object) => self.int(object),
                 None => 0,
             },
-            CALL => self.call(r) as i32,
+            CALL | CALL_OUT => self.call(r) as i32,
             BYTE_TO_INT | INT_TO_BYTE => {
                 self.skip(1);
                 self.int(SELF) & 255
@@ -2263,7 +2308,7 @@ impl Run {
                 Some(object) => self.float(object),
                 None => 0.0,
             },
-            CALL => self.call(r),
+            CALL | CALL_OUT => self.call(r),
             INT_TO_FLOAT => {
                 self.skip(1);
                 self.int(SELF) as f32 as f64
@@ -2404,7 +2449,7 @@ impl Run {
                 Some(object) => self.boolean(object),
                 None => false,
             },
-            CALL => self.call(r) != 0.0,
+            CALL | CALL_OUT => self.call(r) != 0.0,
             NOT => {
                 self.skip(1);
                 !self.boolean(SELF)
@@ -2573,7 +2618,8 @@ impl Run {
                 Some(object) => self.object(object),
                 None => 0,
             },
-            CALL => self.call(r) as u32,
+            CALL | CALL_OUT => self.call(r) as u32,
+            PLAYER_PAWN => self.player_pawn(r),
             _ => self.fail(ERR_KIND, kind),
         }
     }
@@ -2585,7 +2631,7 @@ impl Run {
 #[no_mangle]
 pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, entry: u32) -> i32 {
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
+    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false, iter: crate::iter::NO_ITER };
     run.statements(entry)
 }
 
@@ -2594,7 +2640,7 @@ pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, e
 #[no_mangle]
 pub extern "C" fn vm_statement(code: u32, frame: u32, locals: u32, self_handle: u32, index: u32) -> i32 {
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
+    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false, iter: crate::iter::NO_ITER };
     unsafe { SCRIPT_RUNS = SCRIPT_RUNS.wrapping_add(1) };
     run.statement(index)
 }

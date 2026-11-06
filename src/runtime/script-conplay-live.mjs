@@ -298,7 +298,6 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   // Galaxy (docs/galaxy-audio.md "Speech through Galaxy's voices").
   const soundRequests=[];
   function handleNative(call){
-    const scriptPath=String(call.script?.entry?.path??(call.record?entryOf(call.record)?.path:undefined)??'').toLowerCase();
     if(call.index===3002||call.index===3003){
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};
@@ -327,7 +326,10 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     // emitter with neither takes the general route's boundary. Their
     // StopSound (native 265) is the original's (no case here): Galaxy's
     // StopSoundId.
-    const soundIndex=call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation'].includes(scriptPath)
+    // (the script's path is only wanted for PlaySound: handleNative sees every native that reaches the play host, about fifty a tick
+    // for GetPlayerPawn alone, and the lowercased path string was made for each)
+    const soundIndex=call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation']
+      .includes(String(call.script?.entry?.path??(call.record?entryOf(call.record)?.path:undefined)??'').toLowerCase())
       ?runtime.soundObjectIndex(call.receiver):null;
     if(soundIndex){
       const services=runtime.playSoundServices(call);

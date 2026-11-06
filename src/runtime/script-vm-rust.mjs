@@ -27,7 +27,9 @@ import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT, scriptRunCount} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
-import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling, globalCallMode} from './script-vm-lower.mjs';
+import {lowerFunction, fieldKeyId, callSignature, classRecordId, nameId, foldedNameId, nameSpelling, globalCallMode} from './script-vm-lower.mjs';
+import {PlayerPawnHost, playerPawnMode} from './script-vm-player-pawn.mjs';
+import {ForeachHost} from './script-vm-foreach.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {AiEventHost} from './script-vm-aievent.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
@@ -95,6 +97,9 @@ const HANG_BUDGET = 200000000;
 const STATS = typeof process !== 'undefined' && process.env?.SCRIPT_VM_STATS === '1' ? new Map() : null;
 const opName = n => n?.op === 'native' ? `native ${n.index}` : typeof n?.op === 'number' ? `0x${n.op.toString(16)}` : String(n?.op);
 const CHECK = typeof process !== 'undefined' && process.env?.SCRIPT_VM_CHECK === '1';
+// PLAYER_PAWN / ?playerPawn= (DEUS_EX_PLAYER_PAWN, script-vm-player-pawn.mjs): 'rust' (default) lowers GetPlayerPawn to a Rust node over a cell, and
+// where it is not lowered answers it in js_object (playerPawn below) like 'direct'; 'js' keeps the call through invokeNative, 'verify' does both
+// and compares the handles.
 // RECEIVER_VERIFY=1: Rust asks js_receiver for every receiver, and each
 // answer is compared with the receiver table's entry when that is current.
 const RECEIVER_VERIFY = typeof process !== 'undefined' && process.env?.RECEIVER_VERIFY === '1';
@@ -182,7 +187,7 @@ const RETURNED = 0xfffffffe;
 // Word kinds the state driver inspects (interp.rs).
 const S_EXPR = 1, S_JUMP_IF_NOT = 3, JS_BOOL = 52, JS_VOID = 55;
 // State code's frame layout: a state has no parameters or locals.
-const STATE_LAYOUT = Object.freeze({size: 0, refCount: 0, cells: new Map(), fields: new Map()});
+const STATE_LAYOUT = Object.freeze({size: 0, refCount: 0, cells: new Map(), fields: new Map(), state: true});
 
 // Interpreters whose handle class tables follow handle releases and class
 // default changes, weakly held (an interpreter lives as long as its runtime).
@@ -316,6 +321,10 @@ export class RustScriptVm {
     this.receiverCapacity = 0;
     // R3-c: the perception natives' tables and imports.
     this.perception = new PerceptionHost(this);
+    // GetPlayerPawn's cell (natives.rs PLAYER_PAWN_CELL).
+    this.pawnCell = new PlayerPawnHost(this);
+    // The CycleActors foreach and struct out arguments in Rust (iter.rs).
+    this.foreach = new ForeachHost(this);
     // The AI event manager (aievent.rs, docs/ai-event-manager.md).
     this.aiEvents = new AiEventHost(this);
     // October 1: the locomotion polls' table (loco.rs).
@@ -384,6 +393,8 @@ export class RustScriptVm {
     this.result3At = x.vm_result3_ptr();
     this.checkValuesAt = x.vm_check_values_ptr();
     this.perception.attach(x);
+    this.pawnCell.attach(x);
+    this.foreach.attach(x);
     this.aiEvents.attach(x);
     this.loco.attach(x);
     this.render.attach(x);
@@ -679,6 +690,18 @@ export class RustScriptVm {
       : instance.arena !== this.arena ? 'other arena' : instance.poison?.size ? 'poison' : 'released image';
     return ` [host ${reason}]`;
   }
+  /** js_object's direct path for GetPlayerPawn: its handle, or undefined where the call must go through invokeNative. The call would reach
+   * nativeCall's trigger step (the registry, native-registry.mjs, has no other dispatcher routing 720) through invokeNative's branches,
+   * the window host and the `native` callbacks, none of which run anything for it, unless a host replaced the methods on the way. */
+  playerPawn(run, n, handle) {
+    const runtime = this.runtime, resolve = runtime.playerPawnShortcut;
+    if (typeof resolve !== 'function' || !Array.isArray(n.args) || n.args.length !== 0) return undefined;
+    const m = runtime.constructor.originalMethods;
+    if (run.services.invokeNative !== runtime.services.invokeNative || runtime.invokeNative !== m.invokeNative ||
+      runtime.hostNative !== m.hostNative) return undefined;
+    const receiver = handle === run.selfHandle ? run.self : this.identity(handle);
+    return handleOf(resolve(receiver));
+  }
   identity(handle) {
     const identity = identityOfHandle(handle);
     if (identity === null) throw new Error('Script object allocation has been released');
@@ -686,6 +709,7 @@ export class RustScriptVm {
   }
   imports() {
     const vm = this;
+    const playerPawn = playerPawnMode();
     const enter = () => setScriptRunaway(vm.arena.view.getUint32(vm.runawayAt, true));
     const leave = () => vm.arena.view.setUint32(vm.runawayAt, scriptRunawayCount(), true);
     const receiver = (run, handle) => handle === run.selfHandle ? run.self : vm.identity(handle);
@@ -730,6 +754,21 @@ export class RustScriptVm {
       js_object(frame, node, handle) {
         enter();
         try {
+          if (playerPawn !== 'js') {
+            // GetPlayerPawn (native 720), about forty a tick on the Island: the resolver the native chain would reach, without the
+            // node's evaluation, the call object and invokeNative's branches (docs/firefox-60fps-plan.md "Import cuts")
+            const run = vm.run(frame), n = run.nodes[node];
+            if (n.index === 720 && n.op === 'native') {
+              const direct = vm.playerPawn(run, n, handle);
+              if (direct !== undefined) {
+                if (playerPawn === 'verify') {
+                  const v = value(frame, node, handle), expected = v === undefined ? UNDEFINED : handleOf(v);
+                  if (direct !== expected) throw new Error(`PLAYER_PAWN=verify: GetPlayerPawn is handle ${direct} directly, ${expected} through invokeNative`);
+                }
+                return direct;
+              }
+            }
+          }
           const v = value(frame, node, handle);
           if (v === undefined) return UNDEFINED;
           if (v !== null && typeof v !== 'object') throw new Error(`Script VM object position holds a ${typeof v}`);
@@ -746,6 +785,25 @@ export class RustScriptVm {
         } finally { leave(); }
       },
       js_receiver: handle => vm.receiverInfo(handle),
+      // The CycleActors foreach and struct out arguments in Rust (script-vm-foreach.mjs). None runs script.
+      js_cycle_list(frame, node, handle) {
+        enter();
+        try { return vm.foreach.list(frame, node, handle); } finally { leave(); }
+      },
+      js_cycle_class_test: (frame, node, handle) => vm.foreach.classTest(frame, node, handle),
+      js_foreach_check(frame, node, phase, start, found, cursor) {
+        enter();
+        try { vm.foreach.foreachCheck(frame, node, phase, start, found, cursor); } finally { leave(); }
+      },
+      js_out_struct_check(frame, node, index, dir, from, to) {
+        enter();
+        try { vm.foreach.outCheck(frame, node, index, dir, from, to); } finally { leave(); }
+      },
+      // GetPlayerPawn's walk for the node's receiver, the cell filled (script-vm-player-pawn.mjs).
+      js_player_pawn(frame, node, handle) {
+        enter();
+        try { return vm.pawnCell.cell(frame, node, handle); } finally { leave(); }
+      },
       // Tick events in Rust (dispatch.rs): processEvent's gates (they run
       // no script) and the event cache's decisions (no script either).
       js_event_gate: handle => vm.events.gate(handle),
@@ -886,6 +944,8 @@ export class RustScriptVm {
           case 3: throw new Error('VM instruction pointer outside script');
           case 5: throw new Error('Original Divide_IntInt signed overflow (x86 divide exception) is unsupported');
           case 8: throw new Error('Return requires compiled iterator unwind');
+          case 9: throw new Error(`A struct out argument of ${name} is not addressable in the object image (OUT_STRUCT=js keeps such calls in JavaScript)`);
+          case 10: throw new Error(`The CycleActors foreach of ${name} cannot continue in Rust (FOREACH_START=js keeps it in JavaScript)`);
           default: throw new Error(`Script VM code error ${code} (${node})`);
         }
       },
@@ -1109,7 +1169,7 @@ export class RustScriptVm {
     if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
       fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
       (receiver?.kind === 'Class' && !runtime.instances.has(receiver))) return this.jsCall(n, 'not eligible');
-    const signature = functionSignature(fn, runtime.classLoader);
+    const signature = callSignature(fn, runtime.classLoader);
     if (signature?.id !== sig) return this.jsCall(n, 'signature');
     const layout = frameLayout(fn, runtime.classLoader), lowered = this.loweringFor(fn.compiled, layout, services, receiver);
     if (!lowered) return this.jsCall(n, 'callee not lowered');

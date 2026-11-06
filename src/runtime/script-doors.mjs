@@ -52,6 +52,7 @@ import { PLAIN_SAVED_OBJECTS, NATIVE_SAVED_OBJECTS, isSavedFlag, isSavedFlagBase
 import { createGameSaver } from './game-save.mjs';
 import { handleOf } from './script-object-handles.mjs';
 import { RecordLevelBinding, RecordNetModeBinding } from './script-bindings.mjs';
+import { watchPlayerPawnGraph } from './player-pawn-graph.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -554,6 +555,13 @@ export async function createScriptDoors({
     if(!field)throw new Error(`Unbound trigger native graph field: ${name}`);
     return object[field];
   }}});
+  // Native 720 (GetPlayerPawn) is answered here by nativeCall's second step (triggers); the Rust VM's direct path asks the same resolver
+  // (script-vm-rust.mjs playerPawn, ?playerPawn=js keeps the call through invokeNative and the native chain).
+  runtime.playerPawnShortcut = triggerActions.getPlayerPawn;
+  // ... and the Rust interpreter answers it from a cell while no link of that walk (level.engine.client.viewports[0].actor) is written
+  // (player-pawn-graph.mjs; levelFor is this one level for every receiver, and no native object has an own xLevel).
+  runtime.playerPawnGraphWatched = watchPlayerPawnGraph(level, complete => runtime.notePlayerPawnGraph(complete));
+  runtime.playerPawnListener?.();
   const identities = new WeakMap();
   const moversByObject = new WeakMap();
   const actorByIndex = new Map((level.actors ?? []).filter(actor => Number.isInteger(actor?.index))

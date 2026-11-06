@@ -17,7 +17,7 @@
  * convert it: int `v | 0`, bool `Boolean(v)`, float `+v` (undefined is kept
  * apart, since the float store codec turns it into 0), object its handle.
  */
-import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell, cellKind} from './script-object-image.mjs';
+import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell, cellKind, scalarStructMembers} from './script-object-image.mjs';
 import {GC_RUST_NATIVES} from './script-vm-gc.mjs';
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
@@ -26,7 +26,7 @@ import {nameId} from './script-name-ids.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
-  S_RETURN_ITER: 9,
+  S_RETURN_ITER: 9, S_FOREACH_CYCLE: 10,
   LIT_INT: 20, LIT_FLOAT: 21, LIT_BOOL: 23, LIT_NONE: 24,
   LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34, vector: 161, rotator: 176},
   FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44, vector: 162, rotator: 177},
@@ -39,7 +39,7 @@ const K = {
   COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
   LIT_VECTOR: 160, LIT_ROTATOR: 175, LIT_NAME: 194, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184, IS_A: 193,
   PAWN_ENEMY: 200, PAWN_ALLIANCE: 201, AI_CAN_SEE: 202,
-  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205, GC_EFFECT: 206,
+  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205, GC_EFFECT: 206, PLAYER_PAWN: 207, CALL_OUT: 208,
   CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
@@ -162,7 +162,7 @@ const SMALL_NATIVES = new Set([284, 723, 721]);
  * compound assignments, the composite operators, IsA, the short-circuit pair, the perception and small natives and the
  * GC natives gc.rs runs). Each runs the body its JavaScript case has, so the list is src/runtime/native-registry.mjs's
  * `rust` layer: a native outside it, or outside the JavaScript dispatchers, never reaches a Rust kind. */
-export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, ...OPERATORS.keys(), ...INCREMENTS.keys(),
+export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, 720, ...OPERATORS.keys(), ...INCREMENTS.keys(),
   ...COMPOUNDS.keys(), ...COMPOSITE_OPERATORS.keys(), ...VCOMPOUNDS.keys(), ...PERCEPTION.keys(), ...SMALL_NATIVES,
   ...GC_RUST_NATIVES.keys()])].sort((a, b) => a - b));
 const STASIS_FIELDS = [['engine.actor.lastrendertime', 'float'], ['engine.actor.bstasis', 'bool'], ['engine.actor.physics', 'byte'],
@@ -185,6 +185,7 @@ export const globalCallMode = () => (typeof process !== 'undefined' && process.e
 
 // A call's argument and result kinds (interp.rs CALL).
 const PARAM_KIND = {int: 1, bool: 2, float: 3, object: 4, byte: 5};
+const P_STRUCT = 6;
 const RESULT_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4};
 const RESULT_TYPE = {int: 'int', byte: 'int', bool: 'bool', float: 'float', object: 'object', class: 'object'};
 const CALL_KIND = {0: 'void', 1: 'int', 2: 'bool', 3: 'float', 4: 'object'};
@@ -217,6 +218,57 @@ export function functionSignature(fn, loader) {
     }
   }
   signatures.set(fn, {source: fn.fields, signature});
+  return signature;
+}
+
+/** 'rust' (default), 'js' or 'verify': OUT_STRUCT / DEUS_EX_OUT_STRUCT / `?outStruct=`. Calls to a function with `out` struct
+ * parameters run in Rust (interp.rs CALL_OUT, iter.rs) where 'rust'; 'js' keeps them whole in JavaScript; 'verify' compares each
+ * struct copy with the JavaScript codec (script-vm-foreach.mjs). */
+export const outStructMode = () => (typeof process !== 'undefined' && process.env?.OUT_STRUCT) || globalThis.DEUS_EX_OUT_STRUCT || 'rust';
+/** 'rust' (default), 'js' or 'verify': FOREACH_START / DEUS_EX_FOREACH_START / `?foreachStart=`. The CycleActors foreach start and its
+ * IteratorNext run in Rust (interp.rs S_FOREACH_CYCLE, iter.rs) where 'rust'; 'js' keeps the JavaScript iterator; 'verify' compares each
+ * step with a shadow JavaScript iterator. */
+export const foreachStartMode = () => (typeof process !== 'undefined' && process.env?.FOREACH_START) || globalThis.DEUS_EX_FOREACH_START || 'rust';
+
+const MAX_OUT_STRUCTS = 4;
+const outSignatures = new WeakMap();
+/** functionSignature's signature, or for a function with `out` struct parameters of scalar members (HUDHitDisplay.SetHitColor's
+ * `out BodyPart`) one whose params include {kind: 'struct', offset, mask: 0, struct: {offset, members}} for each: the call copies the
+ * struct in and back (iter.rs). The same id space; null where neither applies (or OUT_STRUCT=js). */
+export function callSignature(fn, loader) {
+  const plain = functionSignature(fn, loader);
+  if (plain || outStructMode() === 'js') return plain;
+  const cached = outSignatures.get(fn);
+  if (cached && cached.source === fn.fields) return cached.signature;
+  let signature = null;
+  const layout = loader ? frameLayout(fn, loader) : null;
+  const resultType = fn.result ? RESULT_TYPE[fn.result.metadata?.type] : 'void';
+  if (layout && !layout.slotFields && resultType && !fn.fields.some(field => field.metadata?.flags & 0x00400000)) {
+    const params = [];
+    let outs = 0;
+    for (let index = 0; index < fn.parameters.length; index++) {
+      const field = fn.parameters[index], cell = layout.parameterCells[index];
+      if (field.metadata?.out) {
+        const struct = field.metadata.type === 'struct' ? scalarStructMembers(cell) : null;
+        if (!struct || ++outs > MAX_OUT_STRUCTS) { params.length = 0; break; }
+        params.push({kind: 'struct', offset: struct.offset, mask: 0, struct});
+      } else {
+        const param = scalarCell(cell);
+        if (!param || !CALL_PARAM_KINDS.has(param.kind)) { params.length = 0; break; }
+        params.push(param);
+      }
+    }
+    if (outs > 0 && params.length === fn.parameters.length) {
+      const rkind = resultType === 'void' ? 0 : RESULT_KIND[resultType];
+      const shape = `${rkind}|${params.map(param => param.kind === 'struct'
+        ? `S:${param.offset}:${param.struct.members.map(m => `${m.kind}.${m.offset}.${m.mask}`).join('+')}`
+        : `${param.kind}:${param.offset}:${param.mask}`).join(',')}`;
+      let id = signatureIds.get(shape);
+      if (id === undefined) signatureIds.set(shape, id = signatureIds.size + 1);
+      signature = {id, rkind, params};
+    }
+  }
+  outSignatures.set(fn, {source: fn.fields, signature});
   return signature;
 }
 
@@ -281,6 +333,8 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   const offsets = [...statements.keys()], entries = [...statements.values()];
   const indexOf = new Map(offsets.map((offset, index) => [offset, index]));
   const nodes = [], nodeIds = new Map();
+  // The struct out arguments of each lowered CALL_OUT node, and the lowered CycleActors foreach: what the verify modes compare against.
+  const outCalls = new Map(), foreachNodes = new Map();
   const nodeId = n => {
     let id = nodeIds.get(n);
     if (id === undefined) { nodeIds.set(n, id = nodes.length); nodes.push(n); }
@@ -500,16 +554,49 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       if (n.op === 0x1c) record = operand(n);
       else if ((n.op === 0x1b || n.op === 0x38) && receiverIsSelf && instance) record = runtime.lookup(instance, n.name, n.op === 0x38);
     } catch { return null; }
-    const target = record?.function, signature = target && functionSignature(target, runtime.classLoader);
+    const target = record?.function, signature = target && callSignature(target, runtime.classLoader);
     if (!signature || n.args.length > signature.params.length) return null;
-    const args = [];
+    const args = [], sources = [], infos = [];
+    let unsupported = false;
     n.args.forEach((arg, index) => {
       const param = signature.params[index];
       if (isNode(arg) && arg.op === 0x0b) args.push(0, 0, 0);
-      else args.push(PARAM_KIND[param.kind], param.offset, param.mask, ...expr(arg, param.kind));
+      else if (param.kind === 'struct') {
+        // an out struct parameter: its source is a variable of the same struct (its members compared by key), copied in and back
+        const source = outStructSource(arg, param.struct);
+        if (!source || !runtime.scriptVm?.foreach?.outStructReady) { unsupported = true; return; }
+        args.push(P_STRUCT, param.offset, sources.length, param.struct.members.length,
+          ...param.struct.members.flatMap(member => [PARAM_KIND[member.kind], member.offset, member.mask]));
+        sources.push(source.words);
+        infos.push({index: sources.length - 1, argIndex: index, members: param.struct.members, callerCell: source.cell, callerField: source.field,
+          calleeField: target.parameters[index], calleeCell: frameLayout(target, runtime.classLoader).parameterCells[index]});
+      } else args.push(PARAM_KIND[param.kind], param.offset, param.mask, ...expr(arg, param.kind));
     });
-    return typed(CALL_KIND[signature.rkind],
-      [K.CALL, nodeId(n), signature.rkind, signature.id, n.args.length, args.length, ...args]);
+    if (unsupported) return null;
+    if (sources.length) outCalls.set(nodeId(n), infos);
+    return typed(CALL_KIND[signature.rkind], sources.length
+      ? [K.CALL_OUT, nodeId(n), signature.rkind, signature.id, n.args.length, args.length, sources.length, ...sources.flat(), ...args]
+      : [K.CALL, nodeId(n), signature.rkind, signature.id, n.args.length, args.length, ...args]);
+  }
+
+  // A struct out argument's source (iter.rs Source): a local or an instance field of the struct type `struct` (the same members), as
+  // [kind, offset, key] with the struct's cell, or null.
+  function outStructSource(arg, struct) {
+    if (!isNode(arg) || (arg.op !== 0x00 && arg.op !== 0x01)) return null;
+    const field = operand(arg);
+    if (!field?.metadata || field.metadata.type !== 'struct') return null;
+    let cell;
+    if (arg.op === 0x00) cell = layout.cells.get(field.key);
+    else {
+      cell = fieldImageCell(field.key);
+      if (!cell) { missingField = true; return null; }
+    }
+    const mine = scalarStructMembers(cell);
+    if (!mine || mine.members.length !== struct.members.length || mine.members.some((m, i) => {
+      const w = struct.members[i];
+      return m.key !== w.key || m.kind !== w.kind || m.offset !== w.offset || m.mask !== w.mask;
+    })) return null;
+    return {words: arg.op === 0x00 ? [0, mine.offset, 0] : [1, mine.offset, fieldKeyId(field.key)], cell, field};
   }
 
   // EX_ArrayElement (0x1a) of a local or instance fixed array read as a
@@ -600,6 +687,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     if (index === 303) return isA(n);
     if (PERCEPTION.has(index)) return perception(n);
     if (SMALL_NATIVES.has(index)) return smallNative(n);
+    if (index === 720) return playerPawn(n);
     if (index === 130 || index === 132) {
       if (args.length !== 2 || !isNode(args[1]) || args[1].op !== 0x18) return null;
       const first = expr(args[0], 'bool'), second = expr(args[1].value, 'bool');
@@ -693,6 +781,13 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       if (kind === 'bool') words.push(cell.mask);
     }
     return typed(n.index === 723 ? 'float' : 'bool', [n.index === 723 ? K.LAST_RENDERED : K.IN_STASIS, nodeId(n), ...words]);
+  }
+
+  // GetPlayerPawn (720) with no arguments, where the runtime's graph is watched and its invokeNative would reach the resolver
+  // (script-vm-player-pawn.mjs lowerable): the Rust node answers from the host's cell, natives.rs player_pawn.
+  function playerPawn(n) {
+    if (!Array.isArray(n.args) || n.args.length !== 0 || !runtime.scriptVm?.pawnCell?.lowerable(services)) return null;
+    return typed('object', [K.PLAYER_PAWN, nodeId(n)]);
   }
 
   // EX_Context: the object against the current receiver, then the value
@@ -845,6 +940,39 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return [K.GC_EFFECT, nodeId(n), nodeId(v), v.index, context.length, ...context, 1 + words.length, kinds.length, ...words];
   }
 
+  // The CycleActors foreach Rust owns (interp.rs S_FOREACH_CYCLE, iter.rs): a body's only foreach, a call of native 1002 on SELF with a
+  // class literal and the out Actor (a local, or a field of SELF, of an object) and out int Index variables, in a function body (state code
+  // keeps the iterator in JavaScript), where the runtime's own createIterator would run (no host has replaced it). A body whose Return stays
+  // in JavaScript is lowered without it (stepCompiled throws on a Return with an iterator active, which Rust's iterator is not visible to).
+  let foreachOff = false, foreachLowered = false, returnInJs = false;
+  function foreachOut(arg, want) {
+    if (!isNode(arg)) return null;
+    if (arg.op === 0x00) {
+      const cell = localCell(arg);
+      return cell?.kind === want ? [0, cell.offset, 0] : null;
+    }
+    if (arg.op !== 0x01) return null;
+    const cell = fieldCell(arg);
+    return cell?.kind === want && cell.name !== 'engine.actor.base' ? [1, cell.offset, cell.key] : null;
+  }
+  function foreachCycle(n) {
+    if (foreachOff || layout.state || entries.filter(entry => entry.node.op === 0x2f).length !== 1) return null;
+    const start = n.value;
+    if (!isNode(start) || start.op !== 'native' || start.index !== 1002 || !Array.isArray(start.args) || start.args.length !== 3) return null;
+    if (!runtime.scriptVm?.foreach?.ready || !runtime.actorClass || !runtime.levelFor) return null;
+    if (services.iterator !== runtime.services.iterator || services.objectReference !== runtime.services.objectReference) return null;
+    const base = start.args[0];
+    if (!isNode(base) || base.op !== 0x20 || !base.objectIndex) return null;
+    let target;
+    try { target = services.objectReference(fn, base.objectIndex, base); } catch { return null; }
+    if (target?.kind !== 'Class') return null;
+    const actor = foreachOut(start.args[1], 'object'), index = foreachOut(start.args[2], 'int'), pop = entries[indexOf.get(n.target)];
+    if (!actor || !index || !pop) return null;
+    foreachLowered = true;
+    foreachNodes.set(nodeId(start), {target});
+    return [K.S_FOREACH_CYCLE, nodeId(start), classRecordId(target), indexOf.get(pop.next) ?? NEXT_NONE, ...actor, ...index];
+  }
+
   function statement(n) {
     switch (n.op) {
       case 0x06: return [K.S_JUMP, indexOf.get(n.target)];
@@ -855,7 +983,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         const kind = hasIterator ? K.S_RETURN_ITER : K.S_RETURN;
         if (isNode(n.value) && n.value.op === 0x0b) return [kind, 0];
         const value = natural(n.value);
-        if (!value || !value.canonical || !RETURN_KIND[value.kind]) return null;
+        if (!value || !value.canonical || !RETURN_KIND[value.kind]) { returnInJs = true; return null; }
         returnKinds.add(RETURN_KIND[value.kind]);
         return [kind, RETURN_KIND[value.kind], ...value.words];
       }
@@ -867,8 +995,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       // A foreach's steps: the iterator stays on the frame in JavaScript.
       case 0x31: return [K.S_ITER_NEXT];
       case 0x30: return [K.S_ITER_POP];
+      // A CycleActors foreach Rust can own (iter.rs); any other start stays in JavaScript with its iterator.
+      case 0x2f: return foreachCycle(n);
       // The compiled loop's own statements stay there.
-      case 0x2f: case 0x08: case 0x05: case 0x0a: return null;
+      case 0x08: case 0x05: case 0x0a: return null;
       default: {
         if (n.op === 'native' && INCREMENTS.has(n.index)) {
           const lowered = native(n);
@@ -899,13 +1029,14 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     const words = [entries.length];
     for (let i = 0; i < entries.length; i++) words.push(0, 0);
     rustStatements = 0;
+    foreachLowered = false; returnInJs = false;
     for (let i = 0; i < entries.length; i++) {
       const {node, next} = entries[i];
       words[1 + 2 * i] = words.length;
       words[2 + 2 * i] = indexOf.get(next) ?? NEXT_NONE;
       let code = isNode(node) ? statement(node) : null;
       // The host converts a typed result by one kind per function.
-      if ((code?.[0] === K.S_RETURN || code?.[0] === K.S_RETURN_ITER) && code[1] && returnKinds.size > 1) code = null;
+      if ((code?.[0] === K.S_RETURN || code?.[0] === K.S_RETURN_ITER) && code[1] && returnKinds.size > 1) { code = null; returnInJs = true; }
       if (code) {
         if (!(code[0] === K.S_EXPR && code[1] === K.JS_VOID)) rustStatements++;
         words.push(...code);
@@ -917,11 +1048,12 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   // Returns of different kinds (not expected: the compiler converts every
   // return value to the function's type) all stay in JavaScript.
   if (returnKinds.size > 1) words = lowerAll();
+  if (foreachLowered && returnInJs) { foreachOff = true; words = lowerAll(); }
   if (!rustStatements) return null;
   for (const word of words) if (!Number.isInteger(word) || word < 0 || word > 0xffffffff)
     throw new Error(`Lowered word out of range in ${compiled.name}: ${word}`);
   return {
-    words: Uint32Array.from(words), bytes: words.length * 4, code: 0, nodes, indexOf, entries, fieldNodes,
+    words: Uint32Array.from(words), bytes: words.length * 4, code: 0, nodes, indexOf, entries, fieldNodes, outCalls, foreachNodes,
     returnKind: returnKinds.size === 1 ? [...returnKinds][0] : 0,
     // A field without a registered cell went to JavaScript; relower once
     // the registry has changed.

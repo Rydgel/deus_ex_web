@@ -179,6 +179,20 @@ export function structMemberCell(cell, member) {
   return inner && {...inner, offset: cell.offset + inner.offset};
 }
 
+const MEMBER_KINDS = {[BYTE]: 'byte', [INT]: 'int', [BOOL]: 'bool', [FLOAT]: 'float', [POINTER]: 'object'};
+/** A struct cell whose every member is a byte, int, bool, float or object pointer: its offset and its members {key, kind, offset
+ * (within the struct), mask}, for the Rust interpreter's copies of a struct out argument (interp.rs P_STRUCT). Null for any other cell. */
+export function scalarStructMembers(cell) {
+  if (!cell || cell.tag !== STRUCT || !cell.members.length) return null;
+  const members = [];
+  for (const member of cell.members) {
+    const kind = MEMBER_KINDS[member.tag];
+    if (!kind) return null;
+    members.push({key: member.key, kind, offset: member.offset, mask: member.mask >>> 0});
+  }
+  return {offset: cell.offset, members};
+}
+
 /** A Core vector or rotator cell (three float32 or int32 words at 4-byte
  * steps, structCell checks the linked layout): its kind ('vector' or
  * 'rotator') and offset, for the Rust interpreter's lowering. Null for any

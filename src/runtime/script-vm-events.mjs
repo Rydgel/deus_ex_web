@@ -24,7 +24,7 @@
 import {identityOfHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
-import {functionSignature, fieldKeyId} from './script-vm-lower.mjs';
+import {functionSignature, callSignature, fieldKeyId} from './script-vm-lower.mjs';
 import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-object-image.mjs';
 import {probeNames, probeIndex} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
@@ -347,7 +347,7 @@ export class EventHost {
     if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
       fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
       (receiver?.kind === 'Class' && !runtime.instances.has(receiver))) return js;
-    if (functionSignature(fn, runtime.classLoader)?.id !== sig) return js;
+    if (callSignature(fn, runtime.classLoader)?.id !== sig) return js;
     const layout = frameLayout(fn, runtime.classLoader), lowered = vm.loweringFor(fn.compiled, layout, services, receiver);
     if (!lowered) return js;
     return {kind: K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services), probe: probeIndex(record)};

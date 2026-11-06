@@ -25,5 +25,7 @@ export async function processProbe(process, assets, tables = null) {
     readyNames: [...(assets?.ready.keys() ?? [])].sort(),
     kernel: kernel && { blocks: kernel.blocks, usedMB: mb(kernel.usedBytes), freeMB: mb(kernel.freeBytes), memoryMB: mb(kernel.memoryBytes) },
     wasm, interpreters, eventHosts, handles, liveHandles, tables,
+    // the DEUS_EX_* switches this realm holds (the page's reach the worker through init: sim-worker.mjs)
+    switches: Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]])),
   };
 }
