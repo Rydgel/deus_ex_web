@@ -62,7 +62,7 @@ import { createUMeshFrameCache, getUMeshFrame } from './umesh-frame.mjs';
 import { readUMeshSurfaces } from './umesh-surfaces.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
-import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
+import { bumpBaseEpoch,bumpBaseEpochFor,bumpActorsEpoch } from './base-epoch.mjs';
 import { bumpReceiverEpoch,bumpReceiverEpochFor } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
@@ -604,6 +604,9 @@ export class ScriptRuntime {
     // instead of running its full engine implementation. Play currently retains
     // that sound boundary until its native listener/audio graph is connected.
     this.boundaryNatives=new Set(boundaryNatives);
+    // GetPlayerPawn's resolver for the Rust VM's direct path (script-vm-rust.mjs playerPawn): what the host's `native` callback answers native 720
+    // with, or null where the host has none (the call then goes through invokeNative as before).
+    this.playerPawnShortcut=null;
     // Scripted functions the host owns as external boundaries (parallel to
     // boundaryNatives): a Map from lowercase function key to a handler
     // `(call)=>returnValue`. When a script call resolves to such a function,
@@ -1645,11 +1648,11 @@ export class ScriptRuntime {
     return {bytes:instance.arena.snapshot(instance.base,instance.size),refs:instance.refs.slice(),poison:instance.poison&&new Map(instance.poison)};
   }
   restoreStorage(receiver,snapshot) {
-    if(snapshot)this.copyStorage(this.instance(receiver),snapshot);
+    if(snapshot)this.copyStorage(this.instance(receiver),snapshot,receiver);
   }
   /** Overwrite in place: live references hold the image and refs arrays. */
-  copyStorage(instance,{bytes,refs,poison}) {
-    bumpBaseEpoch();
+  copyStorage(instance,{bytes,refs,poison},receiver) {
+    if(receiver===undefined)bumpBaseEpoch();else bumpBaseEpochFor(receiver);
     instance.arena.bytes.set(bytes instanceof Uint8Array?bytes:new Uint8Array(bytes),instance.base);
     for(let index=0;index<refs.length;index++)instance.refs[index]=refs[index];
     instance.poison=poison?.size?new Map(poison):null;
@@ -5126,6 +5129,8 @@ export class ScriptRuntime {
 // host or validator that wraps one on the prototype or on a runtime keeps
 // those events or polls in JavaScript (script-vm-events.mjs `allowed`).
 ScriptRuntime.originalMethods=Object.freeze({
+  invokeNative:ScriptRuntime.prototype.invokeNative,
+  hostNative:ScriptRuntime.prototype.hostNative,
   processEvent:ScriptRuntime.prototype.processEvent,
   executeScript:ScriptRuntime.prototype.executeScript,
   eventLevelGate:ScriptRuntime.prototype.eventLevelGate,

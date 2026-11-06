@@ -95,6 +95,9 @@ const HANG_BUDGET = 200000000;
 const STATS = typeof process !== 'undefined' && process.env?.SCRIPT_VM_STATS === '1' ? new Map() : null;
 const opName = n => n?.op === 'native' ? `native ${n.index}` : typeof n?.op === 'number' ? `0x${n.op.toString(16)}` : String(n?.op);
 const CHECK = typeof process !== 'undefined' && process.env?.SCRIPT_VM_CHECK === '1';
+// PLAYER_PAWN / ?playerPawn= (DEUS_EX_PLAYER_PAWN): 'direct' (default) answers GetPlayerPawn in js_object (playerPawn below), 'js' keeps
+// the call through invokeNative, 'verify' does both and compares the handles.
+const playerPawnMode = () => (typeof process !== 'undefined' && process.env?.PLAYER_PAWN) || globalThis.DEUS_EX_PLAYER_PAWN || 'direct';
 // RECEIVER_VERIFY=1: Rust asks js_receiver for every receiver, and each
 // answer is compared with the receiver table's entry when that is current.
 const RECEIVER_VERIFY = typeof process !== 'undefined' && process.env?.RECEIVER_VERIFY === '1';
@@ -679,6 +682,18 @@ export class RustScriptVm {
       : instance.arena !== this.arena ? 'other arena' : instance.poison?.size ? 'poison' : 'released image';
     return ` [host ${reason}]`;
   }
+  /** js_object's direct path for GetPlayerPawn: its handle, or undefined where the call must go through invokeNative. The call would reach
+   * nativeCall's trigger step (the registry, native-registry.mjs, has no other dispatcher routing 720) through invokeNative's branches,
+   * the window host and the `native` callbacks, none of which run anything for it, unless a host replaced the methods on the way. */
+  playerPawn(run, n, handle) {
+    const runtime = this.runtime, resolve = runtime.playerPawnShortcut;
+    if (typeof resolve !== 'function' || !Array.isArray(n.args) || n.args.length !== 0) return undefined;
+    const m = runtime.constructor.originalMethods;
+    if (run.services.invokeNative !== runtime.services.invokeNative || runtime.invokeNative !== m.invokeNative ||
+      runtime.hostNative !== m.hostNative) return undefined;
+    const receiver = handle === run.selfHandle ? run.self : this.identity(handle);
+    return handleOf(resolve(receiver));
+  }
   identity(handle) {
     const identity = identityOfHandle(handle);
     if (identity === null) throw new Error('Script object allocation has been released');
@@ -686,6 +701,7 @@ export class RustScriptVm {
   }
   imports() {
     const vm = this;
+    const playerPawn = playerPawnMode();
     const enter = () => setScriptRunaway(vm.arena.view.getUint32(vm.runawayAt, true));
     const leave = () => vm.arena.view.setUint32(vm.runawayAt, scriptRunawayCount(), true);
     const receiver = (run, handle) => handle === run.selfHandle ? run.self : vm.identity(handle);
@@ -730,6 +746,21 @@ export class RustScriptVm {
       js_object(frame, node, handle) {
         enter();
         try {
+          if (playerPawn !== 'js') {
+            // GetPlayerPawn (native 720), about forty a tick on the Island: the resolver the native chain would reach, without the
+            // node's evaluation, the call object and invokeNative's branches (docs/firefox-60fps-plan.md "Import cuts")
+            const run = vm.run(frame), n = run.nodes[node];
+            if (n.index === 720 && n.op === 'native') {
+              const direct = vm.playerPawn(run, n, handle);
+              if (direct !== undefined) {
+                if (playerPawn === 'verify') {
+                  const v = value(frame, node, handle), expected = v === undefined ? UNDEFINED : handleOf(v);
+                  if (direct !== expected) throw new Error(`PLAYER_PAWN=verify: GetPlayerPawn is handle ${direct} directly, ${expected} through invokeNative`);
+                }
+                return direct;
+              }
+            }
+          }
           const v = value(frame, node, handle);
           if (v === undefined) return UNDEFINED;
           if (v !== null && typeof v !== 'object') throw new Error(`Script VM object position holds a ${typeof v}`);

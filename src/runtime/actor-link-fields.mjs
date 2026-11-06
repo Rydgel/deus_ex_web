@@ -29,7 +29,7 @@
 import {readCell, writeCell, readFixedElement, writeFixedElement, isFixedCell, scalarCell, cellKind}
   from './script-object-image.mjs';
 import {propertyCodec} from './script-values.mjs';
-import {bumpBaseEpoch} from './base-epoch.mjs';
+import {bumpBaseEpochFor} from './base-epoch.mjs';
 import {defineEntryAccessor, internEntries, slotArrayClass, defineBackedMember, isBackedHost, peekPending, dropPending, hostDelete} from './host-accessors.mjs';
 
 export const BASE_KEY = 'engine.actor.base';
@@ -171,7 +171,7 @@ export function installLinkFields(host, instance, fields) {
     let entry;
     if (item.kind === 'object') {
       writeCell(cell, instance.arena.view, instance.refs, codec.copy(pointer(current)), instance.base);
-      bumpBaseEpoch();
+      bumpBaseEpochFor(host);
       entry = baseFieldOf(item, cell, codec);
     } else {
       if (!Array.isArray(current) || current.length !== 4) continue;

@@ -11,7 +11,7 @@ import { addPawn, removePawn } from './pawn-list.mjs';
 import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { setBase as setActorBase } from './walking-callbacks.mjs';
-import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpBaseMoveEpoch } from './base-epoch.mjs';
 import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
 import { flagWordsOf } from './actor-flag-words.mjs';
 import { hostDelete } from './host-accessors.mjs';
@@ -247,7 +247,7 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       player.linkPose(null);
       collision.queries.removeActor(old);player.actorRegistered=false;
       removePawn(level,old);
-      for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old){level.actors[i]=null;bumpBaseEpoch();}
+      for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old){level.actors[i]=null;bumpBaseMoveEpoch();}
       for(const viewport of level.engine?.client?.viewports??[])if(viewport.actor===old)viewport.actor=null;
       if(collision.playerActor===old)collision.playerActor=null;
       return old;

@@ -1,6 +1,6 @@
 import {propertyReference} from './script-values.mjs';
 import {cloneMetadata} from './clone-metadata.mjs';
-import {bumpBaseEpoch} from './base-epoch.mjs';
+import {bumpBaseMoveEpoch, moveBaseSlot, cutBaseSlots} from './base-epoch.mjs';
 import {identityOfHandle} from './script-object-handles.mjs';
 
 const objectField=field=>field.metadata.type==='object'||field.metadata.type==='class';
@@ -140,10 +140,10 @@ export function compactScriptActors(level,{read,warning,recordArrayRemoval,settl
     const actor=actors[index];
     if(actor===null)continue;
     if(read(actor,'bDeleteMe'))warning?.({type:'PendingActorInArray',actor});
-    else{if(write!==index)bumpBaseEpoch();actors[write++]=actor;}
+    else{if(write!==index){bumpBaseMoveEpoch();moveBaseSlot(actors,index,write);}actors[write++]=actor;}
   }
   if(write===actors.length)return;
-  bumpBaseEpoch();
+  bumpBaseMoveEpoch();cutBaseSlots(actors,write);
   if(level.undo!==null){
     if(typeof recordArrayRemoval!=='function')throw new Error('CompactActors requires array transaction recording');
     recordArrayRemoval(level,write,actors.length-write);

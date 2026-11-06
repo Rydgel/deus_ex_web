@@ -554,6 +554,9 @@ export async function createScriptDoors({
     if(!field)throw new Error(`Unbound trigger native graph field: ${name}`);
     return object[field];
   }}});
+  // Native 720 (GetPlayerPawn) is answered here by nativeCall's second step (triggers); the Rust VM's direct path asks the same resolver
+  // (script-vm-rust.mjs playerPawn, ?playerPawn=js keeps the call through invokeNative and the native chain).
+  runtime.playerPawnShortcut = triggerActions.getPlayerPawn;
   const identities = new WeakMap();
   const moversByObject = new WeakMap();
   const actorByIndex = new Map((level.actors ?? []).filter(actor => Number.isInteger(actor?.index))

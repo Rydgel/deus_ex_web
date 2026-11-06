@@ -5,7 +5,7 @@
 import {ScriptObjectRegistry,constructActorBase} from './script-object-construction.mjs';
 import {createScriptNames} from './script-names.mjs';
 import {createScriptObjectLookup} from './script-object-lookup.mjs';
-import {bumpBaseEpoch} from './base-epoch.mjs';
+import {bumpBaseEpochFor} from './base-epoch.mjs';
 import {bumpReceiverEpoch} from './receiver-epoch.mjs';
 import {prepareDataLinkFunctions} from './script-datalink-transmission.mjs';
 import {
@@ -121,7 +121,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
       gates:{[0x102a2644]:1,[0x101e5550]:0},
       registry,isValid:object=>registry.objects[object.index]===object,
       freeStateFrame:()=>{throw new Error('CriticalDelete reached an object with a state frame');},
-      freeObject:object=>{runtime.releaseObjectImage?.(object.identity);object.released=true;bumpBaseEpoch();bumpReceiverEpoch();},
+      freeObject:object=>{runtime.releaseObjectImage?.(object.identity);object.released=true;bumpBaseEpochFor(object.identity);bumpReceiverEpoch();},
     },
   };
   runtime.nameServices={internName:text=>names.intern(text).name};
