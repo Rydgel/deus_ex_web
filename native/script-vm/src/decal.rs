@@ -25,6 +25,15 @@
 //! surface's FDecal list as a doubly linked list of records (head, tail),
 //! and the records: links, surface, Actor, Vertices[4], MoverRotation and
 //! Nodes. A list's order is the TArray order the original keeps.
+//!
+//! `find_surface` and `gather_nodes` below are the reference bodies, the
+//! listing's x87 expressions as they are. The attach calls them through
+//! `fast::find` and `fast::gather` (decal/fast.rs), which decide the same
+//! signs from a table of the per-edge planes and an error-bounded f64
+//! filter and leave every near-zero sign to these (IO word 16: `DECAL_FAST`
+//! off, on, verify; docs/decals.md "Fast surface finding").
+
+mod fast;
 
 use crate::trace;
 use crate::x87::Ext;
@@ -781,6 +790,7 @@ pub extern "C" fn decal_attach(model: u32, store: u32) -> u32 {
         set_io(k, 0);
     }
     let st = Store { at: store };
+    fast::begin();
     let level = io(13) as i32;
     let cells = if level > 0 { (level * level) as u32 } else { 0 };
     unsafe {
@@ -877,7 +887,7 @@ unsafe fn attach(m: &Model, st: &Store) -> Result<(), u32> {
     }
     let s0 = m.surf(m.node(item)?.surf)?;
     let p1 = plane_probe(loc, end, m.point(s0.base)?, m.vector(s0.normal)?);
-    let i_surf = find_surface(m, item, p1)?;
+    let i_surf = fast::find(m, item, p1)?;
     if i_surf == -1 {
         return finish(0, EXIT_NO_SURFACE);
     }
@@ -973,7 +983,7 @@ unsafe fn attach(m: &Model, st: &Store) -> Result<(), u32> {
     let quad: [V; 4] = [vadd(p2, v0), vadd(p2, v1), vadd(p2, neg(v0)), vadd(p2, neg(v1))];
     st.set_vertices(e, &quad);
     let mut nodes = [0u32; MAX_NODES];
-    let count = gather_nodes(m, &surf, &quad, &mut nodes)?;
+    let count = fast::gather(m, &surf, &quad, &mut nodes)?;
     st.set_nodes(e, &nodes[..count]);
 
     // 0x103e7e37: the footprint grid, traced 16 units either side along the
@@ -1003,7 +1013,7 @@ unsafe fn attach(m: &Model, st: &Store) -> Result<(), u32> {
             }
             let hit = m.surf(m.node(item)?.surf)?;
             let q = plane_probe(start, end, m.point(hit.base)?, m.vector(hit.normal)?);
-            let s2 = find_surface(m, item, q)?;
+            let s2 = fast::find(m, item, q)?;
             if s2 == -1 {
                 continue;
             }
@@ -1042,7 +1052,7 @@ unsafe fn attach(m: &Model, st: &Store) -> Result<(), u32> {
                 moved[k] = vsub(q2, vscale(along, shift));
             }
             st.set_vertices(e2r, &moved);
-            let count = gather_nodes(m, &surf2, &moved, &mut nodes)?;
+            let count = fast::gather(m, &surf2, &moved, &mut nodes)?;
             st.set_nodes(e2r, &nodes[..count]);
             let relative = [vsub(moved[0], base2), vsub(moved[1], base2), vsub(moved[2], base2), vsub(moved[3], base2)];
             st.set_vertices(e2r, &relative);

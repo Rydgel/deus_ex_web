@@ -97,8 +97,8 @@ the steady frames' cost, from the step 0 profiles):
   [three tiny imports the Rust tick made for every actor](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
   now in Rust.
 * **Not a port: decals.** They are already Rust. The decal attach is 0.78 of `AttachDecal`'s 0.90 ms in the bunker's slow frames and
-  averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster means changing the Rust algorithm, and only the bunker
-  would gain much.
+  averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster meant changing the Rust algorithm, and only the bunker
+  gained much: [done, exactly](#decals-are-already-in-rust-2026-11-05) (2026-11-06, the first Progress entry).
 * Expected: the slow tenth's 4.3 to 8.6 ms by more than half, and 2 to 4 ms of the median. Each family's A/B decides its share.
 
 **3. Uploads and fog on the page** (Battery Park, the Bar, the Ship).
@@ -167,6 +167,10 @@ the Gecko profiles:
 Porting the glue would save 0.05 to 0.1 ms, under the 5% rule. x87 emulation as a whole is 0.1 to 0.4 ms of a frame on the four
 maps. The order above follows these figures.
 
+The Rust attach itself was then made faster without a port: `FindSurface` and `GatherNodes` use their arithmetic for signs only, and
+a table of edge planes with an error-bounded f64 filter decides them exactly ([decals](decals.md#fast-surface-finding-2026-11-06),
+the first Progress entry).
+
 ### Global function calls run in Rust (2026-11-05)
 
 The census's `js effect 0x38` rows are EX_GlobalFunction, `Global.Tick(DeltaTime)` and its siblings in the state-level overrides
@@ -225,6 +229,20 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, the decal attach's surface finder and node gatherer, exact and cheaper** ([decals](decals.md#fast-surface-finding-2026-11-06)).
+  The Rust `decal_attach` was the bunker's biggest single item in the slow tenth (0.8 to 1.1 ms of `find_surface`'s x87 leaves against 0.03 in
+  the rest): `FindSurface` walks a coplanar chain of 451 nodes (1,616 vertex tests) an attach on the long route, each test about 31 `Ext`
+  operations. Profile split of the bunker (Firefox inline, 60 s): `attachDecalSurfaces` 0.16 ms a drawn frame, `find_surface` and the `Ext`
+  operations under it 0.11, `gather_nodes` 0.02, JavaScript glue 0.02. Both functions use their arithmetic for signs only, so a table of
+  each polygon edge's plane (keyed on the nine input words, 16,384 entries, hit rate 99.8% on the bunker and 98.6% on the Island) and an
+  f64 evaluation with a proven error bound (`|X| > 2^-44 * Q` decides, everything near zero or non-finite takes the x87 expression) replace
+  them. `DECAL_FAST=off|on|verify` (`?decalFast=`, default on); the reference bodies are untouched. Firefox inline on the bunker,
+  four interleaved pairs: mean tick 6.00 -> 5.51 ms (-0.49), slowest tenth 11.93 -> 10.58 ms (-1.35), page p50 13.0 -> 12.3 ms, p95
+  22.3 -> 21.5 ms; all four pairs favor the new body in both figures (tick 5.47/5.83/5.33/5.41 against 6.08/5.90/5.99/6.04; slowest tenth
+  10.64/10.95/10.30/10.42 against 12.69/11.58/11.66/11.77). The Island (two pairs) is within noise, 6.96 against 6.90 ms (its attach is 0.11 ms
+  a frame). Digests unchanged in `on` and `verify` on the five baselines and both long routes, a Firefox inline `verify` run of 40 s on
+  each map is clean, `validate-decal-fast.mjs` (12 million generated cases against the x87 expressions) and `validate-decal-attach`
+  pass. What remains in the attach (profile after the change, below): TBDPROFILE.
 * **2026-11-06, the JavaScript imports the batch still calls: profiled, one change built, not merged** ([below](#import-cuts-not-merged-2026-11-06)).
   `js_move_riders`, `js_walk_prelude`, `js_object` and `js_tick_refresh` add up to about 1.1 ms of the Island's tick (the first three 0.5 ms of
   the bunker's, 1.5 ms in its slowest tenth), but each is a different thing and none is an invalidation the way the bunker's receiver epoch was, except
