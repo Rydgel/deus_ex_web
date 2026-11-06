@@ -25,8 +25,9 @@
 //! WINDOWS = [table, slot count (a power of two), epoch]; a slot is [address, epoch, handle, flags].
 
 use crate::dispatch::dispatch_window_event;
-use crate::gc::{host, push_gc, restore_gc, GC_STATUS, G_CANVAS, G_HMULT, G_VMULT, HEAP_BASE};
+use crate::gc::{host, natives_open, push_gc, restore_gc, run_native, GC_STATUS, G_CANVAS, G_HMULT, G_VMULT, HEAP_BASE};
 use crate::interp::{load32, load8, store32};
+use crate::text::draw_text;
 use core::ptr::{addr_of, addr_of_mut};
 
 static mut WINDOWS: [u32; 3] = [0; 3];
@@ -36,6 +37,10 @@ const SLOT: u32 = 16;
 const F_DRAW_SCRIPT: u32 = 1;
 const F_POST_SCRIPT: u32 = 2;
 const F_EXTERNAL: u32 = 4;
+/// The draw of a TextWindow family window (XTextWindow::Draw 0x10046930) and of a ButtonWindow or ToggleWindow
+/// (XButtonWindow::Draw 0x100082c0, which ends in the text draw): run here over the GC natives and DrawText of gc.rs and text.rs.
+const F_DRAW_TEXT: u32 = 8;
+const F_DRAW_BUTTON: u32 = 16;
 
 // XWindow fields (script-window-tree-natives.mjs O).
 const O_FLAGS: u32 = 0x30;
@@ -43,7 +48,19 @@ const O_LOCK: u32 = 0x34;
 const O_BG_STYLE: u32 = 0x3c;
 const O_CLIP_W: u32 = 0xe4;
 const O_CLIP_H: u32 = 0xe8;
+const O_WIDTH: u32 = 0x80;
+const O_HEIGHT: u32 = 0x84;
 const O_BACKGROUND: u32 = 0xec;
+// TextWindow and ButtonWindow fields (script-window-family-draw.mjs).
+const T_HALIGN: u32 = 0x14c;
+const T_VALIGN: u32 = 0x14d;
+const T_FLAGS: u32 = 0x150;
+const T_HMARGIN: u32 = 0x154;
+const T_VMARGIN: u32 = 0x158;
+const T_TEXT: u32 = 0x168;
+const B_TEXTURE: u32 = 0x184;
+const B_TILE_COLOR: u32 = 0x188;
+const B_TEXT_COLOR: u32 = 0x18c;
 const O_GGC: u32 = 0x130;
 const O_FIRST_CHILD: u32 = 0x13c;
 const O_NEXT_SIBLING: u32 = 0x148;
@@ -69,6 +86,8 @@ extern "C" {
     fn js_window_background(win: u32, gc: u32);
     /// UnlockWindow's SafeDestroy.
     fn js_window_destroy(win: u32);
+    /// The host's processScript(win, 'DrawWindow', [gc]) in JavaScript (the Rust event cache sent it there).
+    fn js_window_event(win: u32, gc: u32);
     /// gcPushGC in JavaScript (the free list is empty: the body allocates a node); the depth.
     fn js_window_gc_push(gc: u32) -> i32;
 }
@@ -158,16 +177,79 @@ fn positive(bits: u32) -> bool {
     f32::from_bits(bits) > 0.0
 }
 
-/// W.v.draw (0) or W.v.postDraw (1): the cached script event for a plain window, else the host's virtual.
-fn phase(win: u32, gc: u32, handle: u32, flags: u32, which: u32) {
-    if flags & if which == 0 { F_DRAW_SCRIPT } else { F_POST_SCRIPT } != 0 {
-        if let Some((gc_handle, _)) = describe(gc) {
-            if dispatch_window_event(handle, which, gc_handle) >= 0 {
-                return;
+/// The 16-bit unit at native `a`.
+#[inline(always)]
+fn r16(a: u32) -> R<u32> {
+    at(a, 2).map(|p| unsafe { *(p as usize as *const u16) as u32 })
+}
+
+/// The GC natives the text and button draws make, on the GC at `gc` (handle `gc_handle`), with up to two integer or bit arguments.
+#[inline(always)]
+fn native(index: u32, gc_handle: u32, gc: u32, a0: u32, a1: u32) {
+    run_native(index, gc_handle, gc, [a0, a1, 0, 0, 0, 0, 0, 0]);
+}
+
+/// XTextWindow::Draw 0x10046930 (script-window-family-draw.mjs textDraw): the alignments and word wrap on the GC, the window's
+/// DrawWindow event, then its text in the margins.
+fn text_part(win: u32, gc: u32, handle: u32, gc_handle: u32) -> R<()> {
+    native(1256, gc_handle, gc, r8(win.wrapping_add(T_HALIGN))?, r8(win.wrapping_add(T_VALIGN))?);
+    native(1258, gc_handle, gc, r32(win.wrapping_add(T_FLAGS))? & 1, 0);
+    if dispatch_window_event(handle, 0, gc_handle) < 0 {
+        unsafe { js_window_event(win, gc) };
+    }
+    let x = r32(win.wrapping_add(T_HMARGIN))?;
+    let y = r32(win.wrapping_add(T_VMARGIN))?;
+    let (xf, yf) = (f32::from_bits(x) as f64, f32::from_bits(y) as f64);
+    let w = (f32::from_bits(r32(win.wrapping_add(O_WIDTH))?) as f64 - 2.0 * xf) as f32;
+    let h = (f32::from_bits(r32(win.wrapping_add(O_HEIGHT))?) as f64 - 2.0 * yf) as f32;
+    // The FString at +0x168 (heap.read 'string'): its data pointer and count, the units up to the first NUL.
+    let slot = win.wrapping_add(T_TEXT);
+    at(slot, 12)?;
+    let data = r32(slot)?;
+    let num = r32(slot.wrapping_add(4))? as i32;
+    let mut end: u32 = 0;
+    if data != 0 && num > 0 {
+        while (end as i32) < num && r16(data.wrapping_add(2 * end))? != 0 {
+            end += 1;
+        }
+    }
+    let units = if end == 0 { 0 } else { at(data, 2)? };
+    draw_text(gc, x, y, w.to_bits(), h.to_bits(), units, end);
+    Ok(())
+}
+
+/// XButtonWindow::Draw 0x100082c0 (buttonDraw): the tile and text colours, the button's pattern over the window, then the text draw.
+fn button_part(win: u32, gc: u32, handle: u32, gc_handle: u32) -> R<()> {
+    native(1230, gc_handle, gc, r32(win.wrapping_add(B_TILE_COLOR))?, 0);
+    native(1240, gc_handle, gc, r32(win.wrapping_add(B_TEXT_COLOR))?, 0);
+    let (w, h) = (r32(win.wrapping_add(O_WIDTH))?, r32(win.wrapping_add(O_HEIGHT))?);
+    run_native(1285, gc_handle, gc, [0, 0, w, h, 0, 0, r32(win.wrapping_add(B_TEXTURE))?, 0]);
+    text_part(win, gc, handle, gc_handle)
+}
+
+/// W.v.draw (0) or W.v.postDraw (1): the cached script event for a plain window, the text or button draw here for those
+/// families, else the host's virtual.
+fn phase(win: u32, gc: u32, handle: u32, flags: u32, which: u32) -> R<()> {
+    if let Some((gc_handle, _)) = describe(gc) {
+        if which == 0 {
+            if flags & F_DRAW_SCRIPT != 0 {
+                if dispatch_window_event(handle, 0, gc_handle) >= 0 {
+                    return Ok(());
+                }
+            } else if flags & (F_DRAW_TEXT | F_DRAW_BUTTON) != 0 && natives_open() {
+                if flags & F_DRAW_BUTTON != 0 {
+                    button_part(win, gc, handle, gc_handle)?;
+                } else {
+                    text_part(win, gc, handle, gc_handle)?;
+                }
+                return Ok(());
             }
+        } else if flags & F_POST_SCRIPT != 0 && dispatch_window_event(handle, 1, gc_handle) >= 0 {
+            return Ok(());
         }
     }
     unsafe { js_window_phase(win, gc, which) };
+    Ok(())
 }
 
 fn draw_locked(win: u32, handle: u32, flags: u32, ctx: &Ctx) -> R<()> {
@@ -186,13 +268,13 @@ fn draw_locked(win: u32, handle: u32, flags: u32, ctx: &Ctx) -> R<()> {
     if r8(win.wrapping_add(O_BG_STYLE))? != 0 && texture != 0 {
         unsafe { js_window_background(win, gc) };
     }
-    phase(win, gc, handle, flags, 0);
+    phase(win, gc, handle, flags, 0)?;
     let mut child = r32(win.wrapping_add(O_FIRST_CHILD))?;
     while child != 0 {
         draw_tree(child, ctx)?;
         child = r32(child.wrapping_add(O_NEXT_SIBLING))?;
     }
-    phase(win, gc, handle, flags, 1);
+    phase(win, gc, handle, flags, 1)?;
     gc_pop(gc, saved)
 }
 

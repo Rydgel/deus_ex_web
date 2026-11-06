@@ -20,7 +20,7 @@ export const windowDrawMode = () => (typeof process !== 'undefined' && process.e
 
 const SLOTS = 512, SLOT = 16;
 /** Slot flag bits (window.rs). */
-const F_DRAW_SCRIPT = 1, F_POST_SCRIPT = 2, F_EXTERNAL = 4;
+const F_DRAW_SCRIPT = 1, F_POST_SCRIPT = 2, F_EXTERNAL = 4, F_DRAW_TEXT = 8, F_DRAW_BUTTON = 16;
 
 export class WindowHost {
   constructor(vm) {
@@ -116,6 +116,10 @@ export class WindowHost {
         const c = this.ctx;
         drawBackground(c.W, c.heap.objectAt(address), c.heap.objectAt(gcAddress));
       },
+      js_window_event: (address, gcAddress) => {
+        const c = this.ctx;
+        c.W.processScript(c.heap.objectAt(address), 'DrawWindow', [c.heap.objectAt(gcAddress)]);
+      },
       js_window_destroy: address => {
         const c = this.ctx;
         c.W.native.safeDestroy(c.heap.objectAt(address));
@@ -136,7 +140,7 @@ export class WindowHost {
     const view = this.vm.arena.view, details = c.W.drawInfo(object);
     view.setUint32(slot + 8, handleOf(object), true);
     view.setUint32(slot + 12, details ? (details.draw ? F_DRAW_SCRIPT : 0) | (details.post ? F_POST_SCRIPT : 0) |
-      (details.external ? F_EXTERNAL : 0) : 0, true);
+      (details.external ? F_EXTERNAL : 0) | (details.text ? F_DRAW_TEXT : 0) | (details.button ? F_DRAW_BUTTON : 0) : 0, true);
     return 1;
   }
 }

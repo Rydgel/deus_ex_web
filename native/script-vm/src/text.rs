@@ -116,6 +116,8 @@ extern "C" {
     fn js_gc_tex_unlock(slot: u32, texture: u32, record: u32);
     /// gcPushGC in JavaScript (the free list is empty: it allocates a node); the depth.
     fn js_gc_text_push(gc: u32) -> i32;
+    /// GC_NATIVE=verify: the host's comparison of the Rust and JavaScript bodies for this call (it calls `vm_gc_draw_text`).
+    fn js_gc_text_verify(base: u32, dest_x: u32, dest_y: u32, dest_w: u32, dest_h: u32, units: u32, end: u32);
     /// Throw the JavaScript body's error: kind 1 a native heap address outside the heap, kind 2 a font lookup it cannot model.
     fn js_gc_text_fail(kind: u32, value: u32);
 }
@@ -761,7 +763,18 @@ fn gc_pop(gc: u32) {
     }
 }
 
-/// Method 0x10028180 for the GC at `base`, the destination rectangle (float32 bits) and the text (`end` units at `units`).
+/// Method 0x10028180 for the GC at `base`, the destination rectangle (float32 bits) and the text (`end` units at the arena address
+/// `units`): the Rust body, or under GC_NATIVE=verify the host's comparison of it with the JavaScript body
+/// (script-vm-gc.mjs verifyText, which calls `vm_gc_draw_text` for the Rust half).
+pub(crate) fn draw_text(base: u32, dest_x: u32, dest_y: u32, dest_w: u32, dest_h: u32, units: u32, end: u32) {
+    if crate::gc::verifying() {
+        unsafe { js_gc_text_verify(base, dest_x, dest_y, dest_w, dest_h, units, end) };
+    } else {
+        vm_gc_draw_text(base, dest_x, dest_y, dest_w, dest_h, units, end);
+    }
+}
+
+/// The Rust body of method 0x10028180 (see `draw_text`).
 #[no_mangle]
 pub extern "C" fn vm_gc_draw_text(base: u32, dest_x: u32, dest_y: u32, dest_w: u32, dest_h: u32, units: u32, end: u32) {
     if rd(base + G_FLAGS) & F_DRAWING == 0 {

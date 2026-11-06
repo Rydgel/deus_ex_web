@@ -616,14 +616,17 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const externalSubtrees = new WeakSet();
   W.externalSubtree=win=>externalSubtrees.has(win);
   // What the Rust draw tree needs to know of a window (script-vm-window.mjs, window.rs): whether its DrawWindow and PostDrawWindow are
-  // the plain script events (virtuals `draw` and `postDraw` below run a family's own body for every other family), and whether its
-  // subtree belongs to another owner. Null for an object that is not a window.
+  // the plain script events (virtuals `draw` and `postDraw` below run a family's own body for every other family), whether it is of
+  // the TextWindow or the Button and Toggle families, whose draws window.rs makes (textDraw and buttonDraw of script-window-family-draw.mjs
+  // are their references), and whether its subtree belongs to another owner. Null for an object that is not a window.
   const SCRIPT_DRAW_EXCEPTIONS=new Set(['extension.textwindow','extension.buttonwindow','extension.togglewindow','extension.textlogwindow',
     'extension.computerwindow','extension.largetextwindow','extension.editwindow','extension.listwindow','extension.viewportwindow','extension.scalewindow']);
   W.drawInfo=win=>{
     const family=families.get(win);
     if(!family)return null;
-    return {draw:!isCheckbox(win)&&!SCRIPT_DRAW_EXCEPTIONS.has(family),post:family!=='extension.viewportwindow',external:externalSubtrees.has(win)};
+    const plain=!isCheckbox(win);
+    return {draw:plain&&!SCRIPT_DRAW_EXCEPTIONS.has(family),post:family!=='extension.viewportwindow',external:externalSubtrees.has(win),
+      text:plain&&family==='extension.textwindow',button:plain&&(family==='extension.buttonwindow'||family==='extension.togglewindow')};
   };
   const destroyed = new WeakSet();
   function familyOf(win) {

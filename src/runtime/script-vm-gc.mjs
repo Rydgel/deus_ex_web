@@ -94,6 +94,7 @@ export class GcHost {
     const base = object.base ?? heap.objectAddress(object);
     this.useHeap(heap);
     this.bindTexCache(services.texCache);
+    const previousServices = this.textServices, previousHeap = this.textHeap;
     this.textServices = services;
     this.textHeap = heap;
     let length = text.indexOf('\0');
@@ -111,6 +112,8 @@ export class GcHost {
       x.vm_gc_draw_text(base, destX >>> 0, destY >>> 0, destWidth >>> 0, destHeight >>> 0, units, length);
     } finally {
       x.__stack_pointer.value = pointer;
+      this.textServices = previousServices;
+      this.textHeap = previousHeap;
     }
     return true;
   }
@@ -228,6 +231,10 @@ export class GcHost {
       !Object.hasOwn(runtime, 'invokeNative') && ![...GC_RUST_NATIVES.keys()].some(index => runtime.boundaryNatives?.has(index));
     this.heap = heap;
     this.services = services;
+    // (the Rust window draws' DrawText hands its glyphs to these)
+    this.textServices = services;
+    this.textHeap = heap;
+    if (this.mode !== 'js' && services.texCache) this.bindTexCache(services.texCache);
     this.heapWords = heap;
     this.write([heap.region, heap.capacity, gate ? 1 : 0, this.mode === 'verify' ? 1 : 0, ++this.epoch]);
   }
@@ -289,6 +296,15 @@ export class GcHost {
       js_gc_tex_unlock: (slot, texture, record) => {
         const crossed = this.textServices.callVirtual(slot, texture, {record});
         if (crossed && typeof crossed.then === 'function') throw new Error('TextureUnlock boundary suspended');
+      },
+      // GC_NATIVE=verify, a DrawText made by the Rust window draws (text.rs draw_text): the units are read back into the string the
+      // JavaScript body takes, and verifyText runs both bodies.
+      js_gc_text_verify: (base, destX, destY, destWidth, destHeight, units, end) => {
+        const view = this.vm.arena.view;
+        let text = '';
+        for (let i = 0; i < end; i++) text += String.fromCharCode(view.getUint16(units + 2 * i, true));
+        const heap = this.heap, object = heap.objectAt(base);
+        this.verifyText(heap, this.services, object, destX, destY, destWidth, destHeight, text);
       },
       js_gc_text_push: gc => { this.allocated = true; return gcPushGC(this.textHeap.objectAt(gc), this.textServices); },
       js_gc_text_fail: (kind, value) => {
