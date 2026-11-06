@@ -300,6 +300,13 @@ with the body's own reads and throws if one held the target. Checked against unc
 route of the Island, Wan Chai and the bunker (the bunker destroys 247 actors on it), the destroy unit tests and the
 world-destroy, spawn-Touching, lifecycle and cleanup validators.
 
+**What the destroy's scan cost in JavaScript (2026-11-06).** In Firefox's profile of the bunker's slow ticks `destroy_scan` was
+0.38 ms a frame, of which the Rust scan was 0.09: the rest was JavaScript the scan asked for, `receiverInfo` for every slot whose
+receiver-table entry a spawn or window construction had invalidated, and `handleOf` over the whole array in `listFor`. Both are
+fixed in the host, not in the body ([the plan](firefox-60fps-plan.md#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06)):
+attaching or binding an object without a handle advances nothing (`EPOCH_SCOPE=global` keeps the old behavior) and
+`Level.Actors`' arena copies are rewritten where a slot changed (`HANDLE_MIRROR=js`). `destroyActor` in the slowest tenth: 0.54 → 0.19 ms.
+
 If `StandingCount` is absent while a live actor still has `Base === receiver`,
 the adapter throws before mutating the target relationship. A provided
 collision hash must expose `checkActorNotReferenced`, and must expose

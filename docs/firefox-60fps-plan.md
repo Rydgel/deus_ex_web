@@ -282,6 +282,13 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
   The per-light-level preparation (`js_light_prepare`: the world model and the query's filter context) likely costs more than the
   line checks it saves. Left on its branch. The tail on Battery Park is elsewhere.
+* **2026-11-06, spawn and destroy: the cost was the invalidation they cause, not their bodies** ([below](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06)).
+  Attaching or binding an object that has no handle yet no longer advances the receiver epoch (`?epochScope=global` keeps the
+  old behavior: 4,230 of 4,356 advances in 1,200 bunker ticks were of that kind, and each made the next pass re-describe every actor in
+  JavaScript), and the three Rust copies of `Level.Actors` are rewritten only where a slot changed (`?handleMirror=js` keeps the full
+  rebuild). Firefox inline on the bunker, eight interleaved pairs: the slowest tenth of ticks 12.45 → 11.77 ms (seven pairs of
+  eight better), the mean tick (6.15 → 6.18) and the page p50/p95 unchanged within the sessions' spread. Digests, verify modes, the spawn, destroy, cleanup, window and conformance
+  validators and `npm test` hold.
 * **2026-11-06, the HUD bundle: `w.hud` down 0.47 ms on the Island and 0.78 ms on the bunker** ([below](#the-hud-bundle-2026-11-06)): the window
   tree's walk, the plain window events, the Text and Button draws and `DrawText` run in Rust; the references stay behind `?windowDraw=js`.
 * **2026-11-05, the HUD phase: no family reaches 0.5 ms** ([below](#the-hud-phase-2026-11-05)). Firefox's `p.hud` holds the
@@ -479,6 +486,97 @@ JavaScript calls (0.23, they need string and struct locals in a Rust frame block
 four string-local window events (about 0.2 with their bodies); the console's PostRender (0.21); the bound window fields' reads
 (`js_float` and `js_bool` together about 0.1 in the profiles, so the typed native-heap read the HUD phase proposed is worth
 less than it looked once the tree left JavaScript: its accesses were the tree's, not the scripts'); the page's three.js tile draw.
+
+### Spawning and destroying: the cost is the invalidation (2026-11-06)
+
+Step 0 put `spawnActor` (+0.7 ms) and `destroyActor` (+1.0, then +0.4 after `destroy_scan`) in the bunker's slow ticks and asked
+what JavaScript inside them a port to Rust would remove. A Gecko profile of the bunker (`hitch-run.mjs --mode scan --god
+--seconds 60 --profile`, master d64b55bf; `scripts/gecko-slow-ticks.mjs` for the slowest tenth against the rest, and the new
+`scripts/gecko-under.mjs` for the time under one named frame, with `--above` for its callers) gives, in ms a frame, slow tenth
+minus the rest:
+
+| Under | ms | What it is |
+|---|---:|---|
+| `spawnActor` | 0.76 | the six script events 0.36 (of which `AttachDecal` 0.16, the decal work, and the spawn the events themselves make), `constructObject` 0.21 (`initProperties` 0.13, the unique name 0.04), zone 0.06, collision view 0.05, gotoState 0.04 |
+| `destroyActor` | 0.51 | `destroy_scan` 0.38; the Rust scan is 0.09 of it. The JavaScript under it is `computeReceiverInfo`/`receiverInfo` 0.22 and `handleOf` in `listFor` 0.04 |
+
+The spawn's own JavaScript is a long tail of small bodies, none over 0.13. The destroy's is not in its body at all: it is the
+**invalidation the spawns and the windows cause**, paid by whoever asks next.
+
+* The receiver table (`receiver-epoch.mjs`) is valid while one global counter is unchanged, and the counter advanced on every
+  `linkInstance` and every host binding. Constructing an actor binds its native header fields and its collision view, building a window one binding per native field.
+  On the bunker's census route (Node, 1,200 ticks after 300 of warm-up) the counter advanced **4,722 times, 4,230 of them for an
+  object that had no handle yet** (the construction of a spawned actor or of a window) and 126 for a freed one. Each advance made the
+  next consumer re-describe every actor in JavaScript: 303,000 `receiverInfo` calls and 67,700 `js_tick_describe` calls in the 1,200
+  ticks, among them `destroy_scan`'s walk over every slot and the perception natives' `Level.Actors` list, which also rebuilt
+  `receiverInfo` for each slot.
+* The three Rust copies of `Level.Actors` (the level loop's list, the render scans' list, the perception list) were rebuilt after every
+  spawn or destroy as `handleOf(actors[i])` over the whole array (1,200 slots, 510, 414 and 67 rebuilds in the 1,200 ticks): a Map lookup
+  on a cold identity for each slot, 0.26 ms of the slowest tenth against 0.06 for the rest.
+
+**What changed**, both behind switches with the JavaScript behavior as the reference:
+* `bumpReceiverEpochFor(identity)` (`receiver-epoch.mjs`): a table entry is per handle and a handle is allocated at the identity's first
+  use and never reused, so an identity without one has no entry and no descriptor to invalidate; attaching an instance to it or binding
+  one of its fields advances nothing. `EPOCH_SCOPE=global` (`?epochScope=global`) advances at every such event as before. In the 1,200
+  ticks: 4,722 advances → 252, `receiverInfo` calls 303,485 → 82,579, `js_tick_describe` 67,681 → 1,935. The proof is by
+  construction (entries are keyed by handle); the checks are the digests, `RECEIVER_VERIFY=1` (every entry compared with a fresh
+  answer) and `LEVEL_LOOP=verify` (every descriptor).
+* `HandleMirror` (`actor-handle-mirror.mjs`): each of the three consumers keeps the handles it last wrote and the identities they
+  were for, and a rebuild compares each slot with the identity it held (a pointer compare) and calls `handleOf` for the slots that
+  differ; a copy into the arena replaces the per-slot `DataView` write. A release of any handle (`releaseCount`) starts it over. The
+  perception list also leaves unchanged slots alone when the receiver epoch has not moved (their `receiverInfo` would be the same
+  by the epoch's own contract). `HANDLE_MIRROR=js` (`?handleMirror=js`) rebuilds every slot with `handleOf`; `=verify` checks the
+  kept handles after each sync, and the perception list against a fresh build (`PERCEPTION_DIFFERENTIAL`'s `checkScan`).
+
+**Profile after** (same route, one run each, so the slow tenth's workload differs a little; ms a frame in the slowest tenth):
+`destroyActor` 0.54 → 0.19, `receiverInfo` 0.38 → 0.03, `handleOf` 0.26 → 0.04, all `listFor` 0.23 → 0.08. `spawnActor` is
+0.76 → 0.64: the construction and events are untouched.
+
+**Interleaved A/B**, headless Firefox inline, two runs of `hitch-ab.mjs --pairs 4` (order alternating; the second run started with
+the old arm), `--mode scan --god --seconds 60` on the bunker, `new:` against `old:epochScope=global&handleMirror=js`,
+`scripts/hitch-ab-table.mjs` (the frames drawn from 5 s after the map; the slowest tenth is by `p.tick`). ms:
+
+| Run, pair | tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1, 1 | 5.94 / 6.11 | 11.37 / 11.85 | 13 / 13 | 22 / 21 |
+| 1, 2 | 6.14 / 5.76 | 11.74 / 11.53 | 13 / 12 | 22 / 21 |
+| 1, 3 | 5.90 / 6.26 | 11.42 / 12.31 | 13 / 13 | 22 / 22 |
+| 1, 4 | 6.18 / 5.82 | 11.79 / 12.80 | 13 / 12 | 22 / 23 |
+| 2, 1 | 6.42 / 6.18 | 12.33 / 12.54 | 14 / 13 | 22 / 22 |
+| 2, 2 | 6.57 / 6.58 | 12.42 / 12.75 | 14 / 14 | 23 / 23 |
+| 2, 3 | 6.54 / 5.96 | 12.10 / 12.92 | 14 / 12 | 22 / 23 |
+| 2, 4 | 5.70 / 6.51 | 10.96 / 12.91 | 12 / 14 | 21 / 23 |
+| mean of run 1 | 6.04 / 5.99 | 11.58 / 12.12 | 13.0 / 12.5 | 22.0 / 21.8 |
+| mean of run 2 | 6.31 / 6.31 | 11.95 / 12.78 | 13.5 / 13.3 | 22.0 / 22.8 |
+| **mean of 8** | **6.18 / 6.15** | **11.77 / 12.45** | **13.3 / 12.9** | **22.0 / 22.3** |
+
+* **The slowest tenth of ticks is 0.68 ms shorter** (run 1: 0.54, run 2: 0.83; seven pairs of eight better, the other 0.21 worse; the
+  pair differences average -0.69 with a standard error of 0.23). A first A/B of the epoch change alone (three pairs) read 12.22 against
+  12.64 (0.42), with the same sign. This meets the bundle's bar of 0.5 ms on the slowest tenth.
+* **The mean tick and the page's p50 and p95 did not move beyond the sessions' own spread** (the mean tick is within ±0.3 ms between
+  sessions of one arm; new is better in four pairs and worse in four). The change removes work that only the ticks after a spawn or a
+  destroy paid, which is the slow tenth; the profile's rest-of-frames figures fall by only 0.03 to 0.05 ms. The bar's alternative (the
+  mean tick) is not met.
+
+**Checks.** Digests unchanged in the default modes on the five maps (Island 5adb254a07b1ed6f, Training 07816ec472f29b84, Airfield
+46ed0d32ae5b56af, Wan Chai 80d27b37e0944d88, bunker 764a7bdffd2ebe59) and on the bunker's long route with `--render-feedback`
+(`SCAN_WARM=300 SCAN_TICKS=1200 bench-sim.mjs --map 15_Area51_Bunker --warm 300 --ticks 1200 --render-feedback --scenario
+.work/perf/scan-scenario.mjs`, ccd09a24aaaad820, both with `EPOCH_SCOPE=global`/`HANDLE_MIRROR=js` and with the defaults; without
+`--render-feedback` the same run reads e7035a0b4d1da90a in every mode, so that flag belongs to the baseline). Both bunker runs clean
+with `HANDLE_MIRROR=verify RECEIVER_VERIFY=1 LEVEL_LOOP=verify PERCEPTION_DIFFERENTIAL=1 RENDER_SCAN=verify LEVEL_SCAN=verify
+DESTROY_SCAN=verify` (the standard run also `ACTOR_PLUMBING=verify`): the digests above, no errors, and 169 perception lists (65 more
+than before, the incrementally rewritten ones) equal to a fresh build. A 60 s Firefox inline run with `?handleMirror=verify`: no error.
+`npm test` 947 passed, 4 skipped, 0 failed. Validators: the spawn family (7), destroy (4: world-destroy, window-destroy,
+property-destroy, cleanup-destroyed-live), cleanup (4), `object-handles`, actor-tick (2), render-scan, perception, the 92 window
+validators, `level-tick`, `play-hud`, `stage3-training-conformance`, and 21 of the 22 conversation validators (including
+`island-conversation`); `validate-conversations-census.mjs` was stopped after 27 minutes and is not counted.
+
+**Not done, and what is left.** `spawnActor`'s own 0.64 is the construction (`initializeObjectStorage`: a loop over the class's
+fields and a copy of the class image, `makeUniqueScriptObjectName`'s lookup), the zone and collision-view setup and the six script
+events, whose Rust bytecode and `AttachDecal` are not JavaScript of the spawn; no piece is over 0.13 ms, and porting `construct`
+means a Rust owner for `ScriptInstance` and its bindings. The mover rider tables (`move-riders.mjs`, `js_move_riders` +0.5 to
++0.7 ms in the slow ticks) are dropped at every `baseEpoch` advance, which CompactActors' index moves and each `freeObject` cause:
+the next candidate here, not measured as spawn-induced.
 
 ## How each step is measured
 

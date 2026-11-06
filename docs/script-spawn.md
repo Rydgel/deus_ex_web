@@ -562,3 +562,12 @@ side effects change the transforms sampled by later default arguments, and a
 null SpawnClass still evaluates every argument before returning without a level
 lookup. Startup observes the class-name Tag; the requested script SpawnTag is
 written after SpawnActor returns.
+
+**Where a spawn's JavaScript cost went (2026-11-06).** Profiled in Firefox on the Area 51 bunker's slow ticks, `spawnActor` is 0.76 ms a
+frame, in pieces none over 0.13 ms: the six script events (0.36, of which `AttachDecal` 0.16), `constructObject` (0.21: the
+`initProperties` loop 0.13, `makeUniqueScriptObjectName` 0.04), the zone (0.06), the collision view (0.05). What the spawn cost
+the ticks after it was larger: each `linkInstance` and each field binding of the new object advanced the receiver epoch and the
+actors epoch, so the receiver table, the level loop's descriptors and the three arena copies of `Level.Actors` were redone for every
+actor. The construction runs before the object has a handle, so those bindings now advance no receiver epoch (`EPOCH_SCOPE`), and the
+arena copies are rewritten only where a slot changed (`HANDLE_MIRROR`); see
+[the plan](firefox-60fps-plan.md#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06). SpawnActor's own body is unchanged.

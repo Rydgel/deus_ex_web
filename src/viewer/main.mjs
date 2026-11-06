@@ -118,6 +118,10 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // script-vm-nav.mjs).
 // ?actorPlumbing=js keeps the reference bodies of the actor layer's host plumbing (record skipping, the pair table, the candidate
 // pack, the movers' reads: actor-plumbing.mjs); ?actorPlumbing=verify checks the new bodies against them as it goes.
+// ?epochScope=global keeps the receiver epoch's reference: every attach and binding advances it, whether or not the object
+// has a handle yet (receiver-epoch.mjs bumpReceiverEpochFor). ?handleMirror=js rebuilds the Rust core's copies of Level.Actors
+// (level loop, render scans, perception) with handleOf on every slot; =verify checks the kept handles against it
+// (actor-handle-mirror.mjs).
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
@@ -125,7 +129,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

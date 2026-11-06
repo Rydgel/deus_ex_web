@@ -1852,7 +1852,13 @@ a few host events, so the answer is now cached in Wasm memory.
   added (`bindProperty`, the window host's `bindNativeFields`), a field is
   poisoned or its last poison cleared, storage is restored (`copyStorage`),
   or an object is freed (the three `freeObject` services). A handle's release
-  clears its own entry. An image base never moves after construction.
+  clears its own entry. An image base never moves after construction. Since
+  2026-11-06 the attach and binding events (`linkInstance`, `bindProperty`,
+  `bindNativeFields`) advance it only for an identity that already has a
+  handle (`bumpReceiverEpochFor`): an entry is per handle, a handle is allocated
+  at first use and never reused, so a spawned actor or a new window, which are
+  constructed before anything asks for their handle, have no entry to
+  invalidate (`EPOCH_SCOPE=global` advances for every event, as before).
 * **Verification.** `RECEIVER_VERIFY=1` makes Rust ask `js_receiver` on
   every lookup; each answer is compared with a current entry and a mismatch
   throws. Training and Island matched the reference digests at all 30
