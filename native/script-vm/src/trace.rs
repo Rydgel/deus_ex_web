@@ -293,6 +293,54 @@ unsafe fn out(time: f64, normal: [f64; 3], location: [f64; 3], node: i32, penetr
 }
 
 // ---------------------------------------------------------------------------
+// Zero-extent point check: point-check.mjs checkPoint.
+
+/// UModel::PointCheck's zero-extent descent over a world model (point-check.mjs
+/// `checkPoint` with a zero extent, no owner and extra node flags 0, the call
+/// `createLevelPoints` makes for the Level->Model in MultiPointCheck, docs/level-points.md;
+/// ULevel::FindSpot's one SinglePointCheck for a zero extent, docs/fitting.md): one
+/// descent from node 0, front when `p.z*n.z + p.y*n.y + p.x*n.x - d > 0` in f64 over the
+/// float32 plane, outside `||= solid` going front and `&&= !solid` going back, where a node
+/// is solid with vertices and no flag of 0x21. `p` is the float32 position. Returns 1
+/// (outside: the point is clear), 0 (inside a solid), or FALLBACK for a model the
+/// JavaScript throws on (an invalid link, a cyclic tree). A model without nodes is
+/// its root.
+pub(crate) unsafe fn point_clear(ptr: u32, p: [f64; 3]) -> i32 {
+    let m = model(ptr);
+    if m.count == 0 {
+        return m.root_outside as i32;
+    }
+    let mut index = 0i32;
+    let mut outside = m.root_outside;
+    let mut visits = 0u64;
+    let limit = m.visit_limit();
+    while index != -1 {
+        visits += 1;
+        if visits > limit || !m.valid(index) {
+            return FALLBACK;
+        }
+        let node = m.node(index);
+        let solid = node.verts != 0 && node.flags & 0x21 == 0;
+        let n = &node.plane;
+        if p[2] * n[2] + p[1] * n[1] + p[0] * n[0] - n[3] > 0.0 {
+            outside = outside || solid;
+            index = node.front;
+        } else {
+            outside = outside && !solid;
+            index = node.back;
+        }
+    }
+    outside as i32
+}
+
+/// `point_clear` for scripts/validate-trace-kernel.mjs: the raw components, rounded to
+/// float32 here as singlePointCheck's `position.map(f)` does.
+#[no_mangle]
+pub extern "C" fn trace_point_clear(ptr: u32, x: f64, y: f64, z: f64) -> i32 {
+    unsafe { point_clear(ptr, [f(x), f(y), f(z)]) }
+}
+
+// ---------------------------------------------------------------------------
 // Zero-extent ray: ray.mjs traceRayFast.
 
 /// traceRay(model, start, end, extraNodeFlags, ownerCoords). The host passes

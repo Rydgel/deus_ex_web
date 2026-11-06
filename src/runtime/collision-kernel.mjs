@@ -715,6 +715,12 @@ export function createKernelLineChecks({store, model: staticModel, worldModel = 
     return hits;
   }
   return {
+    /** The Level->Model's address in `vm`'s arena, for the Rust core's own point check (trace.rs point_clear): the world model, or
+     * the moving brush tracker's while it lives (level-queries.mjs worldModel); 0 where this hash does not live in `vm`'s instance
+     * or the trace kernel leaves the model to JavaScript. */
+    worldBase(vm) {
+      return store.kernel === vm.lineKernel ? store.world(worldModel()) : 0;
+    },
     /** level-queries.mjs lineCheck: singleLineCheck over multiLineCheck. */
     lineCheck(start_, end, extent, flags, extra, source) {
       if (!three(start_) || !three(end) || !three(extent) || typeof flags !== 'number' || typeof extra !== 'number') return undefined;

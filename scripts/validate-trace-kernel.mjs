@@ -33,6 +33,7 @@ import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {brushToWorld} from '../src/runtime/coords.mjs';
 import {traceRay, traceRayFast} from '../src/runtime/ray.mjs';
 import {traceExtent, traceExtentJs, storedSupport} from '../src/runtime/extent-trace.mjs';
+import {pointCheck} from '../src/runtime/point-check.mjs';
 import {loadTraceKernel, sameTraceResult} from '../src/runtime/trace-kernel.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
@@ -46,7 +47,7 @@ const pick = list => list[Math.floor(random() * list.length)];
 const signed = size => (random() * 2 - 1) * size;
 const add = (a, b) => a.map((v, i) => f(v + b[i]));
 
-const tally = {cases: 0, rays: 0, rayHits: 0, extents: 0, extentHits: 0, handedBack: 0, throws: 0, mismatches: 0};
+const tally = {cases: 0, rays: 0, rayHits: 0, extents: 0, extentHits: 0, points: 0, pointsInside: 0, handedBack: 0, throws: 0, mismatches: 0};
 const examples = [], reasons = new Map();
 const exact = (key, v) => typeof v === 'number' && (Object.is(v, -0) || !Number.isFinite(v)) ? (Object.is(v, -0) ? '-0' : String(v)) : v;
 function mismatch(reason, input) {
@@ -86,6 +87,24 @@ function ray(model, start, end, flags = 0, coords = null) {
 function extent(model, start, end, box, coords = null) {
   check('extents', model, () => kernel.extent(model, start, end, box, coords), () => traceExtentJs(model, start, end, box, coords),
     () => traceExtent(model, start, end, box, coords), {start, end, box, coords});
+}
+
+/** The zero-extent world point check (trace.rs point_clear, FindSpot's one SinglePointCheck for a zero extent, docs/fitting.md): the
+ * kernel's status (1 outside, 0 inside, 2 handed back) against point-check.mjs pointCheck with a zero extent. A position the
+ * JavaScript refuses (beyond float32) is not a case: the Rust core declines a non-finite float32 before it asks. */
+function point(model, position) {
+  if (position.some(v => !Number.isFinite(f(v)) && !Number.isNaN(v))) return;
+  tally.cases++;
+  tally.points++;
+  const base = kernel.base(model), expected = attempt(() => Number(pointCheck(model, position, [0, 0, 0], 0)));
+  const answer = base ? x.trace_point_clear(base, position[0], position[1], position[2]) : 2;
+  if (expected.error) tally.throws++;
+  if (answer === 2) {
+    tally.handedBack++;
+    if (!expected.error && !synthetic) mismatch('kernel hands back a point the JavaScript answers', {position});
+  } else if (expected.error) mismatch(`kernel answers a point where the JavaScript throws: ${expected.error.message}`, {position});
+  else if (answer !== expected.value) mismatch('point', {position, kernel: answer, javascript: expected.value});
+  else if (answer === 0) tally.pointsInside++;
 }
 
 const FLAGS = [0, 0, 0, 0, 0x10, 0x10, 6, 1, 2, 4, 0x20, 0x21, 0x31, 0x100, -1, 0xffffffff, 0x7fffffff];
@@ -197,6 +216,7 @@ for (const model of [plane(), plane({front: 7}),
       extent(model, [f(a), 0, 0], [f(b), 1, 0], [1, 1, 1]);
     }
   }
+  for (const a of [-10, -.001, 0, .001, 10, NaN, -0]) point(model, [f(a), 0, 0]);
   for (const bad of [[0, 0, 0], [-1, 1, 1], [NaN, 1, 1], [1, 1]]) extent(model, [0, 0, 0], [5, 0, 0], bad);
   extent(model, [Infinity, 0, 0], [5, 0, 0], [1, 1, 1]);
 }
@@ -211,6 +231,8 @@ for (const length of [0, 50, 2000, 2100, 5000]) {
     ray(chain, [f(length + .25), 0, 0], [f(-.5), 3, 0], flags);
   }
   extent(chain, [f(length + .25), 0, 0], [f(-.5), 3, 0], [2, 2, 2]);
+  point(chain, [f(length + .25), 0, 0]);
+  point(chain, [f(length + .75), 3, 0]);
 }
 tally.deepHandedBack = tally.handedBack - deepBefore;
 synthetic = false;
@@ -229,6 +251,8 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   for (let i = 0; i < CASES; i++) {
     const [start, end] = segment(model, anchors), flags = pick(FLAGS);
     ray(model, start, end, flags);
+    point(model, start);
+    point(model, end);
     if (i < 2000) walking.push([start, end, flags]);
   }
   const boxes = [];
@@ -275,7 +299,7 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
 }
 
 const s = kernel.stats;
-console.log(`validate-trace-kernel: ${tally.cases} cases (${tally.rays} rays, ${tally.rayHits} hits; ${tally.extents} extents, ` +
+console.log(`validate-trace-kernel: ${tally.cases} cases (${tally.rays} rays, ${tally.rayHits} hits; ${tally.points} points, ${tally.pointsInside} inside; ${tally.extents} extents, ` +
   `${tally.extentHits} hits; ${tally.throws} JavaScript throws, ${tally.handedBack} handed back, ${tally.deepHandedBack} of them deeper than ` +
   `the scratch stacks), ${tally.mismatches} mismatches; ` +
   `${tally.sqrt} sqrt, ${tally.support} storedSupport (${tally.supportMidpoints} midpoints) bit-identical; ${s.models} models uploaded (arena ${kernel.arena.memory.buffer.byteLength / 2 ** 20} MiB); ` +

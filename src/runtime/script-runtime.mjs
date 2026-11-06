@@ -3033,32 +3033,47 @@ export class ScriptRuntime {
     if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
     return farMoveActor(this.relocationLevel(view,level),view,destination,test,noCheck);
   }
+  /** What the Rust core's FarMoveActor of a spawned non-Pawn view needs (render.rs far_move, particles.rs particle_items): the
+   * zone model (zone-kernel.mjs) and the world BSP's address (level-queries.mjs worldBase, for FindSpot's one point check of a
+   * zero extent), or null where the JavaScript body must run: FAR_MOVE=js, a core without the table, an actor that is not a
+   * spawned non-Pawn view, a level without its zone model or without its BSP in the core. */
+  farMoveContext(actor) {
+    const vm=this.scriptVm;
+    if(!vm?.render||!vm.zone?.enabled||farMoveMode()==='js'||!this.collisionViewActors.has(actor)||actor.pawn||actor.movingBrush)return null;
+    const level=this.levelFor(actor);
+    if(!level?.hash||!level.zoneModel||!vm.render.ready())return null;
+    const model=vm.zone.model(level);
+    if(!model)return null;
+    // FAR_MOVE=nofit: the core without FindSpot's point check, as before it (a move that needs FindSpot goes to the JavaScript body).
+    return {model,world:farMoveMode()==='nofit'?0:level.hash.worldBase?.(vm)??0};
+  }
   /** FarMoveActor on a spawned non-Pawn view in the Rust core (render.rs
-   * far_move) where the recovered body would run no callback and no query;
-   * true when it moved the actor. FAR_MOVE=js keeps the JavaScript body;
+   * far_move) where the recovered body would run no callback beyond FindSpot's
+   * point check: 1 when it moved the actor, 2 when FindSpot refused the
+   * destination (the original's false, nothing stored), 0 when the JavaScript
+   * body must run. FAR_MOVE=js keeps the JavaScript body;
    * FAR_MOVE=verify also runs that body from the same state and compares
    * the result and every field it writes. */
   noncollidingFarMove(actor,destination,noCheck) {
-    const vm=this.scriptVm,mode=farMoveMode();
-    if(!vm?.render||!vm.zone?.enabled||mode==='js'||!Array.isArray(destination)||destination.length!==3)return false;
-    const level=this.levelFor(actor);
-    if(!level?.hash||!level.zoneModel)return false;
-    const model=vm.zone.model(level);
-    if(!model)return false;
+    const mode=farMoveMode();
+    if(!Array.isArray(destination)||destination.length!==3)return 0;
+    const context=this.farMoveContext(actor);
+    if(!context)return 0;
     const names=['Location','OldLocation','bJustTeleported','Region'];
     const state=()=>names.map(name=>this.readNamed(actor,name));
     const before=mode==='verify'?state():null;
-    if(!vm.render.farMove(actor,destination,noCheck,model))return false;
+    const code=this.scriptVm.render.farMove(actor,destination,noCheck,context.model,context.world);
+    if(code===0)return 0;
     if(mode==='verify'){
       const rust=state();
       names.forEach((name,i)=>this.writeNamed(actor,name,before[i]));
       const moved=this.relocateSpawnedActor(actor,destination,0,noCheck),js=state();
       const same=(a,b)=>a===b||typeof a==='object'&&a!==null&&b!==null&&Object.keys(a).length===Object.keys(b).length&&
         Object.keys(a).every(key=>Object.is(a[key],b[key]));
-      if(moved!==true||!names.every((_,i)=>same(rust[i],js[i])))
-        throw new Error(`FAR_MOVE=verify: ${actor.name} FarMoveActor differs: Rust ${JSON.stringify(rust)}, JavaScript ${moved} ${JSON.stringify(js)}`);
+      if(moved!==(code===1)||!names.every((_,i)=>same(rust[i],js[i])))
+        throw new Error(`FAR_MOVE=verify: ${actor.name} FarMoveActor differs: Rust ${code===1} ${JSON.stringify(rust)}, JavaScript ${moved} ${JSON.stringify(js)}`);
     }
-    return true;
+    return code;
   }
   /** The same FarMoveActor for a map actor: SetLocation on a decoration JC
    * lifts, drops or throws (DeusExPlayer.PutCarriedDecorationInHand /
@@ -3109,7 +3124,10 @@ export class ScriptRuntime {
    * encroachment, SetBase and SetActorZone services act on the pawn itself. */
   farMoveActor(actor,destination,test=0,noCheck=0) {
     if(this.collisionViewActors.has(actor)){
-      if(test===0&&!actor.pawn&&!actor.movingBrush&&this.noncollidingFarMove(actor,destination,noCheck))return true;
+      if(test===0&&!actor.pawn&&!actor.movingBrush){
+        const moved=this.noncollidingFarMove(actor,destination,noCheck);
+        if(moved!==0)return moved===1;
+      }
       return this.relocateSpawnedActor(actor,destination,test,noCheck);
     }
     if(this.isMapPawn(actor))

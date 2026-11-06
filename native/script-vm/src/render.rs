@@ -58,9 +58,9 @@ const R_AMBIENTSOUND: usize = 18;
 pub(crate) const R_DISTANCEFROMPLAYER: usize = 19;
 // The mesh scene's per-actor reads (`mesh_reads`).
 const R_PREPIVOT: usize = 20;
-const R_DRAWSCALE: usize = 21;
+pub(crate) const R_DRAWSCALE: usize = 21;
 const R_STYLE: usize = 22;
-const R_SCALEGLOW: usize = 23;
+pub(crate) const R_SCALEGLOW: usize = 23;
 const R_BANIMBYOWNER: usize = 24;
 const R_BPARTICLES: usize = 25;
 pub(crate) const R_ROTATION: usize = 26;
@@ -807,7 +807,7 @@ pub extern "C" fn mover_reads(pairs: u32, count: u32, viewer: u32, view_target: 
     }
 }
 
-const FAR_MOVE_FIELDS: u64 = 1 << R_BSTATIC
+pub(crate) const FAR_MOVE_FIELDS: u64 = 1 << R_BSTATIC
     | 1 << R_BMOVABLE
     | 1 << R_BDELETEME
     | 1 << R_BCOLLIDEACTORS
@@ -823,53 +823,83 @@ const FAR_MOVE_FIELDS: u64 = 1 << R_BSTATIC
     | 1 << R_REGION_ZONE
     | 1 << R_REGION_ILEAF
     | 1 << R_REGION_ZONENUMBER;
+/// FindSpot's extent: the actor cylinder (relocation.mjs passes `[radius, radius, height]`).
+const FAR_MOVE_FIT_FIELDS: u64 = 1 << R_COLLISIONRADIUS | 1 << R_COLLISIONHEIGHT;
+/// ParticleIterator::CurrentItem's two writes onto the proxy (particles.rs `particle_items`).
+pub(crate) const ITEM_FIELDS: u64 = 1 << R_DRAWSCALE | 1 << R_SCALEGLOW;
+
+/// What `far_plan` decides for one FarMoveActor.
+pub(crate) enum FarMove {
+    /// The JavaScript body must run; nothing was stored.
+    Declined,
+    /// FindSpot refuses the destination: the original returns false before
+    /// any store, and the actor is untouched.
+    Failed,
+    /// The move succeeds; the zone to store with it (None for a deleted actor).
+    Moved(Option<crate::zone::Region>),
+}
 
 /// ULevel::FarMoveActor (0x10398ba0, relocation.mjs farMoveActor) with
-/// Test 0 on a non-Pawn, non-Brush actor of the image (`handle`) to the f32
-/// bits `x, y, z`, where the JavaScript body would run no callback and no
-/// query: movable and not static, no collision or blocking bits and no
-/// Brush (no hash remove/add; the non-Pawn CheckEncroachment returns false
-/// before any query, docs/rider-move-kernel.md), no FindSpot (bCollideWorld
-/// and bCollideWhenPlacing clear, or `no_check`), no standing riders, a
-/// finite destination, and SetActorZone keeping the zone (or bDeleteMe,
-/// where it returns at once). Then bJustTeleported, Location, OldLocation
-/// and Region are stored and 1 (success) is returned; anything else
-/// returns 0 before any store and the JavaScript body runs. `model` is the
-/// zone model (zone.rs).
-#[no_mangle]
-pub extern "C" fn far_move(handle: u32, model: u32, x: u32, y: u32, z: u32, no_check: u32) -> u32 {
-    let a = Obj::of(handle);
+/// Test 0 on a non-Pawn, non-Brush actor of the image (`a`) to the f32
+/// bits `p`, decided without a store, where the JavaScript body would run
+/// no callback beyond FindSpot's one point check: movable and not static,
+/// no collision or blocking bits and no Brush (no hash remove/add; the
+/// non-Pawn CheckEncroachment returns false before any query,
+/// docs/rider-move-kernel.md), no standing riders, a finite destination,
+/// and SetActorZone keeping the zone (or bDeleteMe, where it returns at
+/// once). FindSpot (`no_check` clear and bCollideWorld or
+/// bCollideWhenPlacing, standalone): Engine 0x10398480 with a zero extent
+/// (CollisionRadius and CollisionHeight zero) is one SinglePointCheck on the
+/// world model (docs/fitting.md, fitting.mjs `findSpot`), answered by
+/// `world`, the world BSP's kernel address (trace.rs `point_clear`; 0 where
+/// the host has none, a nonzero extent or a model the JavaScript throws on
+/// declines). `model` is the zone model (zone.rs).
+pub(crate) fn far_plan(a: &Obj, model: u32, world: u32, p: [u32; 3], no_check: u32) -> FarMove {
     if !a.has(FAR_MOVE_FIELDS) || a.flag(R_BSTATIC) || !a.flag(R_BMOVABLE) {
-        return 0;
+        return FarMove::Declined;
     }
     if a.flag(R_BCOLLIDEACTORS) || a.flag(R_BBLOCKACTORS) || a.flag(R_BBLOCKPLAYERS) || a.pointer(R_BRUSH) != 0 {
-        return 0;
-    }
-    if no_check == 0 && (a.flag(R_BCOLLIDEWORLD) || a.flag(R_BCOLLIDEWHENPLACING)) {
-        return 0;
+        return FarMove::Declined;
     }
     if a.byte(R_STANDINGCOUNT) != 0 {
-        return 0;
+        return FarMove::Declined;
     }
-    let p = [x, y, z];
     if p.iter().any(|&w| w & 0x7f80_0000 == 0x7f80_0000) {
-        return 0;
+        return FarMove::Declined;
     }
-    let region = if a.flag(R_BDELETEME) {
-        None
-    } else {
-        if model == 0 || !crate::zone::model_live(model) {
-            return 0;
+    if no_check == 0 && (a.flag(R_BCOLLIDEWORLD) || a.flag(R_BCOLLIDEWHENPLACING)) {
+        // A NaN extent is not zero (`e.every(value => value === 0)`); -0 is.
+        if !a.has(FAR_MOVE_FIT_FIELDS)
+            || (a.word(R_COLLISIONRADIUS, 0) | a.word(R_COLLISIONHEIGHT, 0)) & 0x7fff_ffff != 0
+            || world == 0
+        {
+            return FarMove::Declined;
         }
-        let point = p.map(|w| f32::from_bits(w) as f64);
-        let Some(r) = crate::zone::point_region(model, point) else {
-            return 0;
-        };
-        if r.zone != a.pointer(R_REGION_ZONE) {
-            return 0;
+        match unsafe { crate::trace::point_clear(world, p.map(|w| f32::from_bits(w) as f64)) } {
+            1 => {}
+            0 => return FarMove::Failed,
+            _ => return FarMove::Declined,
         }
-        Some(r)
+    }
+    if a.flag(R_BDELETEME) {
+        return FarMove::Moved(None);
+    }
+    if model == 0 || !crate::zone::model_live(model) {
+        return FarMove::Declined;
+    }
+    let point = p.map(|w| f32::from_bits(w) as f64);
+    let Some(r) = crate::zone::point_region(model, point) else {
+        return FarMove::Declined;
     };
+    if r.zone != a.pointer(R_REGION_ZONE) {
+        return FarMove::Declined;
+    }
+    FarMove::Moved(Some(r))
+}
+
+/// The stores of a successful `far_plan`: bJustTeleported, Location,
+/// OldLocation and Region.
+pub(crate) fn far_commit(a: &Obj, p: [u32; 3], region: Option<crate::zone::Region>) {
     a.set_flag(R_BJUSTTELEPORTED);
     for i in 0..3 {
         a.set_word(R_LOCATION, i, p[i as usize]);
@@ -880,5 +910,22 @@ pub extern "C" fn far_move(handle: u32, model: u32, x: u32, y: u32, z: u32, no_c
         a.set_word(R_REGION_ILEAF, 0, r.leaf as u32);
         a.set_byte(R_REGION_ZONENUMBER, r.number as u8);
     }
-    1
+}
+
+/// FarMoveActor(actor, destination, Test 0, `no_check`) to the f32 bits
+/// `x, y, z` on the image actor `handle` (`far_plan`): 1 when the actor
+/// moved, 2 when FindSpot refused (the original's false, nothing stored), 0
+/// when the JavaScript body must run (nothing was stored).
+#[no_mangle]
+pub extern "C" fn far_move(handle: u32, model: u32, x: u32, y: u32, z: u32, no_check: u32, world: u32) -> u32 {
+    let a = Obj::of(handle);
+    let p = [x, y, z];
+    match far_plan(&a, model, world, p, no_check) {
+        FarMove::Declined => 0,
+        FarMove::Failed => 2,
+        FarMove::Moved(region) => {
+            far_commit(&a, p, region);
+            1
+        }
+    }
 }

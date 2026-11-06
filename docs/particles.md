@@ -207,3 +207,81 @@ the same appFrand values, and compares every particle, nextFreeParticle and
 the proxy flag. Browser runs on 02_NYC_Street and Island (400 frames
 walking) found no difference; `validate-particles-play` and
 `validate-native-particles` pass. Island: 0.35 → 0.01 ms per frame.
+
+## The loop in Rust (2026-11-06)
+
+`particleIteratorItems` (script-particles.mjs) ran the CurrentItem loop of the protocol above in JavaScript for every iterating
+generator, in the root frame's scan and again in every child frame's rescan (`occ_frame_dynamics` → `childDynamics` → `rescan`). On the
+Area 51 bunker's slowest tenth of actor phases it was 0.85 ms a frame against 0.11 in the rest
+([plan](firefox-60fps-plan.md#the-bunker-particle-loop-2026-11-06)): 0.50 of it FarMoveActor, 0.20 `readIteratorState` (64 particle
+objects with their arrays built on each call) and 0.09 the script `Init`.
+
+### Why the proxy's FarMoveActor was declined
+
+DeusEx.u's ParticleProxy (read with `ClassDefaults`, the package's tagged defaults) is `bMovable` and `bCollideWorld` with CollisionRadius
+0 and CollisionHeight 0; bCollideActors, bBlockActors and bBlockPlayers are clear and it has no Brush (the live bunker proxies show the
+same fields). So CurrentItem's `FarMoveActor(proxy, Location, 0, 0)` (Test 0, NoCheck 0) takes the original's FindSpot branch
+(`!NoCheck && bCollideWorld`, `0x10398ba0`, [relocation](relocation.md) step 2) with the extent `(CollisionRadius, CollisionRadius,
+CollisionHeight)` = (0, 0, 0). `far_move` declined every actor with bCollideWorld or bCollideWhenPlacing and `no_check == 0`, so each
+particle's move went to relocation.mjs: `findSpot` → `queries.pointCheck` → `singlePointCheck` (which builds a hit list), the
+encroachment check, `setActorZone`, and the closures `relocationLevel` builds for the call. In the slow tenth that was 0.46 ms under
+`farMoveActor`, FindSpot 0.24 of it (Gecko profile, `.cache/perf/bunker-actors`).
+
+### What the original does with a zero extent
+
+[Fitting](fitting.md#findspot--adjustspot-contract): "A zero extent performs one SinglePointCheck and succeeds only if its return is
+exactly 1" (`0x103984c9`-`0x103985c5`); neither AdjustSpot's line checks nor the corner probes run, and the caller's location is
+unchanged. FarMoveActor passes `checkActors` 0, so the check is Level->Model's `UModel::PointCheck` alone ([level
+points](level-points.md): MultiPointCheck queries the actor hash only when `checkActors` is nonzero), with extra node flags 0 and,
+for a zero extent, `UModel::PointCheck`'s single descent (`0x103f16c5`, [point check](point-check.md)): from node 0, front when
+`p.z*n.z + p.y*n.y + p.x*n.x - d > 0`, outside `||= solid` going front and `&&= !solid` going back, a node being solid with vertices
+and none of the flags `0x21`. The model is the moving brush tracker's while it lives (`worldModel()`). A false return fails the move
+before any store: the actor is untouched, and CurrentItem deletes the particle. On success CheckEncroachment returns false for this
+actor (no collision bits other than bCollideWorld, which `checkActorEncroachment`'s `0xd` mask does not count, and no Brush: it returns
+before any query), and SetActorZone runs as before.
+
+The chain of evidence: the original's FindSpot, its SinglePointCheck and the zero-extent descent equal the JavaScript reference on
+the native validators ([fitting](fitting.md): 1,112 composed cases, [point check](point-check.md), the tracked-model NaN cases); the
+Rust descent equals the reference (`validate-trace-kernel`: 78,798 point cases, 42,996 inside, at plane epsilons and on the chain that
+exceeds the visit guard, 0 mismatches); the Rust move equals the reference body in `verify` mode, below. The descent runs in doubles
+like the reference; whether the original's pass precision (24 bits, [render pass](render-pass-precision.md)) changes a point exactly
+on a node plane is not measured (the row for "ParticleIterator FarMoveActor" there stays "not measured").
+
+### The translation
+
+* `trace.rs point_clear`: the descent over the node records the Rust line checks read (`trace_import_bsp` for a tracked model); a link
+  or cycle the JavaScript throws on hands back.
+* `render.rs far_plan` / `far_commit` / `far_move`: the former `far_move` split into the decision and the stores, with FindSpot's
+  zero-extent case added; `far_move` returns 1 (moved), 2 (FindSpot refused: the original's false, nothing stored) or 0 (the
+  JavaScript body runs). A nonzero extent, a model the core cannot read, a zone change (SetActorZone runs script events), riders,
+  collision bits, a Brush and a non-finite destination still go to JavaScript before any store.
+* `particles.rs particle_items`: the CurrentItem loop over the iterator's cells and the proxy's image: Index stored at each step, an
+  active particle's DrawScale and ScaleGlow copied onto the proxy, `far_plan`, `far_commit`, the item recorded, a failed move deleting the
+  particle (`bActive` cleared, `nextFreeParticle` = Index). A move `far_plan` declines stops the loop before that step's stores;
+  `script-particles.mjs nativeItems` takes the step as the reference does (through `runtime.farMoveActor`, so the zone's events run
+  where the original runs them) and the loop goes on after it. A proxy the image cannot address returns `NOT_RUN`, and the reference
+  loop takes the iterator whole. The script `Init(Camera)` and the Observer write stay in JavaScript, in their order.
+* `sprite-scan.mjs`: the records of an iterator's items are made from the proxy's DrawType, Texture and Style read once for the run
+  instead of for every item. The items are one proxy's and are recorded after the run, with no script between them, so each item
+  finds the fields as the first does.
+
+Switches (`?particleItems=`, env `PARTICLE_ITEMS`; `?farMove=nofit` keeps the core as it was before FindSpot's point check):
+`rust` (default); `js` (the reference loop and the per-item reads; with `farMove=nofit` this is the code before this step); `verify`:
+every Rust run is repeated from the state before it by the reference loop with the recovered relocation body (`relocateSpawnedActor`,
+not the core) as FarMoveActor, and the particles, `nextFreeParticle`, Index, the proxy's DrawScale, ScaleGlow, Location, OldLocation,
+bJustTeleported and Region, and the items are compared; the sprite records are compared with the per-item reads.
+
+### Checks (2026-11-06)
+
+* `node scripts/validate-particle-items.mjs --map NAME --compare` boots a map, holds its proxies as drawn, ticks, and after each tick
+  runs SetupDynamics' scan and a child frame's rescan through `sprite-scan.mjs`, in `js` (the reference with `FAR_MOVE=js`), `rust`
+  and `verify`; the digest of every sprite record and of the iterators' and proxies' end state must be equal. Bunker, 240 ticks:
+  34,991 sprite records, 4,780 iterator runs, 305,504 steps, 33,022 particles moved, 416 steps handed back to JavaScript (a zone
+  change: 0.14% of the steps); `verify` compared 5,196 runs and 33,438 records, digest `8ef26156a3375408` in all three. 02_NYC_Street:
+  23,512 records, 4,302 runs, 275,328 steps, 0 handed back, `0f1d56950a3b8be4` in all three.
+* In the browser, the bunker's scan route for 40 s with `particleItems=verify&farMove=verify`: Firefox inline 2,452 drawn frames, 0 page
+  errors, 4,042 runs and 258,688 steps compared, 50,044 particles moved; Chromium in worker mode 2,660 drawn frames, 0 page errors, 4,232
+  runs and 270,848 steps compared (`--probe-switches` lists both switches in the worker's realm, so the page's flags reach it through
+  `init`, and its counters come from the worker). Per frame on that route (twelve Firefox sessions of 60 s, 45,601 frames): one scan and one
+  child frame's rescan, 1.24 non-frozen iterator runs (64 steps each), 18.4 particles moved, 0.027 deleted by a refused move (1,228 in
+  all: the Failed path runs outside the injection test too), no step handed back.

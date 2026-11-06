@@ -195,6 +195,11 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
     surfaceScan(start, ends, position, floorEnd, source, textureModel, textures, worldActor) {
       return fast ? fast.surfaceScan(start, ends, position, floorEnd, source, textureModel, textures, worldActor) : undefined;
     },
+    /** The Level->Model's address in `vm`'s arena for the Rust core's zero-extent point check (collision-kernel.mjs worldBase),
+     * 0 for none. */
+    worldBase(vm) {
+      return fast ? fast.worldBase(vm) : 0;
+    },
     pointCheck(position, extent, flags, checkActors) {
       return pointCheck ? pointCheck(position, extent, flags, checkActors)
         : Number(points.singlePointCheck(position, extent, flags, levelInfo, checkActors).outside);
