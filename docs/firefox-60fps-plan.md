@@ -310,8 +310,8 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   | Everett | 10 (8) | 10 | 17.1 |
   | Area 51 bunker | 23 (13) | 23 | 33.2 |
 
-  On the synthetic 60 Hz clock, eight maps keep every frame at p95; the Island and the bunker drop to 30 Hz at p95. Four maps are
-  still over 16.7 ms at page p95 (the Island, Battery Park, the Airfield and Wan Chai by 1 to 4 ms; the bunker by 6). The row verdicts
+  On the synthetic 60 Hz clock, eight maps keep every frame at p95; the Island and the bunker drop to 30 Hz at p95. Five maps are
+  still over 16.7 ms at page p95 (the Island by 4 ms, Battery Park and the Airfield by 2, Wan Chai by 1, the bunker by 6). The row verdicts
   (7.2.2, 7.2.4) need the headed set on a visible window.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
