@@ -611,6 +611,10 @@ export class ScriptRuntime {
     // GetPlayerPawn's resolver for the Rust VM's direct path (script-vm-rust.mjs playerPawn): what the host's `native` callback answers native 720
     // with, or null where the host has none (the call then goes through invokeNative as before).
     this.playerPawnShortcut=null;
+    // The Rust interpreter's cell for it (natives.rs PLAYER_PAWN_CELL, script-vm-player-pawn.mjs): `playerPawnGraphWatched` says the host
+    // reports every write to the graph the resolver walks (player-pawn-graph.mjs) through `notePlayerPawnGraph`, which advances the
+    // epoch the cell is valid for (never 0) and tells the interpreter's host (`playerPawnListener`).
+    this.playerPawnGraphWatched=false;this.playerPawnGraphEpoch=1;this.playerPawnListener=null;
     // Scripted functions the host owns as external boundaries (parallel to
     // boundaryNatives): a Map from lowercase function key to a handler
     // `(call)=>returnValue`. When a script call resolves to such a function,
@@ -5075,6 +5079,13 @@ export class ScriptRuntime {
     this.destroyFunctionLocals(fn,locals,{parameters:false});
     return true;
     }finally{stack?.restore(stackIndex,stackTop);}
+  }
+  /** A write to the graph GetPlayerPawn's resolver walks (player-pawn-graph.mjs): the Rust interpreter's cell is stale. `complete` is
+   * false when what the write installed cannot be watched, which ends the cell's use. */
+  notePlayerPawnGraph(complete=true) {
+    this.playerPawnGraphEpoch=(this.playerPawnGraphEpoch+1)>>>0||1;
+    if(!complete)this.playerPawnGraphWatched=false;
+    this.playerPawnListener?.();
   }
   /** The linked class whose default object a class-context receiver names. */
   defaultObjectClass(receiver) {

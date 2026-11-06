@@ -19,13 +19,20 @@
 //!   bForceStasis and [offset, key] of DistanceFromPlayer (bool): InStasis
 //!   (721), actor-tick.mjs `actorInStasis` with the native's level.
 //!
+//! * PLAYER_PAWN 207 `node` (object): GetPlayerPawn (720), `handleOf(playerPawnShortcut(receiver))`, the Engine native's pointer
+//!   walk (the level's engine, its client, the first viewport's actor) that triggers' resolver follows over the host's graph. The
+//!   answer comes from PLAYER_PAWN_CELL, [graph epoch, the epoch the handle is valid for, handle, verify]: the host (script-vm-
+//!   player-pawn.mjs) advances the graph epoch whenever one of the properties the walk reads is written, and js_player_pawn
+//!   computes the walk, fills the handle and marks it valid for the epoch it was computed at. An epoch that differs, and every
+//!   node while `verify` is set (PLAYER_PAWN=verify), cross to js_player_pawn.
+//!
 //! The bodies only read. A field outside the image (a HOST receiver, a bound
 //! key on a BOUND receiver) or a host value the JavaScript body would not
 //! compute with (the clock imports set NATIVE_FAULT: an error, a value that
 //! is not a number) hands the whole node to JavaScript, which reads again
 //! and raises the body's errors. The clock imports run no script.
 
-use crate::interp::{handle_slot, load32, load8, Recv, Run, CK_BOOL, CK_FLOAT, CK_NAME, GONE, NAME_NONE};
+use crate::interp::{handle_slot, load32, load8, Recv, Run, CK_BOOL, CK_FLOAT, CK_NAME, CK_OBJECT, GONE, NAME_NONE};
 use core::ptr::{addr_of, addr_of_mut};
 
 /// STATES = [table, capacity, verify] (script-vm-states.mjs): an entry per
@@ -59,6 +66,16 @@ extern "C" {
     fn js_zone_render_time(handle: u32) -> f64;
     /// `levelFor(actor).netMode === 0`.
     fn js_level_standalone(handle: u32) -> i32;
+    /// GetPlayerPawn's walk for the node's receiver, the cell filled; the handle (script-vm-rust.mjs `playerPawnCell`).
+    fn js_player_pawn(frame: u32, node: u32, receiver: u32) -> u32;
+}
+
+/// [graph epoch, epoch the handle is valid for, handle, verify]: the epoch is 1 or more once the host has attached (the cell's
+/// valid word starts at 0, so a cell nothing has filled is never current).
+static mut PLAYER_PAWN_CELL: [u32; 4] = [0; 4];
+#[no_mangle]
+pub extern "C" fn vm_player_pawn_ptr() -> *mut u32 {
+    addr_of_mut!(PLAYER_PAWN_CELL) as *mut u32
 }
 
 /// Whether STATE_VERIFY=1 set the table's verify word.
@@ -124,6 +141,23 @@ fn fault() -> bool {
 }
 
 impl Run {
+    /// GetPlayerPawn (720) on receiver `r`: the cell's handle while the graph epoch is the one it was filled at.
+    pub(crate) fn player_pawn(&mut self, r: Recv) -> u32 {
+        let node = self.op(1);
+        self.skip(2);
+        let cell = addr_of!(PLAYER_PAWN_CELL) as *const u32;
+        let (epoch, valid, handle, verify) = unsafe { (*cell, *cell.add(1), *cell.add(2), *cell.add(3)) };
+        let v = if verify == 0 && epoch == valid {
+            handle
+        } else {
+            let v = unsafe { js_player_pawn(self.frame, node, self.handle(r)) };
+            self.self_fresh = false;
+            v
+        };
+        self.verify(node, r, CK_OBJECT, v as f64);
+        v
+    }
+
     /// GetStateName (284) on receiver `r`.
     pub(crate) fn state_name(&mut self, r: Recv) -> u32 {
         let node = self.op(1);

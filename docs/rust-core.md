@@ -1000,6 +1000,25 @@ tick at 11.5 us for a 1 us body), the `CycleActors` start (`0x2f` over native 10
 `let`s with name, struct, string or bound-field targets (40 shapes, each under 0.04). Details, the Firefox split and the cost against the bar in
 [the 60 fps plan](firefox-60fps-plan.md#what-the-rust-vm-still-hands-to-javascript-2026-11-06).
 
+**The three largest of those rows, in Rust (2026-11-06, [the bunker bundle](firefox-60fps-plan.md#the-bunker-bundle-2026-11-06)).**
+Each is a lowered kind with the JavaScript path as its reference and `js` / `verify` modes:
+* `PLAYER_PAWN` 207 (natives.rs `player_pawn`, `PLAYER_PAWN=rust|direct|js|verify`): GetPlayerPawn (720) answered from `PLAYER_PAWN_CELL`
+  = [graph epoch, the epoch the handle is valid for, handle, verify]. `js_player_pawn` runs the resolver and fills the cell; the epoch
+  advances on every write to `level.engine.client.viewports[0].actor` or a link above it (player-pawn-graph.mjs, accessors installed by
+  script-doors.mjs where it sets `playerPawnShortcut`). The lowering is gated as the `js_object` direct path is.
+* `CALL_OUT` 208 and `P_STRUCT` (interp.rs `call`, iter.rs, `OUT_STRUCT=rust|js|verify`): a script call whose callee has `out` struct
+  parameters of byte, int, bool, float or object members (`HUDHitDisplay.SetHitColor(out BodyPart ...)`). callFunction's order is kept:
+  each argument in turn, the struct copied in from a local or a SELF field (member by member through the codecs: a float
+  through `float_bits(float_of(..))`, an object as its handle or None if released, a bool merged into its word), the callee, then the
+  out parameters back in reverse, also when a probe-masked callee did not run. `callSignature` (script-vm-lower.mjs) adds the
+  struct parameters to `functionSignature`'s shapes; a source the image cannot address leaves the whole call to JavaScript before
+  anything is pushed.
+* `S_FOREACH_CYCLE` 10 and the run's `Iter` (iter.rs, `FOREACH_START=rust|js|verify`): the `CycleActors(Class'X', out Actor, out int
+  Index)` start of a callee run, its IteratorNext and IteratorPop, over render.rs `cycle_scan_step` and the actor list `js_cycle_list`
+  returns (`listFor`). Lowered for a body with one foreach, in function (not state) code, and no Return left in JavaScript; a start
+  that cannot be Rust's (a run JavaScript enters again after each statement, an out argument the image cannot address) is an
+  S_YIELD and the JavaScript iterator stack keeps that loop (`iter.active` says which owns it).
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

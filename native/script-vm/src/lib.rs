@@ -20,6 +20,7 @@ mod detail;
 mod computer;
 mod dispatch;
 mod interp;
+mod iter;
 mod level;
 mod level_loop;
 mod fire;

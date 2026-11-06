@@ -243,6 +243,12 @@ const imports = {
     calls.push({imp: 'standalone', receiver: handle});
     return nativeHost.standalone(handle) ? 1 : 0;
   },
+  // The bunker bundle's imports (GetPlayerPawn's cell, the CycleActors foreach, struct out arguments): no case here runs them.
+  js_player_pawn() { throw new Error('js_player_pawn is not expected'); },
+  js_cycle_list() { throw new Error('js_cycle_list is not expected'); },
+  js_cycle_class_test() { throw new Error('js_cycle_class_test is not expected'); },
+  js_foreach_check() { throw new Error('js_foreach_check is not expected'); },
+  js_out_struct_check() { throw new Error('js_out_struct_check is not expected'); },
   // October 1: the event dispatch host (script-vm-events.mjs protocol).
   js_event_gate(handle) {
     calls.push({imp: 'gate', receiver: handle, frames: framesKey()});

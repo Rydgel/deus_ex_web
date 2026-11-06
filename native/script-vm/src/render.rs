@@ -417,6 +417,14 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
 /// it).
 #[no_mangle]
 pub extern "C" fn cycle_scan(list: u32, cursor: u32, steps: u32, bound: u32, rid: u32, out: u32) {
+    let (kind, cursor, steps) = cycle_scan_step(list, cursor, steps, bound, rid);
+    store32(out, kind);
+    store32(out.wrapping_add(4), cursor);
+    store32(out.wrapping_add(8), steps);
+}
+
+/// `cycle_scan`'s answer as (kind, cursor, steps) (iter.rs reads it without the out words).
+pub(crate) fn cycle_scan_step(list: u32, cursor: u32, steps: u32, bound: u32, rid: u32) -> (u32, u32, u32) {
     let count = load32(list);
     let (mut cursor, mut steps) = (cursor, steps);
     let mut kind = 0;
@@ -443,9 +451,7 @@ pub extern "C" fn cycle_scan(list: u32, cursor: u32, steps: u32, bound: u32, rid
             break;
         }
     }
-    store32(out, kind);
-    store32(out.wrapping_add(4), cursor);
-    store32(out.wrapping_add(8), steps);
+    (kind, cursor, steps)
 }
 
 /// ULevel::DestroyActor's scan for the actors it hands SetOwner(None) and
