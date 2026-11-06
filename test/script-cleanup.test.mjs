@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {cleanupLevelDestroyed,cleanupScriptReferences} from '../src/runtime/script-cleanup.mjs';
 import {propertyReference} from '../src/runtime/script-values.mjs';
+import {baseEpoch} from '../src/runtime/base-epoch.mjs';
 
 test('pending cleanup keeps the native actor prefix and defers finalization below 128',()=>{
   const info={EventManager:null},live={bDeleteMe:false},dead={bDeleteMe:true,Deleted:null};
@@ -42,4 +43,28 @@ test('reference cleanup visits direct object arrays before nested structs, and M
   store.region[member.key]=dead;store.touching[0]=dead;visited.length=0;
   cleanupScriptReferences([region,references,classField],ref,services,{editor:true});
   assert.deepEqual(visited,['dead','modify','write:region','dead','modify','write:touching','live','live']);
+});
+
+test('CompactActors with the flagged slots gives the loop\'s result, reading bDeleteMe of those only',()=>{
+  // a deterministic mix of live, deleted and null slots, the deleted ones early, late and in runs
+  let seed=12345;const next=()=>(seed=(seed*1103515245+12345)>>>0)/2**32;
+  for(let round=0;round<200;round++){
+    const length=1+Math.floor(next()*40),start=Math.floor(next()*Math.min(length,6));
+    const make=()=>Array.from({length},(_,i)=>{const r=next();return r<0.15?null:{id:i,bDeleteMe:r<0.35};});
+    const base=make(),run=(withFlags)=>{
+      const actors=base.map(actor=>actor&&{...actor}),reads=[],warnings=[];
+      const level={editor:false,undo:null,firstDynamicActor:start,actors,pendingDeleted:null};
+      const services={read:(actor,key)=>{reads.push(actor.id);return actor[key];},warning:event=>warnings.push(event.actor.id),
+        // (a slot the "image" could not answer is flagged too, and read: every third live one)
+        flagged:withFlags?(list,from)=>Uint32Array.from(list.flatMap((actor,i)=>i>=from&&(!actor||actor.bDeleteMe||actor.id%3===0)?[i]:[])):undefined};
+      const epoch=baseEpoch();
+      cleanupLevelDestroyed(level,services);
+      return {ids:level.actors.map(actor=>actor&&actor.id),reads,warnings,advances:baseEpoch()-epoch};
+    };
+    const reference=run(false),flagged=run(true);
+    assert.deepEqual(flagged.ids,reference.ids);assert.deepEqual(flagged.warnings,reference.warnings);assert.equal(flagged.advances,reference.advances);
+    // the loop reads bDeleteMe of the flagged slots only (the first of them and later), never of a live slot the image answered
+    for(const id of flagged.reads)assert.ok(base[id].bDeleteMe||id%3===0,`slot ${id} was read`);
+    assert.ok(flagged.reads.length<=reference.reads.length);
+  }
 });

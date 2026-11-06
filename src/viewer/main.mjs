@@ -129,6 +129,14 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?riderTable=js drops the rider scan's table of Base reads at every advance of the base epoch, as before (base-epoch.mjs); the default
 // keeps it across CompactActors' shifts and an attach, forgetting only the slots whose own cells changed; =verify compares every slot kept
 // with a fresh fill at each scan.
+// ?compactScan=js reads every actor's bDeleteMe in compactScriptActors' loop; the default asks the Rust core for the slots to read (level.rs
+// level_flagged), =verify reads the others too and compares. ?soundRead=js keeps the Error that PlaySound's graph reads of the level container
+// throw out of instance() (script-runtime.mjs reflectedField), =verify checks that it would throw. ?decalFollow=js writes every Mover surface's
+// rotation words at each AttachDecal (script-decal.mjs followDecalTracker); the default writes a mover's when its rotation changed, =verify
+// checks the words kept in memory.
+// ?configFind=js asks the native config tables for a property's field list at every read (script-native-config.mjs findIn; every AttachDecal
+// reads Client.Decals), the default keeps the answer per class and name; ?inputFields=js walks the player's class for its input properties
+// at every ReadInput (script-console-command.mjs), the default keeps the list per class. =verify for both asks fresh as well and compares.
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
@@ -136,7 +144,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['riderTable','DEUS_EX_RIDER_TABLE']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

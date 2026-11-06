@@ -110,9 +110,18 @@ function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => f
   return { base, points, surfAt };
 }
 
+/** 'kept' (default), 'js' or 'verify': DECAL_FOLLOW / DEUS_EX_DECAL_FOLLOW (?decalFollow=). 'js' writes every Mover surface's Actor
+ * Rotation words at each AttachDecal (followDecalTracker), as before; 'kept' writes a mover's surfaces only when its rotation is not the
+ * one the last call wrote for it (nothing else writes those words after the upload: decal.rs `decal_model_sync` leaves them); 'verify'
+ * skips the same writes and checks that the words in memory are the ones the call would write. */
+export const decalFollowMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FOLLOW) || globalThis.DEUS_EX_DECAL_FOLLOW || 'kept';
+
 /** The uploaded model's handle: it holds only the kernel, the block's address, the point capacity and the surface records' word. */
 function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
   let rotationWords = null;
+  // Per mover key: the surfaces and the rotation words setRotations last wrote (a new upload is a new handle: it starts empty).
+  const followed = [];
+  const followMode = decalFollowMode();
   return { base, surfaceCount,
     /** Follow the moving brush tracker's arrays (a model uploaded from
      * brush-tracker.mjs trackedModel); false when a count no longer fits. */
@@ -126,6 +135,25 @@ function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
       if (u === null || u.buffer !== buffer) rotationWords = u = new Uint32Array(buffer);
       const o = surfWords + SURF_WORDS * s + 6;
       u[o] = rotation[0] >>> 0; u[o + 1] = rotation[1] >>> 0; u[o + 2] = rotation[2] >>> 0;
+    },
+    /** setRotation of each of `surfaces` (a mover's, `key` its index among the tracker's movers), unless the last call for `key` wrote
+     * these words to these surfaces already. */
+    setRotations(key, surfaces, rotation) {
+      const r0 = rotation[0] >>> 0, r1 = rotation[1] >>> 0, r2 = rotation[2] >>> 0, last = followed[key];
+      if (followMode !== 'js' && last !== undefined && last.surfaces === surfaces && last.r0 === r0 && last.r1 === r1 && last.r2 === r2) {
+        if (followMode === 'verify') {
+          const buffer = kernel.memory.buffer, u = new Uint32Array(buffer);
+          for (const s of surfaces) {
+            const o = surfWords + SURF_WORDS * s + 6;
+            if (u[o] !== r0 || u[o + 1] !== r1 || u[o + 2] !== r2)
+              throw new Error(`DECAL_FOLLOW=verify: surface ${s} of mover ${key} holds ${u[o]} ${u[o + 1]} ${u[o + 2]}, the rotation is ${r0} ${r1} ${r2}`);
+          }
+        }
+        return;
+      }
+      for (let k = 0; k < surfaces.length; k++) this.setRotation(surfaces[k], rotation);
+      if (last === undefined) followed[key] = { surfaces, r0, r1, r2 };
+      else { last.surfaces = surfaces; last.r0 = r0; last.r1 = r1; last.r2 = r2; }
     },
     dispose: () => kernel.free(base) };
 }

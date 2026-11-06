@@ -78,9 +78,11 @@ export function followDecalTracker(decals) {
     decals.generation = generation;
   }
   const movers = source.movers();
+  const model = decals.model;
   for (let i = 0; i < movers.length; i++) {
     const surfaces = movers[i].surfaces, r = movers[i].rotation();
-    for (let k = 0; k < surfaces.length; k++) decals.model.setRotation(surfaces[k], r);
+    if (typeof model.setRotations === 'function') model.setRotations(i, surfaces, r);
+    else for (let k = 0; k < surfaces.length; k++) model.setRotation(surfaces[k], r);
   }
 }
 /** Drop a level's decals (a reload: the original's UModel is loaded anew). */

@@ -127,7 +127,7 @@ export function cleanupImageSites(sites,offsets,view,base,bound,reference,servic
 /** Engine CompactActors103963e0: stable compaction only after Level+110.
  * A caller must supply that native index; filtering the whole array changes
  * the permanent-prefix indices and is not equivalent. */
-export function compactScriptActors(level,{read,warning,recordArrayRemoval,settled}={}) {
+export function compactScriptActors(level,{read,warning,recordArrayRemoval,settled,flagged}={}) {
   const actors=level.actors,start=level.firstDynamicActor;
   if(!Array.isArray(actors)||!Number.isInteger(start)||start<0||start>actors.length)
     throw new Error('CompactActors requires the original Level+0x110 prefix index');
@@ -135,11 +135,19 @@ export function compactScriptActors(level,{read,warning,recordArrayRemoval,settl
   // Host work: `settled` (level.rs) is true only when the loop below would
   // warn of nothing and move nothing.
   if(settled?.(actors,start))return;
-  let write=start;
-  for(let index=start;index<actors.length;index++){
+  // Host work: `flagged` (level.rs level_flagged) lists the slots whose bDeleteMe the loop has to read (a null slot, a bDeleteMe
+  // actor, an actor the image cannot answer); every actor before the first of them stays where it is, and the others read false.
+  const marks=flagged?.(actors,start)??null;
+  let write=marks===null?start:marks.length?marks[0]:actors.length,mark=0;
+  for(let index=write;index<actors.length;index++){
     const actor=actors[index];
     if(actor===null)continue;
-    if(read(actor,'bDeleteMe'))warning?.({type:'PendingActorInArray',actor});
+    let deleted=true;
+    if(marks!==null){
+      while(mark<marks.length&&marks[mark]<index)mark++;
+      deleted=mark<marks.length&&marks[mark]===index;
+    }
+    if(deleted&&read(actor,'bDeleteMe'))warning?.({type:'PendingActorInArray',actor});
     else{if(write!==index){bumpBaseMoveEpoch();moveBaseSlot(actors,index,write);}actors[write++]=actor;}
   }
   if(write===actors.length)return;

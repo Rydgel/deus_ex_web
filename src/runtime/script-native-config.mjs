@@ -86,6 +86,9 @@ export const NATIVE_CONFIG_CLASSES = Object.freeze([
 export const PLAY_RENDER_DEVICE = 'D3DDrv.D3DRenderDevice';
 
 const lower = text => String(text).toLowerCase();
+let configFindModeCache = null;
+/** 'memo' (default), 'js' or 'verify': CONFIG_FIND / DEUS_EX_CONFIG_FIND (?configFind=), createNativeConfig's findIn. */
+const configFindMode = () => configFindModeCache ??= (typeof process !== 'undefined' && process.env?.CONFIG_FIND) || globalThis.DEUS_EX_CONFIG_FIND || 'memo';
 const clampInt = (value, low, high) => value < low ? low : value >= high ? high : value;
 // FCOM against the low bound then `test ah,1` (below or unordered -> low), then against the high bound
 // (`jne` keeps a value below it): UClient::PostEditChange 0x10374ef0, Galaxy 0x10605ad0.
@@ -105,7 +108,26 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
   const chain = cls => { const out = []; for (let c = cls; c; c = superOf(c)) out.push(c); return out; };
   /** TFieldIterator<UProperty>: own children (reverse registration order), then each super's. */
   const fields = cls => chain(cls).flatMap(owner => [...owner.properties].reverse().map(property => ({owner, property})));
-  const findIn = (cls, name) => fields(cls).find(({property}) => lower(property.name) === lower(name)) ?? null;
+  const findFresh = (cls, name) => fields(cls).find(({property}) => lower(property.name) === lower(name)) ?? null;
+  // The tables are frozen constants, so a class's answer for a name never changes: it is kept per class and lowered name (the Client.Decals
+  // getter that every AttachDecal reads asked for the whole field list of WinDrv.WindowsClient, three times, each time). CONFIG_FIND=js
+  // (?configFind=) asks every time as before, =verify asks both and compares.
+  const findMemo = new Map();
+  const findIn = (cls, name) => {
+    const mode = configFindMode();
+    if (mode === 'js') return findFresh(cls, name);
+    let byName = findMemo.get(cls);
+    if (byName === undefined) findMemo.set(cls, byName = new Map());
+    const key = lower(name);
+    let found = byName.get(key);
+    if (found === undefined) byName.set(key, found = findFresh(cls, name));
+    if (mode === 'verify') {
+      const fresh = findFresh(cls, name);
+      if ((fresh?.owner ?? null) !== (found?.owner ?? null) || (fresh?.property ?? null) !== (found?.property ?? null))
+        throw new Error(`CONFIG_FIND=verify: ${cls.path}.${name} is ${found?.property?.name} in the memo, ${fresh?.property?.name} fresh`);
+    }
+    return found;
+  };
 
   // The classes the engine instantiated from [Engine.Engine] (UGameEngine::Init's StaticLoadClass of
   // ViewportManager, AudioDevice and GameRenderDevice) and their bases are the loaded UClasses.

@@ -460,6 +460,10 @@ const NATIVE_EVENT_BODIES=Object.freeze({
   // APawn::execClientHearSound 0x103dfc40 (docs/galaxy-audio.md "Play").
   'engine.pawn.clienthearsound'(receiver,args){execPawnClientHearSound(receiver,args,this.audioServices());},
 });
+// SOUND_READ / ?soundRead= (DEUS_EX_SOUND_READ): 'direct' (default) answers soundField's reflected read of an object that is not an attached
+// instance as unlinked without throwing out of instance(); 'js' keeps the throw (the reference); 'verify' also checks that it would throw.
+let soundReadModeCache=null;
+const soundReadMode=()=>soundReadModeCache??=(typeof process!=='undefined'&&process.env?.SOUND_READ)||globalThis.DEUS_EX_SOUND_READ||'direct';
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 // (the native graph slots among them, which soundField reads reflected first)
@@ -2461,6 +2465,16 @@ export class ScriptRuntime {
   }
   /** soundField's reflected read: the property's value, or undefined where it is not linked. */
   reflectedField(actor,name) {
+    // (an object that is not an attached script instance, such as the level container PlaySound's graph reads name, would throw out of
+    // instance(): an Error and its stack for each read. SOUND_READ=js keeps the throw as the reference.)
+    if(soundReadMode()!=='js'&&this.attachedInstance(actor)===null){
+      if(soundReadMode()==='verify'){
+        let threw=false;
+        try{this.readNamed(actor,name);}catch{threw=true;}
+        if(!threw)throw new Error(`SOUND_READ=verify: ${actor?.name} is not an attached instance and readNamed(${name}) did not throw`);
+      }
+      return undefined;
+    }
     try{return this.readNamed(actor,name);}
     catch(error){return undefined;}
   }
@@ -3310,6 +3324,7 @@ export class ScriptRuntime {
       recordArrayRemoval:lifecycle.recordArrayRemoval,
       warning:this.warning,
       settled:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactSettled(actors,start):null,
+      flagged:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactFlagged(actors,start):null,
     },force);
   }
   bindProperty(receiver,field,binding) {
