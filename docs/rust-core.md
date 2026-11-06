@@ -963,7 +963,10 @@ Evidence (the answers are the JavaScript references', which are the originals' t
   the unchanged d64b55bf sources (the 0b4d06c72afd1c1d quoted in the task brief is not what that commit produces on this host).
 * The zone table's edges (`.work/perf/zone-edge.mjs`, a bench-sim scenario: a one-zone table, a 300-zone table, fresh render times every
   tick): one digest in `js`, `rust` and `verify`, with the same 55 "Original zone render timestamp is not provided" errors.
-* A 60 s Firefox inline session and a 40 s Chromium worker session on the Island with `?tickReads=verify`: no error.
+* A 60 s Firefox inline session and a 40 s Chromium worker session on the Island with `?tickReads=verify`: no error. The flag reaches
+  the worker: 25 s Chromium worker CPU profiles of the Island's scan route hold the three imports in 614 (`js_event_gate`), 541
+  (`js_tick_zone_time`) and 239 (`js_tick_owner_ticked`) of 47,721 samples with `?tickReads=js`, and none with the default
+  (`js_event_prelude` in 14 of 47,793); Chrome's worker frame is shorter by about as much (profile samples, not an A/B).
 * Node import counts on the Island (300 ticks, `SCRIPT_VM_IMPORT_TIME=1`): 465 gates, 341 owner reads and 62 zone reads a tick
   (1,321, 645 and 1,221 ns each in `js`) leave only `js_event_prelude` (57 ns a call).
 * `validate-actor-tick-kernel` (differential: it keeps the imports), `-actor-tick`, `-level-tick`, `-event-manager`,
