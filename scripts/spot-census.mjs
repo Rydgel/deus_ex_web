@@ -70,7 +70,7 @@ export function mapFigures(run, extra = {}) {
 }
 
 /** The spot's frame work: the page's p50 (Firefox inline), or the larger of the page's and the worker's (Chromium). */
-const fp = s => s.frame ?? fp(s);
+const fp = s => s.frame ?? s.page.p50;
 const row = s => `| ${s.map} | ${s.location.map(v => Math.round(v)).join(', ')} | ${s.yaw} | ${f1(fp(s))} | ${f1(s.page.p95)} | ${f1(s.page.max)} | ${f1(s.fps)} | ${s.top.join(', ')} | ${f1(s.phases['gl.upload'])} / ${f1(s.phases['gl.uploadMB'])} MB | ${f1(s.phases['gl.drawN'])} |`;
 const HEADER = '| Map | Location | Yaw | frame p50 | page p95 | page max | fps | top phases | gl.upload ms / MB | draw calls |\n|---|---|---:|---:|---:|---:|---:|---|---|---:|';
 
