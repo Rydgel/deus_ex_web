@@ -395,6 +395,9 @@ child maps already use, and copies from that. The GPU receives the same texels; 
 * **Cost:** headless Firefox inline, 10_Paris_Club, `hitch-run.mjs --mode idle --god --seconds 30 --place
   '{"location":[-100,-1250,40],"rotation":[0,52436,0]}'` (looking at the corner of surfaces 231 and 232): page frame p50 59 → 17 ms,
   16 → 57 fps, `p.mirrors` 44.9 → 4.0 ms, uploads 165 → 0.85 MB a frame (the same 292 calls).
+* **Afterwards (2026-11-06):** a survey of 38 mirror views in Firefox found no other copy like it. The fog update itself had two `from`
+  copies SpiderMonkey runs per byte (the child frames' kept maps, `note`'s validation record): byte copies now, `?fogCopy=from` keeps
+  the old ones, `p.fog` at the club 2.25 → 1.71 ms (docs/mirror-surfaces.md "Firefox spot survey").
 
 ## Mesh fog
 

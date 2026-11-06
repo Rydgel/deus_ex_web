@@ -553,3 +553,125 @@ mirror-frame-groups.test.mjs` covers `frameGroups` and the plan.
 **Not checked.** A zone boundary between two coplanar requests (two frames):
 the page maps both frames to the same static group, which takes the last
 child's target; read from the code, not seen in a map.
+
+## Firefox spot survey (2026-11-06)
+
+**Why.** The Paris Club's drop to about 30 fps on the Mac (docs/volumetric-fog.md, "The child frames' restore") sat at a spot the
+route-based frame-time set never stands at. This survey puts the player in front of the single-player maps' mirrors in headless Firefox
+(inline simulation, 1440 x 960, DPR 1, an old AMD Radeon R9 200 on Linux) and reads the page frame and the mirror phase.
+
+**Method.**
+* The mirrors: every `POLY.Mirrored` surface of `map.model`, grouped by node plane (`mirrorPlanes()`) with the vertex bounds of its
+  nodes: 80 groups (plane and bounds) in the single-player maps, many repeated in the variants of a map (01/03/04/05 Island and HQ,
+  02/04/08 Bar and Hotel). A spot for each, 120 to 480 units out on the open side (`pointCheck` with JC's 20 x 20 x 43.5 capsule, the
+  floor found by dropping the capsule), the yaw facing the plane; floors from inside their bounds. The scripts are in `.work/` and not
+  committed.
+* A run: `hitch-run.mjs --browser firefox --mode idle --god --seconds 12 (14) --place ...`, the figures from 5 s after the map (650 to
+  900 drawn frames), behind the heavy lock. Firefox rounds `performance.now()` to 1 ms, so the p50 and p95 are whole ms; the phase
+  columns are means. The run's JSON now keeps the mirror pass's stats of the last frame (`status.mirrors`: planes drawn, recursion depth,
+  scissor pixels), to see whether a placed view shows a mirror.
+* 38 views of 20 maps. The pass ran (`p.mirrors` 0.6 ms or more) in 31 of them. Seven drew none (`p.mirrors`
+  0.1 or less): the Chateau's walls x=-444 and y=420, UNATCO HQ's y=-383, the Smuggler's y=-1746 from the floor, the 747 floor looked at
+  level, the UNATCO MJ12 lab's wall x=-2862 (a conversation camera) and Endgame1 (the credits). The spot or the yaw missed the pane in
+  the first five, which is not investigated. Five maps open on a conversation or a cutscene that takes the camera (Bar, Everett,
+  Intro, both MJ12 labs), so their rows show what the conversation's camera saw, not the placed view; the Bar and Everett were run again
+  from further out.
+* Not surveyed (small planes of 1,500 to 14,000 square units, same code path): Airfield, HeliBase, Brooklyn Bridge, MolePeople, the
+  WanChai street's panes, Cathedral, Metro, Vandenberg, OceanLab, Area 51, Dockyard, Ship.
+
+**Survey** (Firefox; Chromium where measured, in its worker mode, where the page thread has no simulation: page p50 / worker p50, then
+its `p.mirrors`). Sorted by the mirror phase.
+
+| View | Map | Spot (Location; yaw) | FF p50 / p95 | p.mirrors | upload MB | draws | Chromium p50 (page / worker), p.mirrors |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Club, wall x=128 (surface 232, 864 x 256) | 10_Paris_Club | [-72,-1168,32]; 0 | 17.0 / 20.0 | 3.6 | 0.7 | 176 | 7.4 / 4.9, 3.2 |
+| Club, slanted wall (surface 231) | 10_Paris_Club | [-128,-1368,32]; 49152 | 17.0 / 21.0 | 3.6 | 0.7 | 158 | 6.5 / 4.5, 2.8 |
+| Club, both walls from 400 units | 10_Paris_Club | [-200,-1100,40]; 55200 | 16.0 / 19.0 | 3.4 | 0.7 | 162 |  |
+| Bar, wall y=-764 from 480 | 02_NYC_Bar | [-768,-284,48]; 49152 | 16.0 / 19.0 | 2.9 | 0.4 | 253 |  |
+| HK VersaLife, wall y=428 (39936) | 06_HongKong_VersaLife | [-944,628,-16]; 49152 | 13.0 / 16.0 | 2.3 | 0.6 | 134 | 2.5 / 6.7, 1.4 |
+| WanChai Underworld, three BreakableGlass movers (view a) | 06_HongKong_WanChai_Underworld | [-1024,-1650,-336]; 49152 | 20.0 / 22.0 | 2.3 | 0.6 | 151 | 3.4 / 9.4, 1.1 |
+| Club, bathroom mirror (651) | 10_Paris_Club | [-1208,-1436,-160]; 0 | 13.0 / 15.0 | 2.3 | 0.5 | 164 |  |
+| Club, bathroom mirror (656) | 10_Paris_Club | [-1384,-1064,-160]; 32768 | 12.0 / 15.0 | 2.2 | 0.4 | 150 |  |
+| Bar, wall y=-764 (conversation) | 02_NYC_Bar | [-768,-564,48]; 49152 | 14.0 / 18.0 | 2.2 | 0.3 | 150 | 4.3 / 5.6, 1.4 |
+| UNATCO Island, floor z=-240 | 01_NYC_UNATCOIsland | [-4648,1794,-192]; 16384 | 17.0 / 21.0 | 1.9 | 0.5 | 120 | 2.8 / 8.2, 1.0 |
+| HK MJ12 lab, wall x=-272 | 06_HongKong_MJ12lab | [-472,2448,-592]; 0 | 16.0 / 19.0 | 1.9 | 0.5 | 122 |  |
+| WanChai Underworld, floor z=-384 | 06_HongKong_WanChai_Underworld | [-1616,-3074,-336]; 16384 | 16.0 / 19.0 | 1.9 | 0.4 | 200 |  |
+| HK MJ12 lab, floor (conversation) | 06_HongKong_MJ12lab | [0,-104,176]; 16384 | 17.0 / 20.0 | 1.9 | 0.3 | 85 | 3.1 / 7.4, 1.0 |
+| UNATCO MJ12 lab, wall y=1042 | 05_NYC_UNATCOMJ12lab | [-2776,842,-148]; 16384 | 14.0 / 17.0 | 1.7 | 0.3 | 107 |  |
+| Smuggler, DeusExMover7 | 02_NYC_Smug | [-576,1530,250]; 16384 | 10.0 / 12.0 | 1.6 | 0.3 | 107 |  |
+| Chateau, wall y=-260 | 10_Paris_Chateau | [-768,60,416]; 49152 | 11.0 / 13.0 | 1.5 | 0.3 | 117 |  |
+| WanChai Canal, floor z=-448 | 06_HongKong_WanChai_Canal | [-1024,2765,-400]; 16384 | 12.0 / 16.0 | 1.4 | 0.4 | 165 |  |
+| HK Helibase, wall y=-640 | 06_HongKong_Helibase | [1248,-440,144]; 49152 | 11.0 / 13.0 | 1.4 | 0.3 | 110 |  |
+| Training, floors from the start, looking down | 00_Training | [-1149,826,-65]; 0 | 10.0 / 14.0 | 1.4 | 0.3 | 112 |  |
+| UNATCO HQ, floor z=408 | 01_NYC_UNATCOHQ | [-999,448,456]; 0 | 11.0 / 13.0 | 1.3 | 0.3 | 118 |  |
+| HK VersaLife, wall y=428 and wall x=-712 | 06_HongKong_VersaLife | [-500,600,-16]; 38318 | 13.0 / 17.0 | 1.3 | 0.6 | 110 |  |
+| WanChai Underworld, wall x=1600 (49152) | 06_HongKong_WanChai_Underworld | [1400,0,-272]; 0 | 12.0 / 14.0 | 1.2 | 0.2 | 78 |  |
+| Free Clinic, wall y=-322 | 02_NYC_FreeClinic | [1136,-522,-272]; 16384 | 9.0 / 11.0 | 1.0 | 0.2 | 93 |  |
+| Intro, floor (cutscene) | 00_Intro | [0,-2256,-80]; 16384 | 9.0 / 12.0 | 1.0 | 0.1 | 54 |  |
+| Hotel, wall x=1729 (opaque unlit) | 02_NYC_Hotel | [1929,-1158,112]; 32768 | 10.0 / 11.0 | 1.0 | 0.3 | 100 |  |
+| Intro, floor and DeusExMover0 (cutscene) | 00_Intro | [0,-2256,-80]; 49152 | 9.0 / 12.0 | 1.0 | 0.1 | 55 |  |
+| Everett (conversation) | 11_Paris_Everett | [1024,1640,430]; 53000 | 9.0 / 11.0 | 0.8 | 0.2 | 57 |  |
+| Training, floor 1 (dark spot) | 00_Training | [-428,600,-80]; 0 | 9.0 / 14.0 | 0.8 | 0.2 | 80 |  |
+| Everett, from 480 | 11_Paris_Everett | [1040,1180,400]; 16384 | 10.0 / 12.0 | 0.8 | 0.3 | 64 |  |
+| 747, floor z=306, looking down | 03_NYC_747 | [1256,-600,354]; 0 | 8.0 / 9.0 | 0.7 | 0.1 | 80 |  |
+| TrainingFinal, floor | 00_TrainingFinal | [6576,-5691,80]; 16384 | 8.0 / 9.0 | 0.6 | 0.2 | 71 |  |
+| UNATCO MJ12 lab, wall x=-2862 (conversation) | 05_NYC_UNATCOMJ12lab | [-3062,1168,-128]; 0 | 15.0 / 18.0 | 0.1 | 0.1 | 86 |  |
+| Chateau, wall x=-444 (55744) | 10_Paris_Chateau | [-764,128,416]; 0 | 9.0 / 11.0 | 0.1 | 0.1 | 71 |  |
+| Chateau, wall y=420 | 10_Paris_Chateau | [-768,100,416]; 16384 | 9.0 / 11.0 | 0.1 | 0.1 | 65 |  |
+| UNATCO HQ, wall y=-383 | 01_NYC_UNATCOHQ | [328,-97,46]; 16384 | 9.0 / 11.0 | 0.1 | 0.1 | 69 |  |
+| 747, floor z=306, level gaze | 03_NYC_747 | [1256,-600,354]; 0 | 7.0 / 8.0 | 0.1 | 0.1 | 68 |  |
+| Smuggler, wall y=-1746 | 02_NYC_Smug | [-788,1546,-48]; 16384 | 8.0 / 9.0 | 0.1 | 0.1 | 62 |  |
+| Endgame1, floor (credits) | 99_Endgame1 | [192,-7048,-48]; 16384 | 11.0 / 15.0 | 0.0 | 0.1 | 23 |  |
+
+**Reading it.**
+* **The mirror phase is small everywhere a mirror was in view:** 0.6 to 3.6 ms (the club's two walls the largest: four child passes,
+  about 175 draw calls, 0.7 MB in 290 to 340 upload calls a frame). No view comes near the club's earlier 165 MB and 36 ms.
+  Chromium's phase is 1.0 to 1.4 ms at the single-plane spots measured against Firefox's 1.9 to 2.3, and 2.8 to 3.2 at the club's walls against
+  3.6: the Firefox excess is the JS speed of three.js's per-pass draw work (about twice), not a trap.
+* **Five spots are over 16.7 ms (page mean):** the club's wall x=128 (17.4) and slanted wall (17.3), the Underworld panes (19.9), the
+  Island floor (17.3) and the HK MJ12 lab's floor (16.7, in a conversation). Phase means:
+  * Club wall x=128: tick 5.2, actors 1.9, fog 2.0, mirrors 3.6, HUD 2.0, render 0.3. Without the mirror phase it is 13.8 ms; the
+    mirror and its child frames' fog are what take it over the bound. Chromium's page does the same phase in 3.2 ms (the simulation is in
+    its worker, 4.9 ms).
+  * Underworld panes (three one-way pane movers, view a of "Original at the same views"): tick 9.7 (Chromium's worker needs 9.4 for that
+    map), mirrors 2.3. Over budget without any mirror.
+  * Island floor: tick 8.4, mirrors 1.9. HK MJ12 lab floor: tick 7.5, mirrors 1.9. The map's tick (script work in Firefox,
+    docs/firefox-60fps-plan.md) is the larger part; the mirror phase is what is left over the bound.
+* **At DPR 2** (the Mac's Retina) the club corner (`[-100,-1250,40]`, yaw 52436: 4 child passes, depth 2, 7.5 M scissor pixels) takes
+  20.8 ms a frame, interval 24 ms, 41 fps: `p.mirrors` 4.25, `p.fog` 2.3, tick 6.9. The frame interval is 3.5 ms longer than the
+  page's work (the page waits on the GPU); every phase is a little up, none by a trap's amount.
+* **The club's mirror phase by profile** (`gecko-phase.mjs --entry 'src/viewer/mirrors\.mjs'`, wall x=128, 3.5 ms): three.js's child
+  `render` calls 1.7 (scene traversal, `updateMatrixWorld` 0.4, program and uniform setup), the fog tile restore 0.94 (`copyTile` 0.5 of it,
+  `texSubImage2D` 0.4, the tile-sized sources of the 2026-11-06 fix), the actors' lighting for each pass 0.55, the hitch log's GL
+  wrapper 0.57 (measurement, inside the others). A single-plane view takes the same shape: the Bar from 480 units (127 k scissor pixels, one
+  pass, 253 draws) is 2.9 ms, 1.56 of it three.js's render. The cost follows the draw calls of the reflected frame, not the pixels.
+
+**Cause found: `from` copies in the fog update.** Profiling the club (`gecko-phase.mjs --entry '^update \(src/viewer/fog-pass'`) showed
+`Uint8Array.from(texels)` (the child frame's kept map) and `Array.from(texels)` (`note`, the validation record of the most fogged map, built
+again each time a map beat the frame's best) as 0.36 + 0.24 + 0.07 ms of self-hosted `from` and `next`, plus the garbage: SpiderMonkey runs
+them through the iterator protocol, a call per byte (the family of `anyFog`'s old `texels.some(Boolean)`, 1.26 ms of Battery Park's frame). Both are
+now byte copies: `new Uint8Array(texels)` for the kept map, and in `note` a byte copy that becomes the Array the validators read
+(`stats.frameCase.texels`, a getter, read across spreads and clones) on its first read. The texels are the same bytes: the fog update's
+output, the GPU tiles and the oracle comparison are unchanged. `?fogCopy=from` (env `FOG_COPY=from`) keeps the old path.
+* **Cost:** Firefox inline, 10_Paris_Club, `hitch-ab.mjs --arms old:fogCopy=from,new: --pairs 4` twice (eight pairs, interleaved, 14 s
+  each, `--place '{"location":[-100,-1250,40],"rotation":[0,52436,0]}'`): `p.fog` 2.25 → 1.71 ms (all eight pairs between 2.17 and 2.33
+  against 1.59 and 1.79), the page's `animate` mean 17.24 → 16.87 ms (medians of the runs' means 17.04 → 16.48). Mirror-phase outliers (4.3 to 4.7
+  against 3.8 to 4.0) fell in three of the eight "new" runs and one "old" run, some beside external gaps in the same run, so the saving
+  shows in the fog phase more cleanly than in the frame. Chromium (worker mode, one run each, wall x=128): `p.fog` 1.56 → 1.13 ms, the page
+  frame 7.5 → 7.0 ms, no regression.
+* **Checks:** validate-volumetric-fog-play (the oracle comparison of the club's frame case through the getter), validate-mirrors-play,
+  validate-mirror-plan-play, validate-sky-in-mirror-play, validate-weapon-mirror-play, validate-strobe-mirror-play and
+  validate-sprite-tiles-mirror-play pass.
+
+**Left as it is.**
+* The original's recursion (the corner's four passes to depth 2, 3 at the limit) and every pass's draw calls: original behaviour.
+* The restore's 0.94 ms at the club (5% of the frame): by the code it restores the tiles after every child pass although only the root
+  frame's draw reads them, and it restores tiles of surfaces the root frame does not draw (`mainVisible` false, whose GPU tiles are
+  rewritten before they next draw). A restore once at the end of the mirror pass, or skipping those surfaces, would save about 0.3 to
+  0.5 ms each (an estimate from the profile, not tried), under the 5% bar the project sets for speed work, and the second breaks the
+  "GPU page equals its pixels" check (`pagesMatch`).
+* three.js's `scene.updateMatrixWorld` in every child `render` (0.4 ms at the club).
+
+**Not explained / not covered.** The seven views with no mirror pass (above). The Mac itself (Metal through ANGLE, DPR 2): the DPR 2
+run here is the same card, so a Mac-specific copy path like the club's would show up there first; none is known. Chromium was measured at
+seven of the spots only.
