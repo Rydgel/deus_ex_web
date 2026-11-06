@@ -480,7 +480,9 @@ export function createScriptTriggers({
     return flagBase;
   }
 
-  return { get flagBase(){return flagBase;}, handleNative, bindPlayerFlagBase, useFlagBase };
+  // `getPlayerPawn`: handleNative's answer to native 720, for the Rust VM's direct path (script-vm-rust.mjs playerPawn), or null where the
+  // host supplied no graph service.
+  return { get flagBase(){return flagBase;}, handleNative, bindPlayerFlagBase, useFlagBase, getPlayerPawn: resolvePlayerPawn };
 }
 
 /**

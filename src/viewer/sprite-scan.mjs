@@ -31,6 +31,7 @@
 import { ensureRenderInterface, particleIteratorItems } from '../runtime/script-particles.mjs';
 import { laserIteratorItems, laserProxySnapshot } from '../runtime/script-laser.mjs';
 import { handleOf } from '../runtime/script-object-handles.mjs';
+import { particleItemsMode, particleItemCounts } from '../runtime/script-vm-particles.mjs';
 import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
 
 /** `pin`: validation only (visual-acceptance.mjs --rng-pin), called at the start of every SetupDynamics run (scan, rescan): the shared stream is set
@@ -47,12 +48,51 @@ export function createSpriteScan(runtime, { player, constructIterator, frand, pi
     const { sprites, meshItems, iterators, iteratorIndex, proxies } = out;
     const viewer = player();
     let order = 0, viaIterator = false;
-    const record = (actor, { location, drawScale, scaleGlow }) => {
+    const recordTo = (sink, actor, { location, drawScale, scaleGlow }) => {
       const reference = read(actor, 'Texture');
       if (!reference) return;
-      sprites.push({ handle: handleOf(actor), order,
+      sink.push({ handle: handleOf(actor), order,
         texture: { key: reference.key ?? null, package: reference.asset?.name, index: reference.index },
         style: read(actor, 'Style') & 255, location: [...location], drawScale, scaleGlow, ...(viaIterator ? { viaIterator: true } : {}) });
+    };
+    const record = (actor, item) => recordTo(sprites, actor, item);
+    // A particle iterator's items, one record each (when the proxy draws as a sprite), as the reference makes them: the proxy's DrawType,
+    // Texture and Style read again for every item.
+    const referenceRecords = (sink, items) => {
+      for (const item of items) {
+        if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) recordTo(sink, item.actor, item);
+        order++;
+      }
+    };
+    // The same records with the proxy's fields read once: the items are one proxy's (script-particles.mjs `particleIteratorItems`) and are
+    // recorded after the run, with no script between them, so every item finds the fields as the first does.
+    const hoistedRecords = (sink, items) => {
+      let actor = null, drawn = false, reference = null, style = 0, handle = 0;
+      for (const item of items) {
+        if (item.actor !== actor) {
+          actor = item.actor;
+          const drawType = read(actor, 'DrawType') & 255;
+          drawn = drawType === 1 || drawType === 7;
+          reference = drawn ? read(actor, 'Texture') : null;
+          if (reference) { style = read(actor, 'Style') & 255; handle = handleOf(actor); }
+        }
+        if (reference) sink.push({ handle, order,
+          texture: { key: reference.key ?? null, package: reference.asset?.name, index: reference.index },
+          style, location: [...item.location], drawScale: item.drawScale, scaleGlow: item.scaleGlow, ...(viaIterator ? { viaIterator: true } : {}) });
+        order++;
+      }
+    };
+    const particleRecords = items => {
+      const mode = particleItemsMode(), first = order;
+      if (mode === 'js') return referenceRecords(sprites, items);
+      if (mode !== 'verify') return hoistedRecords(sprites, items);
+      const want = [], got = [];
+      referenceRecords(want, items);
+      order = first;
+      hoistedRecords(got, items);
+      if (JSON.stringify(want) !== JSON.stringify(got)) throw new Error(`PARTICLE_ITEMS=verify: the sprite records of ${items[0]?.actor?.name} differ from the per-item reads`);
+      sprites.push(...got);
+      particleItemCounts.recordsVerified += got.length;
     };
     return (actor, index) => {
       if (!actor || actor === viewer) return;
@@ -96,12 +136,9 @@ export function createSpriteScan(runtime, { player, constructIterator, frand, pi
         }
         viaIterator = true;
         try {
-          for (const item of particleIteratorItems(runtime, iterator, viewer, {
+          particleRecords(particleIteratorItems(runtime, iterator, viewer, {
             processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args),
-            farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) })) {
-            if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) record(item.actor, item);
-            order++;
-          }
+            farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) }));
         } finally { viaIterator = false; }
         return;
       }

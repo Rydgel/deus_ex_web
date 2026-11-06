@@ -8,6 +8,8 @@
 //   node scripts/gecko-slow-ticks.mjs RUN.json PROFILE.json [--skip 5] [--slow 0.1] [--top 25] [--json OUT]
 //     [--children REGEX [--innermost]] (also: the first two named callees under the outermost, or innermost, frame matching REGEX, frames matching it skipped,
 //     e.g. '^invokeNative ')
+//     [--phase NAME] (the slow tenth by the page's phase `p.NAME` instead of `p.tick`) [--under REGEX] (the samples attributed are those under the
+//     outermost frame matching REGEX instead of the level tick, e.g. '^actors \(src/viewer/sim-session'; the clock join stays on the level tick)
 //
 // The clocks are joined as scripts/gecko-gaps.mjs joins them: the rows count from the page's `meta.started` (a system-clock date),
 // the samples from the content process's `meta.startTime`; the offset (within 5 s) whose per-frame count of level-tick samples
@@ -20,7 +22,8 @@ const skipS=Number(option('skip',5)),slowShare=Number(option('slow',0.1)),top=Nu
 const run=JSON.parse(readFileSync(runFile,'utf8')),prof=JSON.parse(readFileSync(profFile,'utf8'));
 const d=run.dump,ci=Object.fromEntries(d.columns.map((c,i)=>[c,i])),started=Date.parse(d.meta.started);
 const mapAt=d.events.filter(e=>e.kind==='map').at(-1)?.t??0;
-const frames=d.rows.filter(r=>r[ci.drawn]&&r[ci.t]>=mapAt+skipS*1000).map(r=>({t:r[ci.t],animate:r[ci.animate],tick:r[ci['p.tick']]}));
+const phaseCol=`p.${option('phase','tick')}`;if(!(phaseCol in ci))throw new Error(`no column ${phaseCol} in the hitch log`);
+const frames=d.rows.filter(r=>r[ci.drawn]&&r[ci.t]>=mapAt+skipS*1000).map(r=>({t:r[ci.t],animate:r[ci.animate],tick:r[ci['p.tick']],phase:r[ci[phaseCol]]}));
 
 // the page's main thread: the Web Content process's GeckoMain with the most samples
 let thread=null,base=0;
@@ -33,7 +36,7 @@ const clean=s=>s.replace(/\[\d+\]$/,'').replace(/https?:\/\/[^/]+\//g,'').replac
   .replace(/ \(src\/runtime\/script-vm-kernel\.mjs line \d+ > WebAssembly\.compile:\d+\)/,'');
 const cache=new Map();
 const framesOf=s=>{let r=cache.get(s);if(r)return r;r=[];for(let x=s;x!==null;x=st.data[x][st.schema.prefix])r.push(clean(S[ft.data[st.data[x][st.schema.frame]][ft.schema.location]]));cache.set(s,r);return r;};
-const TICK=/^tick \(src\/viewer\/game\.mjs:/;
+const TICK=/^tick \(src\/viewer\/game\.mjs:/,UNDER=option('under',null)?new RegExp(option('under')):TICK;
 const named=f=>!/^0x[0-9a-f]+$/.test(f)&&!/trampoline|^js::RunScript|^JS::Call|^js::Call|^js::Interpret|Interpreter|BaselineCompile|^AsyncFunction/.test(f);
 const gcFrame=f=>/Minor GC|GC slice|GCRuntime|Nursery::collect|js::gc::|CycleCollect|nsCycleCollector|GCMajor|markUntilBudget|sweep/i.test(f);
 const samples=thread.samples.data.filter(r=>r[ss.stack]!==null).map(r=>({at:base+r[ss.time],fr:framesOf(r[ss.stack])})).sort((a,b)=>a.at-b.at);
@@ -55,14 +58,14 @@ const bestN=frames.reduce((n,f)=>{const a=started+f.t+best;return n+lower(tickSa
 const marks=[];{const ms=thread.markers.schema;for(const row of thread.markers.data){const kind=S[row[ms.name]];if(!['GCSlice','GCMinor','CCSlice'].includes(kind))continue;
   const a=base+row[ms.startTime],b=base+(row[ms.endTime]||row[ms.startTime]);marks.push({kind,a,b});}}
 
-const ordered=[...frames].sort((a,b)=>b.tick-a.tick),nSlow=Math.max(1,Math.round(frames.length*slowShare));
+const ordered=[...frames].sort((a,b)=>b.phase-a.phase),nSlow=Math.max(1,Math.round(frames.length*slowShare));
 const groups={slow:ordered.slice(0,nSlow),rest:ordered.slice(nSlow)};
 const tally={};
 for(const [g,list] of Object.entries(groups)){
   const kids=new Map(),self=new Map(),incl=new Map(),imp=new Map(),gc={samples:0,GCSlice:0,GCMinor:0,CCSlice:0};let tickN=0,tickMs=0;
   for(const f of list){
-    tickMs+=f.tick;const a=started+f.t+best,b=a+f.animate;
-    for(let i=lower(samples,a);i<samples.length&&samples[i].at<b;i++){const fr=samples[i].fr,ti=fr.findIndex(x=>TICK.test(x));if(ti<0)continue;tickN++;
+    tickMs+=f.phase;const a=started+f.t+best,b=a+f.animate;
+    for(let i=lower(samples,a);i<samples.length&&samples[i].at<b;i++){const fr=samples[i].fr,ti=fr.findIndex(x=>UNDER.test(x));if(ti<0)continue;tickN++;
       const under=fr.slice(0,ti);
       const leaf=under.find(named)??under[0]??'(tick itself)';self.set(leaf,(self.get(leaf)??0)+1);
       for(const x of new Set(under.filter(named)))incl.set(x,(incl.get(x)??0)+1);
@@ -87,7 +90,7 @@ const deltaTable=(key,title)=>{
   return rows;
 };
 console.log(`${runFile}: ${frames.length} drawn frames from ${skipS} s after the map; clock offset ${best} ms (correlation ${bestR.toFixed(2)}; ${bestN} of ${tickSamples.length} level-tick samples inside a frame); interval ${interval} ms`);
-for(const g of ['slow','rest'])console.log(`${g.padEnd(5)} ${String(tally[g].frames).padStart(5)} frames: p.tick ${tally[g].tickPhaseMs.toFixed(2)} ms, level tick sampled ${tally[g].tickSampledMs.toFixed(2)} ms; collector frames ${tally[g].gc.sampledMs.toFixed(2)} ms, markers in the frame: GCSlice ${tally[g].gc.GCSliceMs.toFixed(2)}, GCMinor ${tally[g].gc.GCMinorMs.toFixed(2)}, CCSlice ${tally[g].gc.CCSliceMs.toFixed(2)} ms`);
+for(const g of ['slow','rest'])console.log(`${g.padEnd(5)} ${String(tally[g].frames).padStart(5)} frames: ${phaseCol} ${tally[g].tickPhaseMs.toFixed(2)} ms, ${UNDER===TICK?'level tick':UNDER.source} sampled ${tally[g].tickSampledMs.toFixed(2)} ms; collector frames ${tally[g].gc.sampledMs.toFixed(2)} ms, markers in the frame: GCSlice ${tally[g].gc.GCSliceMs.toFixed(2)}, GCMinor ${tally[g].gc.GCMinorMs.toFixed(2)}, CCSlice ${tally[g].gc.CCSliceMs.toFixed(2)} ms`);
 const out={offset:best,correlation:bestR,interval,groups:Object.fromEntries(Object.entries(tally).map(([g,t])=>[g,{frames:t.frames,tickPhaseMs:t.tickPhaseMs,tickSampledMs:t.tickSampledMs,gc:t.gc}]))};
 out.imports=deltaTable('imp','by the Rust core\'s import');
 out.self=deltaTable('self','by leaf (self)');

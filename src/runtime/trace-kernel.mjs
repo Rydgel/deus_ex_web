@@ -175,7 +175,7 @@ class TraceKernel {
     // No kernel call is in flight when a finalizer runs, so the range is
     // reusable at once.
     this.registry = new FinalizationRegistry(({base, size}) => { arena.release(base, size); if (reclaim) arena.reclaim(); });
-    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0, bounds: 0, boundsFallback: 0};
+    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0, bounds: 0, boundsFallback: 0, trackedAsks: 0, importMs: 0, importNodes: 0};
     // Tracked models (collisionModel objects) -> {base, wordsAt, wordCount, generation, count}.
     this.trackedModels = new WeakMap();
     this.views();
@@ -251,14 +251,18 @@ class TraceKernel {
       this.registry.register(model, {base, size});
       this.stats.models++;
     }
+    this.stats.trackedAsks++;
     if (entry.generation !== generation || entry.count !== count) {
       if (count === 0 || count > source.capacity) return 0;
+      const started = performance.now();
       new Uint8Array(this.arena.memory.buffer, entry.base + HEADER, count * NODE)
         .set(new Uint8Array(source.memory.buffer, source.at, count * NODE));
       this.x.trace_import_bsp(entry.base, count, model.rootOutside ? 1 : 0, entry.wordsAt, entry.wordCount);
       entry.generation = generation;
       entry.count = count;
       this.stats.imports++;
+      this.stats.importNodes += count;
+      this.stats.importMs += performance.now() - started;
     }
     return entry.base;
   }

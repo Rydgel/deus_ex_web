@@ -39,6 +39,11 @@ Landing supplies `(0, 0)`; SpawnActor supplies `(0, 1)` at `0x103951ae`.
   candidate only if the final point check returns exactly 1
   (`0x10398928`–`0x103989f4`).
 
+The zero-extent case also runs in the Rust core (2026-11-06): FarMoveActor of a ParticleProxy (bCollideWorld, CollisionRadius and
+CollisionHeight zero) is this one SinglePointCheck, `trace.rs point_clear` over the world model (the moving brush tracker's while it
+lives), compared with `point-check.mjs` by `validate-trace-kernel` and, inside the whole CurrentItem loop, by
+`validate-particle-items` ([particles](particles.md#the-loop-in-rust-2026-11-06)).
+
 Engine.dll double constants: `0x1042eab0` = 1.05, `0x1042eac0` = 1.5,
 `0x1042ead0` = 2. Core's appSqrt entry (`0x101032ba`) jumps to `0x10123290`.
 

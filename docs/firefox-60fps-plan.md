@@ -97,8 +97,8 @@ the steady frames' cost, from the step 0 profiles):
   [three tiny imports the Rust tick made for every actor](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
   now in Rust.
 * **Not a port: decals.** They are already Rust. The decal attach is 0.78 of `AttachDecal`'s 0.90 ms in the bunker's slow frames and
-  averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster means changing the Rust algorithm, and only the bunker
-  would gain much.
+  averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster meant changing the Rust algorithm, and only the bunker
+  gained much: [done, exactly](#decals-are-already-in-rust-2026-11-05) (2026-11-06, the first Progress entry).
 * Expected: the slow tenth's 4.3 to 8.6 ms by more than half, and 2 to 4 ms of the median. Each family's A/B decides its share.
 
 **3. Uploads and fog on the page** (Battery Park, the Bar, the Ship).
@@ -167,6 +167,10 @@ the Gecko profiles:
 Porting the glue would save 0.05 to 0.1 ms, under the 5% rule. x87 emulation as a whole is 0.1 to 0.4 ms of a frame on the four
 maps. The order above follows these figures.
 
+The Rust attach itself was then made faster without a port: `FindSurface` and `GatherNodes` use their arithmetic for signs only, and
+a table of edge planes with an error-bounded f64 filter decides them exactly ([decals](decals.md#fast-surface-finding-2026-11-06),
+the first Progress entry).
+
 ### Global function calls run in Rust (2026-11-05)
 
 The census's `js effect 0x38` rows are EX_GlobalFunction, `Global.Tick(DeltaTime)` and its siblings in the state-level overrides
@@ -225,6 +229,48 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, the bunker's particle loop in Rust, and FindSpot's point check in the noncolliding FarMoveActor: meets the bar**
+  ([below](#the-bunker-particle-loop-2026-11-06)). The slowest tenth of the bunker's actor phase held the ParticleIterator's render-iterator
+  protocol, run for the root frame and again for every child frame (`rescan`): 0.85 ms a frame, 0.50 of it FarMoveActor of the
+  ParticleProxy, which `far_move` declined because the proxy is `bCollideWorld` (a zero extent: FindSpot is one point check on the world model).
+  The point check (`trace.rs point_clear`), the decision (`render.rs far_plan`) and the CurrentItem loop over the iterator's cells
+  (`particles.rs particle_items`; a zone change goes back to JavaScript at its step) are in Rust, behind `?particleItems=` and `?farMove=`
+  (`js`, `verify`; `nofit` is the baseline), with the proxy's per-record field reads hoisted in `sprite-scan.mjs`. Twelve interleaved Firefox
+  pairs: the page's slowest tenth −1.10 ms (the bar is 0.5; 10 of 12 pairs), the mean −0.22, p95 −1.08, `p.sprites` and `p.actors` −0.10 each in
+  every pair; digests unchanged; `verify` compared 4,042 runs in Firefox inline and 4,232 in Chromium's worker and 5,196 and 12,954 in Node, with
+  129 and 112 particles put in solid refused alike. Code on branch `worktree-agent-a12ad8f2a7c5f5035`, committed and not merged.
+* **2026-11-06, what the Rust VM still hands to JavaScript: ranked, no family near the bar, nothing built**
+  ([below](#what-the-rust-vm-still-hands-to-javascript-2026-11-06)). `js_eval` is 1.08 ms a frame of the bunker's tick on average (0.90 in the
+  rest, 2.65 in the slowest tenth). A per-tick census of what it evaluates (`scripts/script-vm-fallback-census.mjs`: self time by node, native
+  and called function, the slowest tenth against the rest) puts 1.45 of the tenth's 2.55 ms gap (Node units) in the bodies of natives (Spawn,
+  Destroy, AttachDecal, the pawn-navigation services), which no node translation touches. What is evaluation (calls with out, struct or vector
+  parameters, context calls, `let`s the lowering leaves, `foreach` starts, `GetPlayerPawn`, `SetRotation`, small natives' call glue) is a pool of
+  0.83 ms a tick on the bunker (1.82 in the tenth) and 1.10 on the Island, in 566 and 394 rows, 14 of them holding half: `GetPlayerPawn` 0.08 to
+  0.11 a tick, `SetHitColor` 0.07, the `CycleActors` start 0.06 to 0.07, `SetRotation`, `Trace`, the `let`s of name and struct fields (0.02
+  each). The three largest rows are 0.21 (bunker) and 0.25 (Island), in Node's timer-inflated units: 26% of the bunker's pool, where the 0.3 ms
+  mean-tick bar is 45% of it. No one family reaches it; the three with the seven unshipped host cuts (0.17) might, at a feature each in the Rust
+  interpreter. Nothing built; the census scripts are the commit.
+* **2026-11-06, the decal attach's surface finder and node gatherer, exact and cheaper** ([decals](decals.md#fast-surface-finding-2026-11-06)).
+  The Rust `decal_attach` was the bunker's biggest single item in the slow tenth (0.8 to 1.1 ms of `find_surface`'s x87 leaves against 0.03 in
+  the rest): `FindSurface` walks a coplanar chain of 451 nodes (1,616 vertex tests) an attach on the long route, each test about 31 `Ext`
+  operations. Profile split of the bunker (Firefox inline, 60 s): `attachDecalSurfaces` 0.16 ms a drawn frame, `find_surface` and the `Ext`
+  operations under it 0.11, `gather_nodes` 0.02, JavaScript glue 0.02. Both functions use their arithmetic for signs only, so a table of
+  each polygon edge's plane (keyed on the nine input words, 16,384 entries, hit rate 99.8% on the bunker and 98.6% on the Island) and an
+  f64 evaluation with a proven error bound (`|X| > 2^-44 * Q` decides, everything near zero or non-finite takes the x87 expression) replace
+  them. `DECAL_FAST=off|on|verify` (`?decalFast=`, default on); the reference bodies are untouched. Firefox inline on the bunker,
+  four interleaved pairs: mean tick 6.00 -> 5.51 ms (-0.49), slowest tenth 11.93 -> 10.58 ms (-1.35), page p50 13.0 -> 12.3 ms, p95
+  22.3 -> 21.5 ms; all four pairs favor the new body in both figures (tick 5.47/5.83/5.33/5.41 against 6.08/5.90/5.99/6.04; slowest tenth
+  10.64/10.95/10.30/10.42 against 12.69/11.58/11.66/11.77). The Island (two pairs) is within noise, 6.96 against 6.90 ms (its attach is 0.11 ms
+  a frame). Digests unchanged in `on` and `verify` on the five baselines and both long routes, a Firefox inline `verify` run of 40 s on
+  each map is clean, `validate-decal-fast.mjs` (12 million generated cases against the x87 expressions) and `validate-decal-attach`
+  pass, and so do the Chromium worker-mode decal validators (`validate-decals-play`, `validate-decal-vertices-play`). Profile after the change
+  (Firefox inline, bunker, 60 s, names from a non-stripped build): `attachDecalSurfaces` 0.16 -> 0.10 ms a drawn frame, of which the Wasm
+  `decal_attach` 0.07 (the edge-table lookups `fast::edge` 0.02 self, `fast::find_surface` 0.01, trace and the grid's `Ext` operations
+  the rest) and JavaScript 0.03 (`followDecalTracker` with its `setRotation` and the tracker's `rotation` reads 0.02). In the slowest tenth
+  the decal rows are `fast::edge` 0.18 ms, `fast::find_surface` 0.10, the grid's `Ext::add` and `Ext::rounded` 0.05 each, `setRotation` 0.07,
+  `followDecalTracker` 0.03 (about 0.5 ms against 1.2 before). Left, each under the 0.5 ms bar: the table lookup itself (a 1.2 MB table
+  read at random; a smaller key compare or a prefetch order is the lever), `setRotation` per mover surface per attach, and the
+  16-cell grid's `Ext` work on a Shadow (MultiDecalLevel 4).
 * **2026-11-06, the JavaScript imports the batch still calls: profiled, one change built, not merged** ([below](#import-cuts-not-merged-2026-11-06)).
   `js_move_riders`, `js_walk_prelude`, `js_object` and `js_tick_refresh` add up to about 1.1 ms of the Island's tick (the first three 0.5 ms of
   the bunker's, 1.5 ms in its slowest tenth), but each is a different thing and none is an invalidation the way the bunker's receiver epoch was, except
@@ -232,6 +278,13 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   chain) were cut exactly (digests equal, verify modes clean); Firefox inline, four interleaved pairs each: bunker mean tick
   5.64 → 5.50 ms, slowest tenth 11.07 → 10.77; Island 6.58 → 6.54 and 9.77 → 9.78. Under the 0.5 ms bar: the code is on branch
   `import-cuts-unshipped` (b1f7e186), master unchanged.
+* **2026-11-06, the bunker's slow tenth: seven exact host cuts, under the bar, not merged**
+  ([below](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06)). `js_tick_resume` and `js_tick_state` hold no JavaScript around the Rust
+  bodies (every frame on the path under 0.02 ms: their +0.8 ms is the state code's content). Cut exactly, behind switches: the rider table and
+  `GetPlayerPawn` (b1f7e186), `compactScriptActors`' reads (`level_flagged`), the Errors `PlaySound`'s graph reads threw, `followDecalTracker`'s
+  rewrites, `Client.Decals`' field-list rebuilds and `ReadInput`'s. Digests unchanged, verify modes clean in Node and Firefox. Firefox inline,
+  four interleaved pairs: mean tick 5.40 -> 5.23 ms, slowest tenth 10.12 -> 9.85, page p95 20.5 -> 20.0: under 0.3 and 0.5 ms. Code on
+  `bunker-cuts-unshipped`.
 * **2026-11-06, the tick's reads of other objects in Rust** ([rust-core.md](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
   [the player's tick](script-player-tick.md#what-the-players-tick-costs-in-firefox-2026-11-06)). The step began as "the player's tick and the
   level's host work" (1.1 to 1.3 ms); the Island profile showed the player's tick spread over many parts of 0.03 to 0.6 ms, and under the
@@ -343,6 +396,26 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   On the synthetic 60 Hz clock, eight maps keep every frame at p95; the Island and the bunker drop to 30 Hz at p95. Five maps are
   still over 16.7 ms at page p95 (the Island by 4 ms, Battery Park and the Airfield by 2, Wan Chai by 1, the bunker by 6). The row verdicts
   (7.2.2, 7.2.4) need the headed set on a visible window.
+* **The frame-time set at midday, 2026-11-06** (master e43007c9: since the 04:40 set, the tick reads, the receiver epoch per identity
+  and the Level.Actors handle mirror, the fog restore and byte copies, and the exact fast decal attach; same command, headless,
+  indicative). Page frame p95 (p50), ms, against 04:40, and the headless drawn interval p95:
+
+  | Map | page p95 (p50) | 04:40 p95 | headless interval p95 |
+  |---|---:|---:|---:|
+  | Training | 11 (8) | 11 | 17.1 |
+  | Island | 20 (14) | 21 | 17.1 (was 33.2) |
+  | Bar | 10 (8) | 10 | 17.1 |
+  | Battery Park | 19 (16) | 19 | 17.1 |
+  | Airfield | 19 (15) | 19 | 17.1 |
+  | Wan Chai market | 16 (12) | 18 | 17.1 |
+  | Ship | 13 (10) | 13 | 17.1 |
+  | Chateau | 12 (10) | 12 | 17.1 |
+  | Everett | 9 (8) | 10 | 17.1 |
+  | Area 51 bunker | 22 (13) | 23 | 33.2 |
+
+  On the synthetic 60 Hz clock nine maps keep every frame at p95; the bunker still drops to 30 Hz at p95. Four maps are over
+  16.7 ms of page p95 (the bunker by 5 ms, the Island by 3, Battery Park and the Airfield by 2). The rows' verdicts still need the
+  headed set.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
@@ -423,10 +496,275 @@ the spread of the sessions. Why the profile overstated it: the rider fill is pai
 attach, so 0.4 ms there is 0.04 ms on the mean; and the import's inclusive time for `GetPlayerPawn` counts the resolver's reads and the
 handle lookup, which stay.
 
+(The cuts continue in [Bunker slow-tick cuts](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06): both pieces cherry-picked onto
+master with five more, still under the bar together.)
+
 **Left.** Every one of these four is a small share of a tick that is spread thin. The bunker's slow tenth is `js_eval` (3.62 against 0.83 ms a frame: the JavaScript calls `AttachDecal`, `DetachDecal`,
 `SetHitColor` and the spawns), not these imports. A route to 0.5 ms from this list is translation of whole families, not cuts:
 `WalkTexture` and the prelude's inputs in Rust, `GetPlayerPawn` as a Rust node over a host-maintained cell (no crossing), the
 `refresh` skip; each is about 0.1 ms.
+
+### Bunker slow-tick cuts: seven switches, not merged (2026-11-06)
+
+The task: a bundle of host-plumbing cuts for the Area 51 bunker, the last map over 16.7 ms at page p95 (22 ms, p50 13). Bar for shipping: at
+least 0.5 ms in the slowest tenth of ticks or 0.3 ms in the mean tick, from an interleaved Firefox A/B. The bundle measured 0.27 and 0.17 ms: under
+the bar, so master is unchanged and the code is on branch `bunker-cuts-unshipped` (the rider table and `GetPlayerPawn` of `import-cuts-unshipped`
+cherry-picked onto master 7db679d4, and the five cuts below in a second commit).
+
+**The slow tenth, again** (Firefox 155 inline, headless, scan route, 60 s, master e43007c9; `gecko-slow-ticks.mjs` on
+`.cache/perf/bunker-midday/{run.json,profile.json}`; 345 slow frames at `p.tick` 11.60 ms against 5.48 for the other 3,105). By the Rust core's
+import, ms a frame, slow / rest / difference:
+
+| Import | slow | rest | diff |
+|---|---:|---:|---:|
+| `js_eval` | 2.65 | 0.90 | +1.75 |
+| JavaScript with no Wasm under it | 1.79 | 1.11 | +0.67 |
+| `js_move_riders` | 0.68 | 0.17 | +0.51 |
+| `js_tick_resume` | 0.49 | 0.03 | +0.46 |
+| `js_object` | 0.55 | 0.21 | +0.34 |
+| `js_tick_state` | 0.36 | 0.03 | +0.33 |
+| `js_tick_physics` | 0.44 | 0.27 | +0.17 |
+
+* **`js_tick_resume` and `js_tick_state` hold no JavaScript around the Rust bodies.** Under them the path is `callback` → `js_tick_*` →
+  `processState` → `process` → `resumeFrame` → `resumeCompiled` → `resumeState` → `vm_statement`, and the self time of every frame on it is under
+  0.02 ms (`gecko-under.mjs --anchor '^js_tick_resume'`). The 0.46 and 0.33 are the state code's content, in a few frames of the tenth: 0.28 of the
+  0.46 is `callFunction` → `executeScript` → `resume` (script functions the Rust statements call through JavaScript because their callee has an
+  out or struct parameter, or a native body) and the natives under them (`Spawn`, `AttachDecal`). Nothing to cut there but the content.
+* **What the tenth adds, by subtree** (inclusive, slow minus rest): `execAttachDecal` +0.60 (the Rust attach 0.41, `followDecalTracker` 0.14),
+  `spawnActor` +0.56 (the spawned actor's script events 0.30, construction 0.15), `moveActorRiders` +0.47 (all of it the table's fill),
+  `cleanupDestroyed` +0.27 (`compactScriptActors` 0.17), the HUD tick +0.33, first-use lowering +0.17 (`loweringFor`: 286 of the 344 lowerings in a
+  1,200-tick Node run are the first use of a function, 58 a missing field cell becoming known, none an operand-epoch advance), `PlaySound` +0.13,
+  and collector work inside the frame: `GCSlice` 0.38 against 0.09 ms and `GCMinor` 0.27 against 0.08 (the tenth allocates more).
+* The profile's `selectLodMesh` > `axis` > `updateProjectionMatrix` frames under `invokeNative` are mislabelled JIT frames of `spawnActor`'s
+  callers (their callees are `processEvent` and `initializeObjectStorage`), not LOD code.
+
+**The cuts**, each behind a switch with the JavaScript reference reachable (`js`) and `verify` (both, compared); the page's `?flag=` reaches the
+simulation worker through `init` like the others, and `process-probe.mjs` now returns the worker's `DEUS_EX_*` switches (`switches`).
+
+| Switch (env, `?flag=`) | Cut | Why it is exact |
+|---|---|---|
+| `RIDER_TABLE`, `riderTable` | b1f7e186: the rider scan's table of Base reads kept across `CompactActors`' shifts and an attach | [Import cuts](#import-cuts-not-merged-2026-11-06); `=verify` compared 1.76 million slots on the bunker's long route |
+| `PLAYER_PAWN`, `playerPawn` | b1f7e186: `GetPlayerPawn` answered in `js_object` | as there (Island only) |
+| `COMPACT_SCAN`, `compactScan` | `level.rs level_flagged` lists the slots of `Level.Actors` from `FirstDynamicActor` that are null, `bDeleteMe` or not answerable by the image; `compactScriptActors` starts at the first and reads `bDeleteMe` of the flagged slots only | an unflagged slot holds an actor whose image flag reads false, which is what `readNamed` returns (`level_settled`'s premise, `LEVEL_SCAN=verify`); the loop, the shifts, the epoch advances and the warnings are the same code (unit test: 200 random arrays, same result, same advances, reads only at flagged slots) |
+| `SOUND_READ`, `soundRead` | `reflectedField` answers `undefined` for an object that is not an attached instance without calling `readNamed`, which threw out of `instance()` and was caught | `attachedInstance(x) === null` is exactly the case `instance(x)` throws; every PlaySound reads the level container's `DemoRecDriver`, `Model`, `Engine`, `Client`, `Viewports`, `Actor` that way, an `Error` and its stack (`SavedStacks::saveCurrentStack` 0.09 ms a frame in the slow tenth, 0.01 in the rest) each |
+| `DECAL_FOLLOW`, `decalFollow` | `followDecalTracker` writes a mover's surface rotation words only when its rotation differs from the one last written for that mover to that model handle | nothing else writes the words after the upload (`decal_model_sync` writes words 0 to 2 of a surface record, the attach only reads 6 to 8); `=verify` compares the words in memory at every skip |
+| `CONFIG_FIND`, `configFind` | `createNativeConfig`'s `findIn` kept per class and lowered name | the property tables are frozen constants; `Client.Decals` is read three times by every `AttachDecal` (the getter at `script-doors.mjs`), each time building the whole field list of `WinDrv.WindowsClient` (`flatMap`, `reverse`, `map`: 23.7 MB of the 1,000 sampled over the long route in the function alone) |
+| `INPUT_FIELDS`, `inputFields` | `inputPropertyFields` (the CPF_Input properties `ReadInput` scales) kept per class | the linked class tables do not change once an object of the class exists; it walked every field of the player's class at every tick (0.05 ms of the rest frames) |
+
+**Checks.** `bench-sim --render-feedback` digests unchanged in the default modes: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield
+`46ed0d32ae5b56af`, Wan Chai `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island
+`0b4d06c72afd1c1d`). With `RIDER_TABLE`, `PLAYER_PAWN`, `COMPACT_SCAN`, `SOUND_READ`, `DECAL_FOLLOW` and `LEVEL_SCAN` at `verify`: the same digests
+on the short bunker run and both long routes, no tick errors. A 40 s Firefox inline bunker run with those and `CONFIG_FIND` and
+`INPUT_FIELDS` at `verify`: 2,507 drawn frames, no page error. `test/script-cleanup`, `script-native-config`, `rider-*`, `move-riders`,
+`native-registry` and `script-sound*` pass (70 tests); `cargo` warning-free. **Not run** (the change is not merged): `npm test`, the family
+validators, the Chromium worker (the switches reach it through `init`, and `processProbe().switches` reads them there; not exercised).
+
+**Node effect** (V8 profile of the bunker's long route, ms over 1,200 ticks, defaults against every switch at `js`): `moveActorRiders` 170 → 78,
+`compactScriptActors` 61 → 23, `cleanupDestroyed` 122 → 78, `soundField` 34 → 28 (V8 captures a stack cheaply, Firefox does not), the native-config
+reads about 22 ms before the memo (not measured after it) and 50 MB less allocation.
+
+**Firefox inline A/B**, four interleaved pairs (`hitch-ab.mjs --arms "new:,old:riderTable=js&playerPawn=js&compactScan=js&soundRead=js&decalFollow=js&configFind=js&inputFields=js"
+--pairs 4`, 60 s scan route, god mode, order alternating; `hitch-ab-table.mjs`; sessions in `.cache/perf/bunker-cuts/`). ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 5.23 / 5.45 | 9.46 / 10.39 | 12 / 12 | 20 / 21 |
+| 2 | 5.20 / 5.39 | 10.80 / 10.21 | 12 / 12 | 20 / 20 |
+| 3 | 5.15 / 5.33 | 9.34 / 9.89 | 12 / 12 | 20 / 21 |
+| 4 | 5.36 / 5.42 | 9.78 / 9.99 | 12 / 13 | 20 / 20 |
+| **mean** | **5.23 / 5.40** | **9.85 / 10.12** | **12.0 / 12.3** | **20.0 / 20.5** |
+
+The mean tick is better in all four pairs (by 0.22, 0.19, 0.18, 0.06: 0.17 on average, the bar 0.3); the slowest tenth in three of four (0.93,
+-0.59, 0.55, 0.21: 0.27 on average with a spread of 0.65, the bar 0.5). The page's p50 and p95 move by a half millisecond at most, inside the
+sessions' spread. This is the finding of the first rider-table A/B again: the cuts are real, exact and small, and the bunker's gap to 16.7 ms at page p95
+(20 ms here) is not host plumbing of this size.
+
+**What is left, each over 0.1 ms and none exact for free:**
+* the Rust decal attach (`decal_attach` 0.41 ms in the slow tenth, 53 us an attach in Node; the laser spots re-attach 4 to 6 times a tick: 4,681
+  `AttachDecal` and 1,897 `ReattachDecal` in 1,200 ticks), with `fast::edge`'s table fills cold in a region the player has not been in;
+* `followDecalTracker`'s per-mover `Rotation` reads (0.07 ms of the tenth: a `readNamed` for every tracked mover at every attach; skipping them
+  needs a change signal from the movers' writes, or the image cell address held as the rider table holds the Base word's);
+* spawns (377 in the long route, about 300 us each in Node, 54% of it the spawned actor's script events) and destroys (247 at 160 us);
+* the HUD's `SetHitColor` (7,200 calls in 1,200 ticks, 11.7 us each in Node, a JavaScript call because of its `out BodyPart` parameter): Rust calls
+  with struct out parameters would take it and the player's `ProcessMove` (75 us);
+* `js_tick_refresh`: skipping it needs Rust to say that no JavaScript ran inside the event (a counter at the imports), not a key compared in
+  JavaScript, which costs what the publication costs.
+
+### What the Rust VM still hands to JavaScript (2026-11-06)
+
+The task: rank the nodes and natives the Rust VM hands back to the JavaScript VM (`js_eval`, `js_object` and friends, then
+`nodeEffect`/`evNode` in `script-vm.mjs`) in the bunker's and the Island's frames, and translate the largest exactly if an interleaved
+Firefox A/B shows 0.5 ms in the slowest tenth or 0.3 ms in the mean tick. No translation was built: the largest rows are native bodies,
+which a node translation does not touch, and the largest evaluation row is 0.08 ms a tick. The ranking and the tools are the product.
+
+**Tools** (measurement only, behind `SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1 [SCRIPT_VM_STATS_DETAIL=1]`; the default paths are
+unchanged, `vm_run` and `vm_statement` take one `TIMED` test):
+* `script-vm-rust.mjs`'s `timedCount` also keeps the **self** time of a key (inclusive minus the timed keys nested in it), and the Rust
+  bodies' `vm_run` / `vm_statement` calls are timed keys of their own (`wasm <function>`), so a JavaScript call node's row is the call's
+  glue and the callee's Rust statements are not in it.
+* `scripts/script-vm-fallback-census.mjs` (a `bench-sim --scenario` that also drives the scan route) differences the tables around every
+  `game.tick`, orders the ticks by wall time and prints each key's self time and calls a tick for the slowest tenth against the rest;
+  `CENSUS_JSON=file` keeps every row. `scripts/script-vm-fallback-groups.mjs` folds the rows by native index, called function, statement op
+  or Rust body (`--by diff|slow|mean`). `scripts/cpuprofile-under.mjs` splits a V8 `--cpu-profile` under one frame, cut at boundary frames.
+  Run: `SCAN_WARM=300 SCAN_TICKS=1200 SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1 SCRIPT_VM_STATS_DETAIL=1 node scripts/bench-sim.mjs
+  --map 15_Area51_Bunker --warm 300 --ticks 1200 --render-feedback --scenario scripts/script-vm-fallback-census.mjs`. The runs'
+  digests are the baselines' (bunker `ccd09a24aaaad820`, Island `0b4d06c72afd1c1d`; the short bunker run `764a7bdffd2ebe59`).
+
+**By node kind, in Firefox** (`gecko-slow-ticks.mjs` on `.cache/perf/bunker-midday`, `--children '^evNode '`; ms a frame, slow / rest).
+`js_eval` is 2.65 / 0.90. The callees of `evNode`: script calls through JavaScript (`compileCall` > `invoke`) 1.12 / 0.34, natives
+(`compileNative` > `invokeNative`) 0.85 / 0.08, calls inside a context (`compileEv` > `compileCall`, `X.Func()`) 0.71 / 0.13, `let`s the
+lowering leaves (`compileAssign`) 0.39 / 0.24 (0.19 / 0.18 of it `assignFieldOf`, the same in both groups: stores to fields the image does not
+hold, the player's bound ones such as `EyeHeight`), the rest (`byValues`, `compileEv` > `compileNative`) under 0.1. Below them the callees' Rust bodies (`resume` > Wasm, 1.70 / 0.40 inclusive of
+their own imports) and, by native: `execAttachDecal` 0.51 / 0.03 (the Rust attach is 0.41 of it), `spawnActor` 0.52 / 0.00 (the frames the profile
+labels `selectLodMesh` > `axis` are its JIT code; 0.29 is the spawned actor's script events, in Rust), `destroyActor` 0.19 / 0.02, the
+host-native chain (`hostNative` > the `native` callbacks, which `GetPlayerPawn` reaches) 0.22 / 0.06. The leaf `invokeNative` is 0.23 / 0.10.
+
+**By identity, in Node** (the census; self ms a tick, slow tenth / rest, with calls a tick; the tenth is 120 of 1,200 ticks: 8.70 ms against
+3.47 on the bunker, 10.18 against 5.13 on the Island, timer cost included; the Firefox `js_eval` is 0.73 to 0.84 of Node's sum). Sorted by what
+the tenth adds on the bunker:
+
+| What the Rust VM hands over | Bunker slow / rest | calls | Island slow / rest | calls | Kind |
+|---|---:|---|---:|---|---|
+| `Spawn` (native 278) | 0.59 / 0.01 | 3.4 / 0.0 | 0.04 / 0.00 | 0.1 / 0 | native body: construction, zone, collision view, the events' glue |
+| `AttachDecal` (a native function) | 0.58 / 0.30 | 6.6 / 3.8 | 1.10 / 0.28 | 20 / 5.5 | native body; the Rust attach is 0.29 of the bunker's mean 0.32 |
+| `Destroy` (279) | 0.23 / 0.01 | 1.4 / 0.1 | 0.00 / 0.00 | | native body |
+| `AIPickRandomDestination` 709, `FindPathToward` 517, `actorReachable` 520 | 0.20 / 0.01 | 0.5 / 0.04 | 0.49 / 0.04 | 0.8 / 0.2 | native bodies (the search is in Rust; the services around it are not) |
+| small natives: `Trace` 277, `SetLocation` 267, `IsInState` 281, `FMin`/`FMax` 173, 264, 184, 161, 195, 246, 259 | 0.39 / 0.17 | 46 / 30 | 0.58 / 0.21 | 89 / 39 | bodies of 2 to 12 us plus the call object |
+| `let`s the lowering leaves: name fields (`FloorMaterial`), struct targets, strings, bound fields, values of two imports | 0.35 / 0.13 | 33 / 17 | 0.42 / 0.23 | 86 / 53 | evaluation, 40 shapes, none over 0.04 |
+| `foreach` starts (statement `0x2f`: `CycleActors` 1002, `AllActors`, the others) | 0.15 / 0.07 | 11 / 9 | 0.30 / 0.11 | 56 / 28 | evaluation: an iterator object a start |
+| `SetRotation` 299 | 0.13 / 0.04 | 52 / 15 | 0.06 / 0.03 | 24 / 9 | small native, 2 us a call |
+| calls with out, struct or vector parameters and context calls: `ProcessMove`, `CheckBob`, `GetAugLevelValue`, `CalculatePlayerVisibility`, `SetCrosshair`, `SetCurrentValue`, `TakeDamage` | 0.19 / 0.06 | 12 / 7 | 0.14 / 0.08 | 11 / 7 | call glue, 8 to 30 us a call |
+| `GetPlayerPawn` 720 | 0.10 / 0.08 | 20 / 18 | 0.18 / 0.10 | 69 / 39 | pure read, 2.5 to 4 us a call |
+| `SetHitColor` (`out BodyPart` struct parameter) | 0.08 / 0.07 | 6 / 6 | 0.08 / 0.07 | 6 / 6 | call glue, 11.5 us a call; its body is 1 us |
+
+The Rust bodies called through JavaScript (`wasm PlayerTick` 0.125 / 0.077, `Tick`, `ProcessMove`, the spawned actors' events) are the
+content of those calls and are not counted above.
+
+**The pool.** Without the native bodies that are content (Spawn, Destroy, AttachDecal, the navigation, conversation and combat natives)
+every other JavaScript-evaluated node is 1.82 / 0.72 ms a tick on the bunker (mean 0.83, gap 1.10) and 2.10 / 0.99 on the Island (mean 1.10,
+gap 1.11), in 566 and 394 rows; half of the mass is in 14 rows, whose largest are (bunker, mean ms a tick) `GetPlayerPawn` 0.08, `SetHitColor`
+0.07, the `CycleActors` start (`cycleindex`) 0.06, `SetRotation(Rotator(Velocity))` 0.03, `Trace` 0.03, `FloorMaterial = GetFloorMaterial()` 0.02,
+`IsInState` 0.02, `beamtrigger.Emitter.SetLocation` 0.02. A V8 profile of the same route (`bench-sim --cpu-profile`, 4.30 ms a tick) agrees:
+everything under `nodeEffect` and `nodeValue` is 1.30 ms, 0.67 of it nested work (script calls 0.56, mostly `AttachDecal`'s Wasm; spawn
+0.07; destroy 0.04) and 0.6 a flat tail of leaves, the largest `invokeNative` at 0.09 (two functions), then `fieldValue` 0.018, `operand` 0.016,
+`byValues` 0.016. The glue of a script call through JavaScript (`callFunction` down to the callee's frame, all leaves) is 0.15 ms a tick,
+`AttachDecal`'s JavaScript 0.04 of its 0.33, `spawnActor`'s own JavaScript 0.09 with no leaf over 0.006, as the
+[spawn analysis](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06) found.
+
+**Why nothing was built.**
+* The slow tenth: on the bunker its gap in JavaScript-evaluated nodes is 2.55 ms in Node, 1.45 of it natives' bodies (Spawn 0.58, AttachDecal
+  0.29, Destroy 0.22, the navigation natives 0.19, conversation and combat natives 0.17) and 1.10 the whole evaluation pool, which is the glue
+  of the tenth's small natives (52 `SetRotation` a tick) and calls. The natives' bodies are not Rust-VM nodes: their host code is already cut
+  as far as it goes ([decals](decals.md#fast-surface-finding-2026-11-06),
+  [spawning](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06)). What a translation can take is the pool's 1.82 ms in the tenth
+  (0.8 in Firefox's units at 60% removal, past the 0.5 bar), and that takes the whole of the 14 rows that hold half of it (about a dozen
+  distinct features), not one family.
+* The mean tick: the three largest evaluation rows, `GetPlayerPawn`, `SetHitColor` and the `CycleActors` start, are 0.21 (bunker) and 0.25 (Island)
+  in Node's units. Each is a feature, not a cut: `SetHitColor` needs copy-in and copy-out of a struct lvalue in `call` with the codec's
+  exactness (a Window handle and floats: NaN and bool-word bit patterns would go to JavaScript before any argument is evaluated; the other
+  scalar `out` and vector parameters ride on the same path); `GetPlayerPawn` a Rust node over a host-maintained cell of the level's first
+  viewport actor (`PLAYER_PAWN=direct` of `bunker-cuts-unshipped` already answers it in `js_object`, skipping the `invokeNative` chain); the
+  `foreach` start the iterator family the [CycleActors note](rust-core.md#september-30-choosing-the-next-simulation-change) describes. Below
+  them each row is under 0.03 on the bunker and 0.05 on the Island. The 0.3 ms bar (0.37 Node ms) is 45% of the bunker's pool, which the
+  three do not reach even if they vanished (26%).
+
+**Next, if the bar is to be met** (an experiment, not a step): the seven cuts of the previous entry (0.17 on the mean, 0.27 on the tenth) plus the
+three features above, A/B'd as a bundle against all switches at `js`; expected at most 0.17 + 0.15 (Firefox ms) on the mean, which would be at
+the bar, and each feature needs its own verify mode. The tenth stays where the natives' bodies put it: 8.70 ms in Node with 3.4 spawns,
+1.4 destroys and 6.6 decal attaches a tick.
+
+(That experiment is the next entry: it passed the bar.)
+
+### The bunker bundle (2026-11-06)
+
+The task: the [seven exact host cuts](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06) and the three Rust VM features the
+[fallback census](#what-the-rust-vm-still-hands-to-javascript-2026-11-06) ranked largest, measured as one bundle on the Area 51 bunker
+(the last map over 16.7 ms at page p95). Bar: 0.3 ms in the mean tick or 0.5 ms in the slowest tenth, from an interleaved Firefox A/B, all
+the new switches on against all at `js`.
+
+**What the bundle holds.** The two commits of `bunker-cuts-unshipped` (the shift-proof rider table and direct GetPlayerPawn of
+`import-cuts-unshipped`, `compactScan`, `soundRead`, `decalFollow`, `configFind`, `inputFields`) cherry-picked onto master d746b817, and
+three Rust VM features, each a lowered kind that transcribes the JavaScript VM's evaluation of the same node, with `js` (the
+reference) and `verify` modes:
+
+| Switch (env, `?flag=`) | Feature | How it is exact |
+|---|---|---|
+| `PLAYER_PAWN`, `playerPawn` (`rust` default, `direct`, `js`, `verify`) | GetPlayerPawn (native 720) as the Rust node `PLAYER_PAWN` 207: the handle comes from `PLAYER_PAWN_CELL` = [graph epoch, epoch the handle is valid for, handle, verify] (natives.rs `player_pawn`); `js_player_pawn` runs the resolver the `js_object` shortcut runs and fills the cell | the walk reads `level.engine.client.viewports[0].actor`, and `watchPlayerPawnGraph` (player-pawn-graph.mjs, installed by script-doors.mjs where it sets `playerPawnShortcut`) turns those five links into accessors that advance the epoch on every write (values, enumerability and identities unchanged; `test/player-pawn-graph.test.mjs`). Premises: `levelFor` is one level for every receiver in Play and no native object has an own `xLevel`; a viewport list changed in place is not seen, a chain that cannot be watched ends the cell's use (`playerPawnGraphWatched`) |
+| `OUT_STRUCT`, `outStruct` (`rust` default, `js`, `verify`) | `HUDHitDisplay.SetHitColor(out BodyPart part, ...)` and every script call whose callee has `out` struct parameters of byte, int, bool, float or object members: `CALL_OUT` 208 with `P_STRUCT` arguments (interp.rs `call`, iter.rs) and `callSignature` (script-vm-lower.mjs) beside `functionSignature` | callFunction's order: arguments in turn, the struct copied in from its source (a local, or a SELF field the image addresses) member by member through the codecs (float `float_bits(float_of(w))` = `Math.fround`, object `live(handle)`, bool merged into its word), the callee, the outs back in reverse, also when a probe-masked callee did not run. A source the image cannot address sends the whole call to JavaScript before anything is pushed. `=verify` compares each copy, in and back, with `readCell`/`copyValue` member by member (floats by bits) |
+| `FOREACH_START`, `foreachStart` (`rust` default, `js`, `verify`) | `foreach CycleActors(Class'X', out Actor, out int Index)` of a callee run as `S_FOREACH_CYCLE` 10 with the iterator in the run (`Iter`, iter.rs): the start, IteratorNext, IteratorPop and the Return check, over render.rs `cycle_scan_step` (the scan the JavaScript iterator already used) and the actor list `js_cycle_list` returns (`listFor`) | `createCycleActorsIterator`'s creation (cursor from `Index` when in range, bound `Actors.Num()`, steps 0) and `next()` (clear Actor, bound = min, scan, Actor and Index) step for step; an actor without a class row goes to `classIsA`. Lowered for a body with one foreach, in function code, no Return left in JavaScript; any other start is an `S_YIELD` and the JavaScript stack keeps that loop. `=verify` runs a shadow `createCycleActorsIterator` with the pure JavaScript scan beside every step |
+
+**Checked.** `bench-sim --render-feedback` digests unchanged in the default modes: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`,
+Airfield `46ed0d32ae5b56af`, Wan Chai `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island
+`0b4d06c72afd1c1d`, Wan Chai `25db7596647e2aeb`). Every long route and the short bunker run are also unchanged with all the bundle's switches
+at `js` (bunker, Island) and at `verify` together with `SCRIPT_VM_CHECK=1` and `LEVEL_SCAN=verify` (bunker, Island, Wan Chai), no tick
+error. What the verify runs compared (the host's counters, `script-vm-foreach.mjs` `counts`, `script-vm-player-pawn.mjs` `walks`):
+
+| Long route | foreach steps | struct copies | GetPlayerPawn walks (verify) | walks (default) |
+|---|---:|---:|---:|---:|
+| bunker | 184,633 | 18,012 | 27,411 | 1 |
+| Island | 327,750 | 18,012 | 71,252 | 1 |
+| Wan Chai | 33,239 | 18,012 | 34,976 | 1 |
+
+(No actor without a class row reached `classIsA` in any of them: the validator below covers that branch.) `cargo` is warning-free.
+
+`scripts/validate-script-vm-interp.mjs` (156 kinds, 539,987 checks) gained the three kinds: the cell (current, stale, the verify word, a context
+receiver, `SCRIPT_VM_CHECK`); struct out arguments over a local and over a SELF field for six value sets (a released object, `-0`, a denormal,
+infinity, the extremes of the int, bools sharing a word with other bits set), the padding and neighbours untouched, the unaddressable
+source going to JavaScript whole, two out parameters over one source copied back last first, an omitted argument, the call's value; and the
+foreach against `createCycleActorsIterator` itself over a 11-slot array (null slots, an actor without a class row), five base classes, seven
+start indices (in range, at the count, beyond it, negative) and three break points (105 loops), the yields (a re-entered run, no list, a host
+receiver) and the Return with an iterator active. The statement kind it used for "unknown" (10) is now 11.
+The families' validators pass: iterator-frames-play, play-hud, triggers, trigger-actions, triggerlight-animated, mover-push-play,
+native-mover-push, rider-move-kernel, script-sound-* (4), decal-* (7), input-bindings, keypad, flagbase-iterators, native-config(-classes),
+console-command; `test/player-pawn-graph.test.mjs` and `test/native-registry.test.mjs` (a new `index` comparison in the lowering had to keep
+off the registry scan's pattern) pass.
+
+**In the browsers** (`hitch-run.mjs --mode scan --god --seconds 40 --probe-switches`, which this step added: the DEUS_EX_* switches the
+simulation realm holds, from `processProbe`): Firefox inline with every switch of the bundle at `verify`, 2,448 drawn frames and no page error;
+Chromium in worker mode with the same switches, 2,657 drawn frames, no page error, and the worker's own `processProbe().switches` lists all nine, so
+the page's `?flag=` reaches the worker through `init`; Chromium worker with the defaults, 2,660 drawn frames, no page error.
+
+**Firefox inline A/B, bunker**, four interleaved pairs (`hitch-ab.mjs --arms "new:,old:playerPawn=js&outStruct=js&foreachStart=js&riderTable=js&compactScan=js&soundRead=js&decalFollow=js&configFind=js&inputFields=js"
+--pairs 4 --prefix bunker --dir .cache/perf/bunker-bundle -- --browser firefox --map 15_Area51_Bunker --mode scan --god --seconds 60`; the order alternating; `hitch-ab-table.mjs`). ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 4.97 / 5.59 | 9.08 / 10.52 | 12 / 13 | 20 / 21 |
+| 2 | 5.47 / 5.38 | 9.96 / 11.03 | 13 / 12 | 21 / 23 |
+| 3 | 5.27 / 5.68 | 9.86 / 10.56 | 12 / 13 | 20 / 22 |
+| 4 | 5.04 / 5.56 | 10.13 / 10.22 | 12 / 13 | 21 / 21 |
+| **mean** | **5.19 / 5.55** | **9.76 / 10.58** | **12.3 / 12.8** | **20.5 / 21.8** |
+
+The bundle gains 0.36 ms in the mean tick (the bar is 0.3) and 0.82 ms in the slowest tenth (the bar is 0.5). The mean tick is better in three of
+four pairs (0.62, -0.09, 0.41, 0.52), the slowest tenth in all four (1.44, 1.07, 0.70, 0.09). The page's p50 moves by half a millisecond and its p95 by a millisecond and a
+quarter, inside the spread of the sessions (the bunker's p95 is still over 16.7 ms: 20.5 ms headless; the bundle is host plumbing of
+one tick, not the whole gap).
+
+**Firefox inline A/B, Island**, the same arms and route (`--prefix island`, `--map 01_NYC_UNATCOIsland`), four pairs. ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 6.17 / 6.60 | 8.81 / 9.57 | 13 / 14 | 19 / 20 |
+| 2 | 6.17 / 6.69 | 9.08 / 10.02 | 13 / 14 | 20 / 20 |
+| 3 | 6.33 / 6.98 | 9.21 / 10.19 | 13 / 15 | 20 / 21 |
+| 4 | 6.11 / 6.77 | 8.66 / 10.01 | 13 / 14 | 19 / 21 |
+| **mean** | **6.20 / 6.76** | **8.94 / 9.95** | **13.0 / 14.3** | **19.5 / 20.5** |
+
+The Island gains 0.56 ms in the mean tick and 1.01 ms in the slowest tenth, all four pairs better on both. The seven cuts alone measured
+0.17 and 0.27 ms on the bunker in [their own A/B](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06); read across sessions (not
+interleaved with this one), the three Rust features add about 0.2 ms to the mean tick and 0.5 to the slowest tenth there, more than the
+census's Node units (0.21 ms a tick on the bunker) predicted for the three rows. A Rust CycleActors loop also replaces the JavaScript
+iterator's steps (`js_iterator_next`; the host's counter says about 120 steps a tick on the bunker's long route and 220 on the Island's), not
+only the start the census ranked. No arm-by-arm split was measured.
+
+**Left.** The foreach still crosses once per step for the actor list (`js_cycle_list`: the level's array, `listFor`'s key test); an actor
+epoch word Rust compares would take that import away. Callee runs only: a foreach in a run JavaScript enters again after every
+statement stays on the JavaScript stack. `classIsA` for an actor the class table does not describe is a crossing (never taken in these routes).
+The other `out` parameter shapes (scalars, vectors) ride on the same `P_*` path and are not lowered.
+
+**Result.** The bundle meets both bars on the bunker (0.36 against 0.3 ms in the mean tick, 0.82 against 0.5 ms in the slowest tenth) and
+the Island gains more. It is code on branch `worktree-agent-a53906c07b675a25f`, committed and not merged; the page p95 of the bunker stays over
+16.7 ms in headless Firefox (20.5 ms), which the remaining host work (decal attach, spawns, destroys: [the list above](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06)) has to close.
 
 ### The collision hash reads the image (2026-11-05)
 
@@ -666,6 +1004,112 @@ events, whose Rust bytecode and `AttachDecal` are not JavaScript of the spawn; n
 means a Rust owner for `ScriptInstance` and its bindings. The mover rider tables (`move-riders.mjs`, `js_move_riders` +0.5 to
 +0.7 ms in the slow ticks) are dropped at every `baseEpoch` advance, which CompactActors' index moves and each `freeObject` cause:
 the next candidate here, not measured as spawn-induced.
+
+### The bunker particle loop (2026-11-06)
+
+The task: the Area 51 bunker (`15_Area51_Bunker`) is the last map whose page p95 is over 16.7 ms in headless Firefox inline mode (20 ms; the
+[bunker bundle](#the-bunker-bundle-2026-11-06) left it there). A profile of its slowest tenth of frames **by the actor phase** (`p.actors`,
+`gecko-slow-ticks.mjs --phase actors --under '^actors \(src/viewer/sim-session'`, `.cache/perf/bunker-actors`: 345 slow frames at 5.54 ms of
+`p.actors` against 2.35 for the other 3,106) named the ParticleIterator's render-iterator protocol, run from the occlusion pass's per-frame
+dynamics callback (`occ_frame_dynamics` → `childDynamics` → `rescan`), as the largest single addition: 1.21 ms inclusive against 0.27, and
+`particleIteratorItems` 0.85 against 0.11. Bar for shipping: 0.5 ms in the mean of the slowest tenth of the page frame work (`animate`) or 0.3
+ms in its mean, from an interleaved Firefox A/B with the digests unchanged and `verify` clean.
+
+**Why the proxy's FarMoveActor was declined** ([particles](particles.md#why-the-proxys-farmoveactor-was-declined)). The ParticleProxy is `bMovable`
+and `bCollideWorld` with CollisionRadius and CollisionHeight 0 (read from DeusEx.u; the live bunker proxies show the same). CurrentItem's
+`FarMoveActor(proxy, Location, 0, 0)` therefore takes the original's FindSpot branch (`!NoCheck && bCollideWorld`) with a zero extent, and
+`render.rs far_move` declined every `bCollideWorld` actor with NoCheck clear: each particle's move ran relocation.mjs (FindSpot → a point
+check that builds a hit list → the encroachment check → SetActorZone, with the closures `relocationLevel` makes). In the slow tenth,
+`particleIteratorItems` was 0.85 ms: FarMoveActor 0.50, `readIteratorState` (64 particle objects with their arrays on each call) 0.20, the
+script `Init` 0.09, the Index writes 0.04. A frame on the bunker's scan route (the twelve new-arm sessions below, `--probe-switches`, 45,601
+frames): one root scan and one child frame's rescan (`rescans` = `scans`), 1.24 non-frozen iterator runs (MaxItems 64: 64 steps each) and 18.4
+particles moved, 0.027 particles deleted by a refused move (1,228 in all), and no step handed back to JavaScript (no zone change on that route).
+
+**What was built** (details and evidence in [particles](particles.md#the-loop-in-rust-2026-11-06)):
+
+| Switch (env, `?flag=`) | Feature | How it is exact |
+|---|---|---|
+| `PARTICLE_ITEMS`, `particleItems` (`rust` default, `js`, `verify`) | `particles.rs particle_items`: the CurrentItem loop over the iterator's cells and the proxy's image (Index, the proxy's DrawScale and ScaleGlow, FarMoveActor, DeleteParticle, the items); `script-particles.mjs nativeItems` takes a declined step as the reference does and the loop goes on after it; `sprite-scan.mjs` reads the proxy's DrawType, Texture and Style once for a run's records | the reference loop is `referenceItems` (today's code); `=verify` repeats every Rust run from the state before it with the recovered relocation body (`relocateSpawnedActor`) as FarMoveActor and compares the particles, `nextFreeParticle`, Index, the proxy's six written fields and the items; the records are compared with the per-item reads |
+| `FAR_MOVE` (`rust` default, `js`, `verify`, `nofit`) | `render.rs far_plan`/`far_commit`: FindSpot's zero-extent case (one SinglePointCheck on the world model, `trace.rs point_clear`, the tracker's model while it lives) in the noncolliding FarMoveActor; returns 1 moved, 2 refused (the original's false, nothing stored), 0 JavaScript | `validate-trace-kernel` (78,798 points, 0 mismatches); `FAR_MOVE=verify` compares every Rust move against the JavaScript body; `nofit` is the core before this step (the A/B baseline) |
+
+A zone change (SetActorZone runs script events), a nonzero extent, riders, collision bits, a Brush, a non-finite destination and a model the core
+cannot read still go to JavaScript before any store. The script `Init(Camera)` and the Observer write keep their order. `cargo` is warning-free.
+
+**Checked.** `bench-sim --render-feedback` digests unchanged: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai
+`80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island `0b4d06c72afd1c1d`, Wan Chai
+`25db7596647e2aeb`). **bench-sim does not exercise the render iterators** (it calls `game.tick` and never the sprite scan), so these digests
+only show that the `far_move` change (the FindSpot case, for other spawned actors' SetLocation) altered nothing; the iterator loop is covered by
+the new `scripts/validate-particle-items.mjs`, which boots a map, holds the proxies as drawn, ticks, and after each tick runs SetupDynamics' scan and
+rescans through `sprite-scan.mjs` in `js`, `rust` and `verify`, and compares a digest of every sprite record and of the iterators' and proxies'
+end state:
+
+| Run | sprite records | iterator runs | steps | particles moved | refused by FindSpot | handed back | verify compared |
+|---|---:|---:|---:|---:|---:|---:|---|
+| bunker, 240 ticks, 1 rescan | 34,991 | 4,780 | 305,504 | 33,022 | 0 | 416 | 5,196 runs, 33,438 records |
+| bunker, 300 ticks, 3 rescans | 101,459 | 11,960 | 764,446 | 98,466 | 20 | 994 | 12,954 runs, 99,460 records |
+| bunker, 240 ticks, two particles a tick put in solid every 10 ticks (`--inject 10`) | 3,838 | 4,780 | 305,920 | 2,920 | 129 | 0 | 4,780 runs |
+| 02_NYC_Street, 240 ticks | 23,512 | 4,302 | 275,328 | 21,710 | 0 | 0 | 4,302 runs |
+| 02_NYC_Street, `--inject 10` | 1,520 | 4,302 | 275,328 | 1,010 | 112 | 0 | 4,302 runs |
+
+The digests of `js`, `rust` and `verify` are equal in every row (`8ef26156a3375408`, `aeb1df1bdd5ee8a2`, `1f85f6dae27349e7`, `0f1d56950a3b8be4`,
+`01f196133c5df880`). In the browser, the bunker's scan route for 40 s with `particleItems=verify&farMove=verify` (`hitch-run.mjs --probe-switches`,
+which now also prints the loop's counters, `iteratorStats` and the trace kernel's): Firefox inline 2,452 drawn frames, no page error, 4,042 runs and
+258,688 steps compared; Chromium in worker mode 2,660 drawn frames, no page error, 4,232 runs and 270,848 steps compared, the worker's own
+`processProbe` listing both switches (the page's flags reach it through `init`). `npm test`: 959 tests, 955 pass, 4 skipped, 0 fail
+(`test/particle-items.test.mjs` is new). Validators: `validate-particles-play`, `-native-particles` (288 updates), `-native-relocation` (1,316 cases),
+`-script-set-location`, `-iterator-frames-play`, `-render-scan-verify-play`, `-sprite-tiles-play`, `-collision-kernel`, `-trace-kernel` (157,117
+cases, 0 mismatches), `-native-far-move-scene` (40 cases, 0 mismatches) pass.
+
+**Firefox inline A/B, bunker**, twelve interleaved pairs in two runs (4 pairs on commit b0ca2c4e, 8 on dfc62117, whose runtime differs by counters
+only) of `hitch-ab.mjs --arms "new:,old:particleItems=js&farMove=nofit" --prefix bunker -- --browser firefox --map 15_Area51_Bunker --mode scan --god
+--seconds 60 --probe-switches` (headless, 60 s, the order alternating; sessions in `.cache/perf/bunker-particles/`; `hitch-ab-table.mjs` now has a
+page-work mean and slowest-tenth column). The old arm is the code before this step: the reference loop and per-item reads, and the core without
+FindSpot's point check. ms, new / old:
+
+| Pair | mean tick | `p.sprites` + `p.actors` | page mean (`animate`) | **page slowest tenth** | page p95 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 5.29 / 4.67 | 2.75 / 2.82 | 13.61 / 12.72 | 21.22 / 21.07 | 19 / 19 |
+| 2 | 5.22 / 4.96 | 2.70 / 2.85 | 13.42 / 13.21 | 21.78 / 22.27 | 20 / 20 |
+| 3 | 4.87 / 5.05 | 2.61 / 2.88 | 12.80 / 13.41 | 20.53 / 22.37 | 19 / 21 |
+| 4 | 5.32 / 5.16 | 2.77 / 2.86 | 13.73 / 13.45 | 22.34 / 22.39 | 20 / 20 |
+| 5 | 5.22 / 5.17 | 2.69 / 2.89 | 13.36 / 13.55 | 21.75 / 22.75 | 20 / 21 |
+| 6 | 5.06 / 5.32 | 2.72 / 2.95 | 13.31 / 13.79 | 21.85 / 23.31 | 20 / 21 |
+| 7 | 5.00 / 5.30 | 2.68 / 2.87 | 13.27 / 13.65 | 23.74 / 22.76 | 21 / 21 |
+| 8 | 4.90 / 4.95 | 2.60 / 2.85 | 12.84 / 13.23 | 21.03 / 22.42 | 19 / 21 |
+| 9 | 5.31 / 5.04 | 2.72 / 2.90 | 13.59 / 13.49 | 21.80 / 23.24 | 20 / 21 |
+| 10 | 5.09 / 5.50 | 2.70 / 2.97 | 13.41 / 14.23 | 21.92 / 23.25 | 20 / 21 |
+| 11 | 5.34 / 5.46 | 2.80 / 3.02 | 13.72 / 14.17 | 22.14 / 23.50 | 20 / 22 |
+| 12 | 4.88 / 5.20 | 2.62 / 2.95 | 12.95 / 13.76 | 20.56 / 24.47 | 19 / 22 |
+| **mean** | **5.13 / 5.15** | **2.70 / 2.90** | **13.33 / 13.56** | **21.72 / 22.82** | **19.8 / 20.8** |
+
+Paired differences (new − old, 12 pairs, `.cache/perf/bunker-particles`, mean ± standard error, pairs where new is faster): `p.sprites` −0.10 ± 0.01 (12 of
+12), `p.actors` −0.10 ± 0.02 (11), mean tick −0.02 ± 0.09 (7), **page slowest tenth −1.10 ± 0.35, median −1.33 (10 of 12)**, page mean −0.22 ± 0.15
+(8), page p95 −1.08 ± 0.29 (8), p50 +0.08 ± 0.23. The second run alone (8 pairs, the final code): page mean −0.43 ± 0.11 (7 of 8), slowest tenth
+−1.36 ± 0.46 (7 of 8). The first four pairs alone had read as noise (mean tick 0.22 worse, page mean 0.19 worse, slowest tenth 0.55 better): the
+tick's difference is session spread (0.09 over twelve pairs), and only the two phases the change touches move in every pair.
+
+**Inside the frame** (the same sessions, `iteratorStats` of `--probe-switches`, which times the scan and the rescans with `performance.now`): the scan costs
+0.444 → 0.332 ms and a child frame's rescan 0.314 → 0.212 ms, 0.758 → 0.544 ms a frame; one child frame a frame (`rescans` = `scans`), 1.24
+iterator runs a frame (scan and rescan together), 18.4 particles moved a frame. Gecko profiles of both arms (60 s each, `prof-new`/`prof-old`):
+in the slowest tenth of `p.actors` (350 frames) that phase is 5.26 → 4.65 ms, `occ_frame_dynamics` 1.13 → 0.41 (against 0.27 and 0.24 in the other
+frames), `particleIteratorItems` 0.88 → 0.14, and the collector work inside those frames halves (0.23 → 0.08 ms of GC frames). The trace
+kernel's counters (`traceKernel` in the probe) show one tracked-model import in 60 s in both arms (38,746 nodes): the world base address the Rust
+move asks for costs nothing.
+
+**Result: merge-worthy.** The slowest tenth of the page's frame work falls by 1.10 ms (the bar is 0.5; ten of twelve pairs, median 1.33), the
+mean by 0.22 ms (the bar is 0.3: reached by the second run alone, 0.43), the digests are unchanged and `verify` is clean in Node, Firefox inline
+and Chromium worker mode. The bunker's page p95 falls from 20.8 to 19.8 ms and stays over 16.7 ms (headless Firefox).
+
+**Left** (each under the bar alone):
+* The script `Init(Camera)` of every iterator, run in every frame's SetupDynamics, is now the largest part of the protocol: `inRenderPass` +
+  `processEvent` is 0.27 ms a frame (LaserIterator 0.16, with its `js_bool` import 0.11, ParticleIterator 0.09). The Rust VM hands a bool read
+  back to JavaScript there (the `Owner.bFrozen` context read); lowering that node would take it, and belongs to the
+  [fallback census](#what-the-rust-vm-still-hands-to-javascript-2026-11-06).
+* `laserIteratorItems` and the laser proxies' own sprite bindings (`updateSprite` 0.52 ms in the slow tenth) are the same family and untouched.
+* A handed-back step (a zone change) reads one particle through the arena and takes the reference path: 0.14% of the steps in the bunker's
+  Node route (416 of 305,504), none in the scan route's 45,601 frames; a zone-change event for a proxy is the one case the core never decides.
+* `trace.rs point_clear` and the Rust move run in doubles, like the JavaScript reference; the original's pass precision (24 bits) for a point
+  exactly on a node plane is not measured ([render-pass precision](render-pass-precision.md)).
 
 ## How each step is measured
 

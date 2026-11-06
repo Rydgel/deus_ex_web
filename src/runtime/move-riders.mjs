@@ -22,7 +22,7 @@
  */
 import {rotatorSin} from './coords.mjs';
 import {x87load, x87add, x87neg, x87mul, x87store} from './script-vm.mjs';
-import {baseEpoch, riderEpochOf} from './base-epoch.mjs';
+import {baseEpoch, riderEpochOf, cellEpoch, notedEnd, notedSince, baseTables, riderTableMode} from './base-epoch.mjs';
 import {existingHandle} from './script-object-handles.mjs';
 import {scriptVmKernel} from './script-vm-kernel.mjs';
 import {BASE_KEY} from './actor-link-fields.mjs';
@@ -107,6 +107,7 @@ const riderCaches = new Map();
 // Host development switches (Node only): RIDER_VERIFY=1 compares every cached
 // list with a full scan; RIDER_NOCACHE=1 always scans.
 const verifyRiders = typeof process !== 'undefined' && process.env?.RIDER_VERIFY === '1';
+const verifyTable = riderTableMode() === 'verify';
 const disableRiderCache = typeof process !== 'undefined' && process.env?.RIDER_NOCACHE === '1';
 // RIDER_STATS=1 (Node): counts calls, cache hits, resumed and full scans,
 // actors read and riders visited, printed at exit.
@@ -131,17 +132,41 @@ function scanRiders(actor, actors, baseOf) {
 // (services.baseInstance(other): `other.base` is a plain read of one image cell) is compared as the cell's handle word with the
 // mover's handle: the identity a handle names is the one object that has it, so the word equals the mover's handle exactly when
 // the read would give the mover. Every other slot takes the reads it took. A slot is filled for the actor in it (checked at each
-// read) and the table is dropped when baseEpoch() changes: a Base binding, an installer, any move of the array, and each point
-// where an instance gets poison or is released (copyStorage, poisonField and the freeObject sites bump it), the two states in
-// which a read of the cell would not be the plain read.
-const baseTables = new WeakMap();
+// read) and the table is dropped when cellEpoch() changes (base-epoch.mjs): a Base binding, a bulk restore, poison, and the other
+// advances that name no identity. The advances that change one actor's reads only (its Base link installed by an attach, its
+// storage restored, its image released: bumpBaseEpochFor) make the table forget that actor's slot, and the pure array movements
+// (CompactActors' shifts, a slot nulled or written: bumpBaseMoveEpoch) leave it, the shifts moving the entries with the actors
+// (moveBaseSlot). Before this the table was dropped by every advance of baseEpoch(), and in the Area 51 bunker a destroyed or
+// spawned actor made the next rider pass fill all ~2,500 slots again. RIDER_TABLE=js restores that (every such advance also
+// advances cellEpoch()); =verify compares every slot kept with a fresh fill, at each scan.
 const disableDirectBase = typeof process !== 'undefined' && process.env?.RIDER_NODIRECT === '1';
 function baseTableFor(actors) {
   let table = baseTables.get(actors);
-  if (table === undefined) baseTables.set(actors, table = {epoch: -1, arena: null, hosts: [], ats: []});
-  const epoch = baseEpoch();
-  if (table.epoch !== epoch) { table.epoch = epoch; table.hosts.length = 0; table.ats.length = 0; }
+  if (table === undefined) baseTables.set(actors, table = {epoch: -1, noted: 0, arena: null, hosts: [], ats: []});
+  const epoch = cellEpoch();
+  if (table.epoch !== epoch) { table.epoch = epoch; table.noted = notedEnd(); table.hosts.length = 0; table.ats.length = 0; return table; }
+  const end = notedEnd();
+  if (table.noted !== end) {
+    const since = notedSince(table.noted);
+    table.noted = end;
+    if (since === null || since.length > 64) { table.hosts.length = 0; table.ats.length = 0; }
+    else for (const identity of since) {
+      for (let k = table.hosts.indexOf(identity); k >= 0; k = table.hosts.indexOf(identity, k + 1)) { table.hosts[k] = undefined; table.ats[k] = 0; }
+    }
+  }
   return table;
+}
+// RIDER_TABLE=verify: every slot the table holds for the actor in it equals a fresh fill's.
+function checkTable(table, actors, services) {
+  const fresh = {arena: table.arena, hosts: [], ats: []};
+  for (let i = 0; i < actors.length; i++) {
+    const other = actors[i];
+    if (!other || table.hosts[i] !== other) continue;
+    if (riderStats) riderStats.checked = (riderStats.checked ?? 0) + 1;
+    fillSlot(fresh, i, other, services);
+    if (fresh.ats[i] !== table.ats[i])
+      throw new Error(`RIDER_TABLE=verify: slot ${i} (${other.name}) holds ${table.ats[i]}, a fresh fill gives ${fresh.ats[i]}`);
+  }
 }
 /** Fill slot `i` for the actor in it: the arena address of its Base word, or 0 for a slot that takes the plain reads. */
 function fillSlot(table, i, other, services) {
@@ -263,6 +288,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
   const tScan = riderStats ? now() : 0;
   // The table of direct Base reads, while the scan is undisturbed (it is left for the plain reads once the epoch changes).
   let table = typeof services.baseInstance === 'function' && !disableDirectBase ? baseTableFor(actors) : null;
+  if (table !== null && verifyTable) checkTable(table, actors, services);
   let handle = table === null ? 0 : existingHandle(actor);
   let view = table?.arena?.view;
   for (let i = start; i < actors.length; i++) {
@@ -284,7 +310,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
     if (table !== null) {
       // (a rider's move runs events: the mover may have been given a handle, or lost it, by a pointer stored since, and the arena
       // may have grown)
-      if (table.epoch !== baseEpoch()) table = null;
+      if (epoch !== baseEpoch()) table = null;
       else { handle = existingHandle(actor); view = table.arena?.view; }
     }
     if (riderStats) riderStats.scanMs -= now() - tScan;

@@ -40,6 +40,11 @@ const fogNotesOn = () => globalThis.DEUS_EX_FOG_NOTES === '1' || (typeof process
 /** 'tiles' (default): a page whose texture is on the GPU takes only the tiles the frame wrote (copyTextureToTexture from its
  * pixels); 'page' re-uploads every written page whole (?fogUpload=page). */
 const fogUploadMode = () => globalThis.DEUS_EX_FOG_UPLOAD || (typeof process !== 'undefined' && process.env?.FOG_UPLOAD) || 'tiles';
+/** 'copy' (default): a child frame's fog map is kept with `new Uint8Array(texels)` and the validation record of the most fogged map
+ * (`note`) holds a byte copy that becomes an Array when it is read; 'from' (?fogCopy=from) keeps `Uint8Array.from` and the eager
+ * `Array.from`. SpiderMonkey runs both `from` calls through the iterator protocol (a self-hosted `next` per byte): beside the Paris
+ * club's mirrors the fog update fell from 2.25 to 1.71 ms a frame without them (docs/mirror-surfaces.md "Firefox spot survey"). */
+const fogCopyMode = () => globalThis.DEUS_EX_FOG_COPY || (typeof process !== 'undefined' && process.env?.FOG_COPY) || 'copy';
 export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, notes, kernel = null }) {
   const root = new THREE.Group(), surfaces = [], lights = [], pages = new Map(), moverPolygons = new Map();
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
@@ -133,9 +138,19 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     if (!diagnostics) return;
     let alpha = 0;
     for (let t = 3; t < texels.length; t += 4) alpha += texels[t];
-    if (alpha && alpha > (stats[key]?.alpha ?? 0))
-      stats[key] = { ...what, alpha, missFlag, grid: input.grid, width: input.width, height: input.height, coords,
-        lights: lightInputs(coords), texels: Array.from(texels) };
+    if (!alpha || alpha <= (stats[key]?.alpha ?? 0)) return;
+    const entry = { ...what, alpha, missFlag, grid: input.grid, width: input.width, height: input.height, coords, lights: lightInputs(coords) };
+    if (fogCopyMode() === 'from') entry.texels = Array.from(texels);
+    else {
+      // The bytes now (the buffer is the kernel's); the Array (which the validators read, also across a clone or a spread) on the first read.
+      const bytes = new Uint8Array(texels);
+      Object.defineProperty(entry, 'texels', { enumerable: true, configurable: true, get() {
+        const value = Array.from(bytes);
+        Object.defineProperty(entry, 'texels', { value, enumerable: true, writable: true, configurable: true });
+        return value;
+      } });
+    }
+    stats[key] = entry;
   }
   /** BGRA texels into an RGBA buffer of row length `stride` at (x, y), the
    * one-texel padding repeated. */
@@ -331,7 +346,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
       for (const slot of items) slot.mesh.visible = false;
       if ((!surfaces.length && !moverPolygons.size) || !lights.length) return;
-      const state = { missFlag: 0 };
+      const state = { missFlag: 0 }, copyTexels = fogCopyMode() === 'from' ? texels => Uint8Array.from(texels) : texels => new Uint8Array(texels);
       if (frames && nodeSurface) {
         for (const frame of drawOrder(frames)) {
           if (!frame.coords) continue;
@@ -340,7 +355,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
           const frameLights = lightsFor(coords), here = new Set(Array.from(frame.nodes, node => nodeSurface[node]));
           const maps = [], what = { frame: frame.index, kind: frame.kind };
           levelMaps(here, null, coords, frameLights, state, (surface, texels, input, missFlag) => {
-            maps.push({ surface, texels: Uint8Array.from(texels) });
+            maps.push({ surface, texels: copyTexels(texels) });
             stats.frameMaps++;
             note('frameCase', { ...what, surface: surface.surfaceIndex }, texels, input, missFlag, coords);
           });

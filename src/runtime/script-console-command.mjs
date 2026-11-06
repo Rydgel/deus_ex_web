@@ -32,6 +32,9 @@ import {UnmodelledClassLookup} from './original-loaded.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
 import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
+let inputFieldsModeCache = null;
+/** 'kept' (default), 'js' or 'verify': INPUT_FIELDS / DEUS_EX_INPUT_FIELDS (?inputFields=), inputPropertyFields' list per class. */
+const inputFieldsMode = () => inputFieldsModeCache ??= (typeof process !== 'undefined' && process.env?.INPUT_FIELDS) || globalThis.DEUS_EX_INPUT_FIELDS || 'kept';
 
 export class UnsupportedConsoleCommandError extends Error {
   constructor(message, {body = null, keyword = null} = {}) {
@@ -344,13 +347,26 @@ export function createConsoleCommands({runtime, input, services}) {
     } else runtime.writeField(actor, field, value);
   }
 
+  // A class's CPF_Input properties, in the order of the walk below: its linked tables do not change once an object of it exists, so the
+  // list is kept per class (readInput rebuilt it at every tick of the player). INPUT_FIELDS=js (?inputFields=) walks every time as
+  // before, =verify walks and compares.
+  const inputFieldLists = new WeakMap();
   function inputPropertyFields(instance) {
+    const mode = inputFieldsMode();
+    const kept = mode === 'js' ? undefined : inputFieldLists.get(instance.cls);
+    if (kept !== undefined && mode !== 'verify') return kept;
     const fields = [];
     for (let cls = instance.cls; cls; cls = cls.base) {
       for (const field of cls.propertyOrder) {
         if (field.metadata.flags & 0x4) fields.push(field);
       }
     }
+    if (kept !== undefined) {
+      if (kept.length !== fields.length || kept.some((field, i) => field !== fields[i]))
+        throw new Error(`INPUT_FIELDS=verify: the input properties of ${instance.cls.record?.key} changed`);
+      return kept;
+    }
+    if (mode !== 'js') inputFieldLists.set(instance.cls, fields);
     return fields;
   }
 

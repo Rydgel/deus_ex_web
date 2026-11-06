@@ -160,7 +160,10 @@ table before any store:
    remove/add is skipped (`collides` is bCollideActors), and the non-Pawn
    CheckEncroachment (`0x1039a350`) returns false before any query, as in
    step 3 above.
-3. No FindSpot: bCollideWorld and bCollideWhenPlacing clear, or bNoCheck.
+3. No FindSpot: bCollideWorld and bCollideWhenPlacing clear, or bNoCheck. *(2026-11-06: with a zero extent (CollisionRadius and
+   CollisionHeight zero, a ParticleProxy's) FindSpot is one SinglePointCheck on the world model, which the core answers itself when the
+   host gives it the model's address (`trace.rs point_clear`): a clear point goes on, a refused one returns 2 (the original's false, nothing
+   stored). A nonzero extent still goes to JavaScript. [Particles](particles.md#the-loop-in-rust-2026-11-06).)*
 4. StandingCount 0, so no rider is detached through SetBase.
 5. A finite destination, and SetActorZone keeping the current zone (the
    same point query and hand-back as the rider move), or bDeleteMe, where
@@ -168,10 +171,10 @@ table before any store:
 
 It then stores bJustTeleported, Location and OldLocation (the float32
 destination) and the new Region, and returns success. Anything else
-leaves the actor untouched for the JavaScript body. Island's users are the
+leaves the actor untouched for the JavaScript body (the return is 1 moved, 2 FindSpot refused, 0 JavaScript). Island's users are the
 pawns' carried weapons (Actor.Tick's FarMoveActor of a drawn weapon, about
 23 per tick), the Shadows' SetLocation and the LaserIterator's proxy
-segments. `FAR_MOVE=js` (`?farMove=js`) keeps the JavaScript body;
+segments. `FAR_MOVE=js` (`?farMove=js`) keeps the JavaScript body, `nofit` the core without the FindSpot case;
 `FAR_MOVE=verify` runs it again from the restored state after every Rust
 move and compares the result, Location, OldLocation, bJustTeleported and
 Region. Island and Training digests (both engines), browser runs on Island,

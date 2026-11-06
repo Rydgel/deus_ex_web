@@ -8,6 +8,9 @@
 //! * `level_settled`: whether compactScriptActors (script-cleanup.mjs,
 //!   CompactActors 0x103963e0) would find nothing to do: no null slot and no
 //!   bDeleteMe actor from FirstDynamicActor on.
+//! * `level_flagged`: the slots compactScriptActors has to look at when
+//!   that is not so (a null slot, a bDeleteMe actor, an actor the image
+//!   cannot answer); the loop reads bDeleteMe of those only.
 //!
 //! The list is the render scan's [count, handle...] (script-vm-render.mjs,
 //! per actorsEpoch). An actor whose fields the image cannot answer as
@@ -73,6 +76,31 @@ pub extern "C" fn level_distance(list: u32, start: u32, ox: u32, oy: u32, oz: u3
         handed += 1;
     }
     handed
+}
+
+/// The slots of `list` from `start` that compactScriptActors cannot pass
+/// without a look: a null slot, an actor the image cannot answer, or a
+/// bDeleteMe actor. Writes their indices to `out` in order and returns
+/// their count; every other slot holds an actor whose bDeleteMe the image
+/// reads false, which is what the JavaScript read of it gives.
+#[no_mangle]
+pub extern "C" fn level_flagged(list: u32, start: u32, out: u32) -> u32 {
+    let count = load32(list);
+    let mut index = start;
+    let mut flagged = 0u32;
+    while index < count {
+        let h = load32(list.wrapping_add(4).wrapping_add(index.wrapping_mul(4)));
+        let alive = h != 0 && {
+            let a = Obj::of(h);
+            a.has(1 << R_BDELETEME) && !a.flag(R_BDELETEME)
+        };
+        if !alive {
+            store32(out.wrapping_add(flagged.wrapping_mul(4)), index);
+            flagged += 1;
+        }
+        index += 1;
+    }
+    flagged
 }
 
 /// 1 when every slot of `list` from `start` holds an actor the image

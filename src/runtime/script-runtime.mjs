@@ -62,7 +62,7 @@ import { createUMeshFrameCache, getUMeshFrame } from './umesh-frame.mjs';
 import { readUMeshSurfaces } from './umesh-surfaces.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
-import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
+import { bumpBaseEpoch,bumpBaseEpochFor,bumpActorsEpoch } from './base-epoch.mjs';
 import { bumpReceiverEpoch,bumpReceiverEpochFor } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
@@ -460,6 +460,10 @@ const NATIVE_EVENT_BODIES=Object.freeze({
   // APawn::execClientHearSound 0x103dfc40 (docs/galaxy-audio.md "Play").
   'engine.pawn.clienthearsound'(receiver,args){execPawnClientHearSound(receiver,args,this.audioServices());},
 });
+// SOUND_READ / ?soundRead= (DEUS_EX_SOUND_READ): 'direct' (default) answers soundField's reflected read of an object that is not an attached
+// instance as unlinked without throwing out of instance(); 'js' keeps the throw (the reference); 'verify' also checks that it would throw.
+let soundReadModeCache=null;
+const soundReadMode=()=>soundReadModeCache??=(typeof process!=='undefined'&&process.env?.SOUND_READ)||globalThis.DEUS_EX_SOUND_READ||'direct';
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 // (the native graph slots among them, which soundField reads reflected first)
@@ -604,6 +608,13 @@ export class ScriptRuntime {
     // instead of running its full engine implementation. Play currently retains
     // that sound boundary until its native listener/audio graph is connected.
     this.boundaryNatives=new Set(boundaryNatives);
+    // GetPlayerPawn's resolver for the Rust VM's direct path (script-vm-rust.mjs playerPawn): what the host's `native` callback answers native 720
+    // with, or null where the host has none (the call then goes through invokeNative as before).
+    this.playerPawnShortcut=null;
+    // The Rust interpreter's cell for it (natives.rs PLAYER_PAWN_CELL, script-vm-player-pawn.mjs): `playerPawnGraphWatched` says the host
+    // reports every write to the graph the resolver walks (player-pawn-graph.mjs) through `notePlayerPawnGraph`, which advances the
+    // epoch the cell is valid for (never 0) and tells the interpreter's host (`playerPawnListener`).
+    this.playerPawnGraphWatched=false;this.playerPawnGraphEpoch=1;this.playerPawnListener=null;
     // Scripted functions the host owns as external boundaries (parallel to
     // boundaryNatives): a Map from lowercase function key to a handler
     // `(call)=>returnValue`. When a script call resolves to such a function,
@@ -1645,11 +1656,11 @@ export class ScriptRuntime {
     return {bytes:instance.arena.snapshot(instance.base,instance.size),refs:instance.refs.slice(),poison:instance.poison&&new Map(instance.poison)};
   }
   restoreStorage(receiver,snapshot) {
-    if(snapshot)this.copyStorage(this.instance(receiver),snapshot);
+    if(snapshot)this.copyStorage(this.instance(receiver),snapshot,receiver);
   }
   /** Overwrite in place: live references hold the image and refs arrays. */
-  copyStorage(instance,{bytes,refs,poison}) {
-    bumpBaseEpoch();
+  copyStorage(instance,{bytes,refs,poison},receiver) {
+    if(receiver===undefined)bumpBaseEpoch();else bumpBaseEpochFor(receiver);
     instance.arena.bytes.set(bytes instanceof Uint8Array?bytes:new Uint8Array(bytes),instance.base);
     for(let index=0;index<refs.length;index++)instance.refs[index]=refs[index];
     instance.poison=poison?.size?new Map(poison):null;
@@ -2458,6 +2469,16 @@ export class ScriptRuntime {
   }
   /** soundField's reflected read: the property's value, or undefined where it is not linked. */
   reflectedField(actor,name) {
+    // (an object that is not an attached script instance, such as the level container PlaySound's graph reads name, would throw out of
+    // instance(): an Error and its stack for each read. SOUND_READ=js keeps the throw as the reference.)
+    if(soundReadMode()!=='js'&&this.attachedInstance(actor)===null){
+      if(soundReadMode()==='verify'){
+        let threw=false;
+        try{this.readNamed(actor,name);}catch{threw=true;}
+        if(!threw)throw new Error(`SOUND_READ=verify: ${actor?.name} is not an attached instance and readNamed(${name}) did not throw`);
+      }
+      return undefined;
+    }
     try{return this.readNamed(actor,name);}
     catch(error){return undefined;}
   }
@@ -3012,32 +3033,47 @@ export class ScriptRuntime {
     if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
     return farMoveActor(this.relocationLevel(view,level),view,destination,test,noCheck);
   }
+  /** What the Rust core's FarMoveActor of a spawned non-Pawn view needs (render.rs far_move, particles.rs particle_items): the
+   * zone model (zone-kernel.mjs) and the world BSP's address (level-queries.mjs worldBase, for FindSpot's one point check of a
+   * zero extent), or null where the JavaScript body must run: FAR_MOVE=js, a core without the table, an actor that is not a
+   * spawned non-Pawn view, a level without its zone model or without its BSP in the core. */
+  farMoveContext(actor) {
+    const vm=this.scriptVm;
+    if(!vm?.render||!vm.zone?.enabled||farMoveMode()==='js'||!this.collisionViewActors.has(actor)||actor.pawn||actor.movingBrush)return null;
+    const level=this.levelFor(actor);
+    if(!level?.hash||!level.zoneModel||!vm.render.ready())return null;
+    const model=vm.zone.model(level);
+    if(!model)return null;
+    // FAR_MOVE=nofit: the core without FindSpot's point check, as before it (a move that needs FindSpot goes to the JavaScript body).
+    return {model,world:farMoveMode()==='nofit'?0:level.hash.worldBase?.(vm)??0};
+  }
   /** FarMoveActor on a spawned non-Pawn view in the Rust core (render.rs
-   * far_move) where the recovered body would run no callback and no query;
-   * true when it moved the actor. FAR_MOVE=js keeps the JavaScript body;
+   * far_move) where the recovered body would run no callback beyond FindSpot's
+   * point check: 1 when it moved the actor, 2 when FindSpot refused the
+   * destination (the original's false, nothing stored), 0 when the JavaScript
+   * body must run. FAR_MOVE=js keeps the JavaScript body;
    * FAR_MOVE=verify also runs that body from the same state and compares
    * the result and every field it writes. */
   noncollidingFarMove(actor,destination,noCheck) {
-    const vm=this.scriptVm,mode=farMoveMode();
-    if(!vm?.render||!vm.zone?.enabled||mode==='js'||!Array.isArray(destination)||destination.length!==3)return false;
-    const level=this.levelFor(actor);
-    if(!level?.hash||!level.zoneModel)return false;
-    const model=vm.zone.model(level);
-    if(!model)return false;
+    const mode=farMoveMode();
+    if(!Array.isArray(destination)||destination.length!==3)return 0;
+    const context=this.farMoveContext(actor);
+    if(!context)return 0;
     const names=['Location','OldLocation','bJustTeleported','Region'];
     const state=()=>names.map(name=>this.readNamed(actor,name));
     const before=mode==='verify'?state():null;
-    if(!vm.render.farMove(actor,destination,noCheck,model))return false;
+    const code=this.scriptVm.render.farMove(actor,destination,noCheck,context.model,context.world);
+    if(code===0)return 0;
     if(mode==='verify'){
       const rust=state();
       names.forEach((name,i)=>this.writeNamed(actor,name,before[i]));
       const moved=this.relocateSpawnedActor(actor,destination,0,noCheck),js=state();
       const same=(a,b)=>a===b||typeof a==='object'&&a!==null&&b!==null&&Object.keys(a).length===Object.keys(b).length&&
         Object.keys(a).every(key=>Object.is(a[key],b[key]));
-      if(moved!==true||!names.every((_,i)=>same(rust[i],js[i])))
-        throw new Error(`FAR_MOVE=verify: ${actor.name} FarMoveActor differs: Rust ${JSON.stringify(rust)}, JavaScript ${moved} ${JSON.stringify(js)}`);
+      if(moved!==(code===1)||!names.every((_,i)=>same(rust[i],js[i])))
+        throw new Error(`FAR_MOVE=verify: ${actor.name} FarMoveActor differs: Rust ${code===1} ${JSON.stringify(rust)}, JavaScript ${moved} ${JSON.stringify(js)}`);
     }
-    return true;
+    return code;
   }
   /** The same FarMoveActor for a map actor: SetLocation on a decoration JC
    * lifts, drops or throws (DeusExPlayer.PutCarriedDecorationInHand /
@@ -3088,7 +3124,10 @@ export class ScriptRuntime {
    * encroachment, SetBase and SetActorZone services act on the pawn itself. */
   farMoveActor(actor,destination,test=0,noCheck=0) {
     if(this.collisionViewActors.has(actor)){
-      if(test===0&&!actor.pawn&&!actor.movingBrush&&this.noncollidingFarMove(actor,destination,noCheck))return true;
+      if(test===0&&!actor.pawn&&!actor.movingBrush){
+        const moved=this.noncollidingFarMove(actor,destination,noCheck);
+        if(moved!==0)return moved===1;
+      }
       return this.relocateSpawnedActor(actor,destination,test,noCheck);
     }
     if(this.isMapPawn(actor))
@@ -3307,6 +3346,7 @@ export class ScriptRuntime {
       recordArrayRemoval:lifecycle.recordArrayRemoval,
       warning:this.warning,
       settled:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactSettled(actors,start):null,
+      flagged:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactFlagged(actors,start):null,
     },force);
   }
   bindProperty(receiver,field,binding) {
@@ -5058,6 +5098,13 @@ export class ScriptRuntime {
     return true;
     }finally{stack?.restore(stackIndex,stackTop);}
   }
+  /** A write to the graph GetPlayerPawn's resolver walks (player-pawn-graph.mjs): the Rust interpreter's cell is stale. `complete` is
+   * false when what the write installed cannot be watched, which ends the cell's use. */
+  notePlayerPawnGraph(complete=true) {
+    this.playerPawnGraphEpoch=(this.playerPawnGraphEpoch+1)>>>0||1;
+    if(!complete)this.playerPawnGraphWatched=false;
+    this.playerPawnListener?.();
+  }
   /** The linked class whose default object a class-context receiver names. */
   defaultObjectClass(receiver) {
     if(!receiver.linkedClass)throw new Error(`Class-context call requires a linked class: ${receiver.key}`);
@@ -5126,6 +5173,8 @@ export class ScriptRuntime {
 // host or validator that wraps one on the prototype or on a runtime keeps
 // those events or polls in JavaScript (script-vm-events.mjs `allowed`).
 ScriptRuntime.originalMethods=Object.freeze({
+  invokeNative:ScriptRuntime.prototype.invokeNative,
+  hostNative:ScriptRuntime.prototype.hostNative,
   processEvent:ScriptRuntime.prototype.processEvent,
   executeScript:ScriptRuntime.prototype.executeScript,
   eventLevelGate:ScriptRuntime.prototype.eventLevelGate,

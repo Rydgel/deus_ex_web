@@ -118,12 +118,17 @@ const COMPUTED = 0x80000000;
 export const renderScanMode = () => (typeof process !== 'undefined' && process.env?.RENDER_SCAN)
   || globalThis.DEUS_EX_RENDER_SCAN || 'rust';
 /** The noncolliding FarMoveActor (render.rs far_move): 'rust' (default),
- * 'js' or 'verify'. */
+ * 'js', 'verify', or 'nofit' (the core as it was before it answered FindSpot's point check: a move that needs FindSpot runs in
+ * JavaScript; the A/B baseline). */
 export const farMoveMode = () => (typeof process !== 'undefined' && process.env?.FAR_MOVE)
   || globalThis.DEUS_EX_FAR_MOVE || 'rust';
 /** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
 export const levelScanMode = () => (typeof process !== 'undefined' && process.env?.LEVEL_SCAN)
   || globalThis.DEUS_EX_LEVEL_SCAN || 'rust';
+/** compactScriptActors' scan for the slots to read (level.rs level_flagged): 'rust' (default), 'js' (every actor's bDeleteMe is read,
+ * as before) or 'verify'. */
+export const compactScanMode = () => (typeof process !== 'undefined' && process.env?.COMPACT_SCAN)
+  || globalThis.DEUS_EX_COMPACT_SCAN || 'rust';
 const f32Bits = new DataView(new ArrayBuffer(4));
 const bitsOf = value => { f32Bits.setFloat32(0, value, true); return f32Bits.getUint32(0, true); };
 
@@ -371,6 +376,31 @@ export class RenderScanHost {
           throw new Error(`LEVEL_SCAN=verify: Level.Actors[${i}] ${actors[i]?.name} is settled in Rust`);
     return settled;
   }
+  /** The slots compactScriptActors has to read bDeleteMe of (level.rs level_flagged), as the sorted indices of `actors` from `start`:
+   * a null slot, a bDeleteMe actor, an actor the image cannot answer. Every other slot holds an actor whose bDeleteMe is false, so
+   * the compaction need not read it. Null when the scan cannot run here (COMPACT_SCAN / ?compactScan= is js, the table is not
+   * complete); under =verify each unflagged slot is read as the reference does. */
+  compactFlagged(actors, start) {
+    const mode = compactScanMode();
+    if (mode === 'js' || levelScanMode() === 'js') return null;
+    this.table();
+    if (!this.complete) return null;
+    const list = this.listFor(actors), count = actors.length;
+    if (count + 1 > this.outCapacity) {
+      if (this.out) this.vm.arena.release(this.out, 4 * this.outCapacity);
+      this.outCapacity = Math.max(1024, 2 * (count + 1));
+      this.out = this.vm.arena.alloc(4 * this.outCapacity);
+    }
+    const flagged = this.x.level_flagged(list, start, this.out);
+    const indices = new Uint32Array(this.vm.arena.memory.buffer, this.out, flagged).slice();
+    if (mode === 'verify') {
+      const marked = new Set(indices);
+      for (let i = start; i < count; i++)
+        if (!marked.has(i) && (!actors[i] || this.runtime.readNamed(actors[i], 'bDeleteMe')))
+          throw new Error(`COMPACT_SCAN=verify: Level.Actors[${i}] ${actors[i]?.name} is not flagged in Rust`);
+    }
+    return indices;
+  }
   /** The mesh scene's per-actor reads (render.rs mesh_reads) into each
    * block of the `count` (handle, block) pairs at `pairs`; false when they
    * cannot run here (the mode is js, the table is not complete). */
@@ -391,14 +421,20 @@ export class RenderScanHost {
     this.x.mover_reads(pairs, count, viewer ? handleOf(viewer) : 0, viewTarget ? handleOf(viewTarget) : 0, behind ? 1 : 0);
     return true;
   }
-  /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
-   * (render.rs far_move) over the zone `model`: true when it moved the
-   * actor, false when the JavaScript body must run (nothing was stored). */
-  farMove(actor, destination, noCheck, model) {
+  /** Whether the field table is complete, so `farMove` and the particle loop may address an actor's image. */
+  ready() {
     this.table();
-    if (!this.complete) return false;
+    return this.complete;
+  }
+  /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
+   * (render.rs far_move) over the zone `model` and the world BSP `world`
+   * (trace-kernel.mjs base, 0 for none): 1 when it moved the actor, 2 when
+   * FindSpot refused it (the original's false; nothing was stored), 0 when
+   * the JavaScript body must run (nothing was stored). */
+  farMove(actor, destination, noCheck, model, world = 0) {
+    if (!this.ready()) return 0;
     return this.x.far_move(handleOf(actor), model, bitsOf(destination[0]), bitsOf(destination[1]), bitsOf(destination[2]),
-      noCheck ? 1 : 0) === 1;
+      noCheck ? 1 : 0, world);
   }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */

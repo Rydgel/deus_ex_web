@@ -25,5 +25,12 @@ export async function processProbe(process, assets, tables = null) {
     readyNames: [...(assets?.ready.keys() ?? [])].sort(),
     kernel: kernel && { blocks: kernel.blocks, usedMB: mb(kernel.usedBytes), freeMB: mb(kernel.freeBytes), memoryMB: mb(kernel.memoryBytes) },
     wasm, interpreters, eventHosts, handles, liveHandles, tables,
+    // the DEUS_EX_* switches this realm holds (the page's reach the worker through init: sim-worker.mjs)
+    switches: Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]])),
+    // the render-iterator loop's counters in this realm (script-vm-particles.mjs particleItemCounts): iterators and steps run in Rust, the
+    // verify mode's comparisons
+    particleItems: {...(await import('../runtime/script-vm-particles.mjs')).particleItemCounts},
+    // the runtime's trace kernel counters (trace-kernel.mjs stats: the tracked model's imports and the milliseconds in them)
+    trace: {...(await import('../runtime/collision-kernel.mjs')).kernelStats.runtime?.deref()?.stats},
   };
 }

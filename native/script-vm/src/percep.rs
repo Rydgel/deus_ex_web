@@ -1004,7 +1004,7 @@ pub(crate) const SYNTHETIC_FRAME: u32 = 0xffff_fff0;
 /// before any write, so the caller may make the call in JavaScript.
 pub(crate) fn ai_can_see_direct(pawn: u32, other: u32, visibility: u32, checks: [u32; 4]) -> Option<u32> {
     let code = core::ptr::null::<u32>();
-    let mut run = Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: pawn, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
+    let mut run = Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: pawn, self_info: 0, self_bind: 0, self_fresh: false, callee: false, iter: crate::iter::NO_ITER };
     let flags = [checks[0] != 0, checks[1] != 0, checks[2] != 0, checks[3] != 0];
     match run.ai_can_see_body(pawn, other, f32::from_bits(visibility) as f64, flags) {
         Ok(value) => Some((value as f32).to_bits()),
@@ -1014,7 +1014,7 @@ pub(crate) fn ai_can_see_direct(pawn: u32, other: u32, visibility: u32, checks: 
 
 fn synthetic_run(handle: u32) -> Run {
     let code = core::ptr::null::<u32>();
-    Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false }
+    Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false, iter: crate::iter::NO_ITER }
 }
 
 /// An actor's Location (float32 bits) from its image, or None where the host reads it (HOST or bound).

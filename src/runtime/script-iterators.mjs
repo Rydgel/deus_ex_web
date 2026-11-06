@@ -505,7 +505,7 @@ export function createCycleActorsIterator({
     },
   };
 }
-const cycleScanMode = () => (typeof process !== 'undefined' && process.env?.CYCLE_SCAN) || globalThis.DEUS_EX_CYCLE_SCAN || 'rust';
+export const cycleScanMode = () => (typeof process !== 'undefined' && process.env?.CYCLE_SCAN) || globalThis.DEUS_EX_CYCLE_SCAN || 'rust';
 
 /** Original execBasedActors 0x103e4800 (native index 306). The exec evaluates
  * BaseClass and the out Actor expression, defaults a null BaseClass to

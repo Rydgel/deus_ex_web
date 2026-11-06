@@ -985,6 +985,40 @@ Evidence (the answers are the JavaScript references', which are the originals' t
   Five of six pairs favor `rust`. A Gecko profile of the new code shows the three imports gone and the level tick at 6.49 ms a frame
   (7.13 before); `runtime.instance()`'s own time fell from 0.51 to 0.22 ms a frame.
 
+### November 6: a census of what the interpreter still hands to JavaScript (measured, nothing translated)
+
+`SCRIPT_VM_STATS_TIME=1` now keeps the self time of each key (the key's inclusive time minus the timed keys nested in it) next to the
+inclusive one, and times the Rust bodies' `vm_run` / `vm_statement` as `wasm <function>` keys, so a JavaScript call node's row is the call's
+glue. `scripts/script-vm-fallback-census.mjs` (a `bench-sim --scenario` over the scan route) prints, per key, the self time and the calls a tick
+of the slowest tenth of ticks against the rest, `scripts/script-vm-fallback-groups.mjs` folds the rows by native index, called function and statement
+op, and `scripts/cpuprofile-under.mjs` splits a V8 profile under a frame. On the bunker and Island scan routes (1,200 ticks after 300 warm-up) the
+JavaScript-evaluated nodes cost 1.32 and 1.59 ms a tick on average (bunker slow tenth 3.62, rest 1.07; Island 3.82 / 1.34; Node's units, timers
+included), a third of them (0.49 on both maps; on the bunker 1.45 of the slow tenth's 2.55 ms gap) the bodies of natives (`Spawn`, `Destroy`,
+`AttachDecal`, the pawn-navigation natives), and the rest, the nodes a lowering could take, 0.83 and 1.10 a tick in 566 and 394 rows. The largest rows are `GetPlayerPawn`
+(native 720, 18 to 39 calls a tick at 2.5 to 4 us), `SetHitColor` (the struct `out` parameter keeps its call out of `functionSignature`: 6 a
+tick at 11.5 us for a 1 us body), the `CycleActors` start (`0x2f` over native 1002), `SetRotation(Rotator(Velocity))` (up to 52 a tick), and
+`let`s with name, struct, string or bound-field targets (40 shapes, each under 0.04). Details, the Firefox split and the cost against the bar in
+[the 60 fps plan](firefox-60fps-plan.md#what-the-rust-vm-still-hands-to-javascript-2026-11-06).
+
+**The three largest of those rows, in Rust (2026-11-06, [the bunker bundle](firefox-60fps-plan.md#the-bunker-bundle-2026-11-06)).**
+Each is a lowered kind with the JavaScript path as its reference and `js` / `verify` modes:
+* `PLAYER_PAWN` 207 (natives.rs `player_pawn`, `PLAYER_PAWN=rust|direct|js|verify`): GetPlayerPawn (720) answered from `PLAYER_PAWN_CELL`
+  = [graph epoch, the epoch the handle is valid for, handle, verify]. `js_player_pawn` runs the resolver and fills the cell; the epoch
+  advances on every write to `level.engine.client.viewports[0].actor` or a link above it (player-pawn-graph.mjs, accessors installed by
+  script-doors.mjs where it sets `playerPawnShortcut`). The lowering is gated as the `js_object` direct path is.
+* `CALL_OUT` 208 and `P_STRUCT` (interp.rs `call`, iter.rs, `OUT_STRUCT=rust|js|verify`): a script call whose callee has `out` struct
+  parameters of byte, int, bool, float or object members (`HUDHitDisplay.SetHitColor(out BodyPart ...)`). callFunction's order is kept:
+  each argument in turn, the struct copied in from a local or a SELF field (member by member through the codecs: a float
+  through `float_bits(float_of(..))`, an object as its handle or None if released, a bool merged into its word), the callee, then the
+  out parameters back in reverse, also when a probe-masked callee did not run. `callSignature` (script-vm-lower.mjs) adds the
+  struct parameters to `functionSignature`'s shapes; a source the image cannot address leaves the whole call to JavaScript before
+  anything is pushed.
+* `S_FOREACH_CYCLE` 10 and the run's `Iter` (iter.rs, `FOREACH_START=rust|js|verify`): the `CycleActors(Class'X', out Actor, out int
+  Index)` start of a callee run, its IteratorNext and IteratorPop, over render.rs `cycle_scan_step` and the actor list `js_cycle_list`
+  returns (`listFor`). Lowered for a body with one foreach, in function (not state) code, and no Return left in JavaScript; a start
+  that cannot be Rust's (a run JavaScript enters again after each statement, an out argument the image cannot address) is an
+  S_YIELD and the JavaScript iterator stack keeps that loop (`iter.active` says which owns it).
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

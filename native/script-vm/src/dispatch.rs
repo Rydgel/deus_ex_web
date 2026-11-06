@@ -240,7 +240,7 @@ pub(crate) fn call_score(receiver: u32, name: u32, other: u32, value: u32) -> Op
     let outer_budget = unsafe { BUDGET };
     unsafe { BUDGET = HANG_BUDGET };
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame: id, locals, self_handle: receiver, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: receiver, self_info: 0, self_bind: 0, self_fresh: false, callee: true, iter: crate::iter::NO_ITER };
     run.statements(0);
     unsafe { BUDGET = outer_budget };
     frames_restore(saved);
@@ -407,7 +407,7 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
     let outer_budget = unsafe { BUDGET };
     unsafe { BUDGET = HANG_BUDGET };
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true, iter: crate::iter::NO_ITER };
     run.statements(0);
     unsafe { BUDGET = outer_budget };
     frames_restore(saved);
@@ -492,7 +492,7 @@ pub(crate) fn dispatch_window_event(handle: u32, which: u32, gc: u32) -> i32 {
     let outer_budget = unsafe { BUDGET };
     unsafe { BUDGET = HANG_BUDGET };
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true, iter: crate::iter::NO_ITER };
     run.statements(0);
     unsafe { BUDGET = outer_budget };
     frames_restore(saved);

@@ -21,7 +21,25 @@ export const DECAL_EXITS = Object.freeze(['attached', 'traceMiss', 'noItem', 'no
   'offPlane', 'polyFlags']);
 export const DECAL_FAULTS = Object.freeze({1: 'model index out of range', 2: 'trace fallback',
   3: 'GatherNodes clip buffer assert (24 points, line 0x836)', 4: 'more than 64 nodes on one FDecal',
-  5: 'SurfList longer than 64 entries', 7: 'record store exhausted'});
+  5: 'SurfList longer than 64 entries', 7: 'record store exhausted',
+  8: 'DECAL_FAST=verify: the fast surface finder or node gatherer differs from the x87 reference'});
+
+/** 'on' (default), 'off' or 'verify': DECAL_FAST / DEUS_EX_DECAL_FAST (?decalFast=). 'off' runs FindSurface and GatherNodes as
+ * the reference x87 expressions, 'on' with the per-edge table and the decided-sign filter (decal/fast.rs), 'verify' both on every
+ * call, a difference a DecalKernelFault 8. IO word 16 of the kernel: 0 on, 1 off, 2 verify. */
+export const decalFastMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FAST) || globalThis.DEUS_EX_DECAL_FAST || 'on';
+const DECAL_FAST_WORDS = Object.freeze({on: 0, off: 1, verify: 2});
+const IO_MODE = 16;
+/** Entries of the surface finder's edge table (a power of two; DECAL_FAST_TABLE / DEUS_EX_DECAL_FAST_TABLE): one per polygon vertex
+ * the finder and the gatherer have met, 72 bytes each in the kernel instance's memory, shared by its levels. */
+const fastTableEntries = () => Number((typeof process !== 'undefined' && process.env?.DECAL_FAST_TABLE) || globalThis.DEUS_EX_DECAL_FAST_TABLE || 16384);
+const fastTables = new WeakMap();
+function ensureFastTable(kernel) {
+  if (fastTables.has(kernel) || !kernel.fastTable) return;
+  const entries = fastTableEntries();
+  fastTables.set(kernel, entries);
+  if (entries >= 2) kernel.fastTable(kernel.alloc(entries * kernel.fastEntryBytes()), entries);
+}
 
 export class DecalKernelFault extends Error {
   constructor(code, operation) {
@@ -92,9 +110,18 @@ function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => f
   return { base, points, surfAt };
 }
 
+/** 'kept' (default), 'js' or 'verify': DECAL_FOLLOW / DEUS_EX_DECAL_FOLLOW (?decalFollow=). 'js' writes every Mover surface's Actor
+ * Rotation words at each AttachDecal (followDecalTracker), as before; 'kept' writes a mover's surfaces only when its rotation is not the
+ * one the last call wrote for it (nothing else writes those words after the upload: decal.rs `decal_model_sync` leaves them); 'verify'
+ * skips the same writes and checks that the words in memory are the ones the call would write. */
+export const decalFollowMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FOLLOW) || globalThis.DEUS_EX_DECAL_FOLLOW || 'kept';
+
 /** The uploaded model's handle: it holds only the kernel, the block's address, the point capacity and the surface records' word. */
 function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
   let rotationWords = null;
+  // Per mover key: the surfaces and the rotation words setRotations last wrote (a new upload is a new handle: it starts empty).
+  const followed = [];
+  const followMode = decalFollowMode();
   return { base, surfaceCount,
     /** Follow the moving brush tracker's arrays (a model uploaded from
      * brush-tracker.mjs trackedModel); false when a count no longer fits. */
@@ -109,6 +136,25 @@ function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
       const o = surfWords + SURF_WORDS * s + 6;
       u[o] = rotation[0] >>> 0; u[o + 1] = rotation[1] >>> 0; u[o + 2] = rotation[2] >>> 0;
     },
+    /** setRotation of each of `surfaces` (a mover's, `key` its index among the tracker's movers), unless the last call for `key` wrote
+     * these words to these surfaces already. */
+    setRotations(key, surfaces, rotation) {
+      const r0 = rotation[0] >>> 0, r1 = rotation[1] >>> 0, r2 = rotation[2] >>> 0, last = followed[key];
+      if (followMode !== 'js' && last !== undefined && last.surfaces === surfaces && last.r0 === r0 && last.r1 === r1 && last.r2 === r2) {
+        if (followMode === 'verify') {
+          const buffer = kernel.memory.buffer, u = new Uint32Array(buffer);
+          for (const s of surfaces) {
+            const o = surfWords + SURF_WORDS * s + 6;
+            if (u[o] !== r0 || u[o + 1] !== r1 || u[o + 2] !== r2)
+              throw new Error(`DECAL_FOLLOW=verify: surface ${s} of mover ${key} holds ${u[o]} ${u[o + 1]} ${u[o + 2]}, the rotation is ${r0} ${r1} ${r2}`);
+          }
+        }
+        return;
+      }
+      for (let k = 0; k < surfaces.length; k++) this.setRotation(surfaces[k], rotation);
+      if (last === undefined) followed[key] = { surfaces, r0, r1, r2 };
+      else { last.surfaces = surfaces; last.r0 = r0; last.r1 = r1; last.r2 = r2; }
+    },
     dispose: () => kernel.free(base) };
 }
 
@@ -120,6 +166,8 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
   let at = kernel.alloc(kernel.storeSize(surfaceCount, capacity));
   kernel.storeInit(at, surfaceCount, capacity);
   const recordWords = kernel.recordWords();
+  const fastWord = DECAL_FAST_WORDS[decalFastMode()] ?? 0;
+  ensureFastTable(kernel);
   const io = () => new Uint32Array(kernel.memory.buffer, kernel.ioPtr(), 128);
   function grow() {
     const next = capacity * 2, to = kernel.alloc(kernel.storeSize(surfaceCount, next));
@@ -168,6 +216,7 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
         words.set(decalDir.map(f32Bits), 8);
         words[11] = f32Bits(drawScale);
         words[12] = uSize | 0; words[13] = level | 0; words[14] = texture >>> 0;
+        words[IO_MODE] = fastWord;
         putSurfList(words, surfList);
         setDecalHost({ rand, texture: textureOf });
         let status;
@@ -201,6 +250,9 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
       }
       return out;
     },
+    /** The fast surface finder's counters since the instance began: table hits, misses, vertex signs and distance signs the
+     * filter left to the x87 expressions (null in a core without it). */
+    fastStats: () => kernel.fastStats ? [0, 1, 2, 3].map(i => kernel.fastStats(i)) : null,
     /** The store's byte address in the kernel memory (the renderer's input). */
     get address() { return at; },
     dispose() { kernel.free(at); at = 0; },

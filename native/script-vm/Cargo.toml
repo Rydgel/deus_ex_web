@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# decal_fast_selftest (src/decal/fast.rs); not in the shipped module.
+selftest = []
+
 [profile.release]
 opt-level = 3
 lto = true
