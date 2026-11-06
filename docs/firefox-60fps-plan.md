@@ -1111,6 +1111,107 @@ and Chromium worker mode. The bunker's page p95 falls from 20.8 to 19.8 ms and s
 * `trace.rs point_clear` and the Rust move run in doubles, like the JavaScript reference; the original's pass precision (24 bits) for a point
   exactly on a node plane is not measured ([render-pass precision](render-pass-precision.md)).
 
+### Firefox slow-spot census (2026-11-06)
+
+The fixed routes (the census scan, roam) never stood beside the Paris Club's two mirrors, where a Firefox-only upload trap held a player to
+about 30 fps. `scripts/spot-census.mjs` looks everywhere instead: for every map it reads the placed navigation points from the map file
+(`scripts/map-nav-points.mjs`: PathNode, PlayerStart, PatrolPoint, HidePoint, AmbushPoint, SpawnPoint), takes 40 by farthest-point sampling and
+puts the player at each, at four headings 90 degrees apart (yaw 0, 16384, 32768, 49152), through `placeProbe` (`hitch-run.mjs --places`): 0.5 s
+to settle, then 0.75 s of drawn frames from the hitch log. One session per map, headless Firefox inline, 1440x960, god mode, under the heavy
+lock and an 8 GB scope; `--repair` measures again what a first pass could not. `--summary` and `--figures RUN.json` print the tables.
+
+* **Coverage:** 75 maps, 11,485 views, 11,377 of them valid. Not measured: `00_Intro`, `99_Endgame1..4` (cinematics), `DXMP_*`, `Entry`, `DX`,
+  `DXOnly`. Left out (108 views): 52 swimming, 24 dying, 3 paralyzed, 23 in a conversation that survived a second visit, 6 cut off by a stop.
+* **Method fixes the first passes needed:** a ScriptedPawn that sees the placed player starts a conversation (`MeetTerrorist` on the Island,
+  `MeetTobyAtanwe` in Everett, ...), after which the player is drawn from the conversation camera at every later spot (Everett: all 160 views of
+  the first pass). `placeProbe` takes `endConversation`, which runs the script's own `DeusExPlayer.AbortConversation` before the move; a view
+  that still ends outside `PlayerWalking` is measured once more and else left out. Esc does not end one (eight presses left the state as it was).
+* **Where the slow views are:** 1,649 of the 11,377 are over 16.7 ms (page p50), on 47 of the 75 maps. **1,609 of them are led by `p.tick`**,
+  39 by `p.fog` (10 at `02`, 11 at `04`, 18 at `08_NYC_Underground`), 1 by `p.mirrors`. 28 maps have no slow view.
+  Table and per-map figures: `.cache/perf/spot-census/firefox-summary.md` (not in Git).
+
+**The twelve worst distinct spots**, Firefox inline against Chromium (worker mode) for the same view (the Chromium census ran on the six
+maps that hold them, after the fog fix below; Chromium's frame is the larger of the page's and the worker's p50):
+
+| Map | Place | Yaw | Firefox p50 | Led by | Chromium | Cause |
+|---|---|---:|---:|---|---|---|
+| 09_NYC_Dockyard | 2623, 6205, 20 | 32768 | 46 | tick 24.2, actors 10.1 | 18.5 (worker) | simulation, also over 16.7 in Chromium |
+| 02_NYC_Underground | -3946, 1158, -1000 | 0 | 44 | tick 26.8, hud 6.8 | 6.2 | NPC state: 13 ms in a single placement |
+| 02_NYC_Underground | 645, -415, -361 | 32768 | 41 | tick 13.2, fog 12.4 | 16.1 (page) | fog kernel (below) |
+| 02_NYC_Underground | -73, 636, -361 | 49152 | 41 | fog 14.6, tick 11.6 | 18.3 (page) | fog kernel (below) |
+| 09_NYC_Dockyard | 3785, 6204, 20 | 49152 | 41 | tick 25.8, actors 7.3 | 13.6 | simulation |
+| 12_Vandenberg_Cmd | -503, 7221, -2168 | 49152 | 41 | tick 23.3, actors 9.2 | 22.4 (worker) | simulation, over 16.7 in Chromium |
+| 02_NYC_Underground | -75, 818, -360 | 49152 | 40 | tick 13.0, fog 11.6 | 16.1 (page) | fog kernel |
+| 02_NYC_Underground | -358, 588, -361 | 49152 | 40 | fog 13.7, tick 11.5 | 16.6 (page) | fog kernel |
+| 10_Paris_Metro | 4236, -3463, 167 | 32768 | 40 | tick 23.7, actors 6.1 | 13.2 | simulation |
+| 09_NYC_Dockyard | 3205, 5639, 20 | 32768 | 39 | tick 22.6, actors 7.3 | 19.8 (worker) | simulation |
+| 15_Area51_Page | 7897, -9941, -5675 | 16384 | 38 | tick 17.8, render 5.3 | 6.0 | NPC state |
+| 02_NYC_BatteryPark | -4634, 3480, -312 | 32768 | 37 | tick 22.0, actors 5.3 | 9.2 | NPC state: 23 ms in a single placement |
+
+**Classification.**
+* **Simulation cost, known (the 1,609 tick-led views).** The tick is the families of the [tail profiles](#step-0-what-the-slow-ticks-hold-2026-11-05)
+  in larger doses, and mostly the NPCs' state: a single placement at load (`hitch-run.mjs --mode idle --place`) gave 13 ms at the Market's
+  35 ms view, 13 at the Underground's 44, 13 at the MJ12 lab's 31 and 23 at Battery Park's 33, but 43 at the Dockyard's 46 and 28 at the
+  Warehouse's 31. So most tick-led views are places visited after the map's NPCs had seen and been hurt by a player teleporting around (god mode
+  keeps them shooting); two maps are heavy at load. **09_NYC_Dockyard** is the one to read: its Firefox tick is 25 ms and Chromium's *worker*
+  frame there is 18 to 20 ms (`w.tick` 9 to 12.5, `w.actors` 2 to 6) at 143 of 160 views over 16.7 ms in Firefox, and it misses 60 fps in
+  Chromium too (87 DeusExMover, 207 lights, 377 BlockPlayer; the Gecko profile: `js_eval` 6.0, `js_move_riders` 2.8, `js_tick_physics` 2.4 ms
+  a frame). `12_Vandenberg_Cmd` (41 ms Firefox, worker 22 ms Chromium) is the same kind. No Firefox-only trap showed in the tick.
+* **Volumetric fog in the Underground maps (fixed in part, 950917e5).** 39 views, all in `02`, `04` and `08_NYC_Underground`: `p.fog` 8 to 17 ms.
+  Chromium pays it too (18 ms of the page's 24 at 02's spots), so it is not a Firefox trap. Of the 14.6 ms a frame under the fog pass at
+  (-73, 636, -361): 8.1 ms in the Rust fog loop (`fog::walk`, via `fog_map`; Render.dll's SetupForSurf loop, bit-exact, original per-frame work),
+  6.5 ms of JavaScript around it. The redundant part is fixed: `fogMapKernel` sorted and packed the frame's lights (and wrote their 1 KB
+  colour tables into the kernel) for every surface, and the pass built its validation notes every frame. Interleaved A/B at the three 02 spots,
+  three pairs: `p.fog` 13.93 -> 10.88 ms in Firefox (page p50 37 -> 34), 17.91 -> 11.58 in Chromium (page p50 24.3 -> 17.7). The kernel's
+  inputs over 240 frames of Bar, Market, Ship and Battery Park are byte-identical between the two paths (`?fogLights=each` / `FOG_LIGHTS=each`
+  keep the old one; `?fogNotes=1` turns the notes on).
+* **Actors (`p.actors`).** 25 Dockyard views at 5 to 10 ms, 7 at `12_Vandenberg_Cmd` up to 9.2, 4 at Battery Park up to 7.7, 3 at NSFHQ: `actor-mesh-sim.mjs
+  update` (7.2 ms a frame at the Dockyard), proportional to the visible actors; Chromium's worker pays 4 to 6 ms of the same. The plan's
+  actors family, not a trap.
+* **Moving lights (`p.lightAnimation`, 25 views over 3 ms).** `03_NYC_MolePeople` 10 views (3.0 to 4.2 ms), `12_Vandenberg_Tunnels` 8 (4.3 to
+  5.7), the Dockyard 5, Battery Park 2 (up to 5.3). At the Mole People spot (2469, -179, 23) yaw 32768:
+  `syncMovingLights` is 3.8 ms a frame in Firefox (2.1 `compose`, 1.5 `light-atlas.mjs update`'s float-to-byte copy of each recomposed light
+  map), 2.8 ms of Chromium's page frame of 5.4. Original per-frame work (the moving-light recomposition); the conversion is host code that could
+  go to Rust or the GPU.
+* **Exceptions as control flow, small.** `soundField` -> `reflectedField` catches the `Object is not attached to script runtime` error
+  `instance()` throws for a receiver that is not a script object, at every sound field read: 0.4 to 0.5 ms a frame in Firefox
+  (`js::SavedStacks::saveCurrentStack`) at the Warehouse and the Dockyard, 1% of the frame. Under the 5% bar, not changed.
+* **Mirrors:** one slow view is led by `p.mirrors`, `10_Paris_Club` (-137, -1344, 7) yaw 0, 6.7 ms (six Club views have 2.5 ms or more; so do
+  the Bars at 2.5 to 4.1 and WanChai_Street at 3.5): left to the mirror survey.
+* **Not slow, but stops the session** (simulation, not host): `06_HongKong_Storage` at (535, 0, -103), every yaw, and (-7, 555, -103) yaw 0:
+  `Nonfinite FastLineCheck plane distance is unsupported`. `09_NYC_ShipBelow` at (-506, 894, -361) yaw 16384: `Runaway loop detected (over
+  10000000 iterations) in PickDestination`, and at (-6437, -183, -489) yaw 0 the same in `Patrolling`. The player dies in god mode (state
+  `Paralyzed`, then DXOnly) at `03_NYC_Airfield` (-1578, 34, 23) yaw 0, `03_NYC_UNATCOHQ` (1730, -847, -40) and `12_Vandenberg_Computer`
+  (1884, 2974, -1993). The census goes on after each (another session).
+
+**Fog spots, for the fog work.** `p.fog` before the light-pack fix (the census) and after (a single placement, Firefox inline), the level
+surfaces drawn and the mover draw items the pass computed a map for, and the texels, a frame. The pass holds 2092 (02), 809 (08), 804 (04) and
+2526 (NSFHQ) fog-zone surfaces.
+
+| Map | Place | Yaw | p.fog before | after | level surfaces + mover items | texels |
+|---|---|---:|---:|---:|---|---:|
+| 02_NYC_Underground | 638, -191, -361 | 32768 | 16.9 | 10.3 | 68 + 127 | 63,764 |
+| 02_NYC_Underground | -73, 636, -361 | 49152 | 14.6 | 11.2 | 84 + 128 | 66,462 |
+| 02_NYC_Underground | 234, 605, -361 | 49152 | 14.1 | 10.0 | 86 + 123 | 60,102 |
+| 08_NYC_Underground | -768, -402, -361 | 0 | 9.7 | 6.2 | 51 + 125 | 47,893 |
+| 08_NYC_Underground | -75, 724, -361 | 49152 | 8.7 | 6.2 | 96 + 131 | 47,421 |
+| 04_NYC_Underground | -73, 636, -361 | 49152 | 8.4 | 5.8 | 85 + 118 | 43,412 |
+| 04_NYC_Underground | -358, 588, -361 | 49152 | 7.8 | 5.7 | 76 + 116 | 40,945 |
+| 04_NYC_NSFHQ | -542, -894, 23 | 49152 | 5.8 | 5.0 | 33 + 0 | 83,052 |
+| 04_NYC_NSFHQ | -238, -1777, 48 | 49152 | 5.0 | 3.4 | 23 + 0 | 67,826 |
+| 02_NYC_BatteryPark | -3723, -3353, 265 | 0 | 2.6 | 2.1 | 108 + 2 | 68,326 |
+| 03_NYC_AirfieldHeliBase | -881, 2510, 23 | 32768 | 2.9 | 2.7 | 103 + 0 | 17,514 |
+
+What is left in the fog phase at the Underground (Gecko profile, before the fix): the loop 8.1 ms; `itemMesh` (a geometry with three new
+attributes and a texture write for each of the ~125 mover items, every frame) 1.7 ms; the wrapper around each call 2.3 ms (partly gone now); about
+800 `texSubImage2D` calls a frame for 0.7 MB (`gl.upload` 1.2 ms in Firefox, so not the cost). Reproduce: `node scripts/hitch-run.mjs --browser
+firefox --map 02_NYC_Underground --mode idle --god --seconds 20 --place '{"location":[-73,636,-361],"rotation":[0,49152,0]}' --profile FILE`,
+then `scripts/gecko-phase.mjs RUN FILE --entry 'fog-pass'`; `scripts/wasm-names.mjs` names `wasm-function[175]` on a non-stripped build.
+
+**Left open.** The Mac is not measured; these numbers are Linux headless. The tick-led views say little about place (they follow NPC state), so
+the census finds the *draw-side* costs of places, and those are few: the Underground fog above, the moving lights at the Mole People, the actors
+layer at the Dockyard. No other Firefox-only trap showed in 11,377 views.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
