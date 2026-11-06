@@ -257,6 +257,13 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   chain) were cut exactly (digests equal, verify modes clean); Firefox inline, four interleaved pairs each: bunker mean tick
   5.64 → 5.50 ms, slowest tenth 11.07 → 10.77; Island 6.58 → 6.54 and 9.77 → 9.78. Under the 0.5 ms bar: the code is on branch
   `import-cuts-unshipped` (b1f7e186), master unchanged.
+* **2026-11-06, the bunker's slow tenth: seven exact host cuts, under the bar, not merged**
+  ([below](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06)). `js_tick_resume` and `js_tick_state` hold no JavaScript around the Rust
+  bodies (every frame on the path under 0.02 ms: their +0.8 ms is the state code's content). Cut exactly, behind switches: the rider table and
+  `GetPlayerPawn` (b1f7e186), `compactScriptActors`' reads (`level_flagged`), the Errors `PlaySound`'s graph reads threw, `followDecalTracker`'s
+  rewrites, `Client.Decals`' field-list rebuilds and `ReadInput`'s. Digests unchanged, verify modes clean in Node and Firefox. Firefox inline,
+  four interleaved pairs: mean tick 5.40 -> 5.23 ms, slowest tenth 10.12 -> 9.85, page p95 20.5 -> 20.0: under 0.3 and 0.5 ms. Code on
+  `bunker-cuts-unshipped`.
 * **2026-11-06, the tick's reads of other objects in Rust** ([rust-core.md](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
   [the player's tick](script-player-tick.md#what-the-players-tick-costs-in-firefox-2026-11-06)). The step began as "the player's tick and the
   level's host work" (1.1 to 1.3 ms); the Island profile showed the player's tick spread over many parts of 0.03 to 0.6 ms, and under the
@@ -468,10 +475,99 @@ the spread of the sessions. Why the profile overstated it: the rider fill is pai
 attach, so 0.4 ms there is 0.04 ms on the mean; and the import's inclusive time for `GetPlayerPawn` counts the resolver's reads and the
 handle lookup, which stay.
 
+(The cuts continue in [Bunker slow-tick cuts](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06): both pieces cherry-picked onto
+master with five more, still under the bar together.)
+
 **Left.** Every one of these four is a small share of a tick that is spread thin. The bunker's slow tenth is `js_eval` (3.62 against 0.83 ms a frame: the JavaScript calls `AttachDecal`, `DetachDecal`,
 `SetHitColor` and the spawns), not these imports. A route to 0.5 ms from this list is translation of whole families, not cuts:
 `WalkTexture` and the prelude's inputs in Rust, `GetPlayerPawn` as a Rust node over a host-maintained cell (no crossing), the
 `refresh` skip; each is about 0.1 ms.
+
+### Bunker slow-tick cuts: seven switches, not merged (2026-11-06)
+
+The task: a bundle of host-plumbing cuts for the Area 51 bunker, the last map over 16.7 ms at page p95 (22 ms, p50 13). Bar for shipping: at
+least 0.5 ms in the slowest tenth of ticks or 0.3 ms in the mean tick, from an interleaved Firefox A/B. The bundle measured 0.27 and 0.17 ms: under
+the bar, so master is unchanged and the code is on branch `bunker-cuts-unshipped` (the rider table and `GetPlayerPawn` of `import-cuts-unshipped`
+cherry-picked onto master 7db679d4, and the five cuts below in a second commit).
+
+**The slow tenth, again** (Firefox 155 inline, headless, scan route, 60 s, master e43007c9; `gecko-slow-ticks.mjs` on
+`.cache/perf/bunker-midday/{run.json,profile.json}`; 345 slow frames at `p.tick` 11.60 ms against 5.48 for the other 3,105). By the Rust core's
+import, ms a frame, slow / rest / difference:
+
+| Import | slow | rest | diff |
+|---|---:|---:|---:|
+| `js_eval` | 2.65 | 0.90 | +1.75 |
+| JavaScript with no Wasm under it | 1.79 | 1.11 | +0.67 |
+| `js_move_riders` | 0.68 | 0.17 | +0.51 |
+| `js_tick_resume` | 0.49 | 0.03 | +0.46 |
+| `js_object` | 0.55 | 0.21 | +0.34 |
+| `js_tick_state` | 0.36 | 0.03 | +0.33 |
+| `js_tick_physics` | 0.44 | 0.27 | +0.17 |
+
+* **`js_tick_resume` and `js_tick_state` hold no JavaScript around the Rust bodies.** Under them the path is `callback` → `js_tick_*` →
+  `processState` → `process` → `resumeFrame` → `resumeCompiled` → `resumeState` → `vm_statement`, and the self time of every frame on it is under
+  0.02 ms (`gecko-under.mjs --anchor '^js_tick_resume'`). The 0.46 and 0.33 are the state code's content, in a few frames of the tenth: 0.28 of the
+  0.46 is `callFunction` → `executeScript` → `resume` (script functions the Rust statements call through JavaScript because their callee has an
+  out or struct parameter, or a native body) and the natives under them (`Spawn`, `AttachDecal`). Nothing to cut there but the content.
+* **What the tenth adds, by subtree** (inclusive, slow minus rest): `execAttachDecal` +0.60 (the Rust attach 0.41, `followDecalTracker` 0.14),
+  `spawnActor` +0.56 (the spawned actor's script events 0.30, construction 0.15), `moveActorRiders` +0.47 (all of it the table's fill),
+  `cleanupDestroyed` +0.27 (`compactScriptActors` 0.17), the HUD tick +0.33, first-use lowering +0.17 (`loweringFor`: 286 of the 344 lowerings in a
+  1,200-tick Node run are the first use of a function, 58 a missing field cell becoming known, none an operand-epoch advance), `PlaySound` +0.13,
+  and collector work inside the frame: `GCSlice` 0.38 against 0.09 ms and `GCMinor` 0.27 against 0.08 (the tenth allocates more).
+* The profile's `selectLodMesh` > `axis` > `updateProjectionMatrix` frames under `invokeNative` are mislabelled JIT frames of `spawnActor`'s
+  callers (their callees are `processEvent` and `initializeObjectStorage`), not LOD code.
+
+**The cuts**, each behind a switch with the JavaScript reference reachable (`js`) and `verify` (both, compared); the page's `?flag=` reaches the
+simulation worker through `init` like the others, and `process-probe.mjs` now returns the worker's `DEUS_EX_*` switches (`switches`).
+
+| Switch (env, `?flag=`) | Cut | Why it is exact |
+|---|---|---|
+| `RIDER_TABLE`, `riderTable` | b1f7e186: the rider scan's table of Base reads kept across `CompactActors`' shifts and an attach | [Import cuts](#import-cuts-not-merged-2026-11-06); `=verify` compared 1.76 million slots on the bunker's long route |
+| `PLAYER_PAWN`, `playerPawn` | b1f7e186: `GetPlayerPawn` answered in `js_object` | as there (Island only) |
+| `COMPACT_SCAN`, `compactScan` | `level.rs level_flagged` lists the slots of `Level.Actors` from `FirstDynamicActor` that are null, `bDeleteMe` or not answerable by the image; `compactScriptActors` starts at the first and reads `bDeleteMe` of the flagged slots only | an unflagged slot holds an actor whose image flag reads false, which is what `readNamed` returns (`level_settled`'s premise, `LEVEL_SCAN=verify`); the loop, the shifts, the epoch advances and the warnings are the same code (unit test: 200 random arrays, same result, same advances, reads only at flagged slots) |
+| `SOUND_READ`, `soundRead` | `reflectedField` answers `undefined` for an object that is not an attached instance without calling `readNamed`, which threw out of `instance()` and was caught | `attachedInstance(x) === null` is exactly the case `instance(x)` throws; every PlaySound reads the level container's `DemoRecDriver`, `Model`, `Engine`, `Client`, `Viewports`, `Actor` that way, an `Error` and its stack (`SavedStacks::saveCurrentStack` 0.09 ms a frame in the slow tenth, 0.01 in the rest) each |
+| `DECAL_FOLLOW`, `decalFollow` | `followDecalTracker` writes a mover's surface rotation words only when its rotation differs from the one last written for that mover to that model handle | nothing else writes the words after the upload (`decal_model_sync` writes words 0 to 2 of a surface record, the attach only reads 6 to 8); `=verify` compares the words in memory at every skip |
+| `CONFIG_FIND`, `configFind` | `createNativeConfig`'s `findIn` kept per class and lowered name | the property tables are frozen constants; `Client.Decals` is read three times by every `AttachDecal` (the getter at `script-doors.mjs`), each time building the whole field list of `WinDrv.WindowsClient` (`flatMap`, `reverse`, `map`: 23.7 MB of the 1,000 sampled over the long route in the function alone) |
+| `INPUT_FIELDS`, `inputFields` | `inputPropertyFields` (the CPF_Input properties `ReadInput` scales) kept per class | the linked class tables do not change once an object of the class exists; it walked every field of the player's class at every tick (0.05 ms of the rest frames) |
+
+**Checks.** `bench-sim --render-feedback` digests unchanged in the default modes: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield
+`46ed0d32ae5b56af`, Wan Chai `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island
+`0b4d06c72afd1c1d`). With `RIDER_TABLE`, `PLAYER_PAWN`, `COMPACT_SCAN`, `SOUND_READ`, `DECAL_FOLLOW` and `LEVEL_SCAN` at `verify`: the same digests
+on the short bunker run and both long routes, no tick errors. A 40 s Firefox inline bunker run with those and `CONFIG_FIND` and
+`INPUT_FIELDS` at `verify`: 2,507 drawn frames, no page error. `test/script-cleanup`, `script-native-config`, `rider-*`, `move-riders`,
+`native-registry` and `script-sound*` pass (70 tests); `cargo` warning-free. **Not run** (the change is not merged): `npm test`, the family
+validators, the Chromium worker (the switches reach it through `init`, and `processProbe().switches` reads them there; not exercised).
+
+**Node effect** (V8 profile of the bunker's long route, ms over 1,200 ticks, defaults against every switch at `js`): `moveActorRiders` 170 → 78,
+`compactScriptActors` 61 → 23, `cleanupDestroyed` 122 → 78, `soundField` 34 → 28 (V8 captures a stack cheaply, Firefox does not), the native-config
+reads about 22 ms before the memo (not measured after it) and 50 MB less allocation.
+
+**Firefox inline A/B**, four interleaved pairs (`hitch-ab.mjs --arms "new:,old:riderTable=js&playerPawn=js&compactScan=js&soundRead=js&decalFollow=js&configFind=js&inputFields=js"
+--pairs 4`, 60 s scan route, god mode, order alternating; `hitch-ab-table.mjs`; sessions in `.cache/perf/bunker-cuts/`). ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 5.23 / 5.45 | 9.46 / 10.39 | 12 / 12 | 20 / 21 |
+| 2 | 5.20 / 5.39 | 10.80 / 10.21 | 12 / 12 | 20 / 20 |
+| 3 | 5.15 / 5.33 | 9.34 / 9.89 | 12 / 12 | 20 / 21 |
+| 4 | 5.36 / 5.42 | 9.78 / 9.99 | 12 / 13 | 20 / 20 |
+| **mean** | **5.23 / 5.40** | **9.85 / 10.12** | **12.0 / 12.3** | **20.0 / 20.5** |
+
+The mean tick is better in all four pairs (by 0.22, 0.19, 0.18, 0.06: 0.17 on average, the bar 0.3); the slowest tenth in three of four (0.93,
+-0.59, 0.55, 0.21: 0.27 on average with a spread of 0.65, the bar 0.5). The page's p50 and p95 move by a half millisecond at most, inside the
+sessions' spread. This is the finding of the first rider-table A/B again: the cuts are real, exact and small, and the bunker's gap to 16.7 ms at page p95
+(20 ms here) is not host plumbing of this size.
+
+**What is left, each over 0.1 ms and none exact for free:**
+* the Rust decal attach (`decal_attach` 0.41 ms in the slow tenth, 53 us an attach in Node; the laser spots re-attach 4 to 6 times a tick: 4,681
+  `AttachDecal` and 1,897 `ReattachDecal` in 1,200 ticks), with `fast::edge`'s table fills cold in a region the player has not been in;
+* `followDecalTracker`'s per-mover `Rotation` reads (0.07 ms of the tenth: a `readNamed` for every tracked mover at every attach; skipping them
+  needs a change signal from the movers' writes, or the image cell address held as the rider table holds the Base word's);
+* spawns (377 in the long route, about 300 us each in Node, 54% of it the spawned actor's script events) and destroys (247 at 160 us);
+* the HUD's `SetHitColor` (7,200 calls in 1,200 ticks, 11.7 us each in Node, a JavaScript call because of its `out BodyPart` parameter): Rust calls
+  with struct out parameters would take it and the player's `ProcessMove` (75 us);
+* `js_tick_refresh`: skipping it needs Rust to say that no JavaScript ran inside the event (a counter at the imports), not a key compared in
+  JavaScript, which costs what the publication costs.
 
 ### The collision hash reads the image (2026-11-05)
 
