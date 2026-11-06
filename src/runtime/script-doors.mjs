@@ -1482,6 +1482,8 @@ export async function createScriptDoors({
     if (zone === undefined) zone = runtime.readNamed(actor, 'Region')?.['engine.actor.pointregion.zonenumber'];
     return level.zoneLastRenderTimes?.[zone];
   };
+  // The Rust actor tick may read the table itself (actor-tick-kernel.mjs syncZones, tick.rs zone_render_time).
+  level.zoneLastRenderTime.direct = true;
   let tickBoundary = null, lastTickDelta = 0;
   // One Actor.Tick of the level's scheduler (aroundActorTick, below): a function made once, called with the tick's arguments.
   const tickActorBody = (actor, delta, options) => runtime.processActorTick(actor, delta, options);

@@ -359,3 +359,47 @@ ViewRotation sway and sets `DesiredFOV`, which `PlayerPawn` folds into `FOVAngle
 `BloodDrop` actors while `bleedRate > 0` (the `hit-shot-bleed` census scenario plays). The flash `ViewFlash` integrates is drawn by
 D3DDrv `EndFlash`: [screen flash](screen-flash.md) holds the script arithmetic, the Engine/D3DDrv evidence, the census of what
 paused and the open list.
+
+## What the player's tick costs in Firefox, 2026-11-06
+
+Host measurement for [the Firefox 60 fps plan](firefox-60fps-plan.md); no behavior changed by the measurement. Headless Firefox 155,
+inline, the Island's scan route (`hitch-run.mjs --mode scan --god --seconds 60 --profile`, master d64b55bf, 3,410 drawn frames from
+5 s after the map, Gecko interval 1 ms), joined to the hitch log with `gecko-phase.mjs`. The controlled player is the one actor the
+Rust level loop (`level_loop.rs`) hands back: `actor-tick-kernel.mjs` `run`/`describe` return `HandBack` for `C_PLAYERPAWN`
+(tick.rs `tick_body`), so `tickStandaloneActor` runs in JavaScript between two batches. Per drawn frame:
+
+| Part of the level tick | ms | Where it runs |
+|---|---:|---|
+| `tickStandaloneLevel` (all) | 6.36 | |
+| the Rust batch (`tickActors`), every NPC | 4.54 | Rust, with JavaScript imports under it |
+| **the player's `tickActor`** | **1.20** | below |
+| `playerDistances` (DistanceFromPlayer, `level_distance`) | 0.22 | Rust already (memory-bound) |
+| the AI event manager's tick | 0.16 | Rust |
+| `cleanupDestroyed`, level reads | 0.14 | JavaScript |
+
+The player's 1.20 ms (Node's split of the same tick, with real clocks around each step, in brackets, ms):
+
+| Step of `tickStandaloneActor` | Firefox | [Node] | What the time is |
+|---|---:|---:|---|
+| `PlayerInput` and `PlayerTick` events | 0.60 | [0.34] | run by the Rust VM (`event` → `resume`), but 0.40 of it is `js_eval` fallbacks: the calls with a vector or rotator parameter (`ProcessMove`, `CheckBob`: the `CALL` kind takes scalars only), `GetWallMaterial` (an `out vector`), `GetFloorMaterial` (a `foreach TraceTexture` iterator), `GetAugLevelValue`, assignments to vector/rotator locals and fields and the natives under them (`native 215`, `229`, `161`, `156`...), and reads of the player's bound keys (`ViewRotation` 5 a tick, `bIsCrouching` 4, `Physics` 3, `Region`, `HeadRegion`) |
+| `showSelf` (`showPawnSelf`: every pawn's SightCounter, `losWorker` for the few that are due) | 0.20 | [0.09] | JavaScript over the host `PawnList` |
+| `ReadInput` twice (`inputPropertyFields` rebuilds the CPF_Input list from the class chain each time: 0.08) | 0.14 | [0.07] | JavaScript |
+| `performPhysics` (the walking prelude for a player standing still) | 0.13 | [0.08] | JavaScript, the player's facade |
+| `UpdateEyeHeight` event | 0.03 | [0.03] | Rust VM |
+| `advanceAnimation`, the tick kernel's glue, the rest | 0.10 | [0.02] | JavaScript |
+
+Node's glue is 0.02 ms (the whole `tickStandaloneActor` is 0.636 and its parts add to 0.616). Firefox's glue is larger, but the
+measured parts are the callbacks, not the sequencing. Reading this table:
+
+* There is no single piece of 0.5 ms in the player's tick. Taking the whole tick into Rust (accepting `C_PLAYERPAWN` in tick.rs, which
+  would also let the batch run through the player's slot) saves the glue and the batch's second entry, about 0.1 ms; each callback
+  then remains. The events' fallbacks are the same coverage gap as the NPC scripts' (struct locals, struct parameters, iterators), not
+  the player's sequencing; they would shrink as the Rust VM gains those node kinds.
+* The controlled player's bound keys (`objectflags outer name class objectinternal bIsCrouching FootRegion HeadRegion ViewRotation
+  WalkBob BaseEyeHeight EyeHeight Physics Level Base Region Touching`) send about 25 reads and writes a tick through JavaScript
+  ([rust-core.md](rust-core.md) step 1e-6: the player as a controller over the image).
+* **The larger find of this profile is under the NPCs' batch:** three tiny JavaScript imports that the Rust tick calls for every actor,
+  `js_event_gate` (0.37 ms a frame), `js_tick_zone_time` (0.37) and `js_tick_owner_ticked` (0.16), whose time went mostly to
+  `runtime.instance()` (0.51 ms a frame as a leaf, the largest in the tick). They are
+  [moved to Rust](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented): the Island's mean tick fell
+  0.45 ms (six interleaved pairs), the slowest tenth 0.58 ms.

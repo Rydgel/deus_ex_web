@@ -90,7 +90,12 @@ the steady frames' cost, from the step 0 profiles):
 * **Frequent natives the Rust VM hands back:** `GetPlayerPawn` (native 720, 51,000 calls in 20 s on the Island), `StartConversation`
   calls (Wan Chai, 8,000 in 20 s), and string natives (Wan Chai: one nested string expression, 67,000 calls).
 * **What runs outside the Rust batch** (1.1 to 1.3 ms in steady frames): the player's tick, which still runs in JavaScript, and the
-  level's host work around the batch.
+  level's host work around the batch. Profiled 2026-11-06 ([table](script-player-tick.md#what-the-players-tick-costs-in-firefox-2026-11-06)):
+  the player's tick is 1.20 ms of a flat spread (its two script events 0.60, mostly fallbacks of the Rust VM that NPC scripts share;
+  `showSelf` 0.20, `ReadInput` 0.14, walking physics 0.13), so no piece of it reaches 0.5 ms; the level's own host work is
+  `playerDistances` 0.22 (Rust already), the event manager 0.16, cleanup 0.14. The profile found the larger cost under the batch itself:
+  [three tiny imports the Rust tick made for every actor](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
+  now in Rust.
 * **Not a port: decals.** They are already Rust. The decal attach is 0.78 of `AttachDecal`'s 0.90 ms in the bunker's slow frames and
   averages 0.55 ms per frame there, 0.11 ms on the Island. Making it faster means changing the Rust algorithm, and only the bunker
   would gain much.
@@ -220,6 +225,17 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, the tick's reads of other objects in Rust** ([rust-core.md](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
+  [the player's tick](script-player-tick.md#what-the-players-tick-costs-in-firefox-2026-11-06)). The step began as "the player's tick and the
+  level's host work" (1.1 to 1.3 ms); the Island profile showed the player's tick spread over many parts of 0.03 to 0.6 ms, and under the
+  NPCs' batch three small JavaScript imports (`js_event_gate` 0.37 ms a frame, `js_tick_zone_time` 0.37, `js_tick_owner_ticked` 0.16, mostly
+  `runtime.instance()`, the tick's largest leaf at 0.51). They answer from the images and a copied zone table now (`TICK_READS`,
+  `?tickReads=`, verify compares every answer). Firefox inline, the Island, six interleaved pairs: mean tick 7.00 → 6.55 ms (-0.45), slowest
+  tenth 10.39 → 9.81 ms (-0.58), page p50 13.67 → 13.33 ms, p95 20.67 → 20.00 ms; five of six pairs favor Rust. That is a little under the
+  0.5 ms bar for the mean tick. Digests equal on the five maps and the long route, in `js`, `rust` and `verify`.
+  What remains in the batch's imports (Island profile after the change): `js_walk_prelude` 0.46, `js_object` 0.32, `js_move_hash` 0.18,
+  `js_move_riders` 0.18, `js_tick_refresh` 0.17 (each event the Rust tick runs ends in a state refresh that needs the instance's
+  bindings, poison and field table), `js_step` 0.16, `js_tick_physics` 0.12.
 * **2026-11-05, global function calls** ([above](#global-function-calls-run-in-rust-2026-11-05)). `Global.Tick(...)` and the
   other EX_GlobalFunction calls run through the Rust call path (`GLOBAL_CALLS`, `?globalCalls=`). Node census: the `0x38` rows of
   the three maps vanish except the Island's 753 `HitWall` calls; digests equal in all modes. Node tick means are

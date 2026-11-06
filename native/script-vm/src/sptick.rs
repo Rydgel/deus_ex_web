@@ -95,7 +95,6 @@ extern "C" {
     fn js_tick_destroy(ctx: u32);
     fn js_tick_get(ctx: u32, field: u32, element: i32) -> f64;
     fn js_tick_set(ctx: u32, field: u32, element: i32, value: f64);
-    fn js_tick_zone_time(ctx: u32) -> f64;
     fn js_tick_error(ctx: u32, code: u32);
 }
 
@@ -338,7 +337,7 @@ fn in_stasis(a: &mut Actor, time_seconds: f64) -> Option<bool> {
     if !forced && physics != 0.0 && physics != 5.0 {
         return Some(false);
     }
-    let rendered = unsafe { js_tick_zone_time(a.ctx) };
+    let rendered = crate::tick::zone_render_time(a);
     if crate::tick::zone_time_bad() {
         // Not a number: the JavaScript body throws.
         unsafe { js_tick_error(a.ctx, 3) };
