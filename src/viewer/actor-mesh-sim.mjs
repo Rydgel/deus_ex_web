@@ -1174,10 +1174,38 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     // sent marked as skippable)
     records:0,hiddenSkipped:0,
     shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
+  // `target` receives the lists and counts made from every binding.
+  const makeSummary=target=>{
+    target.actors=actors.map(actor=>actor.summary);
+    target.skipped=actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s})));
+    target.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
+  };
+  // A take or a retire is a change of the list, and the lists and counts above are made from every binding: at the Dockyard (the gas
+  // puffs are admitted and retired within frames) that was 0.34 ms a frame in Firefox and 64 KB of garbage. With ACTOR_PLUMBING's
+  // `summary` they are made when read (the status request, the page's status line), from the bindings as they are then; a binding's
+  // own summary lists and triangles do not change after it is taken, so that is what the refresh at the change would have held
+  // (`verify` makes both and compares). `no-summary` keeps the refresh at every change.
+  let summaryDirty=false,expected=null;
+  const held={actors:summary.actors,skipped:summary.skipped,triangles:summary.triangles};
+  // (verify: what the refresh at the change would have made, kept to compare with what the read makes)
+  const expectation=()=>{const made={};makeSummary(made);return {actors:made.actors,skipped:JSON.stringify(made.skipped),triangles:made.triangles};};
+  if(plumbing.summary){
+    for(const key of Object.keys(held))Object.defineProperty(summary,key,{enumerable:true,configurable:true,
+      get(){
+        if(summaryDirty){
+          summaryDirty=false;makeSummary(held);
+          if(expected){
+            const want=expected;expected=null;
+            if(want.actors.length!==held.actors.length||want.actors.some((entry,i)=>entry!==held.actors[i])||want.skipped!==JSON.stringify(held.skipped)
+              ||want.triangles!==held.triangles)throw new Error('ACTOR_PLUMBING=verify: the summary made at the read differs from the refresh at the change');
+          }
+        }
+        return held[key];
+      },set(value){held[key]=value;}});
+  }
   const refreshSummary=()=>{
-    summary.actors=actors.map(actor=>actor.summary);summary.props=propActors.length;summary.npcs=npcActors.length;
-    summary.skipped=actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s})));
-    summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
+    summary.props=propActors.length;summary.npcs=npcActors.length;
+    if(plumbing.summary){summaryDirty=true;if(plumbing.verify)expected=expectation();}else makeSummary(summary);
   };
   const retired=new WeakMap();
   // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own, lit in the frames that draw the pawn right after
@@ -1564,6 +1592,44 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     get length(){return this.n;}
   }
   const updateRecords=new RecordList(),frameRecords=new RecordList();
+  // The main frame's update of the bindings. A binding that is in neither the main frame's Frame->Sprite nor a child frame's returns a
+  // plain hidden record (update: `!rootVisible && !childOnly`, or the `view.main` miss), with its state at rest: drawnMain and childOnly
+  // false, its LOD record not updated. In a frame whose `main` is a Set (an occlusion result, which makes `cull` and the block's
+  // childOnly test unreachable) that holds for every binding that is not in `main` and not in `children`; so one that did the same
+  // in the previous such frame (`quietAt`), whose plain hidden record the page already holds (`hiddenRun`: nothing drew it since)
+  // and that is not an iterator's moved actor (`spriteAt`: updateSprite writes its snapshot into the actor), finds the same state
+  // and returns the same record, which compactRecords would drop: it is not updated (ACTOR_PLUMBING=no-skip updates it).
+  // `serial` counts the calls, so a call that is not such a frame (no `main`, or a viewport window's updateFrame) ends every run.
+  // `verify` updates them and checks that each returned the plain record with its state at rest.
+  let serial=0,quietAt=new Uint32Array(1024),spriteAt=new Uint32Array(1024);
+  const growTo=(array,id)=>{if(id<array.length)return array;const grown=new Uint32Array(2*Math.max(array.length,id+1));grown.set(array);return grown;};
+  const updateBindings=(view,bindingView,sprites,records)=>{
+    const now=++serial,main=view.main instanceof Set?view.main:null,children=view.children instanceof Set?view.children:null;
+    const skipping=plumbing.skip&&main!==null&&(children!==null||!view.children);
+    if(!skipping&&!main){for(let i=0;i<actors.length;i++)records.push(sprites?updateSprite(sprites,actors[i],bindingView):actors[i].update(bindingView));return;}
+    if(sprites)for(const actor of sprites.keys()){const binding=bindings.get(actor);if(binding){spriteAt=growTo(spriteAt,binding.id);spriteAt[binding.id]=now;}}
+    let skipped=0;
+    for(let i=0;i<actors.length;i++){
+      const binding=actors[i],id=binding.id;
+      let known=false;
+      if(skipping&&id<quietAt.length&&quietAt[id]===now-1&&id<hiddenRun.length&&hiddenRun[id]===1&&spriteAt[id]!==now
+        &&!main.has(id)&&(children===null||!children.has(id))){
+        if(!plumbing.verify){quietAt[id]=now;skipped++;continue;}
+        known=true;
+      }
+      const record=sprites?updateSprite(sprites,binding,bindingView):binding.update(bindingView);
+      records.push(record);
+      if(main!==null&&record&&record.visible===false&&record.childOnly===false){
+        quietAt=growTo(quietAt,id);quietAt[id]=now;
+        if(known){
+          const state=binding.lastDraw();
+          if(state.main||state.childOnly||Object.keys(record).length!==3)
+            throw new Error(`ACTOR_PLUMBING=verify: binding ${id} would be skipped, but its update returned ${JSON.stringify(record)} with ${JSON.stringify(state)}`);
+        }
+      }else if(known)throw new Error(`ACTOR_PLUMBING=verify: binding ${id} would be skipped, but its update returned ${JSON.stringify(record)}`);
+    }
+    summary.hiddenSkipped+=skipped;
+  };
   const compactRecords=gathered=>{
     const items=gathered.items,total=gathered.n;
     let count=0;
@@ -1622,7 +1688,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         // (one view for every binding: the bindings read it and change none of it)
         const bindingView=reads?{...view,reads}:view;
         const sprites=view.proxies?.size?view.proxies:null;
-        for(let i=0;i<actors.length;i++)records.push(sprites?updateSprite(sprites,actors[i],bindingView):actors[i].update(bindingView));
+        updateBindings(view,bindingView,sprites,records);
         drawItems(view.items??[],view,records);
         drawExtras(view,records);
         weapons.update(actors,view,records);
@@ -1648,6 +1714,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * null when no binding is updated. */
     updateFrame(view={},ids){
       const records=frameRecords;records.n=0;
+      serial+=2;   // (this frame updates bindings the main frame's skip rule assumes at rest)
       frameViewer=null;frameViewer=viewer();
       try{
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
