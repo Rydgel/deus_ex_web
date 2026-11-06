@@ -229,6 +229,17 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, what the Rust VM still hands to JavaScript: ranked, no family near the bar, nothing built**
+  ([below](#what-the-rust-vm-still-hands-to-javascript-2026-11-06)). `js_eval` is 1.08 ms a frame of the bunker's tick on average (0.90 in the
+  rest, 2.65 in the slowest tenth). A per-tick census of what it evaluates (`scripts/script-vm-fallback-census.mjs`: self time by node, native
+  and called function, the slowest tenth against the rest) puts 1.45 of the tenth's 2.55 ms gap (Node units) in the bodies of natives (Spawn,
+  Destroy, AttachDecal, the pawn-navigation services), which no node translation touches. What is evaluation (calls with out, struct or vector
+  parameters, context calls, `let`s the lowering leaves, `foreach` starts, `GetPlayerPawn`, `SetRotation`, small natives' call glue) is a pool of
+  0.83 ms a tick on the bunker (1.82 in the tenth) and 1.10 on the Island, in 566 and 394 rows, 14 of them holding half: `GetPlayerPawn` 0.08 to
+  0.11 a tick, `SetHitColor` 0.07, the `CycleActors` start 0.06 to 0.07, `SetRotation`, `Trace`, the `let`s of name and struct fields (0.02
+  each). The three largest rows are 0.21 (bunker) and 0.25 (Island), in Node's timer-inflated units: 26% of the bunker's pool, where the 0.3 ms
+  mean-tick bar is 45% of it. No one family reaches it; the three with the seven unshipped host cuts (0.17) might, at a feature each in the Rust
+  interpreter. Nothing built; the census scripts are the commit.
 * **2026-11-06, the decal attach's surface finder and node gatherer, exact and cheaper** ([decals](decals.md#fast-surface-finding-2026-11-06)).
   The Rust `decal_attach` was the bunker's biggest single item in the slow tenth (0.8 to 1.1 ms of `find_surface`'s x87 leaves against 0.03 in
   the rest): `FindSurface` walks a coplanar chain of 451 nodes (1,616 vertex tests) an attach on the long route, each test about 31 `Ext`
@@ -568,6 +579,89 @@ sessions' spread. This is the finding of the first rider-table A/B again: the cu
   with struct out parameters would take it and the player's `ProcessMove` (75 us);
 * `js_tick_refresh`: skipping it needs Rust to say that no JavaScript ran inside the event (a counter at the imports), not a key compared in
   JavaScript, which costs what the publication costs.
+
+### What the Rust VM still hands to JavaScript (2026-11-06)
+
+The task: rank the nodes and natives the Rust VM hands back to the JavaScript VM (`js_eval`, `js_object` and friends, then
+`nodeEffect`/`evNode` in `script-vm.mjs`) in the bunker's and the Island's frames, and translate the largest exactly if an interleaved
+Firefox A/B shows 0.5 ms in the slowest tenth or 0.3 ms in the mean tick. No translation was built: the largest rows are native bodies,
+which a node translation does not touch, and the largest evaluation row is 0.08 ms a tick. The ranking and the tools are the product.
+
+**Tools** (measurement only, behind `SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1 [SCRIPT_VM_STATS_DETAIL=1]`; the default paths are
+unchanged, `vm_run` and `vm_statement` take one `TIMED` test):
+* `script-vm-rust.mjs`'s `timedCount` also keeps the **self** time of a key (inclusive minus the timed keys nested in it), and the Rust
+  bodies' `vm_run` / `vm_statement` calls are timed keys of their own (`wasm <function>`), so a JavaScript call node's row is the call's
+  glue and the callee's Rust statements are not in it.
+* `scripts/script-vm-fallback-census.mjs` (a `bench-sim --scenario` that also drives the scan route) differences the tables around every
+  `game.tick`, orders the ticks by wall time and prints each key's self time and calls a tick for the slowest tenth against the rest;
+  `CENSUS_JSON=file` keeps every row. `scripts/script-vm-fallback-groups.mjs` folds the rows by native index, called function, statement op
+  or Rust body (`--by diff|slow|mean`). `scripts/cpuprofile-under.mjs` splits a V8 `--cpu-profile` under one frame, cut at boundary frames.
+  Run: `SCAN_WARM=300 SCAN_TICKS=1200 SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1 SCRIPT_VM_STATS_DETAIL=1 node scripts/bench-sim.mjs
+  --map 15_Area51_Bunker --warm 300 --ticks 1200 --render-feedback --scenario scripts/script-vm-fallback-census.mjs`. The runs'
+  digests are the baselines' (bunker `ccd09a24aaaad820`, Island `0b4d06c72afd1c1d`; the short bunker run `764a7bdffd2ebe59`).
+
+**By node kind, in Firefox** (`gecko-slow-ticks.mjs` on `.cache/perf/bunker-midday`, `--children '^evNode '`; ms a frame, slow / rest).
+`js_eval` is 2.65 / 0.90. The callees of `evNode`: script calls through JavaScript (`compileCall` > `invoke`) 1.12 / 0.34, natives
+(`compileNative` > `invokeNative`) 0.85 / 0.08, calls inside a context (`compileEv` > `compileCall`, `X.Func()`) 0.71 / 0.13, `let`s the
+lowering leaves (`compileAssign`) 0.39 / 0.24 (0.19 / 0.18 of it `assignFieldOf`, the same in both groups: stores to fields the image does not
+hold, the player's bound ones such as `EyeHeight`), the rest (`byValues`, `compileEv` > `compileNative`) under 0.1. Below them the callees' Rust bodies (`resume` > Wasm, 1.70 / 0.40 inclusive of
+their own imports) and, by native: `execAttachDecal` 0.51 / 0.03 (the Rust attach is 0.41 of it), `spawnActor` 0.52 / 0.00 (the frames the profile
+labels `selectLodMesh` > `axis` are its JIT code; 0.29 is the spawned actor's script events, in Rust), `destroyActor` 0.19 / 0.02, the
+host-native chain (`hostNative` > the `native` callbacks, which `GetPlayerPawn` reaches) 0.22 / 0.06. The leaf `invokeNative` is 0.23 / 0.10.
+
+**By identity, in Node** (the census; self ms a tick, slow tenth / rest, with calls a tick; the tenth is 120 of 1,200 ticks: 8.70 ms against
+3.47 on the bunker, 10.18 against 5.13 on the Island, timer cost included; the Firefox `js_eval` is 0.73 to 0.84 of Node's sum). Sorted by what
+the tenth adds on the bunker:
+
+| What the Rust VM hands over | Bunker slow / rest | calls | Island slow / rest | calls | Kind |
+|---|---:|---|---:|---|---|
+| `Spawn` (native 278) | 0.59 / 0.01 | 3.4 / 0.0 | 0.04 / 0.00 | 0.1 / 0 | native body: construction, zone, collision view, the events' glue |
+| `AttachDecal` (a native function) | 0.58 / 0.30 | 6.6 / 3.8 | 1.10 / 0.28 | 20 / 5.5 | native body; the Rust attach is 0.29 of the bunker's mean 0.32 |
+| `Destroy` (279) | 0.23 / 0.01 | 1.4 / 0.1 | 0.00 / 0.00 | | native body |
+| `AIPickRandomDestination` 709, `FindPathToward` 517, `actorReachable` 520 | 0.20 / 0.01 | 0.5 / 0.04 | 0.49 / 0.04 | 0.8 / 0.2 | native bodies (the search is in Rust; the services around it are not) |
+| small natives: `Trace` 277, `SetLocation` 267, `IsInState` 281, `FMin`/`FMax` 173, 264, 184, 161, 195, 246, 259 | 0.39 / 0.17 | 46 / 30 | 0.58 / 0.21 | 89 / 39 | bodies of 2 to 12 us plus the call object |
+| `let`s the lowering leaves: name fields (`FloorMaterial`), struct targets, strings, bound fields, values of two imports | 0.35 / 0.13 | 33 / 17 | 0.42 / 0.23 | 86 / 53 | evaluation, 40 shapes, none over 0.04 |
+| `foreach` starts (statement `0x2f`: `CycleActors` 1002, `AllActors`, the others) | 0.15 / 0.07 | 11 / 9 | 0.30 / 0.11 | 56 / 28 | evaluation: an iterator object a start |
+| `SetRotation` 299 | 0.13 / 0.04 | 52 / 15 | 0.06 / 0.03 | 24 / 9 | small native, 2 us a call |
+| calls with out, struct or vector parameters and context calls: `ProcessMove`, `CheckBob`, `GetAugLevelValue`, `CalculatePlayerVisibility`, `SetCrosshair`, `SetCurrentValue`, `TakeDamage` | 0.19 / 0.06 | 12 / 7 | 0.14 / 0.08 | 11 / 7 | call glue, 8 to 30 us a call |
+| `GetPlayerPawn` 720 | 0.10 / 0.08 | 20 / 18 | 0.18 / 0.10 | 69 / 39 | pure read, 2.5 to 4 us a call |
+| `SetHitColor` (`out BodyPart` struct parameter) | 0.08 / 0.07 | 6 / 6 | 0.08 / 0.07 | 6 / 6 | call glue, 11.5 us a call; its body is 1 us |
+
+The Rust bodies called through JavaScript (`wasm PlayerTick` 0.125 / 0.077, `Tick`, `ProcessMove`, the spawned actors' events) are the
+content of those calls and are not counted above.
+
+**The pool.** Without the native bodies that are content (Spawn, Destroy, AttachDecal, the navigation, conversation and combat natives)
+every other JavaScript-evaluated node is 1.82 / 0.72 ms a tick on the bunker (mean 0.83, gap 1.10) and 2.10 / 0.99 on the Island (mean 1.10,
+gap 1.11), in 566 and 394 rows; half of the mass is in 14 rows, whose largest are (bunker, mean ms a tick) `GetPlayerPawn` 0.08, `SetHitColor`
+0.07, the `CycleActors` start (`cycleindex`) 0.06, `SetRotation(Rotator(Velocity))` 0.03, `Trace` 0.03, `FloorMaterial = GetFloorMaterial()` 0.02,
+`IsInState` 0.02, `beamtrigger.Emitter.SetLocation` 0.02. A V8 profile of the same route (`bench-sim --cpu-profile`, 4.30 ms a tick) agrees:
+everything under `nodeEffect` and `nodeValue` is 1.30 ms, 0.67 of it nested work (script calls 0.56, mostly `AttachDecal`'s Wasm; spawn
+0.07; destroy 0.04) and 0.6 a flat tail of leaves, the largest `invokeNative` at 0.09 (two functions), then `fieldValue` 0.018, `operand` 0.016,
+`byValues` 0.016. The glue of a script call through JavaScript (`callFunction` down to the callee's frame, all leaves) is 0.15 ms a tick,
+`AttachDecal`'s JavaScript 0.04 of its 0.33, `spawnActor`'s own JavaScript 0.09 with no leaf over 0.006, as the
+[spawn analysis](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06) found.
+
+**Why nothing was built.**
+* The slow tenth: on the bunker its gap in JavaScript-evaluated nodes is 2.55 ms in Node, 1.45 of it natives' bodies (Spawn 0.58, AttachDecal
+  0.29, Destroy 0.22, the navigation natives 0.19, conversation and combat natives 0.17) and 1.10 the whole evaluation pool, which is the glue
+  of the tenth's small natives (52 `SetRotation` a tick) and calls. The natives' bodies are not Rust-VM nodes: their host code is already cut
+  as far as it goes ([decals](decals.md#fast-surface-finding-2026-11-06),
+  [spawning](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06)). What a translation can take is the pool's 1.82 ms in the tenth
+  (0.8 in Firefox's units at 60% removal, past the 0.5 bar), and that takes the whole of the 14 rows that hold half of it (about a dozen
+  distinct features), not one family.
+* The mean tick: the three largest evaluation rows, `GetPlayerPawn`, `SetHitColor` and the `CycleActors` start, are 0.21 (bunker) and 0.25 (Island)
+  in Node's units. Each is a feature, not a cut: `SetHitColor` needs copy-in and copy-out of a struct lvalue in `call` with the codec's
+  exactness (a Window handle and floats: NaN and bool-word bit patterns would go to JavaScript before any argument is evaluated; the other
+  scalar `out` and vector parameters ride on the same path); `GetPlayerPawn` a Rust node over a host-maintained cell of the level's first
+  viewport actor (`PLAYER_PAWN=direct` of `bunker-cuts-unshipped` already answers it in `js_object`, skipping the `invokeNative` chain); the
+  `foreach` start the iterator family the [CycleActors note](rust-core.md#september-30-choosing-the-next-simulation-change) describes. Below
+  them each row is under 0.03 on the bunker and 0.05 on the Island. The 0.3 ms bar (0.37 Node ms) is 45% of the bunker's pool, which the
+  three do not reach even if they vanished (26%).
+
+**Next, if the bar is to be met** (an experiment, not a step): the seven cuts of the previous entry (0.17 on the mean, 0.27 on the tenth) plus the
+three features above, A/B'd as a bundle against all switches at `js`; expected at most 0.17 + 0.15 (Firefox ms) on the mean, which would be at
+the bar, and each feature needs its own verify mode. The tenth stays where the natives' bodies put it: 8.70 ms in Node with 3.4 spawns,
+1.4 destroys and 6.6 decal attaches a tick.
 
 ### The collision hash reads the image (2026-11-05)
 

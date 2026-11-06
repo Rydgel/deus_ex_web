@@ -985,6 +985,21 @@ Evidence (the answers are the JavaScript references', which are the originals' t
   Five of six pairs favor `rust`. A Gecko profile of the new code shows the three imports gone and the level tick at 6.49 ms a frame
   (7.13 before); `runtime.instance()`'s own time fell from 0.51 to 0.22 ms a frame.
 
+### November 6: a census of what the interpreter still hands to JavaScript (measured, nothing translated)
+
+`SCRIPT_VM_STATS_TIME=1` now keeps the self time of each key (the key's inclusive time minus the timed keys nested in it) next to the
+inclusive one, and times the Rust bodies' `vm_run` / `vm_statement` as `wasm <function>` keys, so a JavaScript call node's row is the call's
+glue. `scripts/script-vm-fallback-census.mjs` (a `bench-sim --scenario` over the scan route) prints, per key, the self time and the calls a tick
+of the slowest tenth of ticks against the rest, `scripts/script-vm-fallback-groups.mjs` folds the rows by native index, called function and statement
+op, and `scripts/cpuprofile-under.mjs` splits a V8 profile under a frame. On the bunker and Island scan routes (1,200 ticks after 300 warm-up) the
+JavaScript-evaluated nodes cost 1.32 and 1.59 ms a tick on average (bunker slow tenth 3.62, rest 1.07; Island 3.82 / 1.34; Node's units, timers
+included), a third of them (0.49 on both maps; on the bunker 1.45 of the slow tenth's 2.55 ms gap) the bodies of natives (`Spawn`, `Destroy`,
+`AttachDecal`, the pawn-navigation natives), and the rest, the nodes a lowering could take, 0.83 and 1.10 a tick in 566 and 394 rows. The largest rows are `GetPlayerPawn`
+(native 720, 18 to 39 calls a tick at 2.5 to 4 us), `SetHitColor` (the struct `out` parameter keeps its call out of `functionSignature`: 6 a
+tick at 11.5 us for a 1 us body), the `CycleActors` start (`0x2f` over native 1002), `SetRotation(Rotator(Velocity))` (up to 52 a tick), and
+`let`s with name, struct, string or bound-field targets (40 shapes, each under 0.04). Details, the Firefox split and the cost against the bar in
+[the 60 fps plan](firefox-60fps-plan.md#what-the-rust-vm-still-hands-to-javascript-2026-11-06).
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
