@@ -11,7 +11,9 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
- *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666] [--dts 0.0167,0.34,0.17] [--seed 1]
+ *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666] [--dts 0.0167,0.34,0.17] [--seed 1] [--idle]
+ *
+ * --idle does not hold the forward key (the browser harness's idle mode; the places replay's census spots).
  *
  * --dt sets the simulated seconds per tick (default 1/60). A longer step
  * reaches physics branches a 60 Hz step cannot (physFalling's apex
@@ -372,7 +374,8 @@ if (argv.includes('--microbench')) {
   console.error('sink', sink > 0);
   process.exit(0);
 }
-fixture.key('KeyW', true);
+const idle = argv.includes('--idle');
+if (!idle) fixture.key('KeyW', true);
 log('warming');
 for (let i = 0; i < warm; i++) step();
 log('timing');
@@ -398,13 +401,15 @@ for (let i = 0; i < ticks; i++) {
 const cpuUsed = process.cpuUsage(cpuStart);
 if (profiler) await writeFile(profilePath, JSON.stringify((await profiler.call('Profiler.stop')).profile));
 globalThis.__callerOn?.(false);
-fixture.key('KeyW', false);
+if (!idle) fixture.key('KeyW', false);
 log('digest');
 const dumpLines = flag('dump', null) ? [] : null;
 const sorted = times.toSorted((a, b) => a - b), pct = p => +sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))].toFixed(2);
 const report = {map, warm, ticks, bypass: argv.includes('--bypass'), continue: continueMode, renderFeedback, bootMs: Math.round(bootMs),
   firstTickMs: times.slice(0, 12).map(t => +t.toFixed(1)),
-  tickMs: {mean: +(times.reduce((a, b) => a + b, 0) / ticks).toFixed(2), median: pct(0.5), p95: pct(0.95), max: pct(1)},
+  tickMs: {mean: +(times.reduce((a, b) => a + b, 0) / ticks).toFixed(2), median: pct(0.5), p95: pct(0.95), max: pct(1),
+    // the mean of the slowest tenth of the ticks (the A/B bar's second figure, docs/firefox-60fps-plan.md)
+    slowestTenth: +(sorted.slice(Math.ceil(0.9 * ticks)).reduce((a, b) => a + b, 0) / Math.max(1, ticks - Math.ceil(0.9 * ticks))).toFixed(2)},
   // Process CPU per tick (user+system, all threads incl. GC helpers): less
   // sensitive to preemption by other processes than the wall-clock times.
   cpuMsPerTick: +((cpuUsed.user + cpuUsed.system) / 1000 / ticks).toFixed(2),
