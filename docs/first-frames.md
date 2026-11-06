@@ -63,6 +63,13 @@ view are read again: a pointer stored to the mover during the scan gives it a ha
 tight loop is a function of its own (`nextCandidate`) that returns at the next slot that is a rider by its word or that the table
 cannot decide.
 
+Later in a level the drop is the cost: in the Area 51 bunker `CompactActors` advances the epoch once per slot it shifts (22,320 of
+25,402 advances in 1,500 ticks) and an attach advances it twice, so the next rider pass fills ~1,250 slots again, 0.4 ms in those ticks
+in Firefox. A table that survives the shifts and forgets only the slots whose own cells changed was built, exact (a verify mode
+compares every kept slot) and measured: 91 ms to 21 ms of rider scan over the long route in Node, nothing measurable in Firefox's
+tick (4 interleaved pairs), so it is not merged ([the plan](firefox-60fps-plan.md#import-cuts-not-merged-2026-11-06), branch
+`import-cuts-unshipped`).
+
 `RIDER_VERIFY=1` also compares each recorded scan with the plain reads (`RIDER_NODIRECT=1` turns the direct reads off).
 `test/rider-direct.test.mjs` covers the order, a null slot, a Base stored into a later slot by a rider's move, a mover given its
 handle during the scan, an epoch bump during a visit, a released instance and a poisoned one.

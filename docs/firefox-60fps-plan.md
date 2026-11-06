@@ -225,6 +225,13 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, the JavaScript imports the batch still calls: profiled, one change built, not merged** ([below](#import-cuts-not-merged-2026-11-06)).
+  `js_move_riders`, `js_walk_prelude`, `js_object` and `js_tick_refresh` add up to about 1.1 ms of the Island's tick (the first three 0.5 ms of
+  the bunker's, 1.5 ms in its slowest tenth), but each is a different thing and none is an invalidation the way the bunker's receiver epoch was, except
+  the rider table (dropped by every `CompactActors` shift). That one and `GetPlayerPawn` (42 calls a tick through the whole native
+  chain) were cut exactly (digests equal, verify modes clean); Firefox inline, four interleaved pairs each: bunker mean tick
+  5.64 → 5.50 ms, slowest tenth 11.07 → 10.77; Island 6.58 → 6.54 and 9.77 → 9.78. Under the 0.5 ms bar: the code is on branch
+  `import-cuts-unshipped` (b1f7e186), master unchanged.
 * **2026-11-06, the tick's reads of other objects in Rust** ([rust-core.md](rust-core.md#november-6-the-ticks-reads-of-other-objects-in-rust-implemented),
   [the player's tick](script-player-tick.md#what-the-players-tick-costs-in-firefox-2026-11-06)). The step began as "the player's tick and the
   level's host work" (1.1 to 1.3 ms); the Island profile showed the player's tick spread over many parts of 0.03 to 0.6 ms, and under the
@@ -339,6 +346,88 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
+### Import cuts: not merged (2026-11-06)
+
+Host measurement, then one exact change that did not reach the 0.5 ms bar. Master 15a7903c, headless Firefox 155 inline, the scan
+route (`hitch-run.mjs --browser firefox --mode scan --god --seconds 60 --profile`), joined with `gecko-slow-ticks.mjs`,
+`gecko-under.mjs` (`--anchor '^js_...'`) and the Node census (`SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_DETAIL=1`, `RIDER_STATS=1`, a V8
+CPU profile of the long route). Runs are in `.cache/perf/imp/` (outside Git).
+
+**What the four imports cost** (ms a drawn frame, from 5 s after the map; the slowest tenth of ticks against the other nine tenths;
+the Island's tick is 11.67 against 7.09 ms in those groups, the bunker's 11.82 against 5.13):
+
+| Import | Island rest / slow | Bunker rest / slow | Cause |
+|---|---:|---:|---|
+| `js_walk_prelude` | 0.41 / 0.83 | 0.15 / 0.27 | below |
+| `js_object` | 0.32 / 0.63 | 0.23 / 0.73 | Island: `GetPlayerPawn`; bunker slow tenth: `Spawn` |
+| `js_tick_refresh` | 0.16 / 0.16 | | below |
+| `js_move_riders` | 0.17 / 0.28 | 0.12 / 0.55 | Island: the riders' own moves; bunker: the table's fill |
+
+* **`js_move_riders` in the bunker is an invalidation.** The slow tenth's extra 0.43 ms is all `fillSlot` → `baseInstance` →
+  `riderBaseInstance` / `baseLinkInstance`: the rider scan's table of direct Base reads (move-riders.mjs `baseTableFor`) was dropped at
+  every advance of the base epoch and filled again, slot by slot over ~1,250 actors, at the next rider pass. In 1,500 bunker ticks the
+  epoch advanced 25,402 times, 22,320 of them by `CompactActors` shifting one actor down (script-cleanup.mjs: one advance per moved
+  slot, every tick a destroy leaves a hole), 826 by an attach's `installLinkFields` and 826 by its `restoreStorage`, 252 by
+  `freeObject`; the rider pass saw 149 distinct epochs and 1,396 of its 1,423 full scans (1.77 million slots) followed an epoch change.
+  The Island's `js_move_riders` is not that: the fill is 0.01 ms of it, the rest is the riders' moves (`moveSpawnedActor`).
+* **`js_object` on the Island is `GetPlayerPawn`** (native 720): 50,818 calls in 1,200 ticks, 42 a tick, each through `nodeValue` →
+  `rvNode` → the native's closure (a call object and an `evaluateArgument` closure) → `invokeNative`'s branch chain → the window host →
+  `hostNative` → the `native` wrappers → `nativeCall` (the conplay layer first, which built the script's lowercased path string for
+  every native) → the trigger resolver's five reads. About 5 us a call in Node (`js_object` held 283 ms of the long route's 1,200 ticks), 7.6 us in
+  Firefox (0.32 ms a frame). The bunker's extra is `Spawn` and its object result.
+* **`js_walk_prelude`** (the Island: 0.41 ms, every walking pawn at every tick) is the original's work done: `surfaceScan`
+  (up to 36 line checks and the floor query, in the Rust kernel, about 0.27 ms in Node, memory-bound), then the `WalkTexture` event
+  (0.135 ms in Firefox: `Pawn.WalkTexture` is a declaration without a body for these pawns, but the event runs through the JavaScript
+  `dispatch` → `processEvent` → `eventLevelGate`'s two `readNamed`s → `lookup`), and the scan's inputs read back through the pawn
+  view's named reads (`Location`, `Rotation`, the collision size, 0.05). There is no invalidation or rebuild in it; the cuts would be
+  Rust's `WalkTexture` dispatch (dispatch.rs takes the tick's events with scalar arguments, not a texture and two vectors) and the
+  scan inputs passed by the walk loop, which changes `js_walk_prelude`'s signature (every harness that instantiates the module lists
+  its imports).
+* **`js_tick_refresh`** (0.16 ms, every event the Rust tick runs) is `refresh`: `host(instance)` 0.07 (six reads over the instance, its
+  poison, its image token and its native object), `bind` 0.04, `describe` 0.01, memory-bound and flat between the slow tenth and the
+  rest. A skip needs the actor's receiver epoch and table version unchanged across the event (the invariant the level loop's descriptors
+  rely on, checked by `LEVEL_LOOP=verify`), and the runaway count handed back first (`setScriptRunaway` is the import's other job, and
+  the tick's JavaScript callbacks read it); not attempted.
+
+**The change** (branch `import-cuts-unshipped`, b1f7e186, three pieces, each behind a switch with `js` the reference and `verify`):
+
+* `RIDER_TABLE` / `?riderTable=` (default `kept`): base-epoch.mjs adds `cellEpoch` (the advances that can change what a read of some
+  live actor's Base cell returns), `bumpBaseMoveEpoch` (CompactActors' shifts, a slot nulled or written: no cell changed) and
+  `bumpBaseEpochFor(identity)` (a Base link installed by an attach, a storage restore, an image released: one actor's cells). The rider
+  lists, the perception list and the Rust mirror follow the old epoch as before. The table follows `cellEpoch`, forgets the slots of
+  the identities noted since its last use, and CompactActors moves its entries with the actors (`moveBaseSlot`, `cutBaseSlots`).
+  `=verify` compares every slot kept with a fresh `fillSlot` at each scan: 1.76 million slots on the bunker's long route, no
+  difference. Bunker, Node: the rider scan 91.3 → 21.2 ms over the long route.
+* `PLAYER_PAWN` / `?playerPawn=` (default `direct`): `js_object` answers a zero-argument native 720 with the resolver `nativeCall`
+  reaches (`triggerActions.getPlayerPawn`) when `invokeNative` and `hostNative` are the prototype's; the native registry
+  (native-registry.mjs, checked in both directions by `test/native-registry.test.mjs`) lists the trigger step as the only dispatcher
+  that routes 720. `=verify` also runs the old path and compares the handles. Island, Node: `js_object` 283 → 177 ms over the long
+  route, mean tick 6.15, 6.17 against 6.32, 6.22 ms (two interleaved pairs).
+* The conplay layer's script path string is built only for `PlaySound` (it was built for every native that reached it).
+
+**Checked:** digests equal on the bunker (`ccd09a24aaaad820`) and the Island (`0b4d06c72afd1c1d`) long routes in the default, `verify`
+and `js` modes; `test/rider-cache`, `rider-direct`, `move-riders`, `script-cleanup` and `native-registry` pass (53 tests). Not run
+(the change is not merged): the other digests, the validators, `npm test`, a Firefox inline `verify` run, the Chromium worker.
+
+**Firefox inline, four interleaved pairs each** (`hitch-ab.mjs --arms "new:,old:riderTable=js&playerPawn=js"`, 60 s scan route, the
+order alternating; `hitch-ab-table.mjs`):
+
+| Map | mean tick new / old | slowest tenth new / old | page p50 | page p95 |
+|---|---:|---:|---:|---:|
+| Bunker | 5.50 / 5.64 | 10.77 / 11.07 | 12.5 / 12.8 | 21.3 / 21.0 |
+| Island | 6.54 / 6.58 | 9.78 / 9.77 | 13.3 / 13.3 | 20.0 / 20.0 |
+
+The bunker's pairs (mean tick new / old): 5.69 / 5.80, 5.71 / 5.60, 5.50 / 5.44, 5.10 / 5.73; slowest tenth 11.06 / 11.41, 11.14 / 10.85,
+10.76 / 10.69, 10.11 / 11.34. The Island's: 6.55 / 6.44, 6.46 / 6.69, 6.51 / 6.64, 6.64 / 6.56. Far under the 0.5 ms bar, and inside
+the spread of the sessions. Why the profile overstated it: the rider fill is paid in the ~10% of ticks that follow a destroy or an
+attach, so 0.4 ms there is 0.04 ms on the mean; and the import's inclusive time for `GetPlayerPawn` counts the resolver's reads and the
+handle lookup, which stay.
+
+**Left.** Every one of these four is a small share of a tick that is spread thin. The bunker's slow tenth is `js_eval` (3.62 against 0.83 ms a frame: the JavaScript calls `AttachDecal`, `DetachDecal`,
+`SetHitColor` and the spawns), not these imports. A route to 0.5 ms from this list is translation of whole families, not cuts:
+`WalkTexture` and the prelude's inputs in Rust, `GetPlayerPawn` as a Rust node over a host-maintained cell (no crossing), the
+`refresh` skip; each is about 0.1 ms.
+
 ### The collision hash reads the image (2026-11-05)
 
 The perception and walking-prelude line checks ran in Rust, but the hash they ran in could not read the object image, so it
