@@ -294,6 +294,25 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   HUD and actors phases have no family at 0.5 ms either ([HUD](#the-hud-phase-2026-11-05), [actors](firefox-actors-phase.md)). The
   remaining gap is a programme of sub-5% steps, the Rust core's long road (the player's tick, window-event dispatch, the
   native-heap path, x87 fast paths), not one more family.
+* **The frame-time set again, 2026-11-06 ~04:40** (master 84972800: the actors host plumbing, the laser proxy fix and the HUD bundle
+  since the set above; same command and route; headless, indicative). Page frame p95 (p50), ms, with the 23:00 p95:
+
+  | Map | page p95 (p50) | 23:00 p95 | headless interval p95 |
+  |---|---:|---:|---:|
+  | Training | 11 (8) | 12 | 17.1 |
+  | Island | 21 (14) | 23 | 33.2 |
+  | Bar | 10 (8) | 12 | 17.1 |
+  | Battery Park | 19 (16) | 21 | 17.1 |
+  | Airfield | 19 (15) | 21 | 17.1 |
+  | Wan Chai market | 18 (12) | 19 | 17.1 |
+  | Ship | 13 (10) | 15 | 17.1 |
+  | Chateau | 12 (10) | 13 | 17.1 |
+  | Everett | 10 (8) | 10 | 17.1 |
+  | Area 51 bunker | 23 (13) | 23 | 33.2 |
+
+  On the synthetic 60 Hz clock, eight maps keep every frame at p95; the Island and the bunker drop to 30 Hz at p95. Four maps are
+  still over 16.7 ms at page p95 (the Island, Battery Park, the Airfield and Wan Chai by 1 to 4 ms; the bunker by 6). The row verdicts
+  (7.2.2, 7.2.4) need the headed set on a visible window.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
