@@ -172,11 +172,13 @@ function timedImports(imports) {
   for (const [name, fn] of Object.entries(imports)) timed[name] = function (...args) {
     const start = importClock(), outer = importNested;
     importNested = 0;
+    const cls = globalThis.__curActorKey?.();
     try { return fn.apply(this, args); }
     finally {
       const total = importClock() - start, entry = table.get(name) ?? {calls: 0, ms: 0, self: 0};
       entry.calls++; entry.ms += total; entry.self += total - importNested;
       table.set(name, entry);
+      if (cls) { const k = `${cls} ${name}`, e2 = table.get(k) ?? {calls: 0, ms: 0, self: 0}; e2.calls++; e2.ms += total; e2.self += total - importNested; table.set(k, e2); }
       importNested = outer + total;
     }
   };

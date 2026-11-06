@@ -26,7 +26,9 @@
  * HitWall event, the host's processLanded, the zone reads for a zone without
  * an image, and the performPhysics tail (`actorPhysicsTail`).
  *
- * ACTOR_PHYSICS=js (`?actorPhysics=js`) keeps every call in JavaScript;
+ * ACTOR_PHYSICS=js (`?actorPhysics=js`) keeps every call in JavaScript, ACTOR_PROJECTILE=js (`?projectilePhysics=js`) the
+ * PHYS_Projectile calls (the Rust body is fall.rs `perform_projectile`; the host admits them as it does a falling actor, with
+ * Projectile.MaxSpeed's row for an engine.projectile);
  * ACTOR_PHYSICS_STATS=1 prints the counts at exit.
  */
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell, scalarCell} from './script-object-image.mjs';
@@ -34,17 +36,20 @@ import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {isMapMoveHost} from './map-actor-native.mjs';
 import {playerMove} from './player-move.mjs';
 import {processDecorationHitWall} from './walking-callbacks.mjs';
-import {spawnedFallingAdapter} from './script-actor-physics.mjs';
+import {spawnedFallingAdapter, runSpawnedActorFalling} from './script-actor-physics.mjs';
 import {actorPhysicsTail, linkedActorPhysics} from './actor-physics.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 // Read when an interpreter attaches: the viewer sets the global from
 // `?actorPhysics=` after this module loads.
 const disabled = () => env.ACTOR_PHYSICS === 'js' || globalThis.DEUS_EX_ACTOR_PHYSICS === 'js';
+// ACTOR_PROJECTILE=js (`?projectilePhysics=js`) keeps PHYS_Projectile calls in JavaScript and leaves the falling body in Rust.
+const projectileOff = () => env.ACTOR_PROJECTILE === 'js' || globalThis.DEUS_EX_PROJECTILE_PHYSICS === 'js';
 const STATS = env.ACTOR_PHYSICS_STATS === '1';
 // fall.rs FALL_COUNTS, in order.
 export const RUST_COUNTS = ['calls', 'substeps', 'water', 'bobbing', 'apex', 'blocked', 'bounces', 'landings', 'walls',
-  'slides', 'twoWalls', 'terminal', 'deleted', 'tails', 'moveHandBacks', 'zoneFallbacks'];
+  'slides', 'twoWalls', 'terminal', 'deleted', 'tails', 'moveHandBacks', 'zoneFallbacks',
+  'projectiles', 'projectileIterations', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater'];
 const stats = {declined: new Map(), rust: null};
 let statsHost = null;
 if (STATS) process.on('exit', () => {
@@ -83,8 +88,12 @@ export const FALL_FIELDS = [
   ['bWaterZone', 'engine.zoneinfo.bwaterzone', 'bool'],
   ['bBobbing', 'engine.decoration.bbobbing', 'bool'],
   ['Region', 'engine.actor.region', 'struct'],
+  // physProjectile's clamp, for an engine.projectile only.
+  ['MaxSpeed', 'engine.projectile.maxspeed', 'float'],
 ];
-const ACTOR_ROWS = 10, BOBBING = 15, REGION = 16, ZONE_NUMBER = 17;
+const ACTOR_ROWS = 10, BOBBING = 15, REGION = 16, MAX_SPEED = 17, ZONE_NUMBER = 18;
+// js_fall_begin's second argument: the actor's Physics.
+const PHYS_FALLING = 2, PHYS_PROJECTILE = 6;
 
 export class ActorPhysicsHost {
   constructor(vm) {
@@ -93,8 +102,9 @@ export class ActorPhysicsHost {
     this.version = -1;
     this.cells = null;
     this.valid = false;
-    this.classes = new Map();
-    this.instances = new WeakMap();
+    // Per physics mode (falling, projectile): the rows differ (Decoration's bBobbing, Projectile's MaxSpeed).
+    this.classes = [new Map(), new Map()];
+    this.instances = [new WeakMap(), new WeakMap()];
     // One context per move depth (the pawn MoveActor host's index).
     this.contexts = [];
   }
@@ -110,19 +120,20 @@ export class ActorPhysicsHost {
     const version = fieldImageCellVersion();
     if (version === this.version) return;
     this.version = version;
-    this.classes.clear();
-    this.instances = new WeakMap();
+    this.classes.forEach(map => map.clear());
+    this.instances = [new WeakMap(), new WeakMap()];
     this.cells = FALL_FIELDS.map(([, key, kind]) => {
       const cell = fieldImageCell(key);
       return cellKind(cell) === kind ? cell : null;
     });
     this.vm.zone.table();
     const members = this.vm.zone.members;
-    this.valid = !this.cells.includes(null) && members !== null;
+    // MaxSpeed's cell exists once a Projectile class is linked; the other rows are needed by every class.
+    this.valid = !this.cells.some((cell, i) => cell === null && i !== MAX_SPEED) && members !== null;
     if (!this.valid) return;
     const view = this.vm.arena.view, region = this.cells[REGION];
     this.cells.forEach((cell, i) => {
-      if (i === REGION) return;
+      if (i === REGION || cell === null) return;
       view.setUint32(this.fieldsAt + i * 8, cell.offset, true);
       view.setUint32(this.fieldsAt + i * 8 + 4, (scalarCell(cell)?.mask ?? 0) >>> 0, true);
     });
@@ -133,15 +144,22 @@ export class ActorPhysicsHost {
     view.setUint32(this.fieldsAt + ZONE_NUMBER * 8 + 4, 0, true);
   }
   /** Whether `cls` and the instance read every actor row (and bBobbing
-   * for a Decoration) from the table's cell. */
-  eligible(instance) {
+   * for a Decoration falling, MaxSpeed for a Projectile in PHYS_Projectile)
+   * from the table's cell. */
+  eligible(instance, physics = PHYS_FALLING) {
     const {cls, cells, fieldTable: names} = instance;
-    let info = this.classes.get(cls);
+    const mode = physics === PHYS_PROJECTILE ? 1 : 0, classes = this.classes[mode];
+    let info = classes.get(cls);
     if (!info || info.names !== names.size) {
-      let decoration = false;
-      for (let c = cls; c; c = c.base) if (c.record?.key === 'engine.decoration') decoration = true;
-      const rows = decoration ? [...FALL_FIELDS.keys()].filter(i => i < ACTOR_ROWS || i === BOBBING) : [...Array(ACTOR_ROWS).keys()];
-      let ok = this.valid;
+      let decoration = false, projectile = false;
+      for (let c = cls; c; c = c.base) {
+        if (c.record?.key === 'engine.decoration') decoration = true;
+        else if (c.record?.key === 'engine.projectile') projectile = true;
+      }
+      const actorRows = [...Array(ACTOR_ROWS).keys()];
+      const rows = mode === 1 ? (projectile ? [...actorRows, MAX_SPEED] : actorRows)
+        : decoration ? [...actorRows, BOBBING] : actorRows;
+      let ok = this.valid && (!rows.includes(MAX_SPEED) || this.cells[MAX_SPEED] !== null);
       for (const i of rows) {
         if (!ok) break;
         const [name, key] = FALL_FIELDS[i];
@@ -151,19 +169,22 @@ export class ActorPhysicsHost {
         const cell = cached === undefined ? cells.get(key) : cached?.field === field ? cached.cell : null;
         if (field?.key !== key || !sameCell(cell, this.cells[i])) ok = false;
       }
-      this.classes.set(cls, info = {names: names.size, ok, decoration, keys: rows.map(i => FALL_FIELDS[i][1])});
+      classes.set(cls, info = {names: names.size, ok, decoration: decoration && mode === 0, projectile: projectile && mode === 1,
+        keys: rows.map(i => FALL_FIELDS[i][1])});
     }
     if (!info.ok) return null;
-    let entry = this.instances.get(instance);
+    const instances = this.instances[mode];
+    let entry = instances.get(instance);
     if (!entry || entry.info !== info || entry.bindings !== instance.bindings.size) {
       const ok = info.keys.every(key => !instance.bindings.has(key));
-      this.instances.set(instance, entry = {info, bindings: instance.bindings.size, ok});
+      instances.set(instance, entry = {info, bindings: instance.bindings.size, ok});
     }
     return entry.ok ? info : null;
   }
-  /** js_fall_begin for the tick context `c`: the move depth, or -1. */
-  begin(c) {
+  /** js_fall_begin for the tick context `c` and the actor's Physics: the move depth, or -1. */
+  begin(c, physics) {
     if (!this.enabled) return decline('disabled');
+    if (physics === PHYS_PROJECTILE && projectileOff()) return decline('projectile off');
     if (c.log) return decline('tick differential');
     const runtime = this.runtime, actor = c.receiver, mover = this.vm.moveActor;
     if (Object.hasOwn(runtime, 'processActorPhysics')) return decline('replaced');
@@ -182,7 +203,7 @@ export class ActorPhysicsHost {
     else return decline('kind');
     if (!level?.hash) return decline('level');
     mover.table(); this.table();
-    const info = mover.eligible(instance) ? this.eligible(instance) : null;
+    const info = mover.eligible(instance) ? this.eligible(instance, physics) : null;
     if (!info) return decline('fields');
     const view = this.vm.arena.view, base = instance.base;
     // FellOutOfWorld (Region.ZoneNumber 0) and the static or immovable
@@ -191,6 +212,7 @@ export class ActorPhysicsHost {
     const bit = cell => (view.getUint32(base + cell.offset, true) & scalarCell(cell).mask) !== 0;
     if (bit(mover.cells[0]) || !bit(mover.cells[1])) return decline('static');
     view.setUint32(this.stateAt, info.decoration ? 1 : 0, true);
+    view.setUint32(this.stateAt + 4, info.projectile ? 1 : 0, true);
     const world = target => target === level.hash.levelInfo ? level.actors[0] : target;
     const ops = runtime.spawnedMoveServices(actor, level);
     const depth = this.vm.movePawn.contexts.length;
@@ -220,7 +242,7 @@ export class ActorPhysicsHost {
     // The reference's host, built where an import needs its own body.
     const adapter = c => c.adapter ??= spawnedFallingAdapter(runtime, c.actor);
     return {
-      js_fall_begin: i => host.begin(tick().contextAt(i)),
+      js_fall_begin: (i, physics) => host.begin(tick().contextAt(i), physics),
       js_fall_move(depth, dx, dy, dz) {
         const c = context(depth), result = playerMove(c.actor, [dx, dy, dz], c.ops), v = io();
         const normal = result.hit?.normal ?? [0, 0, 0];
@@ -251,6 +273,10 @@ export class ActorPhysicsHost {
         const read = name => runtime.readNamed(zone, name), v = io();
         const gravity = read('ZoneGravity'), velocity = read('ZoneVelocity');
         v.set([...gravity, ...velocity, read('ZoneTerminalVelocity'), read('ZoneFluidFriction'), read('bWaterZone') ? 1 : 0]);
+      },
+      // A bounce that left a projectile falling (projectile.mjs `physFalling`, runActorProjectile's service).
+      js_fall_falling(depth, remaining, iterations) {
+        runSpawnedActorFalling(runtime, context(depth).actor, remaining, iterations);
       },
       js_fall_error(depth, code) { throw new Error(ERRORS[code] ?? `Non-Pawn physFalling error ${code}`); },
       js_fall_tail(depth, delta) {

@@ -324,6 +324,22 @@ export class RenderScanHost {
     const view = this.vm.arena.view, at = this.cycleOut;
     return {kind: view.getUint32(at, true), cursor: view.getUint32(at + 4, true), steps: view.getUint32(at + 8, true)};
   }
+  /** RadiusActors' (mode 1) and VisibleActors' (mode 2) scan in Rust (render.rs area_scan) over `actors` from `start` for class record
+   * `base`, Radius `radius` and the point `loc` (both float32 values): {kind (0 exhausted, 1 passed the image's tests, 2 untested),
+   * cursor}; the actor passed or untested is actors[cursor - 1]. No script runs. */
+  areaScan(actors, start, base, mode, radius, loc) {
+    this.table();
+    const list = this.listFor(actors);
+    this.areaAt ??= this.vm.arena.alloc(32);
+    const at = this.areaAt, set = this.vm.arena.view;
+    set.setFloat32(at, radius, true);
+    set.setFloat32(at + 4, loc[0], true);
+    set.setFloat32(at + 8, loc[1], true);
+    set.setFloat32(at + 12, loc[2], true);
+    this.x.area_scan(list, start, classRecordId(base), mode, at, at + 16);
+    const view = this.vm.arena.view;
+    return {kind: view.getUint32(at + 16, true), cursor: view.getUint32(at + 20, true)};
+  }
   /** DestroyActor's SetOwner/EndTouch scan in Rust (render.rs destroy_scan): from `from`, the first index of `actors` whose
    * actor holds `receiver` as its Owner or in a Touching slot, or that the image cannot answer; `actors.length` when none.
    * No script runs. */

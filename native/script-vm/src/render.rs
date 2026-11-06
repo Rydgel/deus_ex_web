@@ -454,6 +454,60 @@ pub(crate) fn cycle_scan_step(list: u32, cursor: u32, steps: u32, bound: u32, ri
     (kind, cursor, steps)
 }
 
+/// RadiusActors' (mode 1, Engine.dll execRadiusActors 0x103e4fa0) and VisibleActors' (mode 2, execVisibleActors 0x103e5260) scan
+/// (script-iterators.mjs `scanArea`) over `list` ([count, handle...]) from `start`: the first slot that is not null and passes the
+/// exec's tests as far as the image answers them (all are reads, so their order is not observable). Mode 1: the class row lists
+/// record id `rid` and (Radius + CollisionRadius)^2 > sum((Location - Loc)^2); mode 2: bHidden is clear, the class row lists `rid`
+/// and, for a Radius that is ordered nonzero, Radius^2 > sum((Location - Loc)^2) (the line check after them is the caller's).
+/// `params` holds [Radius, Loc.x, Loc.y, Loc.z] as float32. Writes [kind, cursor] to `out`: kind 0 exhausted, 1 passed (the actor
+/// is at cursor - 1), 2 the image does not answer for the actor at cursor - 1 (no class row, a host or bound object, or a class
+/// without a field the tests read): JavaScript runs all of its tests.
+#[no_mangle]
+pub extern "C" fn area_scan(list: u32, start: u32, rid: u32, mode: u32, params: u32, out: u32) {
+    let count = load32(list);
+    let num = |bits: u32| f32::from_bits(bits) as f64;
+    let radius = num(load32(params));
+    let loc = [num(load32(params.wrapping_add(4))), num(load32(params.wrapping_add(8))), num(load32(params.wrapping_add(12)))];
+    let gate = radius < 0.0 || radius > 0.0;
+    let need = if mode == 1 {
+        1u64 << R_LOCATION | 1u64 << R_COLLISIONRADIUS
+    } else {
+        1u64 << R_BHIDDEN | if gate { 1u64 << R_LOCATION } else { 0 }
+    };
+    let mut cursor = start;
+    let mut kind = 0;
+    while cursor < count {
+        let h = load32(list.wrapping_add(4).wrapping_add(cursor.wrapping_mul(4)));
+        cursor += 1;
+        if h == 0 {
+            continue;
+        }
+        let a = Obj::of(h);
+        let row = class_entry(h);
+        if row <= RELEASED || !a.has(need) {
+            kind = 2;
+            break;
+        }
+        if mode == 2 && a.flag(R_BHIDDEN) {
+            continue;
+        }
+        if !chain_has(row, rid) {
+            continue;
+        }
+        if mode == 1 || gate {
+            let d = [num(a.word(R_LOCATION, 0)) - loc[0], num(a.word(R_LOCATION, 1)) - loc[1], num(a.word(R_LOCATION, 2)) - loc[2]];
+            let reach = if mode == 1 { radius + num(a.word(R_COLLISIONRADIUS, 0)) } else { radius };
+            if !(reach * reach > d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) {
+                continue;
+            }
+        }
+        kind = 1;
+        break;
+    }
+    store32(out, kind);
+    store32(out.wrapping_add(4), cursor);
+}
+
 /// ULevel::DestroyActor's scan for the actors it hands SetOwner(None) and
 /// EndTouch (script-destroy.mjs, Engine.dll DestroyActor) over `list`
 /// ([count, handle...]): from `from`, the index of the first slot whose actor

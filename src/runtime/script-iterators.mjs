@@ -35,6 +35,8 @@ function isNoneName(value) {
  * classIsA walks): started at `start` with the actors left as its bound it never wraps, and it returns each class match, or an
  * actor it has no class row for, which `isA` tests here. `accept` (the tag, the distance) reads only, so both loops may run. */
 export const actorScanMode = () => (typeof process !== 'undefined' && process.env?.ACTOR_SCAN) || globalThis.DEUS_EX_ACTOR_SCAN || 'rust';
+/** ACTOR_AREA_SCAN=js (`?areaScan=js`) keeps RadiusActors' and VisibleActors' loops in JavaScript (scanArea), leaving AllActors' class scan in Rust. */
+export const areaScanOff = () => (typeof process !== 'undefined' && process.env?.ACTOR_AREA_SCAN === 'js') || globalThis.DEUS_EX_AREA_SCAN === 'js';
 function scanActors(array, start, baseClass, isA, accept, scan) {
   const mode = scan ? actorScanMode() : 'js';
   const loop = () => {
@@ -64,6 +66,42 @@ function scanActors(array, start, baseClass, isA, accept, scan) {
     const expected = loop();
     if (expected.actor !== found.actor || expected.index !== found.index)
       throw new Error(`ACTOR_SCAN=verify: Rust ${found.actor?.name ?? 'none'}@${found.index}, JavaScript ${expected.actor?.name ?? 'none'}@${expected.index}`);
+  }
+  return found;
+}
+
+/** RadiusActors' (mode 1) and VisibleActors' (mode 2) scan. `area(array, start, base, mode, radius, loc)` runs the tests the object
+ * image answers in the Rust core (script-vm-render.mjs areaScan, render.rs area_scan) and returns {kind, cursor}: 0 exhausted, 1 the
+ * actor at cursor - 1 passed them (`rest(actor)` is what the exec still tests: the line check of VisibleActors, nothing for
+ * RadiusActors), 2 the image does not answer for it (`full(actor)`, the whole exec's tests in its order, runs). Every test is a
+ * read, so where they run is not observable. ACTOR_SCAN=js keeps the JavaScript loop of `full`, =verify runs both and compares. */
+function scanArea(array, start, mode, baseClass, radius, loc, area, full, rest) {
+  const how = area ? actorScanMode() : 'js';
+  const loop = () => {
+    let index = start;
+    while (index < array.length) {
+      const actor = array[index++];
+      if (actor === null || actor === undefined) continue;
+      if (!full(actor)) continue;
+      return {actor, index};
+    }
+    return {actor: null, index};
+  };
+  if (how === 'js') return loop();
+  let found = {actor: null, index: start};
+  for (let index = start; ;) {
+    if (index >= array.length) { found = {actor: null, index}; break; }
+    const result = area(array, index, baseClass, mode, radius, loc);
+    index = result.cursor;
+    if (result.kind === 0) { found = {actor: null, index}; break; }
+    const actor = array[index - 1];
+    if (!(result.kind === 2 ? full(actor) : rest === null || rest(actor))) continue;
+    found = {actor, index}; break;
+  }
+  if (how === 'verify') {
+    const expected = loop();
+    if (expected.actor !== found.actor || expected.index !== found.index)
+      throw new Error(`ACTOR_SCAN=verify: area scan (mode ${mode}) Rust ${found.actor?.name ?? 'none'}@${found.index}, JavaScript ${expected.actor?.name ?? 'none'}@${expected.index}`);
   }
   return found;
 }
@@ -317,6 +355,7 @@ export function createRadiusActorsIterator({
   levelFor,
   isA,
   scan = null,
+  area = null,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('RadiusActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('RadiusActors requires levelFor');
@@ -344,7 +383,9 @@ export function createRadiusActorsIterator({
       const level = levelFor(receiver), actors = level?.actors;
       if (!actors || typeof actors.length !== 'number')
         throw new TypeError('RadiusActors levelFor(receiver) must provide an actors array');
-      const found = scanActors(actors, index, baseClass, isA, within, scan);
+      const found = area
+        ? scanArea(actors, index, 1, baseClass, radius, loc, area, actor => isA(actor, baseClass) && within(actor), null)
+        : scanActors(actors, index, baseClass, isA, within, scan);
       index = found.index;
       if (!found.actor) return false;
       outActor.set(found.actor);
@@ -372,6 +413,7 @@ export function createVisibleActorsIterator({
   levelFor,
   isA,
   actorWord,
+  area = null,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('VisibleActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('VisibleActors requires levelFor');
@@ -396,22 +438,26 @@ export function createVisibleActorsIterator({
       if (!actors || typeof actors.length !== 'number')
         throw new TypeError('VisibleActors levelFor(receiver) must provide an actors array');
       const model = level?.model, check = level?.fastLineCheck ?? fastLineCheck;
-      while (index < actors.length) {
-        const actor = actors[index++];
-        if (actor === null || actor === undefined) continue;
-        if (actorWord(actor) & 2) continue;
-        if (!isA(actor, baseClass)) continue;
+      // The line check, the last test of the exec: survivors only.
+      const sees = actor => {
+        if (!model) throw new TypeError('VisibleActors requires the level BSP model');
+        return Boolean(check(model, actor.position.map(f32), loc) & 0xff);
+      };
+      const full = actor => {
+        if (actorWord(actor) & 2) return false;
+        if (!isA(actor, baseClass)) return false;
         const p = actor.position;
         if (radius < 0 || radius > 0) {
           const dx = f32(p[0]) - loc[0], dy = f32(p[1]) - loc[1], dz = f32(p[2]) - loc[2];
-          if (!(radius * radius > dx * dx + dy * dy + dz * dz)) continue;
+          if (!(radius * radius > dx * dx + dy * dy + dz * dz)) return false;
         }
-        if (!model) throw new TypeError('VisibleActors requires the level BSP model');
-        if (!(check(model, p.map(f32), loc) & 0xff)) continue;
-        outActor.set(actor);
-        return true;
-      }
-      return false;
+        return sees(actor);
+      };
+      const found = scanArea(actors, index, 2, baseClass, radius, loc, area, full, sees);
+      index = found.index;
+      if (!found.actor) return false;
+      outActor.set(found.actor);
+      return true;
     },
   };
 }

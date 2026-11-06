@@ -128,12 +128,12 @@ log(`booted in ${Math.round(bootMs)} ms`);
 const runtime = game.doors.scriptRuntime.runtime;
 const fixture = createPlayerInputFixture(game);
 // --scenario file.mjs: a scripted workload for differential runs. The module's
-// default export, called with {game, runtime}, returns a function run before
+// default export, called with {game, runtime, assets} (it may be async), returns a function run before
 // each tick with the tick index (warm ticks first). It drives inputs the map
 // alone would not produce (validate-walk-loop-branches.mjs); same-mode digests
 // only, never a claim about the original game.
 const scenarioPath = flag('scenario', null);
-const scenario = scenarioPath ? (await import(pathToFileURL(resolve(scenarioPath)).href)).default({game, runtime}) : null;
+const scenario = scenarioPath ? await (await import(pathToFileURL(resolve(scenarioPath)).href)).default({game, runtime, assets}) : null;
 let tickIndex = 0;
 
 // --render-feedback: Play's actor-mesh layer copies TimeSeconds to the
