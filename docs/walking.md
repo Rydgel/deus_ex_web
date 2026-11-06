@@ -212,6 +212,18 @@ zone-0 cases (Role 4 and 2, PlayerPawn and script pawn): the original returns af
 headless Island check (Class P) writes Terrorist0's ZoneNumber 0 while it stands: the Rust path hands the tick back once
 and both paths leave it Dying, Health -1, `PHYS_None`, unmoved.
 
+**God mode does not save a player here (2026-11-06).** `Pawn.FellOutOfWorld` (bytecode `Engine.Pawn`, source `.cache/reference/Pawn.uc`:
+`Health = -1; SetPhysics(PHYS_None); Weapon = None; Died(None, 'Fell', Location)`) is not overridden by DeusExPlayer, and
+`DeusExPlayer.Died` (@0..@142) has no god-mode test: the `ReducedDamageType == 'All'` test lives in TakeDamage (`DeusExPlayer.uc` "//God mode").
+The slow-spot census put its god-mode player on navigation points that lie inside the level's solid and lost the sessions of
+`03_NYC_Airfield` (698, -4255, 24), `03_NYC_UNATCOHQ` (-36, 1, 264) and `12_Vandenberg_Computer` (782, 2657, -2249): after the placement the
+player's Region has ZoneNumber 0 (`iLeaf` -1), and the next walking tick leaves it Dying, Health -1, `PHYS_None`, `ReducedDamageType` still
+`All` (`scripts/validate-census-solid-spots.mjs`; `UModel::PointRegion` is `zone.mjs` pointRegion, `validate-native-zone`). The death screen lasts about
+twelve seconds before `Dying`'s `PlayerCalcView` starts the splash, which is the `DXOnly` level whose player DeusExPlayer sends to `Paralyzed`
+(`MissionNumber == -1`): that was the `Paralyzed` the census saw at the last spots of those sessions, and why "the session goes to DXOnly".
+The census no longer offers such points (`map-nav-points.mjs`, tested where the player is placed, 8 units above the point): 22 of the shipped
+maps' navigation points, on 10 maps.
+
 ## Surface-prelude boundary
 
 The original caller ALWAYS first invokes103cc450. It scans prospective wall

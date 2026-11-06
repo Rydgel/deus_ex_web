@@ -176,7 +176,7 @@ function session(args) {
 const failed = [];
 try {
   for (const map of names) {
-    const all = await navPoints(map);
+    const all = await navPoints(map, {lift: zUp});
     if (all.length < 4) { console.log(`${map}: ${all.length} navigation points, skipped`); failed.push({map, why: 'no navigation points'}); continue; }
     const sample = farthestPoints(all, points);
     const places = sample.flatMap(p => YAWS.map(yaw => ({label: p.cls, location: [p.location[0], p.location[1], p.location[2] + zUp], rotation: [0, yaw, 0]})));
