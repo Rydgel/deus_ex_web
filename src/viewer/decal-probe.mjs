@@ -73,9 +73,17 @@ export function particleProbe(game, { place = null, sample = null } = {}) {
  * set its ViewRotation to `rotation`, or aim the view from the eye at the
  * level actor named `lookAt`, or write properties of an actor (`set`), on the
  * simulation side (sim-worker.mjs
- * `call`, or the page with ?sim=inline). */
-export function placeProbe(game, { location = null, rotation = null, lookAt = null, set = null }) {
+ * `call`, or the page with ?sim=inline).
+ *
+ * `endConversation` (scripts/spot-census.mjs, via hitch-run.mjs --places): first ends a conversation the player is in, with the script's
+ * own DeusExPlayer.AbortConversation (what ends one when the player is hurt), so that a measuring visit to a spot is not drawn from the
+ * conversation camera; the conversation's played flag is set, as the game sets it, and its trigger does not start it again. */
+export function placeProbe(game, { location = null, rotation = null, lookAt = null, set = null, endConversation = false }) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  if (endConversation && runtime.readNamed(player, 'conPlay')) {
+    const abort = () => runtime.callFunction(runtime.lookup(player, 'AbortConversation'), player, 0, () => undefined);
+    if (game.hud?.scoped) game.hud.scoped(abort); else abort();
+  }
   // `set` {actor, fields}: write script properties of a level actor (or of
   // '$player'; validate-coronas-play: make a static corona light a moving-light
   // candidate; census-frame-projection: the FOV).

@@ -6,6 +6,10 @@
 //     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do; --vite-port N gives it that port)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
 //     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--god] (the console's god mode before the settle)
+//     [--places FILE] [--place-settle 500] [--place-record 750] (a list of spots: FILE is a JSON array of {location:[x,y,z], rotation:[0,yaw,0],
+//       label?}; the harness visits each in turn through placeProbe, lets it settle for --place-settle ms and marks the --place-record ms after
+//       it; the marks are in the dump's `spots` as page performance.now() times, which scripts/spot-census.mjs turns into per-spot figures; the
+//       mode is then `places` and the run ends after the last spot, --seconds being only a cap)
 //     [--headed] [--no-hitchlog] [--worker-patch FILE]
 //     [--screenshot FILE] (a PNG of the page at the end of the run)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
@@ -32,8 +36,9 @@ const flag=n=>process.argv.includes(`--${n}`);
 const engine=option('browser','chromium');
 if(engine!=='chromium'&&engine!=='firefox')throw new Error('--browser must be chromium or firefox');
 const isChromium=engine==='chromium';
-const map=option('map','01_NYC_UNATCOIsland'),via=option('via',null),seconds=Number(option('seconds',60)),mode=option('mode','roam');
-if(!['roam','walk','idle','scan'].includes(mode))throw new Error('--mode must be roam, walk, idle or scan');
+const placesFile=option('places',null);
+const map=option('map','01_NYC_UNATCOIsland'),via=option('via',null),seconds=Number(option('seconds',placesFile?100000:60)),mode=placesFile?'places':option('mode','roam');
+if(!['roam','walk','idle','scan','places'].includes(mode))throw new Error('--mode must be roam, walk, idle or scan (places is --places FILE)');
 const out=option('out',`.cache/perf/hitch/${engine}-${map}-${mode}`),settle=Number(option('settle',3000));
 const [width,height]=option('size','1440x960').split('x').map(Number),dpr=Number(option('dpr',1));
 const throttle=Number(option('throttle',1)),cdpPort=Number(option('cdp-port',9336)),traced=isChromium&&flag('trace');
@@ -186,9 +191,36 @@ if(traced){await browser.startTracing(page,{categories:['disabled-by-default-v8.
 // ---- input
 let stop=false;
 const positionOf=()=>page.evaluate(()=>window.deusExViewer.status().position);
-const headings=[];
+const headings=[],spots=[];
+let driverDone=false;
 async function driver(){
   if(mode==='idle')return;
+  if(mode==='places'){
+    // The slow-spot census (scripts/spot-census.mjs): each spot is a placeProbe, a settle, and a recorded window whose ends are the page's
+    // performance.now() (the hitch log's rows count from dump.meta.originMs on the same clock).
+    const list=JSON.parse(await readFile(placesFile,'utf8')),settleMs=Number(option('place-settle',500)),recordMs=Number(option('place-record',750));
+    for(const [i,spot] of list.entries()){
+      if(stop)break;
+      console.log(`spot ${i+1}/${list.length}`);
+      // A ScriptedPawn that sees the placed player starts a conversation (the Island's MeetTerrorist), and the player is then drawn from the
+      // conversation camera; the spot is measured again once (the placement ends the conversation first, placeProbe `endConversation`, and the
+      // played flag keeps it from starting again). A spot that still ends in another state than PlayerWalking is kept with its `state`.
+      let start,end,now,attempts=0;
+      do{
+        attempts++;
+        await page.evaluate(args=>window.deusExViewer.placeProbe(args),{location:spot.location,rotation:spot.rotation,endConversation:true});
+        await page.waitForTimeout(settleMs);
+        start=await page.evaluate(()=>performance.now());
+        await page.waitForTimeout(recordMs);
+        end=await page.evaluate(()=>performance.now());
+        now=await page.evaluate(async()=>{const s=window.deusExViewer.status(),v=await window.deusExViewer.viewProbe({});return {position:s.position,map:s.map,player:{location:v.location.map(Math.round),physics:v.physics,state:v.state,region:v.region},conversation:v.state==='PlayerWalking'?null:JSON.stringify((await window.deusExViewer.conversationProbe({}))?.conPlay?.con??null)};});
+      }while(now.player.state!=='PlayerWalking'&&attempts<2);
+      spots.push({i,id:spot.id??i,label:spot.label??null,location:spot.location,rotation:spot.rotation,start,end,position:now.position,map:now.map,player:now.player,conversation:now.conversation,attempts});
+      if(String(now.map).toLowerCase()!==map.toLowerCase()){errors.push(`driver: the session left ${map} for ${now.map}`);break;}
+    }
+    driverDone=true;
+    return;
+  }
   if(mode==='scan'){
     // The census route (docs/play-frame-cost.md "October 2"): the authored view, then three more 60 degrees apart (10923 of 65536).
     const start=(await page.evaluate(()=>window.deusExViewer.viewProbe({}))).viewRotation;
@@ -224,10 +256,10 @@ if(stallMs&&workerSession){
     stalls.push({at,ms:stallMs});}})();
 }
 const t0=Date.now();
-const driving=driver().catch(e=>errors.push('driver: '+e.message));
+const driving=driver().catch(e=>{errors.push('driver: '+e.message);if(mode==='places')driverDone=true;});
 // A runtime error stops the run early.
 let ended=null;
-while(Date.now()-t0<seconds*1000){
+while(Date.now()-t0<seconds*1000&&!driverDone){
   await new Promise(r=>setTimeout(r,1000));
   const err=await page.evaluate(()=>window.deusExViewer.status().runtimeError?.message??null);
   if(err){ended=err;break;}
@@ -292,7 +324,7 @@ if(loadProfile){
   else{await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(loadProfileResult));
     profileSync={workerEpochMs:loadSync.workerEpochMs,pageTimeOrigin:await page.evaluate(()=>performance.timeOrigin)};}
 }
-await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));
+await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,spots,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));
 await browser.close();await server?.close();
 console.log(`saved ${out}.json ${engine} ${status.sim} frames ${dump?.summary?.frames} drawn ${dump?.summary?.drawn} rows ${dump?.rows?.length} map ${status.map} ended ${ended} errors ${errors.length}`);
 if(errors.length)console.log(errors.slice(0,5).join('\n'));
