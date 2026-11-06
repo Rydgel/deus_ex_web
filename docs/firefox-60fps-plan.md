@@ -663,6 +663,76 @@ three features above, A/B'd as a bundle against all switches at `js`; expected a
 the bar, and each feature needs its own verify mode. The tenth stays where the natives' bodies put it: 8.70 ms in Node with 3.4 spawns,
 1.4 destroys and 6.6 decal attaches a tick.
 
+### The bunker bundle (2026-11-06)
+
+The task: the [seven exact host cuts](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06) and the three Rust VM features the
+[fallback census](#what-the-rust-vm-still-hands-to-javascript-2026-11-06) ranked largest, measured as one bundle on the Area 51 bunker
+(the last map over 16.7 ms at page p95). Bar: 0.3 ms in the mean tick or 0.5 ms in the slowest tenth, from an interleaved Firefox A/B, all
+the new switches on against all at `js`.
+
+**What the bundle holds.** The two commits of `bunker-cuts-unshipped` (the shift-proof rider table and direct GetPlayerPawn of
+`import-cuts-unshipped`, `compactScan`, `soundRead`, `decalFollow`, `configFind`, `inputFields`) cherry-picked onto master d746b817, and
+three Rust VM features, each a lowered kind that transcribes the JavaScript VM's evaluation of the same node, with `js` (the
+reference) and `verify` modes:
+
+| Switch (env, `?flag=`) | Feature | How it is exact |
+|---|---|---|
+| `PLAYER_PAWN`, `playerPawn` (`rust` default, `direct`, `js`, `verify`) | GetPlayerPawn (native 720) as the Rust node `PLAYER_PAWN` 207: the handle comes from `PLAYER_PAWN_CELL` = [graph epoch, epoch the handle is valid for, handle, verify] (natives.rs `player_pawn`); `js_player_pawn` runs the resolver the `js_object` shortcut runs and fills the cell | the walk reads `level.engine.client.viewports[0].actor`, and `watchPlayerPawnGraph` (player-pawn-graph.mjs, installed by script-doors.mjs where it sets `playerPawnShortcut`) turns those five links into accessors that advance the epoch on every write (values, enumerability and identities unchanged; `test/player-pawn-graph.test.mjs`). Premises: `levelFor` is one level for every receiver in Play and no native object has an own `xLevel`; a viewport list changed in place is not seen, a chain that cannot be watched ends the cell's use (`playerPawnGraphWatched`) |
+| `OUT_STRUCT`, `outStruct` (`rust` default, `js`, `verify`) | `HUDHitDisplay.SetHitColor(out BodyPart part, ...)` and every script call whose callee has `out` struct parameters of byte, int, bool, float or object members: `CALL_OUT` 208 with `P_STRUCT` arguments (interp.rs `call`, iter.rs) and `callSignature` (script-vm-lower.mjs) beside `functionSignature` | callFunction's order: arguments in turn, the struct copied in from its source (a local, or a SELF field the image addresses) member by member through the codecs (float `float_bits(float_of(w))` = `Math.fround`, object `live(handle)`, bool merged into its word), the callee, the outs back in reverse, also when a probe-masked callee did not run. A source the image cannot address sends the whole call to JavaScript before anything is pushed. `=verify` compares each copy, in and back, with `readCell`/`copyValue` member by member (floats by bits) |
+| `FOREACH_START`, `foreachStart` (`rust` default, `js`, `verify`) | `foreach CycleActors(Class'X', out Actor, out int Index)` of a callee run as `S_FOREACH_CYCLE` 10 with the iterator in the run (`Iter`, iter.rs): the start, IteratorNext, IteratorPop and the Return check, over render.rs `cycle_scan_step` (the scan the JavaScript iterator already used) and the actor list `js_cycle_list` returns (`listFor`) | `createCycleActorsIterator`'s creation (cursor from `Index` when in range, bound `Actors.Num()`, steps 0) and `next()` (clear Actor, bound = min, scan, Actor and Index) step for step; an actor without a class row goes to `classIsA`. Lowered for a body with one foreach, in function code, no Return left in JavaScript; any other start is an `S_YIELD` and the JavaScript stack keeps that loop. `=verify` runs a shadow `createCycleActorsIterator` with the pure JavaScript scan beside every step |
+
+**Checked.** `bench-sim --render-feedback` digests unchanged in the default modes: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`,
+Airfield `46ed0d32ae5b56af`, Wan Chai `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island
+`0b4d06c72afd1c1d`, Wan Chai `25db7596647e2aeb`). Every long route and the short bunker run are also unchanged with all the bundle's switches
+at `js` (bunker, Island) and at `verify` together with `SCRIPT_VM_CHECK=1` and `LEVEL_SCAN=verify` (bunker, Island, Wan Chai), no tick
+error. What the verify runs compared (the host's counters, `script-vm-foreach.mjs` `counts`, `script-vm-player-pawn.mjs` `walks`):
+
+| Long route | foreach steps | struct copies | GetPlayerPawn walks (verify) | walks (default) |
+|---|---:|---:|---:|---:|
+| bunker | 184,633 | 18,012 | 27,411 | 1 |
+| Island | 327,750 | 18,012 | 71,252 | 1 |
+| Wan Chai | 33,239 | 18,012 | 34,976 | 1 |
+
+(No actor without a class row reached `classIsA` in any of them: that branch is checked by reading only.) `cargo` is warning-free.
+
+**Firefox inline A/B, bunker**, four interleaved pairs (`hitch-ab.mjs --arms "new:,old:playerPawn=js&outStruct=js&foreachStart=js&riderTable=js&compactScan=js&soundRead=js&decalFollow=js&configFind=js&inputFields=js"
+--pairs 4 --prefix bunker --dir .cache/perf/bunker-bundle -- --browser firefox --map 15_Area51_Bunker --mode scan --god --seconds 60`; the order alternating; `hitch-ab-table.mjs`). ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 4.97 / 5.59 | 9.08 / 10.52 | 12 / 13 | 20 / 21 |
+| 2 | 5.47 / 5.38 | 9.96 / 11.03 | 13 / 12 | 21 / 23 |
+| 3 | 5.27 / 5.68 | 9.86 / 10.56 | 12 / 13 | 20 / 22 |
+| 4 | 5.04 / 5.56 | 10.13 / 10.22 | 12 / 13 | 21 / 21 |
+| **mean** | **5.19 / 5.55** | **9.76 / 10.58** | **12.3 / 12.8** | **20.5 / 21.8** |
+
+The bundle gains 0.36 ms in the mean tick (the bar is 0.3) and 0.82 ms in the slowest tenth (the bar is 0.5). The mean tick is better in three of
+four pairs (0.62, -0.09, 0.41, 0.52), the slowest tenth in all four (1.44, 1.07, 0.70, 0.09). The page's p50 moves by half a millisecond and its p95 by a millisecond and a
+quarter, inside the spread of the sessions (the bunker's p95 is still over 16.7 ms: 20.5 ms headless; the bundle is host plumbing of
+one tick, not the whole gap).
+
+**Firefox inline A/B, Island**, the same arms and route (`--prefix island`, `--map 01_NYC_UNATCOIsland`), four pairs. ms:
+
+| Pair | mean tick new / old | slowest tenth new / old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|
+| 1 | 6.17 / 6.60 | 8.81 / 9.57 | 13 / 14 | 19 / 20 |
+| 2 | 6.17 / 6.69 | 9.08 / 10.02 | 13 / 14 | 20 / 20 |
+| 3 | 6.33 / 6.98 | 9.21 / 10.19 | 13 / 15 | 20 / 21 |
+| 4 | 6.11 / 6.77 | 8.66 / 10.01 | 13 / 14 | 19 / 21 |
+| **mean** | **6.20 / 6.76** | **8.94 / 9.95** | **13.0 / 14.3** | **19.5 / 20.5** |
+
+The Island gains 0.56 ms in the mean tick and 1.01 ms in the slowest tenth, all four pairs better on both. The seven cuts alone measured
+0.17 and 0.27 ms on the bunker in [their own A/B](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06); read across sessions (not
+interleaved with this one), the three Rust features add about 0.2 ms to the mean tick and 0.5 to the slowest tenth there, more than the
+census's Node units (0.21 ms a tick on the bunker) predicted for the three rows. A Rust CycleActors loop also replaces the JavaScript
+iterator's steps (`js_iterator_next`; the host's counter says about 120 steps a tick on the bunker's long route and 220 on the Island's), not
+only the start the census ranked. No arm-by-arm split was measured.
+
+**Left.** The foreach still crosses once per step for the actor list (`js_cycle_list`: the level's array, `listFor`'s key test); an actor
+epoch word Rust compares would take that import away. Callee runs only: a foreach in a run JavaScript enters again after every
+statement stays on the JavaScript stack. `classIsA` for an actor the class table does not describe is a crossing (never taken in these routes).
+The other `out` parameter shapes (scalars, vectors) ride on the same `P_*` path and are not lowered.
+
 ### The collision hash reads the image (2026-11-05)
 
 The perception and walking-prelude line checks ran in Rust, but the hash they ran in could not read the object image, so it

@@ -294,7 +294,10 @@ if(loadProfile){
   else{await writeFile(`${out}.worker.cpuprofile`,JSON.stringify(loadProfileResult));
     profileSync={workerEpochMs:loadSync.workerEpochMs,pageTimeOrigin:await page.evaluate(()=>performance.timeOrigin)};}
 }
-await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog}));
+// --probe-switches: the DEUS_EX_* switches the simulation realm holds (processProbe), kept in the dump and printed
+const switches=flag('probe-switches')?await page.evaluate(async()=>(await window.deusExViewer.processProbe()).switches).catch(e=>String(e)):null;
+if(switches)console.log('switches',JSON.stringify(switches));
+await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog,switches}));
 await browser.close();await server?.close();
 console.log(`saved ${out}.json ${engine} ${status.sim} frames ${dump?.summary?.frames} drawn ${dump?.summary?.drawn} rows ${dump?.rows?.length} map ${status.map} ended ${ended} errors ${errors.length}`);
 if(errors.length)console.log(errors.slice(0,5).join('\n'));

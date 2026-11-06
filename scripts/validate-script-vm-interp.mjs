@@ -20,6 +20,7 @@ import {x87mul32, x87div32, x87add32, x87sub32} from '../src/runtime/x87-nan.mjs
 import {finishVectorSize} from '../src/runtime/mover-finish.mjs';
 import {actorInStasis} from '../src/runtime/actor-tick.mjs';
 import {HandleSlots} from '../src/runtime/script-vm-handle-slots.mjs';
+import {createCycleActorsIterator} from '../src/runtime/script-iterators.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -53,10 +54,12 @@ const K = {
   SET_LOCAL_VECTOR: 196, SET_FIELD_VECTOR: 197, SET_LOCAL_ROTATOR: 198, SET_FIELD_ROTATOR: 199,
   // October 1 (natives.rs)
   STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
+  // the bunker bundle (natives.rs player_pawn, interp.rs call, iter.rs)
+  S_FOREACH_CYCLE: 10, PLAYER_PAWN: 207, CALL_OUT: 208,
 };
-const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, RETURN_ITERATOR: 8};
+const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, RETURN_ITERATOR: 8, OUT_STRUCT: 9, FOREACH: 10};
 const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
-const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5};
+const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5, STRUCT: 6};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
 const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
 // The handle class table (R2b-5): a released handle; a row's unreadable
@@ -244,11 +247,11 @@ const imports = {
     return nativeHost.standalone(handle) ? 1 : 0;
   },
   // The bunker bundle's imports (GetPlayerPawn's cell, the CycleActors foreach, struct out arguments): no case here runs them.
-  js_player_pawn() { throw new Error('js_player_pawn is not expected'); },
-  js_cycle_list() { throw new Error('js_cycle_list is not expected'); },
-  js_cycle_class_test() { throw new Error('js_cycle_class_test is not expected'); },
-  js_foreach_check() { throw new Error('js_foreach_check is not expected'); },
-  js_out_struct_check() { throw new Error('js_out_struct_check is not expected'); },
+  js_player_pawn(frame, n, receiver) { calls.push({imp: 'pawn', frame, node: n, receiver}); return nativeHost.pawn(receiver); },
+  js_cycle_list(frame, n, receiver) { calls.push({imp: 'cycleList', frame, node: n, receiver}); return nativeHost.cycleList(receiver); },
+  js_cycle_class_test(frame, n, actor) { calls.push({imp: 'classTest', frame, node: n, actor}); return nativeHost.classTest(actor) ? 1 : 0; },
+  js_foreach_check(frame, n, phase, start, found, cursor) { calls.push({imp: 'foreachCheck', frame, node: n, phase, start, found, cursor}); },
+  js_out_struct_check(frame, n, index, dir, from, to) { calls.push({imp: 'outCheck', frame, node: n, index, dir, from, to}); },
   // October 1: the event dispatch host (script-vm-events.mjs protocol).
   js_event_gate(handle) {
     calls.push({imp: 'gate', receiver: handle, frames: framesKey()});
@@ -1304,7 +1307,7 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
   same(vmError(() => run([S.nothing()], {entry: 1, budget: 0})).code, ERR.HANG, 'no budget outside the script');
   // Bad code words.
   for (const [statement, kind] of [
-    [[10], 10], [S.expr(E.int(1)), K.LIT_INT], [S.ret(R.INT, E.float(0)), K.LIT_FLOAT], [S.ret(9, E.int(1)), 9],
+    [[11], 11], [S.expr(E.int(1)), K.LIT_INT], [S.ret(R.INT, E.float(0)), K.LIT_FLOAT], [S.ret(9, E.int(1)), 9],
     [S.ret(R.BOOL, E.int(1)), K.LIT_INT], [S.ret(R.FLOAT, E.bool(1)), K.LIT_BOOL],
     [S.ret(R.BOOL, w(K.OBJECT_EQ, E.int(1), E.none())), K.LIT_INT],
   ]) {
@@ -3686,6 +3689,227 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   const onKept = expr => E.context(node(), (wr32(LOCALS + 44, kept), w(K.LOCAL_OBJECT, 44)), expr);
   same(value(R.BOOL, w(K.NAME_EQ, node(), onKept(w(K.STATE_NAME, node())), w(K.LIT_NAME, nameId('patrolling')))), true,
     'GetStateName reads an old key\'s entry at its slot');
+}
+
+// ---- The bunker bundle: GetPlayerPawn's cell, struct out arguments, the CycleActors foreach --------------------------------
+// natives.rs player_pawn, interp.rs call (CALL_OUT, P_STRUCT) and iter.rs against the JavaScript VM: callFunction's copy in and back
+// through the cell codecs (readCell, copyValue, writeCell: a float is Math.fround, an object its handle or None once released, a bool
+// merged into its word), and createCycleActorsIterator itself for the foreach.
+{
+  // GetPlayerPawn (720): PLAYER_PAWN_CELL = [graph epoch, epoch the handle is valid for, handle, verify].
+  const PAWN_AT = x.vm_player_pawn_ptr();
+  const cell = (epoch, valid, handle, verify = 0) => [epoch, valid, handle, verify].forEach((v, i) => wr32(PAWN_AT + 4 * i, v));
+  reset();
+  nativeHost.pawn = () => OTHER_H;
+  cell(5, 5, THIRD_H);
+  same(value(R.OBJECT, w(K.PLAYER_PAWN, node())), THIRD_H, 'GetPlayerPawn: a current cell answers');
+  same(count('pawn'), 0, 'GetPlayerPawn: a current cell makes no import');
+  cell(6, 5, THIRD_H);
+  same(value(R.OBJECT, w(K.PLAYER_PAWN, node())), OTHER_H, 'GetPlayerPawn: a stale cell asks the host');
+  same(calls.find(c => c.imp === 'pawn')?.receiver, SELF_H, 'GetPlayerPawn: the host gets the receiver');
+  same(count('pawn'), 1, 'GetPlayerPawn: one import');
+  reset();
+  nativeHost.pawn = () => OTHER_H;
+  cell(5, 5, THIRD_H, 1);
+  same(value(R.OBJECT, w(K.PLAYER_PAWN, node())), OTHER_H, 'GetPlayerPawn: the verify word asks even when the cell is current');
+  reset();
+  nativeHost.pawn = () => THIRD_H;
+  cell(1, 0, 0);
+  wr32(LOCALS + 44, OTHER_H);
+  run([S.ret(R.OBJECT, E.context(node(), w(K.LOCAL_OBJECT, 44), w(K.PLAYER_PAWN, node())))]);
+  same(result(R.OBJECT), THIRD_H, 'GetPlayerPawn on a context object');
+  same(calls.find(c => c.imp === 'pawn')?.receiver, OTHER_H, 'GetPlayerPawn: the context object is the receiver');
+  reset();
+  cell(5, 5, THIRD_H);
+  wr32(CHECK_AT, 1);
+  const pawnNode = node();
+  same(value(R.OBJECT, w(K.PLAYER_PAWN, pawnNode)), THIRD_H, 'GetPlayerPawn under SCRIPT_VM_CHECK');
+  const pawnCheck = calls.find(c => c.imp === 'check');
+  same([pawnCheck?.kind, pawnCheck?.value, pawnCheck?.node].join(), [CK.OBJECT, THIRD_H, pawnNode].join(), 'GetPlayerPawn: js_check object, value, node');
+}
+{
+  // Struct out arguments (CALL_OUT, P_STRUCT): a struct of [int 0, float 4, bool 8 mask 1, bool 8 mask 4, byte 12, object 16].
+  const SIG = 6, SRC = 64, MEMBERS = [[P.INT, 0, 0], [P.FLOAT, 4, 0], [P.BOOL, 8, 1], [P.BOOL, 8, 4], [P.BYTE, 12, 0], [P.OBJECT, 16, 0]];
+  let fnSlot = 0;
+  const defineFn = (statements, {size = 64, steps = {}} = {}) =>
+    ({code: assembleAt(FN_CODE[fnSlot++ % FN_CODE.length], statements), size, steps});
+  const site = (target, js) => {
+    const n = node(js ?? (() => { throw new Error('call took the JavaScript path unexpectedly'); }));
+    callSites.set(n, {target});
+    return n;
+  };
+  const structArg = (dst, index) => [P.STRUCT, dst, index, MEMBERS.length, ...MEMBERS.flat()];
+  const callOut = (n, sources, args) => {
+    const words = args.flat();
+    return w(K.CALL_OUT, n, R.VOID, SIG, args.length, words.length, sources.length, sources.flat(), words);
+  };
+  const fill = (base, v) => {
+    arena.bytes.fill(0xee, base - 4, base + 28);
+    wr32(base, v.int); wr32(base + 4, v.float); wr32(base + 8, v.word); arena.bytes[base + 12] = v.byte; wr32(base + 16, v.object);
+  };
+  const read = base => ({int: rd32(base), float: rd32(base + 4), word: rd32(base + 8), byte: arena.bytes[base + 12], object: rd32(base + 16),
+    around: [...arena.bytes.subarray(base - 4, base), ...arena.bytes.subarray(base + 13, base + 16), ...arena.bytes.subarray(base + 20, base + 28)].join()});
+  const AROUND = new Array(4 + 3 + 8).fill(0xee).join();
+  let seen = null;
+  // The callee: takes a snapshot of its frame when it begins, then changes the int, a bool, the byte and the object.
+  const callee = () => defineFn([
+    S.yield(),
+    S.expr(w(K.SET_LOCAL_INT, 0, w(K.INT_ADD, w(K.LOCAL_INT, 0), E.int(1)))),
+    S.expr(w(K.SET_LOCAL_BOOL, 8, 1, E.bool(0))),
+    S.expr(w(K.SET_LOCAL_BYTE, 12, E.int(0x7f))),
+    S.expr(w(K.SET_LOCAL_OBJECT, 16, w(K.JS_OBJECT, node(() => THIRD_H)))),
+    S.ret(R.VOID),
+  ], {steps: {0: info => { seen = Array.from(arena.bytes.subarray(info.base, info.base + 24)); return 1; }}});
+  const word32 = (bytes, at) => (bytes[at] | bytes[at + 1] << 8 | bytes[at + 2] << 16 | bytes[at + 3] << 24) >>> 0;
+  const VALUES = [
+    {int: -5, float: bits(1.5), word: 0xf0f0f0f5, byte: 0xab, object: 22},
+    {int: 0x7fffffff, float: 0x80000000, word: 0x0000000a, byte: 0, object: 0},
+    {int: 0, float: 0x7fc00000, word: 0x00000004, byte: 255, object: 22, released: 22},
+    {int: -0x80000000, float: 0x7f800000, word: 0xffffffff, byte: 1, object: OTHER_H},
+    {int: 12345, float: 0x00000001, word: 0x00000001, byte: 2, object: 200},
+    {int: 7, float: bits(-3.25e-7), word: 0, byte: 3, object: 22},
+  ];
+  for (const sourceKind of ['local', 'field']) {
+    for (const v of VALUES) {
+      reset();
+      classTable();
+      if (v.released) wr32(TABLE + 4 * v.released, RELEASED);
+      const base = sourceKind === 'local' ? LOCALS + SRC : SELF_IMG + 0x40, source = sourceKind === 'local' ? [0, SRC, 0] : [1, 0x40, 5];
+      fill(base, v);
+      const live = h => (v.released && h === v.released ? 0 : h);
+      run([S.expr(callOut(site(callee()), [source], [structArg(0, 0)])), S.ret(R.INT, E.int(1))]);
+      const tag = `${sourceKind} struct ${JSON.stringify(v)}`;
+      const inWord = (v.word & 1) | (v.word & 4);
+      same(word32(seen, 0), v.int >>> 0, `${tag}: int copied in`);
+      same(word32(seen, 4), v.float, `${tag}: float copied in`);
+      same(word32(seen, 8), inWord, `${tag}: the bools copied in, no other bit of the word`);
+      same(seen[12], v.byte, `${tag}: byte copied in`);
+      same(word32(seen, 16), live(v.object), `${tag}: object copied in (None once released)`);
+      same(seen.slice(13, 16).join() + seen.slice(20, 24).join(), '0,0,0' + '0,0,0,0', `${tag}: nothing else of the callee's frame is written`);
+      const after = read(base);
+      same(after.int, ((v.int + 1) | 0) >>> 0, `${tag}: int copied back`);
+      same(after.float, v.float, `${tag}: float copied back`);
+      same(after.word, ((v.word & ~5) | (inWord & 4)) >>> 0, `${tag}: bool word merged back, the other bits kept`);
+      same(after.byte, 0x7f, `${tag}: byte copied back`);
+      same(after.object, THIRD_H, `${tag}: object copied back`);
+      same(after.around, AROUND, `${tag}: padding and neighbours untouched`);
+      same(framesKey(), '-1,0,0', `${tag}: frame stack restored`);
+    }
+  }
+  // A source the image cannot address (a host receiver): the whole call is JavaScript's, its arguments skipped.
+  reset();
+  infos.delete(SELF_H);
+  fill(SELF_IMG + 0x40, VALUES[0]);
+  let jsRuns = 0;
+  const jsSite = site(null, () => (jsRuns++, undefined));
+  run([S.expr(callOut(jsSite, [[1, 0x40, 5]], [structArg(0, 0)])), S.ret(R.INT, E.int(1))]);
+  same(jsRuns, 1, 'an unaddressable struct source: the call runs in JavaScript once');
+  same(count('callBegin'), 0, 'an unaddressable struct source: nothing is pushed');
+  // Out parameters are copied back last first: two parameters over one source leave the first one's value.
+  reset();
+  fill(LOCALS + SRC, VALUES[0]);
+  const twice = defineFn([S.expr(w(K.SET_LOCAL_INT, 0, E.int(1))), S.expr(w(K.SET_LOCAL_INT, 32, E.int(2))), S.ret(R.VOID)], {size: 96});
+  run([S.expr(callOut(site(twice), [[0, SRC, 0]], [structArg(0, 0), structArg(32, 0)])), S.ret(R.INT, E.int(1))]);
+  same(read(LOCALS + SRC).int, 1, 'two out parameters over one source: the first is copied back last');
+  // An omitted argument copies nothing.
+  reset();
+  fill(LOCALS + SRC, VALUES[0]);
+  const omitted = defineFn([S.expr(w(K.SET_LOCAL_INT, 0, E.int(9))), S.ret(R.VOID)]);
+  run([S.expr(callOut(site(omitted), [[0, SRC, 0]], [[P.SKIP, 0, 0]])), S.ret(R.INT, E.int(1))]);
+  same(read(LOCALS + SRC).int, VALUES[0].int >>> 0, 'an omitted struct argument is not copied back');
+  // The call's value is the callee's, and it comes after the copies.
+  reset();
+  fill(LOCALS + SRC, VALUES[0]);
+  const valued = defineFn([S.expr(w(K.SET_LOCAL_INT, 0, E.int(77))), S.ret(R.INT, E.int(41))]);
+  const valuedCall = w(K.CALL_OUT, site(valued), R.INT, SIG, 1, structArg(0, 0).length, 1, [0, SRC, 0], structArg(0, 0));
+  same(value(R.INT, w(K.INT_ADD, valuedCall, E.int(1))), 42, 'a CALL_OUT as a value');
+  same(read(LOCALS + SRC).int, 77, 'a CALL_OUT as a value copies back');
+}
+{
+  // The CycleActors foreach (S_FOREACH_CYCLE), against createCycleActorsIterator over the same array.
+  const LIST_H = [0, 20, 21, 0, 22, 25, 23, 24, SELF_H, OTHER_H, 20];
+  const LIST = arena.alloc(4 * (LIST_H.length + 1));
+  wr32(LIST, LIST_H.length);
+  LIST_H.forEach((h, i) => wr32(LIST + 4 + 4 * i, h));
+  identities.get(25).objectClass = CLS.C;
+  const isAClass = (handle, base) => {
+    const identity = identityOf(handle), cls = world.instances.get(identity)?.cls ?? identity?.objectClass;
+    for (let c = cls; c; c = c.base) if (c.record === base) return true;
+    return false;
+  };
+  let fnSlot = 0;
+  const defineFn = (statements, {size = 64, steps = {}} = {}) =>
+    ({code: assembleAt(FN_CODE[fnSlot++ % FN_CODE.length], statements), size, steps});
+  const site = target => { const n = node(() => { throw new Error('call took the JavaScript path unexpectedly'); }); callSites.set(n, {target}); return n; };
+  /** What createCycleActorsIterator does: [actor handle, Index] after each next(); `limit` bodies at most (a break). */
+  const follow = (base, start, limit) => {
+    const actors = LIST_H.map(h => h ? identityOf(h) : null), slots = {actor: null, index: start}, steps = [];
+    const slot = key => ({reference: true, get: () => slots[key], set: v => { slots[key] = v; }});
+    const args = [base, slot('actor'), slot('index')];
+    const iterator = createCycleActorsIterator({index: 1002, receiver: null, argumentCount: 3, evaluateArgument: i => args[i],
+      actorClass: CR.A, levelFor: () => ({actors}), isA: (actor, b) => isAClass(actor.handle, b), scan: null});
+    let more;
+    do {
+      more = iterator.next();
+      steps.push([slots.actor ? slots.actor.handle : 0, slots.index]);
+    } while (more && steps.length < limit);
+    return more ? [...steps, steps.at(-1)] : steps;
+  };
+  const visited = [];
+  const record = () => node((r, frame) => { const at = frameInfo.get(frame).base; visited.push([rd32(at + 44), rd32(at + 48) | 0]); });
+  const loopFn = (base, start, limit, {actorKind = 0, actorOffset = 44, actorKey = 0} = {}) => defineFn([
+    S.expr(w(K.SET_LOCAL_INT, 48, E.int(start))),
+    w(K.S_FOREACH_CYCLE, node(), classRecordId(base), 6, actorKind, actorOffset, actorKey, 0, 48, 0),
+    S.expr(w(K.JS_VOID, record())),
+    S.jumpIfNot(5, w(K.JS_BOOL, node(() => visited.length < limit))),
+    S.iterNext(),
+    S.iterPop(),
+    S.expr(w(K.JS_VOID, record())),
+    S.ret(R.VOID),
+  ]);
+  let runs = 0;
+  for (const base of [CR.A, CR.B, CR.C, CR.D, CR.E]) {
+    for (const start of [0, 3, 10, 11, 99, -1, -0x80000000]) {
+      for (const limit of [Infinity, 3, 1]) {
+        reset();
+        classTable();
+        visited.length = 0;
+        nativeHost.cycleList = () => LIST;
+        nativeHost.classTest = actor => isAClass(actor, base);
+        run([S.expr(w(K.CALL, site(loopFn(base, start, limit)), R.VOID, 6, 0, 0)), S.ret(R.INT, E.int(1))]);
+        same(JSON.stringify(visited), JSON.stringify(follow(base, start, limit)), `foreach ${base.key} from ${start}, ${limit} bodies`);
+        same(framesKey(), '-1,0,0', 'foreach: frame stack restored');
+        runs++;
+      }
+    }
+  }
+  assert.ok(runs > 100);
+  same(count('classTest') > 0, true, 'an actor without a class row is tested in JavaScript');
+  // A start Rust cannot own is an S_YIELD: a run the host re-enters after each statement, and a callee whose out argument the image
+  // cannot address or whose host has no list (the host's step runs the statement).
+  reset();
+  classTable();
+  nativeHost.cycleList = () => LIST;
+  same(run([w(K.S_FOREACH_CYCLE, node(), classRecordId(CR.A), 1, 0, 44, 0, 0, 48, 0), S.ret(R.VOID)]), 0, 'a top-level start yields to JavaScript');
+  same(count('cycleList'), 0, 'a top-level start imports nothing');
+  for (const [why, setup, actorKind] of [['no list', () => { nativeHost.cycleList = () => 0; }, 0],
+    ['a host receiver', () => { infos.delete(SELF_H); nativeHost.cycleList = () => LIST; }, 1]]) {
+    reset();
+    classTable();
+    setup();
+    const T = defineFn([w(K.S_FOREACH_CYCLE, node(), classRecordId(CR.A), 1, actorKind, actorKind ? 0x40 : 44, actorKind ? 5 : 0, 0, 48, 0), S.ret(R.VOID)],
+      {steps: {0: () => RETURNED}});
+    run([S.expr(w(K.CALL, site(T), R.VOID, 6, 0, 0)), S.ret(R.INT, E.int(1))]);
+    same(calls.filter(c => c.imp === 'step' && c.index === 0).length, 1, `a start with ${why}: the host runs the statement`);
+    same(count('classTest'), 0, `a start with ${why}: no scan`);
+  }
+  // A Return inside the loop is stepCompiled's unwind error.
+  reset();
+  classTable();
+  nativeHost.cycleList = () => LIST;
+  const returning = defineFn([w(K.S_FOREACH_CYCLE, node(), classRecordId(CR.A), 3, 0, 44, 0, 0, 48, 0), w(K.S_RETURN_ITER, R.VOID), S.iterNext(), S.ret(R.VOID)]);
+  same(vmError(() => run([S.expr(w(K.CALL, site(returning), R.VOID, 6, 0, 0)), S.ret(R.INT, E.int(1))])).code, ERR.RETURN_ITERATOR,
+    'a Return with a Rust iterator active');
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

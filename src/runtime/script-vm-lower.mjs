@@ -957,20 +957,20 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   }
   function foreachCycle(n) {
     if (foreachOff || layout.state || entries.filter(entry => entry.node.op === 0x2f).length !== 1) return null;
-    const call = n.value;
-    if (!isNode(call) || call.op !== 'native' || call.index !== 1002 || !Array.isArray(call.args) || call.args.length !== 3) return null;
+    const start = n.value;
+    if (!isNode(start) || start.op !== 'native' || start.index !== 1002 || !Array.isArray(start.args) || start.args.length !== 3) return null;
     if (!runtime.scriptVm?.foreach?.ready || !runtime.actorClass || !runtime.levelFor) return null;
     if (services.iterator !== runtime.services.iterator || services.objectReference !== runtime.services.objectReference) return null;
-    const base = call.args[0];
+    const base = start.args[0];
     if (!isNode(base) || base.op !== 0x20 || !base.objectIndex) return null;
     let target;
     try { target = services.objectReference(fn, base.objectIndex, base); } catch { return null; }
     if (target?.kind !== 'Class') return null;
-    const actor = foreachOut(call.args[1], 'object'), index = foreachOut(call.args[2], 'int'), pop = entries[indexOf.get(n.target)];
+    const actor = foreachOut(start.args[1], 'object'), index = foreachOut(start.args[2], 'int'), pop = entries[indexOf.get(n.target)];
     if (!actor || !index || !pop) return null;
     foreachLowered = true;
-    foreachNodes.set(nodeId(call), {target});
-    return [K.S_FOREACH_CYCLE, nodeId(call), classRecordId(target), indexOf.get(pop.next) ?? NEXT_NONE, ...actor, ...index];
+    foreachNodes.set(nodeId(start), {target});
+    return [K.S_FOREACH_CYCLE, nodeId(start), classRecordId(target), indexOf.get(pop.next) ?? NEXT_NONE, ...actor, ...index];
   }
 
   function statement(n) {
