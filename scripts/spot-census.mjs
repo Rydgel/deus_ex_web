@@ -44,9 +44,14 @@ export function spotFigures(run, spot) {
   const page = column('animate');
   const phases = {};
   for (const k of d.columns) if (/^(p|gl|w)\./.test(k) && !['w.start', 'w.status', 'w.age', 'w.dt'].includes(k)) phases[k] = Math.round(mean(k) * 100) / 100;
+  // The worker's frame (Chromium; one `w.dur` per distinct `w.start`): the frame is then the larger of the page's and the worker's
+  const seen = new Set(), workerDur = [];
+  for (const r of rows) { const dur = r[ci['w.dur']]; if (dur >= 0 && !seen.has(r[ci['w.start']])) { seen.add(r[ci['w.start']]); workerDur.push(dur); } }
+  const worker = workerDur.length ? {p50: quantile(workerDur, .5), p95: quantile(workerDur, .95)} : null;
   const top = Object.entries(phases).filter(([k]) => k.startsWith('p.')).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k.slice(2)} ${f1(v)}`);
   return {frames: rows.length, drawn: drawn.length, fps: drawn.length / Math.max(1e-3, (spot.end - spot.start) / 1000),
-    page: {p50: quantile(page, .5), p95: quantile(page, .95), max: page.length ? Math.max(...page) : NaN, mean: mean('animate')}, phases, top};
+    page: {p50: quantile(page, .5), p95: quantile(page, .95), max: page.length ? Math.max(...page) : NaN, mean: mean('animate')}, worker,
+    frame: Math.max(quantile(page, .5), worker?.p50 ?? 0), phases, top};
 }
 
 /** All the figures of one map's run (the file hitch-run.mjs --places wrote), joined to the spots' labels. A spot is `valid` when the player
@@ -64,25 +69,27 @@ export function mapFigures(run, extra = {}) {
   });
 }
 
-const row = s => `| ${s.map} | ${s.location.map(v => Math.round(v)).join(', ')} | ${s.yaw} | ${f1(s.page.p50)} | ${f1(s.page.p95)} | ${f1(s.page.max)} | ${f1(s.fps)} | ${s.top.join(', ')} | ${f1(s.phases['gl.upload'])} / ${f1(s.phases['gl.uploadMB'])} MB | ${f1(s.phases['gl.drawN'])} |`;
-const HEADER = '| Map | Location | Yaw | page p50 | p95 | max | fps | top phases | gl.upload ms / MB | draw calls |\n|---|---|---:|---:|---:|---:|---:|---|---|---:|';
+/** The spot's frame work: the page's p50 (Firefox inline), or the larger of the page's and the worker's (Chromium). */
+const fp = s => s.frame ?? fp(s);
+const row = s => `| ${s.map} | ${s.location.map(v => Math.round(v)).join(', ')} | ${s.yaw} | ${f1(fp(s))} | ${f1(s.page.p95)} | ${f1(s.page.max)} | ${f1(s.fps)} | ${s.top.join(', ')} | ${f1(s.phases['gl.upload'])} / ${f1(s.phases['gl.uploadMB'])} MB | ${f1(s.phases['gl.drawN'])} |`;
+const HEADER = '| Map | Location | Yaw | frame p50 | page p95 | page max | fps | top phases | gl.upload ms / MB | draw calls |\n|---|---|---:|---:|---:|---:|---:|---|---|---:|';
 
 function summary(dirPath, over, limit = 60) {
   const files = readdirSync(dirPath).filter(f => f.startsWith(`${engine}-`) && f.endsWith('.spots.json'));
   const every = files.flatMap(f => JSON.parse(readFileSync(path.join(dirPath, f), 'utf8')).spots), invalid = every.filter(s => !s.valid);
   const all = every.filter(s => s.valid);
-  all.sort((a, b) => b.page.p50 - a.page.p50);
+  all.sort((a, b) => fp(b) - fp(a));
   const maps = new Map();
   for (const s of all) (maps.get(s.map) ?? maps.set(s.map, []).get(s.map)).push(s);
   const perMap = [...maps].map(([map, list]) => {
-    const p50 = list.map(s => s.page.p50);
-    return `| ${map} | ${list.length} | ${f1(quantile(p50, .5))} | ${f1(Math.max(...p50))} | ${list.filter(s => s.page.p50 > over).length} | ${list.sort((a, b) => b.page.p50 - a.page.p50)[0].top[0]} |`;
+    const p50 = list.map(s => fp(s));
+    return `| ${map} | ${list.length} | ${f1(quantile(p50, .5))} | ${f1(Math.max(...p50))} | ${list.filter(s => fp(s) > over).length} | ${list.sort((a, b) => fp(b) - fp(a))[0].top[0]} |`;
   }).sort((a, b) => Number(b.split('|')[4]) - Number(a.split('|')[4]));
   // the frame less the simulation's tick: what the page's own work (actors, drawing, uploads, fog, mirrors, HUD) costs there
   const draw = s => s.page.mean - (s.phases['p.tick'] ?? 0);
   const byDraw = [...all].sort((a, b) => draw(b) - draw(a)).slice(0, Math.min(limit, 25));
-  return `Slow spots (${engine}, page p50 over ${over} ms: ${all.filter(s => s.page.p50 > over).length} of ${all.length} valid spots on ${maps.size} maps; ${invalid.length} spots left out: the player was in a conversation or not where placed)\n\n${HEADER}\n${all.slice(0, limit).map(row).join('\n')}\n\n`
-    + `Draw side (page mean less p.tick, the 25 largest):\n\n| Map | Location | Yaw | frame mean less tick | page p50 | top phases |\n|---|---|---:|---:|---:|---|\n${byDraw.map(s => `| ${s.map} | ${s.location.map(v => Math.round(v)).join(', ')} | ${s.yaw} | ${f1(draw(s))} | ${f1(s.page.p50)} | ${s.top.join(', ')} |`).join('\n')}\n\n`
+  return `Slow spots (${engine}, page p50 over ${over} ms: ${all.filter(s => fp(s) > over).length} of ${all.length} valid spots on ${maps.size} maps; ${invalid.length} spots left out: the player was in a conversation or not where placed)\n\n${HEADER}\n${all.slice(0, limit).map(row).join('\n')}\n\n`
+    + `Draw side (page mean less p.tick, the 25 largest):\n\n| Map | Location | Yaw | frame mean less tick | page p50 | top phases |\n|---|---|---:|---:|---:|---|\n${byDraw.map(s => `| ${s.map} | ${s.location.map(v => Math.round(v)).join(', ')} | ${s.yaw} | ${f1(draw(s))} | ${f1(fp(s))} | ${s.top.join(', ')} |`).join('\n')}\n\n`
     + `| Map | spots | median of p50 | worst p50 | spots over ${over} | worst spot's top phase |\n|---|---:|---:|---:|---:|---|\n${perMap.join('\n')}\n`;
 }
 
@@ -91,7 +98,7 @@ if (flag('figures')) {
   for (const file of process.argv.slice(2).filter(a => a.endsWith('.json') && !a.startsWith('--'))) {
     const run = JSON.parse(readFileSync(file, 'utf8'));
     console.log(`${file.split('/').pop()}: ${run.browser} ${run.status?.sim}`);
-    for (const s of mapFigures(run)) console.log(`  #${s.index} ${s.location.map(v => Math.round(v)).join(',')} yaw ${s.yaw}: p50 ${f1(s.page.p50)} p95 ${f1(s.page.p95)} max ${f1(s.page.max)} fps ${f1(s.fps)} | ${s.top.join(', ')} | upload ${f1(s.phases['gl.upload'])} ms ${f1(s.phases['gl.uploadMB'])} MB | draws ${f1(s.phases['gl.drawN'])}${s.valid ? '' : ` | INVALID ${s.state}`}`);
+    for (const s of mapFigures(run)) console.log(`  #${s.index} ${s.location.map(v => Math.round(v)).join(',')} yaw ${s.yaw}: p50 ${f1(fp(s))} p95 ${f1(s.page.p95)} max ${f1(s.page.max)} fps ${f1(s.fps)} | ${s.top.join(', ')} | upload ${f1(s.phases['gl.upload'])} ms ${f1(s.phases['gl.uploadMB'])} MB | draws ${f1(s.phases['gl.drawN'])}${s.valid ? '' : ` | INVALID ${s.state}`}`);
   }
   process.exit(0);
 }
@@ -207,8 +214,8 @@ try {
     }
     const spots = mergeMap(map);
     if (!spots.length) continue;
-    const valid = spots.filter(x => x.valid), worst = [...valid].sort((a, b) => b.page.p50 - a.page.p50)[0];
-    console.log(`${map}: ${valid.length}/${spots.length} valid spots in ${Math.round((Date.now() - started) / 1000)} s, sim ${sim}, worst p50 ${f1(worst?.page.p50)} (${worst?.top.join(', ')}), ended ${ended}`);
+    const valid = spots.filter(x => x.valid), worst = [...valid].sort((a, b) => fp(b) - fp(a))[0];
+    console.log(`${map}: ${valid.length}/${spots.length} valid spots in ${Math.round((Date.now() - started) / 1000)} s, sim ${sim}, worst p50 ${f1((worst ? fp(worst) : NaN))} (${worst?.top.join(', ')}), ended ${ended}`);
   }
 } finally { await server?.close(); }
 writeFileSync(path.join(dir, `${engine}-summary.md`), summary(dir, 16.7));
