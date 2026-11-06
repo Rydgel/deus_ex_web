@@ -566,6 +566,13 @@ const MB_OWN_ANIMFRAME: u32 = MB_ZONE + 7;
 /// valid with MS_ANIMSEQ: Setup's GetAnimSeq looks the name up only when
 /// it changes.
 const MB_ANIMSEQ: u32 = MB_ZONE + 8;
+/// FDynamicSprite::Setup's GetAnimSeq answer for the name word it was made for (the host writes them in packSetup; `pack_candidates`
+/// reads them): valid flag, that name word, found, StartFrame, NumFrames.
+const MB_SEQ_VALID: u32 = MB_ANIMSEQ + 1;
+const MB_SEQ_WORD: u32 = MB_ANIMSEQ + 2;
+const MB_SEQ_HIT: u32 = MB_ANIMSEQ + 3;
+const MB_SEQ_START: u32 = MB_ANIMSEQ + 4;
+const MB_SEQ_FRAMES: u32 = MB_ANIMSEQ + 5;
 /// The numeric pose: animation actor, bParticles, DrawScale, Location,
 /// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
 const POSE_WORDS: u32 = 17;
@@ -764,13 +771,15 @@ fn mesh_read_block(h: u32, block: u32, player: u32, behind: bool, view_target: u
     }
 }
 
-// The actor mesh layer's roster (actor-mesh-sim.mjs, docs/firefox-60fps-plan.md "Actors layer in bulk"): one row of four words per
+// The actor mesh layer's roster (actor-mesh-sim.mjs, docs/firefox-60fps-plan.md "Actors layer in bulk"): one row of eight words per
 // binding, in the layer's binding order.
 const RW_HANDLE: u32 = 0;
 const RW_BLOCK: u32 = 1;
 const RW_MESH: u32 = 2;
 const RW_POS: u32 = 3;
-const ROW_BYTES: u32 = 16;
+/// The mesh record's address in the occlusion kernel (the host writes it once; `pack_candidates` reads it).
+const RW_RECORD: u32 = 4;
+const ROW_BYTES: u32 = 32;
 /// A row's position when its actor is not in Level.Actors (or the positions were not asked for).
 const NO_POS: u32 = 0xffff_ffff;
 // What a row gets the host's attention for (`roster_reads`' entries are `row << 4 | reasons`).
@@ -957,6 +966,141 @@ pub extern "C" fn admit_filter(list: u32, entries: u32, n: u32, keep: u32, rows:
         written += 1;
     }
     written
+}
+
+// Setup candidate words, as setup.rs C_* and bsp-occlusion.mjs SETUP lay them out.
+const SU_KEY: u32 = 0;
+const SU_DRAWTYPE: u32 = 1;
+const SU_MESH: u32 = 2;
+const SU_LOCATION: u32 = 6;
+const SU_ROTATION: u32 = 9;
+const SU_DRAWSCALE: u32 = 12;
+const SU_PREPIVOT: u32 = 13;
+const SU_PARTICLES: u32 = 16;
+const SU_SEQ: u32 = 17;
+const SU_SEQ_START: u32 = 18;
+const SU_SEQ_FRAMES: u32 = 19;
+const SU_ANIMFRAME: u32 = 20;
+const SU_FLAGS: u32 = 21;
+const SU_WORDS: u32 = 22;
+/// refs bit: the binding is a candidate only for child frames (SETUP_ROOT_EXCLUDED).
+const EC_EXCLUDED: u32 = 1 << 29;
+/// `pack_candidates`' answer when the host must pack the frame itself.
+const PACK_HOST: u32 = 0xffff_ffff;
+
+/// A binding's Setup candidate words (actor-mesh-sim.mjs packSetup from this frame's block) at `out`, as entry `key` with mesh record
+/// `record`; false when the block's cached GetAnimSeq answer is not for the actor's AnimSequence name word (the host packs it).
+fn pack_binding(block: u32, key: u32, record: u32, excluded: bool, out: u32) -> bool {
+    let w = |i: u32| load32(block.wrapping_add(4 * i));
+    let status = w(MB_STATUS);
+    if status & MS_ANIMSEQ == 0 || w(MB_SEQ_VALID) == 0 || w(MB_SEQ_WORD) != w(MB_ANIMSEQ) {
+        return false;
+    }
+    let put = |i: u32, value: u32| store32(out.wrapping_add(4 * i), value);
+    put(SU_KEY, key);
+    put(SU_DRAWTYPE, w(MB_DRAWTYPE));
+    put(SU_MESH, record);
+    put(3, 0);
+    put(4, 0);
+    put(5, 0);
+    for k in 0..3 {
+        put(SU_LOCATION + k, w(MB_LOCATION + k));
+        put(SU_ROTATION + k, w(MB_POSE + 6 + k));
+        put(SU_PREPIVOT + k, w(MB_PREPIVOT + k));
+    }
+    put(SU_DRAWSCALE, w(MB_DRAWSCALE));
+    put(SU_PARTICLES, w(MB_OWN_PARTICLES));
+    put(SU_SEQ, w(MB_SEQ_HIT));
+    put(SU_SEQ_START, w(MB_SEQ_START));
+    put(SU_SEQ_FRAMES, w(MB_SEQ_FRAMES));
+    put(SU_ANIMFRAME, w(MB_OWN_ANIMFRAME));
+    put(SU_FLAGS, excluded as u32);
+    true
+}
+
+/// SetupDynamics' candidate order of the main frame (dynamics-candidates.mjs packDynamics) from the roster: the admitted bindings in
+/// Level.Actors order (a row's order is its position times 65536) merged with the host's items and sprites by order, ties in the
+/// order packDynamics builds them (bindings, then items, then sprites, each in its own order); an entry's index is its place in that
+/// order. `skip` ([count, row...]) are the rows the iterators stand in for; `extra` holds `extra_n` triples [order, class, index]
+/// (class 1 an item, 2 a sprite) the host builds; `scratch` is 9 * (count + extra_n) bytes of memory (8-byte aligned). Writes, per
+/// entry, `refs`: class << 30 | EC_EXCLUDED | index (the row, the item or the sprite). Returns the number of entries, or PACK_HOST
+/// when a binding's block is not answered by the image (the host's packDynamics runs).
+#[no_mangle]
+pub extern "C" fn pack_order(rows: u32, count: u32, child_frames: u32, skip: u32, extra: u32, extra_n: u32, scratch: u32, refs: u32) -> u32 {
+    let keys = scratch as usize as *mut u64;
+    let flags = scratch.wrapping_add(8 * count.wrapping_add(extra_n));
+    for b in 0..count {
+        crate::interp::store8(flags.wrapping_add(b), 0);
+    }
+    for k in 0..load32(skip) {
+        let b = load32(skip.wrapping_add(4).wrapping_add(4 * k));
+        if b < count {
+            crate::interp::store8(flags.wrapping_add(b), 1);
+        }
+    }
+    let mut n = 0u32;
+    for b in 0..count {
+        if load8(flags.wrapping_add(b)) != 0 {
+            continue;
+        }
+        let row = rows.wrapping_add(b.wrapping_mul(ROW_BYTES));
+        let pos = load32(row.wrapping_add(4 * RW_POS));
+        if pos == NO_POS {
+            continue;
+        }
+        let block = load32(row.wrapping_add(4 * RW_BLOCK));
+        if block == 0 {
+            return PACK_HOST;
+        }
+        let status = load32(block.wrapping_add(4 * MB_STATUS));
+        if status & MS_OK == 0 {
+            return PACK_HOST;
+        }
+        let excluded = if status & MS_DRAWN != 0 {
+            false
+        } else if child_frames != 0 && status & MS_DRAWN_CHILD != 0 {
+            true
+        } else {
+            continue;
+        };
+        // order, then class (0 bindings), then the row
+        unsafe { *keys.add(n as usize) = (pos as u64 * 65536) << 32 | (excluded as u64) << 29 | b as u64 };
+        n += 1;
+    }
+    for k in 0..extra_n {
+        let at = extra.wrapping_add(12 * k);
+        let (order, class, index) = (load32(at), load32(at.wrapping_add(4)), load32(at.wrapping_add(8)));
+        unsafe { *keys.add(n as usize) = (order as u64) << 32 | (class as u64) << 30 | index as u64 };
+        n += 1;
+    }
+    let sorted = unsafe { core::slice::from_raw_parts_mut(keys, n as usize) };
+    sorted.sort_unstable();
+    for (i, &key) in sorted.iter().enumerate() {
+        store32(refs.wrapping_add(4 * i as u32), key as u32);
+    }
+    n
+}
+
+/// The candidate words of the binding entries of `pack_order`'s `refs` (`n` entries) at `words` (SU_WORDS each, the key the entry's
+/// index, the mesh record the row's); `host` ([count, entry...]) receives the binding entries whose block does not hold the sequence
+/// answer for the actor's AnimSequence name word, which the host packs.
+#[no_mangle]
+pub extern "C" fn pack_words(rows: u32, refs: u32, n: u32, words: u32, host: u32) {
+    let mut hosted = 0u32;
+    for i in 0..n {
+        let low = load32(refs.wrapping_add(4 * i));
+        if low >> 30 != 0 {
+            continue;
+        }
+        let row = rows.wrapping_add((low & 0x1fff_ffff).wrapping_mul(ROW_BYTES));
+        let block = load32(row.wrapping_add(4 * RW_BLOCK));
+        let record = load32(row.wrapping_add(4 * RW_RECORD));
+        if !pack_binding(block, i, record, low & EC_EXCLUDED != 0, words.wrapping_add(4 * SU_WORDS * i)) {
+            store32(host.wrapping_add(4).wrapping_add(4 * hosted), i);
+            hosted += 1;
+        }
+    }
+    store32(host, hosted);
 }
 
 // A mover's block (`mover_reads`): status, Location, Rotation, then the pair last given to the tracker and whether there is one.

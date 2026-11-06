@@ -35,8 +35,9 @@ import {actorPlumbing} from './actor-plumbing.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
-  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54,ANIMSEQ:55};
-const MB_WORDS=56,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16,MS_ANIMSEQ=32;
+  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54,ANIMSEQ:55,
+  SEQ_VALID:56,SEQ_WORD:57,SEQ_HIT:58,SEQ_START:59,SEQ_FRAMES:60};
+const MB_WORDS=61,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16,MS_ANIMSEQ=32;
 
 /** A plain texture reference for the page's asset store. */
 const wordView=new DataView(new ArrayBuffer(4));
@@ -691,10 +692,14 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
         if(word!==setupWord){setupWord=word;setupName=own.AnimSequence();setupHit=setupSequence(payload.sequences,setupName);}
         else if(reads.verify&&setupHit!==setupSequence(payload.sequences,own.AnimSequence()))
           throw new Error(`RENDER_SCAN=verify: ${actorName} AnimSequence's sequence differs from its name word's`);
+        // (the answer for this name word, kept in the block for render.rs pack_candidates)
+        w[b+MB.SEQ_VALID]=1;w[b+MB.SEQ_WORD]=word;w[b+MB.SEQ_HIT]=setupHit?1:0;
+        w[b+MB.SEQ_START]=setupHit?.startFrame??0;w[b+MB.SEQ_FRAMES]=setupHit?.numFrames??0;
       }else{
         const name=own.AnimSequence();
         if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
         setupWord=-1;
+        if(b>=0)w[b+MB.SEQ_VALID]=0;
       }
       u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
     }
@@ -1124,13 +1129,13 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // kept with the list (rowAdd at a take, rowRemove at a retire) whatever the mode, so a frame the pass cannot run in
   // (RENDER_SCAN=js, an incomplete field table) takes the JavaScript path and the next one the pass. ACTOR_PLUMBING=no-roster keeps
   // that path always.
-  const ROW_WORDS=4,NO_POS=0xffffffff;
+  const ROW_WORDS=8,NO_POS=0xffffffff;
   let rows=0,rowsCapacity=0,rowCount=0,rowsDirty=true,positionsEpoch=-1;
   const rowsArena=()=>runtime.scriptVm?.arena??null;
   const rowsView=()=>new Uint32Array(rowsArena().memory.buffer);
   const rowWrite=(k,binding)=>{
     const u32=rowsView(),at=(rows>>2)+ROW_WORDS*k;
-    u32[at]=handleOf(binding.actor);u32[at+1]=binding.block||0;u32[at+2]=binding.meshHandle??0;u32[at+3]=NO_POS;
+    u32[at]=handleOf(binding.actor);u32[at+1]=binding.block||0;u32[at+2]=binding.meshHandle??0;u32[at+3]=NO_POS;u32[at+4]=0;
   };
   const rowAdd=binding=>{
     const arena=rowsArena();
@@ -1513,7 +1518,11 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     return binding.row>=0?rowsView()[(rows>>2)+ROW_WORDS*binding.row+3]:undefined;
   };
   let rosterUsed=false;
-  const levelPositions={bindings:actors,u32:()=>rowsView().subarray(rows>>2,(rows>>2)+ROW_WORDS*rowCount),NO_POS};
+  // (what packDynamics reads of the roster: the positions in the rows' fourth word and, for its Rust form, the rows themselves)
+  const levelPositions={bindings:actors,u32:()=>rowsView().subarray(rows>>2,(rows>>2)+ROW_WORDS*rowCount),NO_POS,ROW_WORDS,
+    get count(){return rowCount;},get rows(){return rows;},map:bindings,verify:plumbing.verify,
+    render:()=>plumbing.pack&&reads_ok()?runtime.scriptVm.render:null};
+  const reads_ok=()=>rosterUsed&&rowCount===actors.length;
   // The index map packDynamics orders the bindings by: the roster's rows when this frame's reconcile used them, else the map.
   const positionsFor=()=>rosterUsed?levelPositions:levelIndex;
   const updateSprite=(sprites,binding,view)=>{

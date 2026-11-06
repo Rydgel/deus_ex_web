@@ -460,6 +460,32 @@ export class RenderScanHost {
       list, scratch, slots, attn);
     return new Uint32Array(this.vm.arena.memory.buffer, attn, n).slice();
   }
+  /** The main frame's candidate order from the roster (render.rs pack_order): `skip` the rows the iterators stand in for, `extra` the
+   * host's items and sprites as [order, class, index] triples (`extraN` of them). Returns {n, refs, words, host} (arena addresses of
+   * the entries' references, the room for their candidate words and the host list), or null when the pass cannot run here or a binding's
+   * block is not answered by the image. */
+  packOrder(rows, count, childFrames, skip, extra, extraN) {
+    if (renderScanMode() === 'js' || typeof this.x.pack_order !== 'function') return null;
+    this.table();
+    if (!this.complete) return null;
+    const total = count + extraN;
+    const skipAt = this.scratchOf('sPackSkip', 4 * (skip.length + 1)).at, extraAt = this.scratchOf('sPackExtra', 12 * (extraN + 1)).at;
+    const sorted = this.scratchOf('sPackSort', 9 * total + 16).at, refs = this.scratchOf('sPackRefs', 4 * (total + 1)).at;
+    const words = this.scratchOf('sPackWords', 88 * (total + 1)).at, host = this.scratchOf('sPackHost', 4 * (total + 2)).at;
+    if (sorted & 7) throw new Error('pack_order: the sort scratch is not 8-byte aligned');
+    const u32 = new Uint32Array(this.vm.arena.memory.buffer);
+    u32[skipAt >> 2] = skip.length;
+    for (let i = 0; i < skip.length; i++) u32[(skipAt >> 2) + 1 + i] = skip[i];
+    u32.set(extra.subarray(0, 3 * extraN), extraAt >> 2);
+    const n = this.x.pack_order(rows, count, childFrames ? 1 : 0, skipAt, extraAt, extraN, sorted, refs);
+    if ((n | 0) === -1) return null;   // (PACK_HOST: a wasm u32 result is a signed number here)
+    return {n, refs, words, host};
+  }
+  /** The candidate words of the binding entries of a packOrder (render.rs pack_words); the host list at `order.host` names the entries
+   * whose words the host makes. */
+  packWords(rows, order) {
+    this.x.pack_words(rows, order.refs, order.n, order.words, order.host);
+  }
   /** The rows' positions in `actors` alone (render.rs roster_positions); false when the pass cannot run here. */
   rosterPositions(rows, count, actors) {
     if (renderScanMode() === 'js' || typeof this.x.roster_positions !== 'function') return false;

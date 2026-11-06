@@ -261,6 +261,7 @@ if (inspector) {
   }
 }
 
+{ const { packStats } = await import('../src/viewer/dynamics-candidates.mjs'); console.log('candidates from the roster', JSON.stringify(packStats)); }
 let digest = 0n;
 for (const h of hashes) digest = (digest * 1099511628211n + BigInt('0x' + h)) & 0xffffffffffffffffn;
 const digestText = digest.toString(16).padStart(16, '0');
