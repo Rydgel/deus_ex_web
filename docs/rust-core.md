@@ -775,6 +775,16 @@ native-player-move, projectile, rider-move, pawn-move, pawn-physics-kernel,
 actor-tick, script-spawn, inventory-spawn, island-swimming, island-blowitup,
 island-tracer and native-actor-physics pass.
 
+#### November 6: PHYS_Projectile beside it (the Dockyard's poison gas)
+
+`fall.rs` `perform_projectile` runs AActor::performPhysics' case 6 (physProjectile 0x103d4600) on the same host, field table, `move_source` and
+tail: `projectile.mjs` on `Ext` (the water factor, `Velocity += Acceleration * remaining`, an engine.projectile's MaxSpeed clamp read from an
+optional table row, the final `(Location - OldLocation) / DeltaTime`), HitWall through `js_fall_bounce`, and a bounce that left the actor
+falling through `js_fall_falling` (`runSpawnedActorFalling`). `js_fall_begin` takes the actor's Physics, so a class is admitted per mode (a
+Projectile's MaxSpeed cell is needed only for PHYS_Projectile). `?projectilePhysics=js` / `ACTOR_PROJECTILE=js` keep the JavaScript body;
+`validate-actor-physics-kernel` runs `scenarios/projectile-branches.mjs` and the Dockyard against `ACTOR_PHYSICS=js`. Firefox A/B at the
+Dockyard's worst spot: tick 17.65 -> 16.64 ms (docs/firefox-60fps-plan.md "Dockyard tick").
+
 ### October 3: a swimming pawn's performPhysics in Rust (B6d, implemented)
 
 Island's swimmers are its GeneratorScouts and the fish their generators

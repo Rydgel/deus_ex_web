@@ -26,7 +26,7 @@ import { loadTraceKernel } from './trace-kernel.mjs';
 import { RustScriptVm, classDefaultsChanged } from './script-vm-rust.mjs';
 import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createVisibleCollidingActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
+import { areaScanOff, createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createVisibleCollidingActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { actorRadiusCheck } from './collision-hash-radius.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { execParabolicTrace, levelParabolicServices } from './script-actor-parabolic-trace.mjs';
@@ -5009,7 +5009,9 @@ export class ScriptRuntime {
       }
       // AllActors' and RadiusActors' class tests run in the Rust core's CycleActors scan (script-iterators.mjs scanActors).
       const render=this.scriptVm?.render,scan=render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null;
-      if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,scan});
+      // RadiusActors' and VisibleActors' class, radius and bHidden tests run in the Rust core too (script-iterators.mjs scanArea).
+      const area=render&&!areaScanOff()?(array,start,base,mode,radius,loc)=>render.areaScan(array,start,base,mode,radius,loc):null;
+      if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,scan,area});
       // execVisibleCollidingActors 0x103e55b0: the list is the collision hash's ActorRadiusCheck 0x103589e0
       // (collision-hash-radius.mjs), filtered by class, bHidden and Model->FastLineCheck.
       if(call.index===312)return createVisibleCollidingActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
@@ -5021,7 +5023,7 @@ export class ScriptRuntime {
         }});
       // VisibleActors tests the candidate's whole +0x28 word for bHidden.
       return createVisibleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
-        actorWord:actor=>actorWordOf(this.instance(actor))});
+        actorWord:actor=>actorWordOf(this.instance(actor)),area});
     }
     if(call.index===1004){
       // execReachablePathnodes 0x103c8bb0 over APawn::GetPathnodeList

@@ -1212,6 +1212,130 @@ then `scripts/gecko-phase.mjs RUN FILE --entry 'fog-pass'`; `scripts/wasm-names.
 the census finds the *draw-side* costs of places, and those are few: the Underground fog above, the moving lights at the Mole People, the actors
 layer at the Dockyard. No other Firefox-only trap showed in 11,377 views.
 
+### Dockyard tick (2026-11-06)
+
+The task: `09_NYC_Dockyard` misses 60 fps in both browsers at load, with no player history (the census's 143 of 160 views over 16.7 ms in
+Firefox; the worker frame 18 to 20 ms in Chromium), so lower the tick's measured largest families by moving them into the Rust core. Method
+as the bunker's: baselines on master 0dd477f0, a ranking by measurement, ports behind switches with the JavaScript bodies as references,
+interleaved Firefox A/B, bar 0.3 ms in the page mean or 0.5 ms in the slowest tenth. Everything below is headless Linux (Firefox 155
+inline, Chromium worker mode, 1440x960, god mode, idle, `--place '{"location":[2623,6205,20],"rotation":[0,32768,0]}'` at load, 25 s
+sessions measured from 5 s after the map); the Mac is not measured.
+
+**Baselines (master 0dd477f0).** `bench-sim --map NAME --warm 60 --ticks 300 --render-feedback`: Island `5adb254a07b1ed6f`, Training
+`07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59` (the expected ones), and
+**Dockyard `e53f348673f1247b`**. Firefox, one unprofiled session: `p.tick` 16.75 ms, `p.actors` 7.07, `p.render` 2.70, `p.hud` 1.98 (of it
+`w.hud` 1.37), page `animate` mean 32.7 ms. With the Gecko profiler on (`--profile`, 1 ms interval) the tick reads 20.1 ms: the profile
+inflates the tick by about a fifth, so its figures below are for ranking, not for the A/B.
+
+**Ranking (Gecko profile, 482 rest frames and the 54 slowest tenth by `p.tick`; the level tick sampled at 16.9 ms in the rest frames and
+30.6 in the slow ones).** By the Rust core's import (the outermost `js_*` call from Wasm; ms a frame, rest / slow):
+
+| Import | rest | slow | What is under it at the Dockyard |
+|---|---:|---:|---|
+| `js_eval` | 4.05 | 5.70 | nodes the Rust VM hands to JavaScript: flat, no row over 0.5 ms (below) |
+| `js_tick_physics` | 2.08 | 2.35 | **1.69 `runActorProjectile`** (PoisonGas, PHYS_Projectile), 0.36 for the 87 DeusExMovers at rest (PHYS_MovingBrush) |
+| in Wasm | 1.94 | 2.46 | the actor loop over ~1,960 slots |
+| JavaScript, no Wasm under it | 1.64 | 4.41 | `cleanupDestroyed` 0.18 / 2.70, `spawnActor`, `processEvent` |
+| `js_tick_resume` | 1.47 | 4.65 | state code resumed through `processState` (NPCs, ProjectileGenerator) |
+| `js_move_riders` | 0.56 | 0.74 | the riders' moves (below) |
+| `js_step`, `js_tick_state`, `js_iterator_next` | 0.42, 0.41, 0.37 | 1.59, 1.39, 1.70 | the Cloud timers' `foreach VisibleActors` (below) |
+| `js_tick_destroy` | 0.38 | 0.65 | |
+
+* **What the Dockyard has that the Island has not** is the poison gas: 20 `PoisonGas` actors (a `Cloud`, `DeusExProjectile`, Physics 6;
+  `ProjectileGenerator`s spawn them (native 278 with their `ProjectileClass`), they die in the water at once, `Cloud.ZoneChange`), 15 of them
+  in flight a tick.
+  Node, `SCRIPT_VM_IMPORT_TIME=1 SCRIPT_VM_IMPORT_CLASS=1` (the import self time by the class of the actor being ticked, 3.2 ms a tick in
+  all, placed at the same spot): PoisonGas 0.83 (26%: `js_tick_physics` 0.70, 47 us a call), then Soldier 0.37, Shadow 0.31, DeusExMover
+  0.27, TrashPaper 0.18, MilitaryBot 0.18, Barrel1 0.16. 87 `js_tick_physics` calls a tick are the movers' (2.5 us in Node), 15 the gas's.
+* **`js_tick_physics` was 82% gas**: of the 2.05 ms in `performActorPhysics`, `runActorProjectile` is 1.69 (the move through
+  `playerMove` and its `checkEncroachment` 0.41, `beginTouch` 0.16, the fields by name), the movers' idle `interpolated` body 0.36.
+* **`js_move_riders` is 0.56 ms here (0.74 slow), not 2.8, and not the movers'**: the 2.8 came from the census's profile, which is not
+  on disk; I could not reproduce it at this placement. The Node class table puts the calls at the pawns (Soldier 4.3 a tick at 11 us,
+  MilitaryBot 1.9): a moved pawn with `StandingCount` != 0 moves the inventory based on it (`moveSpawnedActor`, the Island's content, 0.2 ms
+  there); a mover at rest never reaches `moveActorRiders` (it does not move). `RIDER_STATS=1` over 900 placed ticks: 9,949 rider passes,
+  9,264 of them cache hits, 685 scans (657 after a base-epoch change: 1.35 million slots, 27 ms in Node), 29,492 riders visited (97 ms).
+  So it is not the table's fill or invalidation (the bunker's case needed a destroy/spawn storm between scans); the riders' own moves cost
+  four times the scans. Not changed.
+* **The slow tenth** (39 ms of tick against 16) is the gas's other work: `js_iterator_next` +2.60 and `js_step` +2.36 ms are the
+  `foreach VisibleActors(class'Actor', A, cloudRadius)` of `Cloud.Timer` (20 clouds), a JavaScript loop over every slot of `Level.Actors`
+  (`script-iterators.mjs` `createVisibleActorsIterator`, 0.67 ms a rest frame and 3.11 ms a slow one, inclusive), `cleanupDestroyed` +2.5 and
+  `spawnActor` +1.8 (the puffs' construction and their script events 1.30 of it).
+* **`js_eval` is flat** (Node fallback census at the spot, self ms a tick): `AttachDecal` 0.36, `SetRotation` 0.18 (31 calls: the
+  LaserTrigger/BeamTrigger/LaserEmitter ticks move their emitter and spot), `SetLocation` of the same ~0.1, `Spawn`/`Destroy` 0.1; everything
+  else under 0.06. In the profile `setScriptRotation` is 0.39 ms inclusive, `execSetLocation` 0.13, `execAttachDecal` 0.51 (rest). No
+  family is a cut on its own; each is a feature (a context native call in the Rust VM).
+
+**What moved.**
+1. **PHYS_Projectile in Rust** (`fall.rs` `perform_projectile`, host `actor-physics-kernel.mjs`, `?projectilePhysics=js` /
+   `ACTOR_PROJECTILE=js`). AActor::performPhysics case 6 (physProjectile 0x103d4600) beside the falling body: the same field table, `move_source`
+   MoveActor and tail, `projectile.mjs` transcribed on `Ext` (the water factor, `Velocity += Acceleration * remaining` with its float32
+   temporaries, an engine.projectile's MaxSpeed clamp from its own table row (optional: the cell exists once a Projectile class is linked),
+   the final `(Location - OldLocation) / DeltaTime`); HitWall is `js_fall_bounce`'s event dispatch, a bounce that left the actor falling
+   calls `runSpawnedActorFalling` (`js_fall_falling`); Region.ZoneNumber 0 (the destroy) and every other boundary decline to the callback
+   before any effect. *Evidence:* `projectile.mjs`'s own oracle record (docs/projectile.md); the Rust body is checked against it by
+   `validate-actor-physics-kernel` (two new runs: `scenarios/projectile-branches.mjs` on the Island, decorations and items launched at
+   walls, floors and water with pulls and spin, plus spawned Tracers, Rockets and LAMs past their MaxSpeed, bouncing and handed to
+   physFalling; and the Dockyard as played): digests equal to `ACTOR_PHYSICS=js` at every checkpoint, all branches reached
+   (115,881 projectile calls in the scenario run: 6,857 HitWall events, 243 bounces, 76 physFalling hand-offs, 2,595 MaxSpeed clamps; the
+   Dockyard run's gas goes through the water branch, 2,438 substeps in 300 ticks).
+2. **RadiusActors' and VisibleActors' loops in Rust** (`render.rs` `area_scan`, `script-vm-render.mjs` `areaScan`,
+   `script-iterators.mjs` `scanArea`, `?areaScan=js` / `ACTOR_AREA_SCAN=js`; `?actorScan=verify` runs both and throws on a difference).
+   The exec's tests are reads (null slot, bHidden, class ancestry, the radius gates), so where they run is not observable; the Rust scan
+   answers them from the image (kind 1: passed; kind 2: the image does not answer for this actor, bound or host field or no class row, so
+   JavaScript runs the whole list for it; kind 0: exhausted) and VisibleActors' `FastLineCheck` stays JavaScript's, for the survivors.
+   The comparisons are in the same order of operations as the references (`radius * radius > dx*dx + dy*dy + dz*dz` in doubles over float32
+   loads, `(Radius + CollisionRadius)^2` for RadiusActors). *Evidence:* Engine.dll execRadiusActors/execVisibleActors (docs/script-actor-queries.md);
+   `ACTOR_SCAN=verify` on the Dockyard for 600 ticks (850 scans, 352,018 slots, 713 found, no kind 2, no difference), and
+   `test/script-iterators-area.test.mjs` (the iterators with a fake `area` that answers kind 2 for some slots, against the JavaScript loop).
+
+**A/B (Firefox inline, four interleaved pairs each, the arms' order alternating; `hitch-ab.mjs`, `hitch-ab-table.mjs`; ms).**
+
+| Change | tick, new / old | tick, slowest tenth | page mean | page slowest tenth |
+|---|---|---|---|---|
+| PHYS_Projectile (`projectilePhysics=js`) | 16.64 / 17.65 (-1.01) | 27.48 / 29.46 (-1.98) | 33.39 / 34.45 (-1.06) | 46.09 / 48.47 (-2.38) |
+| area scan (`areaScan=js`) | 15.73 / 16.43 (-0.70) | 24.72 / 26.83 (-2.11) | 32.40 / 33.04 (-0.64) | 44.03 / 45.70 (-1.67) |
+
+Both pass the bar. The sessions are noisy (the order inside a pair moved a session by 1 to 3 ms; the pairs of the second table are +0.8,
+-2.0, +0.7, -2.3 ms in tick, new minus old, which with the alternating order puts the effect at -0.7 and the order at 1.4 ms; the first table's pairs are -1.7, -0.9, -2.5, +1.1):
+the figures above are balanced means, not a claim to a tenth of a millisecond. **Chromium worker mode** (three pairs, `projectilePhysics=js`):
+`w.tick` 8.73 / 9.41 ms (-0.68), `w.actors` 5.31 / 5.54, page `animate` 5.15 / 5.13 (the page is not where the frame goes there); the worker frame
+`w.tick + w.actors` falls from about 14.9 to 14.0 ms in this headless run. The area scan has not been run in Chromium.
+
+**Checks.** The six digests below are unchanged after both changes, also with `ACTOR_SCAN=verify` (no scan differed), and the Dockyard's
+is the same with `projectilePhysics=js`; the 900-tick placed run is `560a7bbad1e78c9a` with `areaScan=js` and with the default.
+`validate-actor-physics-kernel` passes (digests equal on all six runs; not reached, as before: a MoveActor handed back, a zone without an
+image); `test/script-iterators-area.test.mjs` and `npm test` (below).
+
+**Digests** (`--warm 60 --ticks 300 --render-feedback`, before = after): Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`,
+Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`.
+
+**Tried and not shipped.**
+* **A Mover at rest in Rust** (`performPhysics` case 9 with `bInterpolating` clear: `OldLocation = Location`, `Velocity = (Location -
+  OldLocation) / dt`, the tail). Not built, because the premise fails: for a DeusExMover `engine.actor.binterpolating` (and KeyNum, PhysAlpha,
+  PhysRate, BasePos, ...) is a *bound* field (`script-doors.mjs` `binterpolating`, backed by the `actor.interpolation` state object), so the
+  image bit the Rust tick would read is stale. It needs the state's `interpolating` mirrored into the image word (the motion word
+  0x1ec, bit 0x80) at every write (the physMovingBrush loop, InterpolateTo, saves) and the tick mask to ignore the binding for it. The
+  gain is the movers' 0.36 ms (profile), at the bar's edge: left.
+* **Skipping the non-Pawn CheckEncroachment call** (`js_move_encroach`, 0.48 ms rest) for a source with none of the
+  `bCollideActors|bBlockActors|bBlockPlayers` bits, where `checkActorEncroachment` returns false at once. Written with a verify mode and
+  tried: the count of `js_move_encroach` calls did not change (16.7 a tick before and after), because the gas has `bCollideActors`; reverted.
+  What the call costs is the hash query (`actorEncroachmentCheck`) and its blocking test, in JavaScript (13 us a call in Node).
+
+**What is left at the Dockyard (rest frames, Firefox profile after the two changes; unmeasured as A/B).** The level tick is 14.6 ms sampled:
+`js_eval` 3.59, in Wasm 1.97, JavaScript outside Wasm 1.49, `js_tick_resume` 1.13, `js_move_riders` 0.51, `js_move_encroach` 0.48, `js_fall_bounce`
+(the gas's HitWall script event) 0.25; inclusive, `spawnActor` 1.23, `processEvent` 2.33, `checkEncroachment` 0.61, `moveActorRiders`
+0.56, `execAttachDecal` 0.51, `setScriptRotation` 0.39, `execSetLocation` 0.13. The next cuts would be the context native calls
+(`emitter.SetRotation(Rotation)`, `SetLocation`) as Rust nodes, the encroachment query in Rust (the hash's extent walk exists as
+`collision-kernel.mjs`; the blocking test needs the candidates' flags), and the gas's spawn path. Each is 0.3 to 0.6 ms of the profile's
+units; none is a family.
+* **The actors layer** (`p.actors` 7.4 ms rest, 13 slow; `actor-mesh-sim.mjs update`) is flat: `occludeMain` 2.65 inclusive (the Rust
+  occlusion pass and its glue), `reconcile` 1.5, `updateSprite` 2.0, `updateDrawn` 1.5, `lightIn` 0.85, `refreshSummary` 0.4; no self time
+  over 0.5 ms (the largest, `reconcile`, 0.46). The slow tenth adds Major/Minor GC 1.4 and `admit`/`createMeshBindingNow` 2.1 (the gas
+  puffs' new bindings). It is the plan's actors family, not a trap, and nothing there is a cut. Not measured as a GPU candidate.
+* **The goal is not reached.** The page mean is 32.4 ms against 16.7: the tick is 15.7 of it, the actors layer 7, the render 2.7, the HUD 2.
+  Even a free tick would leave 17. At this spot Firefox stays at half the rate; the Dockyard needs the tick and the actors layer both
+  to lose a third.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
