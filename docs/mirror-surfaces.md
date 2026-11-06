@@ -672,6 +672,6 @@ output, the GPU tiles and the oracle comparison are unchanged. `?fogCopy=from` (
   "GPU page equals its pixels" check (`pagesMatch`).
 * three.js's `scene.updateMatrixWorld` in every child `render` (0.4 ms at the club).
 
-**Not explained / not covered.** The seven views with no mirror pass (above). The Mac itself (Metal through ANGLE, DPR 2): the DPR 2
+**Not explained / not covered.** The seven views with no mirror pass (above). One checked afterwards (2026-11-06): the Chateau's x=-444 view had the camera outside the bathroom (a black frame); placed at [-604,304,440], yaw 0, before surface 1020 (y 212..396, z 420..508), the mirror draws 2 planes to depth 2 (JC and the room reflected, the facing mirror inside it), `p.mirrors` 1.93 ms. The Smuggler view also faces a plain corner, so the rest are likely placements too; not each checked. The Mac itself (Metal through ANGLE, DPR 2): the DPR 2
 run here is the same card, so a Mac-specific copy path like the club's would show up there first; none is known. Chromium was measured at
 seven of the spots only.
