@@ -531,6 +531,11 @@ against a fresh computation and every filtered sign against the expression; a di
 | Firefox inline A/B, bunker scan route, 4 interleaved pairs | mean tick 6.00 -> 5.51 ms, slowest tenth 11.93 -> 10.58 ms, page p50 13.0 -> 12.3, p95 22.3 -> 21.5 |
 | Firefox inline A/B, Island, 2 pairs | mean tick 6.90 -> 6.96 ms, slowest tenth 10.17 -> 10.55 ms: within noise |
 
+Gecko profile of the bunker after the change (Firefox inline, 60 s): `attachDecalSurfaces` 0.16 -> 0.10 ms a drawn frame; in the
+slowest tenth of ticks `fast::edge` (the table lookups) 0.18 ms, `fast::find_surface` 0.10, `Ext::add` and `Ext::rounded` of the
+footprint grid 0.05 each, the JavaScript `setRotation` 0.07. The Chromium worker-mode `validate-decals-play` and
+`validate-decal-vertices-play` pass.
+
 The module's statics grew by 18 KB (`__heap_base` 1.673 to 1.691 MiB of the 2 MiB reserved); the 16,384-entry table (1.2 MB) is
 allocated in the kernel instance's memory at the first level store.
 

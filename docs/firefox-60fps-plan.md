@@ -242,7 +242,14 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   10.64/10.95/10.30/10.42 against 12.69/11.58/11.66/11.77). The Island (two pairs) is within noise, 6.96 against 6.90 ms (its attach is 0.11 ms
   a frame). Digests unchanged in `on` and `verify` on the five baselines and both long routes, a Firefox inline `verify` run of 40 s on
   each map is clean, `validate-decal-fast.mjs` (12 million generated cases against the x87 expressions) and `validate-decal-attach`
-  pass. What remains in the attach (profile after the change, below): TBDPROFILE.
+  pass, and so do the Chromium worker-mode decal validators (`validate-decals-play`, `validate-decal-vertices-play`). Profile after the change
+  (Firefox inline, bunker, 60 s, names from a non-stripped build): `attachDecalSurfaces` 0.16 -> 0.10 ms a drawn frame, of which the Wasm
+  `decal_attach` 0.07 (the edge-table lookups `fast::edge` 0.02 self, `fast::find_surface` 0.01, trace and the grid's `Ext` operations
+  the rest) and JavaScript 0.03 (`followDecalTracker` with its `setRotation` and the tracker's `rotation` reads 0.02). In the slowest tenth
+  the decal rows are `fast::edge` 0.18 ms, `fast::find_surface` 0.10, the grid's `Ext::add` and `Ext::rounded` 0.05 each, `setRotation` 0.07,
+  `followDecalTracker` 0.03 (about 0.5 ms against 1.2 before). Left, each under the 0.5 ms bar: the table lookup itself (a 1.2 MB table
+  read at random; a smaller key compare or a prefetch order is the lever), `setRotation` per mover surface per attach, and the
+  16-cell grid's `Ext` work on a Shadow (MultiDecalLevel 4).
 * **2026-11-06, the JavaScript imports the batch still calls: profiled, one change built, not merged** ([below](#import-cuts-not-merged-2026-11-06)).
   `js_move_riders`, `js_walk_prelude`, `js_object` and `js_tick_refresh` add up to about 1.1 ms of the Island's tick (the first three 0.5 ms of
   the bunker's, 1.5 ms in its slowest tenth), but each is a different thing and none is an invalidation the way the bunker's receiver epoch was, except
