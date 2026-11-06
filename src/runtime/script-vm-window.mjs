@@ -13,12 +13,12 @@
 import {handleOf} from './script-object-handles.mjs';
 import {NativeHeapError} from './script-native-heap.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';
-import {drawBackground, drawTree as jsDrawTree} from './script-window-tree-natives.mjs';
+import {O, c0, c3, drawBackground, drawTree as jsDrawTree} from './script-window-tree-natives.mjs';
 
 export const windowDrawMode = () => (typeof process !== 'undefined' && process.env?.WINDOW_DRAW)
   || globalThis.DEUS_EX_WINDOW_DRAW || 'rust';
 
-const SLOTS = 512, SLOT = 16;
+const SLOTS = 512, SLOT = 16, LOG_CAPACITY = 4096;
 /** Slot flag bits (window.rs). */
 const F_DRAW_SCRIPT = 1, F_POST_SCRIPT = 2, F_EXTERNAL = 4, F_DRAW_TEXT = 8, F_DRAW_BUTTON = 16;
 
@@ -31,6 +31,8 @@ export class WindowHost {
     this.epoch = 1;
     // Whether the window events dispatch in Rust during the paint in flight (paint).
     this.events = false;
+    // WINDOW_DRAW=verify: the phases compared so far.
+    this.verified = 0;
     // The paint in flight: {W, heap, canvas, hm, vm_}.
     this.ctx = null;
   }
@@ -40,11 +42,16 @@ export class WindowHost {
     this.at = x.vm_windows_ptr();
     this.eventsAt = x.vm_window_events_ptr();
     this.faultAt = x.vm_window_fault_ptr();
-    const bytes = SLOTS * SLOT, table = arena.alloc(bytes), view = arena.view;
+    const bytes = SLOTS * SLOT, table = arena.alloc(bytes), log = this.mode === 'verify' ? arena.alloc(4 * LOG_CAPACITY) : 0, view = arena.view;
     arena.bytes.fill(0, table, table + bytes);
     view.setUint32(this.at, table, true);
     view.setUint32(this.at + 4, SLOTS, true);
     view.setUint32(this.at + 8, this.epoch, true);
+    if (log) {
+      view.setUint32(this.at + 12, 1, true);
+      view.setUint32(this.at + 16, log, true);
+      view.setUint32(this.at + 20, LOG_CAPACITY, true);
+    }
   }
   /** A heap object was freed or forgotten, or a subtree was delegated: every slot is described again. */
   invalidate() {
@@ -86,6 +93,13 @@ export class WindowHost {
     const x = this.x, pointer = x.__stack_pointer.value, stack = this.vm.runtime.frameStack(), index = stack.index, top = stack.top;
     const depth = this.vm.depth;
     let status;
+    const verifying = this.mode === 'verify';
+    let expected = null;
+    if (verifying) {
+      this.vm.arena.view.setUint32(this.at + 24, 0, true);
+      expected = [];
+      this.plan(W, heap, root, expected);
+    }
     try {
       status = x.vm_draw_tree(heap.addressOf(root), heap.addressOf(canvas), hm >>> 0, vm >>> 0);
     } finally {
@@ -98,7 +112,34 @@ export class WindowHost {
       const address = this.vm.arena.view.getUint32(this.faultAt, true);
       throw new NativeHeapError(`Native heap address 0x${address.toString(16)} is outside heap storage`, {address});
     }
+    if (verifying) this.verify(expected);
     return true;
+  }
+  /** WINDOW_DRAW=verify: the windows and phases the JavaScript body's tests would draw, from the tree as it stands before the paint
+   * (`address * 2 + phase` as window.rs logs them): external subtrees, the GC and visible flag, the clip. */
+  plan(W, heap, win, out) {
+    if (W.externalSubtree?.(win)) return;
+    const gc = W.ptr(win, O.gGc);
+    if (!gc || !(W.u8(win, O.flags) & 1)) return;
+    if (c0(W.f32(win, O.clipW), 0) || c3(W.f32(win, O.clipW), 0)) return;
+    if (c0(W.f32(win, O.clipH), 0) || c3(W.f32(win, O.clipH), 0)) return;
+    const address = heap.addressOf(win);
+    out.push(address * 2);
+    for (let child = W.ptr(win, O.firstChild); child; child = W.ptr(child, O.nextSibling)) this.plan(W, heap, child, out);
+    out.push(address * 2 + 1);
+  }
+  verify(expected) {
+    const view = this.vm.arena.view, length = view.getUint32(this.at + 24, true), log = view.getUint32(this.at + 16, true);
+    if (length >= LOG_CAPACITY) return;
+    this.verified += length;
+    const got = Array.from({length}, (_, i) => view.getUint32(log + 4 * i, true));
+    // (the 32-bit words of window.rs: address * 2 + phase wraps like the plan's number, which stays below 2^33)
+    const same = got.length === expected.length && got.every((word, i) => word === expected[i] >>> 0);
+    if (!same) {
+      const at = got.findIndex((word, i) => word !== (expected[i] ?? -1) >>> 0);
+      throw new Error(`WINDOW_DRAW verify: the Rust draw tree visited ${length} phases, the reference plans ${expected.length}; first difference at ${at}: `
+        + `rust ${got[at] === undefined ? 'end' : `0x${(got[at] >>> 1).toString(16)}/${got[at] & 1}`}, plan ${expected[at] === undefined ? 'end' : `0x${(expected[at] / 2 | 0).toString(16)}/${expected[at] & 1}`}`);
+    }
   }
   imports() {
     return {

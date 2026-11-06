@@ -22,7 +22,9 @@
 //! (`js_window_tree`), and so is a draw that is not the plain script event (the Text, Button, Checkbox, List ... families,
 //! `js_window_phase`), or an event whose function the cache sends to JavaScript.
 //!
-//! WINDOWS = [table, slot count (a power of two), epoch]; a slot is [address, epoch, handle, flags].
+//! WINDOWS = [table, slot count (a power of two), epoch, verify, log, log capacity, log length]; a slot is [address, epoch, handle,
+//! flags]. Under WINDOW_DRAW=verify each window that passes the early-out tests logs `address * 2 + phase` as it starts its DrawWindow (phase
+//! 0) and its PostDrawWindow (1); the host compares the log with the plan it makes of the same tree from the JavaScript body's tests.
 
 use crate::dispatch::dispatch_window_event;
 use crate::gc::{host, natives_open, push_gc, restore_gc, run_native, GC_STATUS, G_CANVAS, G_HMULT, G_VMULT, HEAP_BASE};
@@ -30,7 +32,7 @@ use crate::interp::{load32, load8, store32};
 use crate::text::draw_text;
 use core::ptr::{addr_of, addr_of_mut};
 
-static mut WINDOWS: [u32; 3] = [0; 3];
+static mut WINDOWS: [u32; 7] = [0; 7];
 static mut FAULT: u32 = 0;
 const SLOT: u32 = 16;
 /// Slot flag bits (script-vm-window.mjs).
@@ -252,6 +254,16 @@ fn phase(win: u32, gc: u32, handle: u32, flags: u32, which: u32) -> R<()> {
     Ok(())
 }
 
+/// WINDOW_DRAW=verify: log the phase about to run.
+#[inline(always)]
+fn log(win: u32, phase: u32) {
+    let w = unsafe { *addr_of!(WINDOWS) };
+    if w[3] != 0 && w[6] < w[5] {
+        store32(w[4].wrapping_add(4 * w[6]), win.wrapping_mul(2).wrapping_add(phase));
+        unsafe { (*addr_of_mut!(WINDOWS))[6] = w[6] + 1 };
+    }
+}
+
 fn draw_locked(win: u32, handle: u32, flags: u32, ctx: &Ctx) -> R<()> {
     let gc = r32(win.wrapping_add(O_GGC))?;
     if gc == 0 || r8(win.wrapping_add(O_FLAGS))? & 1 == 0 {
@@ -268,12 +280,14 @@ fn draw_locked(win: u32, handle: u32, flags: u32, ctx: &Ctx) -> R<()> {
     if r8(win.wrapping_add(O_BG_STYLE))? != 0 && texture != 0 {
         unsafe { js_window_background(win, gc) };
     }
+    log(win, 0);
     phase(win, gc, handle, flags, 0)?;
     let mut child = r32(win.wrapping_add(O_FIRST_CHILD))?;
     while child != 0 {
         draw_tree(child, ctx)?;
         child = r32(child.wrapping_add(O_NEXT_SIBLING))?;
     }
+    log(win, 1);
     phase(win, gc, handle, flags, 1)?;
     gc_pop(gc, saved)
 }
