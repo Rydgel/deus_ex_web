@@ -33,6 +33,8 @@ simulation state, and without the URL switch it installs nothing
 * `scripts/hitch-summary.mjs` reads the file (and a saved dump): frame work and drawn-gap figures, and the 7.2 rows' verdicts.
 * `scripts/hitch-ab.mjs` runs interleaved arms with each session's CPU.
 * `scripts/frame-time-set.mjs` runs the ten-map frame-time set.
+* `scripts/spot-census.mjs` visits up to 40 spread-out navigation points of a map at four headings each (`hitch-run.mjs --places`) and
+  tabulates the spots by frame work ([the census](firefox-60fps-plan.md#firefox-slow-spot-census-2026-11-06)).
 * `scripts/session-hour.mjs` runs the one-hour session (row 7.4.3, [long session](long-session.md)).
 * `scripts/hitch-frame-profile.mjs` and `scripts/gecko-gc.mjs` name what a slow frame ran.
 * `scripts/gecko-gaps.mjs RUN.json PROFILE.json` lines a Firefox run's drawn gaps up with the Gecko profile's GC and CC pauses
