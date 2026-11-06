@@ -6,6 +6,7 @@
 //! when every cell is its image storage, and supplies appFrand.
 
 use crate::interp::{load32, store32};
+use crate::render::{far_commit, far_plan, FarMove, Obj, FAR_MOVE_FIELDS, ITEM_FIELDS, R_DRAWSCALE, R_SCALEGLOW};
 use crate::x87::Ext;
 use core::ptr::{addr_of, addr_of_mut};
 
@@ -33,7 +34,9 @@ const P_ZONEGRAVITY: usize = 17;
 const P_RISERATE: usize = 18;
 const P_LIFE: usize = 19;
 const P_DRAWSCALE_OWNER: usize = 20;
-const P_WORDS: usize = 21;
+// The iterator's Index (RenderIterator, an int), for `particle_items`.
+const P_INDEX: usize = 21;
+const P_WORDS: usize = 22;
 const COUNT: u32 = 64;
 
 static mut P_FIELDS: [u32; P_WORDS] = [0; P_WORDS];
@@ -131,4 +134,84 @@ pub extern "C" fn update_particles(base: u32, delta: u32) -> u32 {
         store32(w(P_LOCATION, 2), Ext::load(dz).add(Ext::load(load32(w(P_LOCATION, 2)))).store());
     }
     none_active as u32
+}
+
+// ---------------------------------------------------------------------------
+// The render-iterator protocol's CurrentItem loop (docs/particles.md "Per frame").
+
+const ITEM_CAP: usize = COUNT as usize;
+/// `particle_items`' answer for a proxy the image cannot address: nothing ran.
+const NOT_RUN: u32 = u32::MAX;
+/// `particle_items`' output: the item count, then five words an item (DrawScale,
+/// ScaleGlow, then the proxy's Location after its move), float32 bits.
+static mut ITEMS: [u32; 1 + 5 * ITEM_CAP] = [0; 1 + 5 * ITEM_CAP];
+
+#[no_mangle]
+pub extern "C" fn particle_items_ptr() -> *const u32 {
+    addr_of!(ITEMS) as *const u32
+}
+
+/// SetupDynamics' loop over a ParticleIterator (script-particles.mjs
+/// `particleIteratorItems`, Engine's URenderIterator and DeusEx's
+/// UParticleIterator::CurrentItem 0x1001ab20) from `start` below `max`, on the
+/// iterator image at `base` and its proxy `proxy` (an image actor): for each Index,
+/// Index is stored; for an active particle the proxy's DrawScale and ScaleGlow take
+/// the particle's, and FarMoveActor(proxy, particle Location, 0, 0) (render.rs
+/// `far_plan`) either moves the proxy (the item is recorded) or fails, which
+/// DeleteParticle's the particle (0x1001aaf0: bActive cleared, nextFreeParticle the
+/// index). Returns the Index of the first step the host must take, `max` when the
+/// loop is complete: a move `far_plan` declines (a zone change, which runs script
+/// events; a nonzero extent; ...) stops the loop before that step's DrawScale and
+/// ScaleGlow stores, and everything before it is done. A proxy the image cannot
+/// address returns NOT_RUN before any store. The items are in `ITEMS`.
+#[no_mangle]
+pub extern "C" fn particle_items(base: u32, proxy: u32, model: u32, world: u32, start: u32, max: u32) -> u32 {
+    let items = addr_of_mut!(ITEMS) as *mut u32;
+    let mut count = 0usize;
+    let a = Obj::of(proxy);
+    let mut index = start;
+    if !a.has(FAR_MOVE_FIELDS | ITEM_FIELDS) {
+        unsafe { *items = 0 };
+        return NOT_RUN;
+    }
+    while index < max {
+        store32(base + pf(P_INDEX), index);
+        if index < COUNT {
+            let particle = base + pf(P_ARRAY) + index * pf(P_STRIDE);
+            let active_at = particle + pf(P_ACTIVE);
+            if load32(active_at) & pf(P_ACTIVE_MASK) != 0 {
+                let word = |member: usize, k: u32| load32(particle + pf(member) + 4 * k);
+                let at = [word(P_LOCATION, 0), word(P_LOCATION, 1), word(P_LOCATION, 2)];
+                let plan = far_plan(&a, model, world, at, 0);
+                if let FarMove::Declined = plan {
+                    break;
+                }
+                let (draw_scale, scale_glow) = (word(P_DRAWSCALE, 0), word(P_SCALEGLOW, 0));
+                a.set_word(R_DRAWSCALE, 0, draw_scale);
+                a.set_word(R_SCALEGLOW, 0, scale_glow);
+                match plan {
+                    FarMove::Moved(region) => {
+                        far_commit(&a, at, region);
+                        let item = unsafe { items.add(1 + 5 * count) };
+                        unsafe {
+                            *item = draw_scale;
+                            *item.add(1) = scale_glow;
+                            *item.add(2) = at[0];
+                            *item.add(3) = at[1];
+                            *item.add(4) = at[2];
+                        }
+                        count += 1;
+                    }
+                    _ => {
+                        // DeleteParticle (0x1001aaf0).
+                        store32(active_at, load32(active_at) & !pf(P_ACTIVE_MASK));
+                        store32(base + pf(P_NEXTFREE), index);
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    unsafe { *items = count as u32 };
+    index
 }

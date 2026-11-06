@@ -295,7 +295,12 @@ if(loadProfile){
     profileSync={workerEpochMs:loadSync.workerEpochMs,pageTimeOrigin:await page.evaluate(()=>performance.timeOrigin)};}
 }
 // --probe-switches: the DEUS_EX_* switches the simulation realm holds (processProbe), kept in the dump and printed
-const switches=flag('probe-switches')?await page.evaluate(async()=>(await window.deusExViewer.processProbe()).switches).catch(e=>String(e)):null;
+const probed=flag('probe-switches')?await page.evaluate(async()=>{
+  const p=await window.deusExViewer.processProbe(),i=await window.deusExViewer.iteratorProbe?.({});
+  return {switches:p.switches,particleItems:p.particleItems,iterators:i&&{scans:i.scans,rescans:i.rescans,visited:i.visited,iterators:i.iterators,
+    msScan:i.msScan,msRescan:i.msRescan,draws:i.draws}};}).catch(e=>({switches:String(e)})):null;
+// the render iterators' totals for the run (sim-session iteratorStats: SetupDynamics scans, child frames' rescans, the milliseconds in each)
+const switches=probed&&{...probed.switches,...(probed.particleItems?{particleItemCounts:probed.particleItems}:{}),...(probed.iterators?{iteratorStats:probed.iterators}:{})};
 if(switches)console.log('switches',JSON.stringify(switches));
 await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog,switches}));
 await browser.close();await server?.close();

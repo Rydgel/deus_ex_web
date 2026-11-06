@@ -118,7 +118,8 @@ const COMPUTED = 0x80000000;
 export const renderScanMode = () => (typeof process !== 'undefined' && process.env?.RENDER_SCAN)
   || globalThis.DEUS_EX_RENDER_SCAN || 'rust';
 /** The noncolliding FarMoveActor (render.rs far_move): 'rust' (default),
- * 'js' or 'verify'. */
+ * 'js', 'verify', or 'nofit' (the core as it was before it answered FindSpot's point check: a move that needs FindSpot runs in
+ * JavaScript; the A/B baseline). */
 export const farMoveMode = () => (typeof process !== 'undefined' && process.env?.FAR_MOVE)
   || globalThis.DEUS_EX_FAR_MOVE || 'rust';
 /** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
@@ -420,14 +421,20 @@ export class RenderScanHost {
     this.x.mover_reads(pairs, count, viewer ? handleOf(viewer) : 0, viewTarget ? handleOf(viewTarget) : 0, behind ? 1 : 0);
     return true;
   }
-  /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
-   * (render.rs far_move) over the zone `model`: true when it moved the
-   * actor, false when the JavaScript body must run (nothing was stored). */
-  farMove(actor, destination, noCheck, model) {
+  /** Whether the field table is complete, so `farMove` and the particle loop may address an actor's image. */
+  ready() {
     this.table();
-    if (!this.complete) return false;
+    return this.complete;
+  }
+  /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
+   * (render.rs far_move) over the zone `model` and the world BSP `world`
+   * (trace-kernel.mjs base, 0 for none): 1 when it moved the actor, 2 when
+   * FindSpot refused it (the original's false; nothing was stored), 0 when
+   * the JavaScript body must run (nothing was stored). */
+  farMove(actor, destination, noCheck, model, world = 0) {
+    if (!this.ready()) return 0;
     return this.x.far_move(handleOf(actor), model, bitsOf(destination[0]), bitsOf(destination[1]), bitsOf(destination[2]),
-      noCheck ? 1 : 0) === 1;
+      noCheck ? 1 : 0, world);
   }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */
