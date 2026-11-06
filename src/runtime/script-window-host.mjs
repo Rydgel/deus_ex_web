@@ -336,7 +336,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // The arena range lets the Rust core's GC natives address the heap
   // (script-vm-gc.mjs); a release invalidates its cached addresses.
   const heap = createNativeHeap({external: (value, api) => materialize(value, api), arena: runtime.objectArena?.(),
-    onRelease: () => runtime.scriptVm?.gc?.invalidate()});
+    onRelease: () => { runtime.scriptVm?.gc?.invalidate(); runtime.scriptVm?.windows?.invalidate?.(); }});
   const vtableFor = new Map();
   const textureVtable = (() => { const vt = heap.allocRaw(0x80); heap.mem.write(vt + 0x54, 'u32', 1); heap.mem.write(vt + 0x58, 'u32', 2); return vt; })();
   function textureImage(asset, index, ref) {
@@ -615,6 +615,19 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const isCheckbox = win => checkboxes.has(win);
   const externalSubtrees = new WeakSet();
   W.externalSubtree=win=>externalSubtrees.has(win);
+  // What the Rust draw tree needs to know of a window (script-vm-window.mjs, window.rs): whether its DrawWindow and PostDrawWindow are
+  // the plain script events (virtuals `draw` and `postDraw` below run a family's own body for every other family), whether it is of
+  // the TextWindow or the Button and Toggle families, whose draws window.rs makes (textDraw and buttonDraw of script-window-family-draw.mjs
+  // are their references), and whether its subtree belongs to another owner. Null for an object that is not a window.
+  const SCRIPT_DRAW_EXCEPTIONS=new Set(['extension.textwindow','extension.buttonwindow','extension.togglewindow','extension.textlogwindow',
+    'extension.computerwindow','extension.largetextwindow','extension.editwindow','extension.listwindow','extension.viewportwindow','extension.scalewindow']);
+  W.drawInfo=win=>{
+    const family=families.get(win);
+    if(!family)return null;
+    const plain=!isCheckbox(win);
+    return {draw:plain&&!SCRIPT_DRAW_EXCEPTIONS.has(family),post:family!=='extension.viewportwindow',external:externalSubtrees.has(win),
+      text:plain&&family==='extension.textwindow',button:plain&&(family==='extension.buttonwindow'||family==='extension.togglewindow')};
+  };
   const destroyed = new WeakSet();
   function familyOf(win) {
     const family = families.get(win);
@@ -749,7 +762,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   // ProcessScript with typed parameter blocks (XWindow::ProcessScript 0x1004ded0).
   // ------------------------------------------------------------------
+  // The Rust window events (script-vm-window.mjs) while the host paints: DrawWindow and PostDrawWindow run from the event cache, not
+  // through lookup and processEvent below (a window's class and state decide, dispatch.rs dispatch_window_event; -1 sends it back here).
+  let windowEvents = null;
   function processScript(win, event, args = [], {checked = false, result} = {}) {
+    if (windowEvents !== null && !checked && args.length === 1 && (event === 'DrawWindow' || event === 'PostDrawWindow') &&
+      windowEvents.event(win, event === 'DrawWindow' ? 0 : 1, args[0])) return undefined;
     if (checked && !runtime.scriptability()) return result;
     const record = runtime.lookup(win, event, false);
     if (!record) {
@@ -1864,6 +1882,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
   };
 
+  // DrawText's own PushGC and PopGC take the same route as the tree's (script-gc-draw-text.mjs).
+  // (WINDOW_DRAW=js keeps the JavaScript bodies, with the rest of the window draw's Rust paths.)
+  const gcPushRoute=gc=>W.gc.push(gc),gcPopRoute=(gc,depth)=>W.gc.pop(gc,depth);
+  const gcRoutes=()=>runtime.scriptVm?.windows?.mode==='js';
+  const gcTextRoute=(object,dx,dy,dw,dh,text)=>runtime.scriptVm.gc.drawText(heap,gcServices,object,dx,dy,dw,dh,text);
+  Object.defineProperty(gcServices,'drawText',{get:()=>gcRoutes()||!runtime.scriptVm?.gc?undefined:gcTextRoute,enumerable:true});
+  Object.defineProperty(gcServices,'pushGC',{get:()=>gcRoutes()?undefined:gcPushRoute,enumerable:true});
+  Object.defineProperty(gcServices,'popGC',{get:()=>gcRoutes()?undefined:gcPopRoute,enumerable:true});
+
   // ------------------------------------------------------------------
   // Root construction: APlayerPawnExt::ConstructRootWindow 0x10037e70.
   // ------------------------------------------------------------------
@@ -1894,7 +1921,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     inputKeyNames:inputConsole.names,
     // The UInput object (Extension.InputExt) a UViewport holds at +0x60.
     input:inputConsole,
-    delegateLegacySubtree:object=>externalSubtrees.add(object),
+    delegateLegacySubtree:object=>{externalSubtrees.add(object);runtime.scriptVm?.windows?.invalidate?.();},
     raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,
     /** The world frame of each ViewportWindow DrawWorld (sim-session.mjs). */
@@ -1973,7 +2000,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const gcNatives=runtime.scriptVm?.gc;
       gcNatives?.open({heap,services:gcServices,handleNative:lifecycle.handleNative});
       plainTiles=plain===true||plain==='stream';streaming=plain==='stream';
-      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;streaming=false;gcNatives?.close();}
+      // The draw tree in Rust (script-vm-window.mjs) while this paint runs; paintWindows draws in JavaScript when it declines.
+      const windows=runtime.scriptVm?.windows;
+      W.rustDrawTree=windows?(r,c,h,v,debug,timer)=>windows.drawTree(W,heap,r,c,h,v,debug,timer):null;
+      // The events of the families whose own draw runs them from here (processScript) go through the Rust cache too.
+      windowEvents=windows?.paint(true)?windows:null;
+      try{T.paintWindows(W,root,canvas);}finally{plainTiles=false;streaming=false;W.rustDrawTree=null;windowEvents=null;windows?.paint(false);gcNatives?.close();}
       return plain==='stream'?commandStream.finish():drawCommands.slice();
     },
     install() {

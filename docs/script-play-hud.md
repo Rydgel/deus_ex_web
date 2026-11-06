@@ -148,6 +148,77 @@ actor-reference and GC validators cover their translation boundaries against
 the shipped DLL. Browser checks additionally cover native layout, pickup/belt
 selection, frob brackets, ammo, log placement and shared dialogue behavior.
 
+## The draw tree, the window events and DrawText in Rust (2026-11-06)
+
+The paint's cost (below) was a flat spread over the host JavaScript around about 95 script events, the window tree's native-heap access
+and `gcDrawText`. The bundle moves those three into the Rust core. The behaviors are unchanged and still have their evidence in the
+JavaScript bodies, which stay as the reference (`WINDOW_DRAW=js`): the Rust code is a step-for-step transcription of each one, the same
+heap reads and stores in the same order, the same roundings, and is held to it by the checks below. Nothing here is a new claim about
+the original.
+
+* **`XWindow::DrawTree`** (`script-window-tree-natives.mjs` `drawTree`, native 0x10051490; `window.rs`, `script-vm-window.mjs`). One
+  window: skip a subtree the host delegates (InfoLink, ConPlay: `externalSubtree`); LockWindow; nothing more unless the GC (+0x130) is set,
+  the visible flag (+0x30 & 1) is on and the clip width and height (+0xe4, +0xe8) are above zero; PushGC; the GC's canvas and
+  multipliers; the background icon pattern when the window has a style and a texture; DrawWindow; the children in sibling order;
+  PostDrawWindow; PopGC to the depth PushGC returned; UnlockWindow (SafeDestroy for a window flagged destroying). `paintWindows` asks the
+  host's `rustDrawTree` hook first, which declines (and the JavaScript body draws) for a debug-frame texture, `GC_NATIVE=js`,
+  `WINDOW_DRAW=js` or an allocation log. The window host describes each window and GC to the Rust walk once (`js_window_info`: its VM
+  handle and what its draw is), into a table keyed by native address; the host advances the table's epoch whenever a native heap
+  object is freed or forgotten (an address can be reused) and when a subtree is delegated. A window it cannot describe is drawn by the
+  JavaScript body. The JavaScript global `granularityDepth`, raised and lowered around the events, has no reader but `drawTree` itself
+  (the reconfigure diagnostics read `global100aeb08`, another entry), so the Rust walk does not keep it.
+* **The window events** (`script-window-host.mjs` `processScript`, `script-vm-events.mjs` `decideWindow`, `dispatch.rs`
+  `dispatch_window_event`). `processScript(win, 'DrawWindow' | 'PostDrawWindow', [gc])` runs `processEvent`'s steps from the event cache
+  that already serves the tick events, keyed by the receiver's class row and state row and filled by `js_event_resolve` with
+  processEvent's decision: no event, or a native function, is no call; a plain script function of one object parameter, lowered by
+  the Rust VM, is a Rust run with the GC's handle in its frame; everything else (a singular function, a result, an out parameter,
+  locals that need destruction, an Actor receiver) is the JavaScript path. A window has no bDeleteMe and no Level (an Actor would),
+  its event names are no probe names (IsProbing is true for them whatever the state's mask), GIsScriptable is the window host's constant
+  `true`, and nothing sets a window's pendingKill, so processEvent's other gates pass for it; the host turns the Rust dispatch on only
+  while processEvent, executeScript, eventLevelGate, lookup and `ScriptState.isProbing` are the runtime's own (the census scripts wrap
+  `processEvent`, which keeps the events in JavaScript, and `--time-only` wraps nothing). The four HUD events whose functions have
+  string locals (`ActorDisplayWindow`, `DamageHUDDisplay`, `HUDMultiSkills`, `FrobDisplayWindow`) stay in JavaScript: their frames need
+  `destroyFunctionLocals`.
+* **The Text, Button and Toggle draws** (`script-window-family-draw.mjs` `textDraw` and `buttonDraw`, XTextWindow::Draw 0x10046930,
+  XButtonWindow::Draw 0x100082c0): the tile and text colours, the pattern over the window, the alignments and word wrap on the GC, the
+  window's DrawWindow event, then the text in the margins, made in `window.rs` over the GC natives of `gc.rs` (`run_native`, the same
+  bodies and verification as the script-called ones) and `text.rs`; the FString is read from the heap, not converted to a JavaScript
+  string. Checkbox, TextLog, Computer, LargeText, Edit, List, Viewport and Scale draws stay in JavaScript.
+* **`UGC::DrawText`** (native 1282, method 0x10028180; `text.rs`, `script-gc-draw-text.mjs` is the reference). The gates, the emit
+  state's colour, PushGC, Intersect, the vertical-alignment measure, the line scanner with GetNextChar's escapes (`|b`, `|c`, `|p`, `|!`,
+  `|&`), UFont's glyph lookup, drawGlyph with the five-record texture realize cache and the underline, and PopGC(-1), in `text.rs`.
+  Every `gcDrawText` call goes there while the window host paints (script `DrawText` calls, the layout and computer-window draws too),
+  through a hook in `gcDrawText`; the DrawTile of each glyph and the texture Lock and Unlock of the cache go back to the host's
+  `callVirtual`. The scanner's two process globals (a stale last character and the `|!` flag) are locals: the reference notes that every
+  path assigns them before it reads them. The realize cache's head and count live in Rust and the host's `texCache` reads them there.
+  `gcDrawText`'s PushGC and PopGC take the Rust stack bodies of `gc.rs` even when the JavaScript text body runs.
+
+**Switches.** `WINDOW_DRAW=js` (`?windowDraw=js`) keeps all of the above in JavaScript, the reference; `WINDOW_DRAW=verify` also checks
+that the windows and phases the Rust walk visited are those the reference's tests plan for the same tree (compared after each paint);
+`GC_NATIVE=verify` runs each Rust DrawText, then the JavaScript one on the heap from before it, and throws on any difference in the GC
+image, the GC stack's nodes, the realize cache or the DrawTile commands (a call whose PushGC had to allocate is not compared);
+`DISPATCH_VERIFY=1` resolves every event again and compares the cache slot.
+
+**Checked.**
+* `scripts/hud-stream-digest.mjs` (the plain and the `--stream` form): the per-frame HUD command stream of a 600-frame roam is bit-identical to
+  the unchanged tree's on the Island, the Area 51 bunker, 00_Training and Wan Chai (digests df48c15010687dd1, 4cd8392aff85151c,
+  702be5968d3bcafb and fc4dd730f1ccf3f3). The digest runs the simulation worker's session; the page's inline mode runs the same code.
+* `GC_NATIVE=verify` over 200 to 300 frames of those four maps, and `WINDOW_DRAW=verify DISPATCH_VERIFY=1` over 150 frames of the
+  Island, pass; `GC_NATIVE=verify` gives the same digest as `GC_NATIVE=js`.
+* `scripts/validate-gc-draw-text-rust.mjs`: 1,500 random DrawText calls (alignments, wrap, every escape in good and truncated forms,
+  both fonts or none, clips, origins, multipliers, an underline texture, newlines, long words) on the live host's heap and fonts in
+  verify mode: the GC image, the GC stack, the realize cache and about 22,000 DrawTile commands are identical.
+* The state digests of `bench-sim.mjs --warm 60 --ticks 300 --render-feedback` on the five baseline maps are unchanged.
+* The validators the runner selects by `hud`, `window`, `gc-`, `console`, `computer`, `infolink`, `keypad`, `scope`, `datacube`
+  (161 validator runs, with `validate-gc-draw-text-rust` and the native-oracle `validate-gc-draw-text` among them) pass, with the menu capture's validator
+  skipped as before; `test/hud-compositor.test.mjs` and the GC unit tests pass.
+* Chromium in worker mode (25 s on the Island and the bunker, the default switches and `?windowDraw=js`, which reaches the worker):
+  no page error, and the worker's `w.hud` is 0.78 against 1.14 ms (Island) and 1.04 against 1.65 ms (bunker).
+
+**Not established.** Equivalence to the original is that of the JavaScript references (their own validators run against the DLL bodies);
+these checks show the Rust bodies equal the references on the paths above, not on every input: the random test covers DrawText, the
+digests cover the windows the roams draw, and a family or an event the cache sends to JavaScript runs the reference.
+
 ## What a paint costs (2026-11-05)
 
 One HUD paint runs about 95 original script events a frame over about 46 windows (70 of them `Extension.Window`'s empty DrawWindow
@@ -156,4 +227,7 @@ Firefox (`w.hud`), against Chrome's 1.0 to 1.3. The cost is a flat spread over t
 `DrawTargetAugmentation` call, window field reads), the JavaScript around each event, and the window tree's native-heap access; no
 part is 0.5 ms. The split, the profiles and the parts a port could take are in
 [Firefox at 60 fps](firefox-60fps-plan.md#the-hud-phase-2026-11-05); `scripts/hud-census.mjs` prints a paint's events and
-fallbacks. The events themselves are unchanged: none is skipped, reordered or cached.
+fallbacks (with the window events in JavaScript, its counts are the reference path's; `--time-only` times the shipped path). The events
+themselves are unchanged: none is skipped, reordered or cached. The 2026-11-06 bundle above took the tree, the plain events, the
+Text and Button draws and DrawText into Rust, and its measurements are in
+[the plan](firefox-60fps-plan.md#the-hud-bundle-2026-11-06).

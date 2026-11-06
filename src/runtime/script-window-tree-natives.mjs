@@ -409,6 +409,13 @@ export function invokeWindowReady(W, root, win) {
 // 0x1003aab0 (without the debug-frame and statistics overlays, which are
 // explicit boundaries when their root flags are set).
 // ---------------------------------------------------------------------------
+/** DrawTree's background icon pattern (a window with a background style and texture): the texture stretched over the window when
+ * its surface flag (+0x38 & 2) asks, else its own size. The Rust draw tree (window.rs) calls this through the host. */
+export function drawBackground(W, win, gc, texture = W.ptr(win, O.background)) {
+  const stretch = W.u32(win, O.surface) & 2;
+  const vl = stretch ? W.i32(texture, 0x38) : 0, ul = stretch ? W.i32(texture, 0x34) : 0;
+  W.gc.drawIconPattern(gc, 0, 0, W.f32(win, O.width), W.f32(win, O.height), 0, 0, f(ul), f(vl), texture);
+}
 export function drawTree(W, win, canvas, debugTexture, frameTimer, hMultiplier, vMultiplier) {
   if(W.externalSubtree?.(win))return;
   lockWindow(W, win);
@@ -423,11 +430,7 @@ export function drawTree(W, win, canvas, debugTexture, frameTimer, hMultiplier, 
     W.gc.setCanvas(gc, canvas);
     W.gc.setMultipliers(gc, hMultiplier, vMultiplier);
     const texture = W.ptr(win, O.background);
-    if (W.u8(win, O.backgroundStyle) && texture) {
-      const stretch = W.u32(win, O.surface) & 2;
-      const vl = stretch ? W.i32(texture, 0x38) : 0, ul = stretch ? W.i32(texture, 0x34) : 0;
-      W.gc.drawIconPattern(gc, 0, 0, W.f32(win, O.width), W.f32(win, O.height), 0, 0, f(ul), f(vl), texture);
-    }
+    if (W.u8(win, O.backgroundStyle) && texture) drawBackground(W, win, gc, texture);
     W.setGlobal('granularityDepth', W.global('granularityDepth') + 1);
     W.v.draw(win, gc);
     for (let child = W.ptr(win, O.firstChild); child; child = W.ptr(child, O.nextSibling))
@@ -455,7 +458,9 @@ export function paintWindows(W, root, canvas) {
   drawRawBackground(W, root, gc, W.u32(root, ROOT.rawBackground), W.u32(root, ROOT.rawColor));
   const debugTexture = (W.u32(root, ROOT.debugFlags) & 2) ? W.ptr(root, ROOT.debugTexture) : null;
   const frameTimer = f(W.f32(root, ROOT.frameTimer) / 1);
-  drawTree(W, root, canvas, debugTexture, frameTimer, W.i32(root, ROOT.hMultiplier), W.i32(root, ROOT.vMultiplier));
+  // The Rust body (script-vm-window.mjs) when the host installed it for this paint, else the JavaScript one below.
+  const hm = W.i32(root, ROOT.hMultiplier), vm = W.i32(root, ROOT.vMultiplier);
+  if (!W.rustDrawTree?.(root, canvas, hm, vm, debugTexture, frameTimer)) drawTree(W, root, canvas, debugTexture, frameTimer, hm, vm);
   W.gc.pop(gc, saved);
   const saved2 = W.gc.push(gc);
   W.gc.enableDrawing(gc, 1);

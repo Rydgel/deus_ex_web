@@ -4,10 +4,15 @@
  * SCRIPT_VM_STATS_TIME=1]) and the paint's total, over a fixed roam (hud-stream-digest.mjs's schedule).
  *
  *   node scripts/hud-census.mjs [--map 01_NYC_UNATCOIsland] [--frames 300] [--warm 60] [--top 25] [--rows 40] [--size 1440x960]
+ *     [--time-only]
  *
  * Node's V8 times, with a timer around every event (about 0.1 ms a frame of its own): they say which events and calls the paint spends
  * its time in and how often, not what Firefox spends (docs/firefox-60fps-plan.md "The HUD phase in Firefox"). The events counted are the
  * paint's own, Galaxy's update inside it included (it runs scripts too, but not events: the audio is not the HUD's). Host measurement only.
+ *
+ * The census wraps runtime.processEvent and callFunction, which keeps the window events in JavaScript (the Rust dispatch runs only
+ * when processEvent is the runtime's own, script-vm-events.mjs windowEventsAllowed): the counts are those of the reference path.
+ * --time-only wraps nothing and prints the paint's mean (and the p50 of the frames) as the shipped path runs it.
  */
 import {readFile, readdir} from 'node:fs/promises';
 
@@ -46,19 +51,23 @@ const runtime = game.doors.scriptRuntime.runtime;
 let inHud = false, counting = false;
 const events = new Map(), calls = new Map(), fallbacks = new Map(), fallbackMs = new Map();
 const add = (table, key, ms) => { const row = table.get(key) ?? {n: 0, ms: 0}; row.n++; row.ms += ms; table.set(key, row); };
-const processEvent = runtime.processEvent.bind(runtime), callFunction = runtime.callFunction.bind(runtime);
-runtime.processEvent = function (receiver, name, args, result, record) {
-  if (!inHud || !counting) return processEvent(receiver, name, args, result, record);
-  const start = realNow();
-  try { return processEvent(receiver, name, args, result, record); } finally { add(events, record?.key ?? name, realNow() - start); }
-};
-runtime.callFunction = function (record, ...rest) {
-  if (!inHud || !counting) return callFunction(record, ...rest);
-  const start = realNow();
-  try { return callFunction(record, ...rest); } finally { add(calls, record?.key ?? '?', realNow() - start); }
-};
+const timeOnly = argv.includes('--time-only');
+if (!timeOnly) {
+  const processEvent = runtime.processEvent.bind(runtime), callFunction = runtime.callFunction.bind(runtime);
+  runtime.processEvent = function (receiver, name, args, result, record) {
+    if (!inHud || !counting) return processEvent(receiver, name, args, result, record);
+    const start = realNow();
+    try { return processEvent(receiver, name, args, result, record); } finally { add(events, record?.key ?? name, realNow() - start); }
+  };
+  runtime.callFunction = function (record, ...rest) {
+    if (!inHud || !counting) return callFunction(record, ...rest);
+    const start = realNow();
+    try { return callFunction(record, ...rest); } finally { add(calls, record?.key ?? '?', realNow() - start); }
+  };
+}
 
 let tick = 0, paintMs = 0;
+const paints = [];
 const step = () => {
   simulatedMs += 1000 / 60;
   if (tick === 0) fixture.key('KeyW', true);
@@ -76,6 +85,7 @@ const step = () => {
   inHud = false;
   if (counting) {
     paintMs += elapsed;
+    paints.push(elapsed);
     const stats = globalThis.__scriptVmStats;
     if (stats) {
       for (const [key, n] of stats.counts) fallbacks.set(key, (fallbacks.get(key) ?? 0) + n);
@@ -94,6 +104,11 @@ const table = (title, map, limit) => {
   for (const [key, row] of [...map].sort((a, b) => b[1].ms - a[1].ms).slice(0, limit))
     console.log(`${per(row.n).toFixed(2).padStart(8)}/frame ${per(row.ms).toFixed(3).padStart(8)} ms  ${key}`);
 };
+if (timeOnly) {
+  const sorted = paints.slice().sort((a, b) => a - b);
+  console.log(`${map}: ${frames} frames after ${warm}; one HUD paint (session.hud, Galaxy's update included): mean ${per(paintMs).toFixed(3)} ms, p50 ${sorted[sorted.length >> 1].toFixed(3)} ms`);
+  process.exit(0);
+}
 const eventCount = [...events.values()].reduce((n, row) => n + row.n, 0), eventMs = [...events.values()].reduce((n, row) => n + row.ms, 0);
 console.log(`${map}: ${frames} frames after ${warm}; one HUD paint (session.hud, Galaxy's update included) ${per(paintMs).toFixed(3)} ms`);
 console.log(`script events a paint: ${per(eventCount).toFixed(1)}, ${per(eventMs).toFixed(3)} ms inclusive, ${events.size} distinct`);

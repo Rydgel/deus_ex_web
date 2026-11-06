@@ -357,6 +357,97 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
     1
 }
 
+// ---- Window events (DrawWindow, PostDrawWindow) -------------------------------
+//
+// processScript(win, event, [gc]) for the window host's draw tree and its text,
+// button and checkbox draws (script-window-host.mjs `processScript`,
+// docs/script-play-hud.md "Window events in Rust"): the same event cache as the
+// tick events, keyed by (class row, 0, WINDOW_EVENT_BASE + event, epoch) and
+// filled by `js_event_resolve` (script-vm-events.mjs `decideWindow`). A window
+// has no ScriptState, no bDeleteMe and no Level, so processEvent's probing,
+// Level and pendingKill gates pass for it, and its event names are no probe names (ename -1: IsProbing is true whatever the state's
+// mask); the state row stays in the key because `lookup` reads the state node's methods first. The host sets WINDOW_EVENTS only
+// while scriptability() is constant true (the window host's lifecycle) and processEvent, executeScript, eventLevelGate, lookup
+// and ScriptState.isProbing are the runtime's own.
+// The one parameter, the GC, is stored as its handle.
+
+/// The first event index of a window event in a cache slot's `which` word.
+pub(crate) const WINDOW_EVENT_BASE: u32 = 16;
+/// [enabled]: set by the window host (script-vm-window.mjs).
+static mut WINDOW_EVENTS: [u32; 1] = [0; 1];
+
+#[no_mangle]
+pub extern "C" fn vm_window_events_ptr() -> *mut u32 {
+    addr_of_mut!(WINDOW_EVENTS) as *mut u32
+}
+
+/// processScript(`handle`, event `which` (0 DrawWindow, 1 PostDrawWindow), [gc handle]): 1 when the body ran, 0 when no script
+/// ran (no such event, or a native function), -1 when the caller must dispatch in JavaScript.
+pub(crate) fn dispatch_window_event(handle: u32, which: u32, gc: u32) -> i32 {
+    if unsafe { WINDOW_EVENTS[0] } == 0 {
+        return -1;
+    }
+    let e = events();
+    if e[0] == 0 || e[1] == 0 {
+        return -1;
+    }
+    let mut row = class_entry(handle);
+    if row <= RELEASED {
+        row = unsafe { js_class_row(handle) };
+        if row <= RELEASED {
+            return -1;
+        }
+    }
+    let entry = state_entry(handle);
+    if entry == 0 {
+        return -1;
+    }
+    let state = load32(entry);
+    let which = WINDOW_EVENT_BASE + which;
+    let (slot, hit) = find(e[0], e[1], SLOT, mix(row ^ mix(state ^ mix(which))), &[row, state, which, e[2]]);
+    if e[4] != 0 || !hit {
+        unsafe { js_event_resolve(handle, which, slot) };
+        store32(slot, row);
+        store32(slot.wrapping_add(4), state);
+        store32(slot.wrapping_add(8), which);
+        store32(slot.wrapping_add(12), events()[2]);
+    }
+    match load32(slot.wrapping_add(16)) {
+        K_NOCALL => return 0,
+        K_RUN => {}
+        _ => return -1,
+    }
+    let saved = frames_save();
+    let id = saved[3];
+    if id >= MAX_RUNS {
+        return -1;
+    }
+    let (code, size, param, template) =
+        (load32(slot.wrapping_add(20)), load32(slot.wrapping_add(24)), load32(slot.wrapping_add(28)), load32(slot.wrapping_add(32)));
+    let locals = if size != 0 { vm_frame_push(size) } else { 0 };
+    store32(locals.wrapping_add(param - 1), gc);
+    unsafe {
+        let serial = SERIAL.wrapping_add(1);
+        SERIAL = serial;
+        (*addr_of_mut!(RUNS))[id as usize] = [template, handle, locals, serial];
+        (*addr_of_mut!(FRAMES))[3] = id + 1;
+    }
+    let outer_budget = unsafe { BUDGET };
+    unsafe { BUDGET = HANG_BUDGET };
+    let code = code as usize as *const u32;
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
+    run.statements(0);
+    unsafe { BUDGET = outer_budget };
+    frames_restore(saved);
+    1
+}
+
+/// dispatch_window_event for validators.
+#[no_mangle]
+pub extern "C" fn vm_window_event(handle: u32, which: u32, gc: u32) -> i32 {
+    dispatch_window_event(handle, which, gc)
+}
+
 // ---- Script calls (CALL) ----------------------------------------------------
 //
 // A CALL's begin (script-vm-rust.mjs `beginCall`: runtime.invoke's

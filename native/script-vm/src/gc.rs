@@ -53,9 +53,9 @@ const GA_OBJECT: u32 = 4;
 const GA_COLOR_LOCAL: u32 = 5;
 const GA_COLOR_FIELD: u32 = 6;
 
-const HEAP_BASE: u32 = 0x2100_0000;
+pub(crate) const HEAP_BASE: u32 = 0x2100_0000;
 // UGC fields (script-gc-state-model.mjs GC).
-const G_CANVAS: u32 = 0x28;
+pub(crate) const G_CANVAS: u32 = 0x28;
 const G_ORIGIN_X: u32 = 0x2c;
 const G_ORIGIN_Y: u32 = 0x30;
 const G_CLIP_X: u32 = 0x34;
@@ -74,8 +74,8 @@ const G_BOLD_FONT: u32 = 0x80;
 const G_HALIGN: u32 = 0x94;
 const G_VALIGN: u32 = 0x95;
 const G_TEXT_FLAGS: u32 = 0x98;
-const G_HMULT: u32 = 0x9c;
-const G_VMULT: u32 = 0xa0;
+pub(crate) const G_HMULT: u32 = 0x9c;
+pub(crate) const G_VMULT: u32 = 0xa0;
 /// The UGC image size: the verify snapshot.
 pub(crate) const GC_SIZE: usize = 0xb8;
 const F_DRAWING: u32 = 0x2;
@@ -137,7 +137,7 @@ extern "C" {
 }
 
 #[inline(always)]
-fn host(i: usize) -> u32 {
+pub(crate) fn host(i: usize) -> u32 {
     unsafe { (*addr_of!(GC_HOST))[i] }
 }
 
@@ -504,43 +504,60 @@ impl Run {
             let handle = a[object_arg];
             a[object_arg] = if handle == 0 || handle == UNDEFINED { 0 } else { cached(addr_of_mut!(ARG_CACHE), handle, 0) };
         }
-        unsafe { *addr_of_mut!(GC_ARGS) = a };
-        let verify = host(3) != 0;
-        if verify {
-            let p = at(base, GC_SIZE as u32);
-            if p != 0 {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(p as usize as *const u8, addr_of_mut!(GC_SNAP) as *mut u8, GC_SIZE);
-                }
-            }
-        }
-        unsafe { FAULT = false };
-        match index {
-            1284 | 1285 => {
-                // GC_TILE[0] (the texture, nonzero for a tile) marks a tile.
-                unsafe { (*addr_of_mut!(GC_TILE))[0] = 0 };
-                let tile = draw_body(index, base, &a);
-                if unsafe { FAULT } {
-                    unsafe { js_gc_native(index, object) };
-                } else if verify {
-                    unsafe { js_gc_verify(index, object, base) };
-                } else if let Some((slot, canvas)) = tile {
-                    unsafe { js_gc_tile(slot, canvas) };
-                }
-            }
-            _ => {
-                if at(base, GC_SIZE as u32) == 0 {
-                    unsafe { js_gc_native(index, object) };
-                } else {
-                    state_body(index, base, &a);
-                    if verify {
-                        unsafe { js_gc_verify(index, object, base) };
-                    }
-                }
-            }
-        }
+        run_native(index, object, base, a);
         self.self_fresh = false;
     }
+}
+
+/// A GC native with its arguments converted (`a`, an object argument as a native address), on the GC at native address `base` whose
+/// handle is `object`: the Rust body, or the JavaScript one when a heap access falls outside the heap (js_gc_native raises its
+/// error), compared with it under verify. The window host's Rust draws (window.rs) call it for the natives a family's draw makes.
+pub(crate) fn run_native(index: u32, object: u32, base: u32, a: [u32; 8]) {
+    unsafe { *addr_of_mut!(GC_ARGS) = a };
+    let verify = host(3) != 0;
+    if verify {
+        let p = at(base, GC_SIZE as u32);
+        if p != 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(p as usize as *const u8, addr_of_mut!(GC_SNAP) as *mut u8, GC_SIZE);
+            }
+        }
+    }
+    unsafe { FAULT = false };
+    match index {
+        1284 | 1285 => {
+            // GC_TILE[0] (the texture, nonzero for a tile) marks a tile.
+            unsafe { (*addr_of_mut!(GC_TILE))[0] = 0 };
+            let tile = draw_body(index, base, &a);
+            if unsafe { FAULT } {
+                unsafe { js_gc_native(index, object) };
+            } else if verify {
+                unsafe { js_gc_verify(index, object, base) };
+            } else if let Some((slot, canvas)) = tile {
+                unsafe { js_gc_tile(slot, canvas) };
+            }
+        }
+        _ => {
+            if at(base, GC_SIZE as u32) == 0 {
+                unsafe { js_gc_native(index, object) };
+            } else {
+                state_body(index, base, &a);
+                if verify {
+                    unsafe { js_gc_verify(index, object, base) };
+                }
+            }
+        }
+    }
+}
+
+/// Whether the Rust GC natives may run now (the window host paints and its native dispatch would reach them: GC_HOST's gate).
+pub(crate) fn natives_open() -> bool {
+    host(2) != 0 && host(0) != 0
+}
+
+/// Whether GC_NATIVE=verify is on.
+pub(crate) fn verifying() -> bool {
+    host(3) != 0
 }
 
 // PushGC 0x10027c90 / PopGC's restore 0x10027d40 and CopyGC 0x10027b40
@@ -562,7 +579,7 @@ const G_UNKNOWN84: u32 = 0x84;
 const G_UNDERLINE: u32 = 0x88;
 const G_BASELINE: u32 = 0x8c;
 const G_VSPACING: u32 = 0x90;
-static mut GC_STATUS: [u32; 2] = [0; 2];
+pub(crate) static mut GC_STATUS: [u32; 2] = [0; 2];
 
 #[no_mangle]
 pub extern "C" fn vm_gc_status_ptr() -> *mut u32 {
@@ -627,7 +644,7 @@ fn copy_gc(dst: u32, src: u32) -> Option<()> {
     Some(())
 }
 
-fn push_gc(gc: u32) -> Option<i32> {
+pub(crate) fn push_gc(gc: u32) -> Option<i32> {
     let depth = g32(gc + G_DEPTH)? as i32;
     if g32(gc + G_OWNER)? != 0 {
         return Some(depth);
@@ -650,7 +667,7 @@ fn push_gc(gc: u32) -> Option<i32> {
 }
 
 /// gcRestoreGC(gc, n).
-fn restore_gc(gc: u32, n: i32) -> Option<()> {
+pub(crate) fn restore_gc(gc: u32, n: i32) -> Option<()> {
     if n >= g32(gc + G_DEPTH)? as i32 {
         return Some(());
     }
