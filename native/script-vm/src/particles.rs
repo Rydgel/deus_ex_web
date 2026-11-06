@@ -142,9 +142,10 @@ pub extern "C" fn update_particles(base: u32, delta: u32) -> u32 {
 const ITEM_CAP: usize = COUNT as usize;
 /// `particle_items`' answer for a proxy the image cannot address: nothing ran.
 const NOT_RUN: u32 = u32::MAX;
-/// `particle_items`' output: the item count, then five words an item (DrawScale,
-/// ScaleGlow, then the proxy's Location after its move), float32 bits.
-static mut ITEMS: [u32; 1 + 5 * ITEM_CAP] = [0; 1 + 5 * ITEM_CAP];
+/// `particle_items`' output: the item count, the number of particles a refused move
+/// deleted, then five words an item (DrawScale, ScaleGlow, then the proxy's Location after
+/// its move), float32 bits.
+static mut ITEMS: [u32; 2 + 5 * ITEM_CAP] = [0; 2 + 5 * ITEM_CAP];
 
 #[no_mangle]
 pub extern "C" fn particle_items_ptr() -> *const u32 {
@@ -168,10 +169,14 @@ pub extern "C" fn particle_items_ptr() -> *const u32 {
 pub extern "C" fn particle_items(base: u32, proxy: u32, model: u32, world: u32, start: u32, max: u32) -> u32 {
     let items = addr_of_mut!(ITEMS) as *mut u32;
     let mut count = 0usize;
+    let mut failed = 0u32;
     let a = Obj::of(proxy);
     let mut index = start;
     if !a.has(FAR_MOVE_FIELDS | ITEM_FIELDS) {
-        unsafe { *items = 0 };
+        unsafe {
+            *items = 0;
+            *items.add(1) = 0;
+        }
         return NOT_RUN;
     }
     while index < max {
@@ -192,7 +197,7 @@ pub extern "C" fn particle_items(base: u32, proxy: u32, model: u32, world: u32, 
                 match plan {
                     FarMove::Moved(region) => {
                         far_commit(&a, at, region);
-                        let item = unsafe { items.add(1 + 5 * count) };
+                        let item = unsafe { items.add(2 + 5 * count) };
                         unsafe {
                             *item = draw_scale;
                             *item.add(1) = scale_glow;
@@ -206,12 +211,16 @@ pub extern "C" fn particle_items(base: u32, proxy: u32, model: u32, world: u32, 
                         // DeleteParticle (0x1001aaf0).
                         store32(active_at, load32(active_at) & !pf(P_ACTIVE_MASK));
                         store32(base + pf(P_NEXTFREE), index);
+                        failed += 1;
                     }
                 }
             }
         }
         index += 1;
     }
-    unsafe { *items = count as u32 };
+    unsafe {
+        *items = count as u32;
+        *items.add(1) = failed;
+    }
     index
 }

@@ -139,14 +139,15 @@ export class ParticleHost {
   items(instance, proxy, model, world, start, max, into) {
     const next = this.x.particle_items(instance.base, handleOf(proxy), model, world, start, max) >>> 0;
     const buffer = this.vm.arena.memory.buffer;
-    if (this.itemView?.buffer !== buffer) this.itemView = {buffer, words: new Uint32Array(buffer, this.x.particle_items_ptr(), 321),
-      floats: new Float32Array(buffer, this.x.particle_items_ptr(), 321)};
+    if (this.itemView?.buffer !== buffer) this.itemView = {buffer, words: new Uint32Array(buffer, this.x.particle_items_ptr(), 322),
+      floats: new Float32Array(buffer, this.x.particle_items_ptr(), 322)};
     const {words, floats} = this.itemView, count = words[0];
     for (let i = 0; i < count; i++) {
-      const at = 1 + 5 * i;
+      const at = 2 + 5 * i;
       into.push({actor: proxy, location: [floats[at + 2], floats[at + 3], floats[at + 4]], drawScale: floats[at], scaleGlow: floats[at + 1]});
     }
     particleItemCounts.moved += count;
+    particleItemCounts.failed += words[1];
     return next;
   }
   /** Particle `index` as the loop reads it: whether it is active, its Location, DrawScale and ScaleGlow. */

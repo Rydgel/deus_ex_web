@@ -30,5 +30,7 @@ export async function processProbe(process, assets, tables = null) {
     // the render-iterator loop's counters in this realm (script-vm-particles.mjs particleItemCounts): iterators and steps run in Rust, the
     // verify mode's comparisons
     particleItems: {...(await import('../runtime/script-vm-particles.mjs')).particleItemCounts},
+    // the runtime's trace kernel counters (trace-kernel.mjs stats: the tracked model's imports and the milliseconds in them)
+    trace: {...(await import('../runtime/collision-kernel.mjs')).kernelStats.runtime?.deref()?.stats},
   };
 }
