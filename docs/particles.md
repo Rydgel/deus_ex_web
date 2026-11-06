@@ -282,5 +282,6 @@ bJustTeleported and Region, and the items are compared; the sprite records are c
 * In the browser, the bunker's scan route for 40 s with `particleItems=verify&farMove=verify`: Firefox inline 2,452 drawn frames, 0 page
   errors, 4,042 runs and 258,688 steps compared, 50,044 particles moved; Chromium in worker mode 2,660 drawn frames, 0 page errors, 4,232
   runs and 270,848 steps compared (`--probe-switches` lists both switches in the worker's realm, so the page's flags reach it through
-  `init`, and its counters come from the worker). Per frame (Firefox inline, default switches, 30 s): one scan and one child frame's
-  rescan, 2.5 non-frozen iterators run (64 steps each), 28 particles moved, 0.09 steps handed back.
+  `init`, and its counters come from the worker). Per frame on that route (twelve Firefox sessions of 60 s, 45,601 frames): one scan and one
+  child frame's rescan, 1.24 non-frozen iterator runs (64 steps each), 18.4 particles moved, 0.027 deleted by a refused move (1,228 in
+  all: the Failed path runs outside the injection test too), no step handed back.

@@ -229,6 +229,16 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
 ## Progress
 
+* **2026-11-06, the bunker's particle loop in Rust, and FindSpot's point check in the noncolliding FarMoveActor: meets the bar**
+  ([below](#the-bunker-particle-loop-2026-11-06)). The slowest tenth of the bunker's actor phase held the ParticleIterator's render-iterator
+  protocol, run for the root frame and again for every child frame (`rescan`): 0.85 ms a frame, 0.50 of it FarMoveActor of the
+  ParticleProxy, which `far_move` declined because the proxy is `bCollideWorld` (a zero extent: FindSpot is one point check on the world model).
+  The point check (`trace.rs point_clear`), the decision (`render.rs far_plan`) and the CurrentItem loop over the iterator's cells
+  (`particles.rs particle_items`; a zone change goes back to JavaScript at its step) are in Rust, behind `?particleItems=` and `?farMove=`
+  (`js`, `verify`; `nofit` is the baseline), with the proxy's per-record field reads hoisted in `sprite-scan.mjs`. Twelve interleaved Firefox
+  pairs: the page's slowest tenth −1.10 ms (the bar is 0.5; 10 of 12 pairs), the mean −0.22, p95 −1.08, `p.sprites` and `p.actors` −0.10 each in
+  every pair; digests unchanged; `verify` compared 4,042 runs in Firefox inline and 4,232 in Chromium's worker and 5,196 and 12,954 in Node, with
+  129 and 112 particles put in solid refused alike. Code on branch `worktree-agent-a12ad8f2a7c5f5035`, committed and not merged.
 * **2026-11-06, what the Rust VM still hands to JavaScript: ranked, no family near the bar, nothing built**
   ([below](#what-the-rust-vm-still-hands-to-javascript-2026-11-06)). `js_eval` is 1.08 ms a frame of the bunker's tick on average (0.90 in the
   rest, 2.65 in the slowest tenth). A per-tick census of what it evaluates (`scripts/script-vm-fallback-census.mjs`: self time by node, native
@@ -994,6 +1004,112 @@ events, whose Rust bytecode and `AttachDecal` are not JavaScript of the spawn; n
 means a Rust owner for `ScriptInstance` and its bindings. The mover rider tables (`move-riders.mjs`, `js_move_riders` +0.5 to
 +0.7 ms in the slow ticks) are dropped at every `baseEpoch` advance, which CompactActors' index moves and each `freeObject` cause:
 the next candidate here, not measured as spawn-induced.
+
+### The bunker particle loop (2026-11-06)
+
+The task: the Area 51 bunker (`15_Area51_Bunker`) is the last map whose page p95 is over 16.7 ms in headless Firefox inline mode (20 ms; the
+[bunker bundle](#the-bunker-bundle-2026-11-06) left it there). A profile of its slowest tenth of frames **by the actor phase** (`p.actors`,
+`gecko-slow-ticks.mjs --phase actors --under '^actors \(src/viewer/sim-session'`, `.cache/perf/bunker-actors`: 345 slow frames at 5.54 ms of
+`p.actors` against 2.35 for the other 3,106) named the ParticleIterator's render-iterator protocol, run from the occlusion pass's per-frame
+dynamics callback (`occ_frame_dynamics` → `childDynamics` → `rescan`), as the largest single addition: 1.21 ms inclusive against 0.27, and
+`particleIteratorItems` 0.85 against 0.11. Bar for shipping: 0.5 ms in the mean of the slowest tenth of the page frame work (`animate`) or 0.3
+ms in its mean, from an interleaved Firefox A/B with the digests unchanged and `verify` clean.
+
+**Why the proxy's FarMoveActor was declined** ([particles](particles.md#why-the-proxys-farmoveactor-was-declined)). The ParticleProxy is `bMovable`
+and `bCollideWorld` with CollisionRadius and CollisionHeight 0 (read from DeusEx.u; the live bunker proxies show the same). CurrentItem's
+`FarMoveActor(proxy, Location, 0, 0)` therefore takes the original's FindSpot branch (`!NoCheck && bCollideWorld`) with a zero extent, and
+`render.rs far_move` declined every `bCollideWorld` actor with NoCheck clear: each particle's move ran relocation.mjs (FindSpot → a point
+check that builds a hit list → the encroachment check → SetActorZone, with the closures `relocationLevel` makes). In the slow tenth,
+`particleIteratorItems` was 0.85 ms: FarMoveActor 0.50, `readIteratorState` (64 particle objects with their arrays on each call) 0.20, the
+script `Init` 0.09, the Index writes 0.04. A frame on the bunker's scan route (the twelve new-arm sessions below, `--probe-switches`, 45,601
+frames): one root scan and one child frame's rescan (`rescans` = `scans`), 1.24 non-frozen iterator runs (MaxItems 64: 64 steps each) and 18.4
+particles moved, 0.027 particles deleted by a refused move (1,228 in all), and no step handed back to JavaScript (no zone change on that route).
+
+**What was built** (details and evidence in [particles](particles.md#the-loop-in-rust-2026-11-06)):
+
+| Switch (env, `?flag=`) | Feature | How it is exact |
+|---|---|---|
+| `PARTICLE_ITEMS`, `particleItems` (`rust` default, `js`, `verify`) | `particles.rs particle_items`: the CurrentItem loop over the iterator's cells and the proxy's image (Index, the proxy's DrawScale and ScaleGlow, FarMoveActor, DeleteParticle, the items); `script-particles.mjs nativeItems` takes a declined step as the reference does and the loop goes on after it; `sprite-scan.mjs` reads the proxy's DrawType, Texture and Style once for a run's records | the reference loop is `referenceItems` (today's code); `=verify` repeats every Rust run from the state before it with the recovered relocation body (`relocateSpawnedActor`) as FarMoveActor and compares the particles, `nextFreeParticle`, Index, the proxy's six written fields and the items; the records are compared with the per-item reads |
+| `FAR_MOVE` (`rust` default, `js`, `verify`, `nofit`) | `render.rs far_plan`/`far_commit`: FindSpot's zero-extent case (one SinglePointCheck on the world model, `trace.rs point_clear`, the tracker's model while it lives) in the noncolliding FarMoveActor; returns 1 moved, 2 refused (the original's false, nothing stored), 0 JavaScript | `validate-trace-kernel` (78,798 points, 0 mismatches); `FAR_MOVE=verify` compares every Rust move against the JavaScript body; `nofit` is the core before this step (the A/B baseline) |
+
+A zone change (SetActorZone runs script events), a nonzero extent, riders, collision bits, a Brush, a non-finite destination and a model the core
+cannot read still go to JavaScript before any store. The script `Init(Camera)` and the Observer write keep their order. `cargo` is warning-free.
+
+**Checked.** `bench-sim --render-feedback` digests unchanged: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai
+`80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, and the long routes (bunker `ccd09a24aaaad820`, Island `0b4d06c72afd1c1d`, Wan Chai
+`25db7596647e2aeb`). **bench-sim does not exercise the render iterators** (it calls `game.tick` and never the sprite scan), so these digests
+only show that the `far_move` change (the FindSpot case, for other spawned actors' SetLocation) altered nothing; the iterator loop is covered by
+the new `scripts/validate-particle-items.mjs`, which boots a map, holds the proxies as drawn, ticks, and after each tick runs SetupDynamics' scan and
+rescans through `sprite-scan.mjs` in `js`, `rust` and `verify`, and compares a digest of every sprite record and of the iterators' and proxies'
+end state:
+
+| Run | sprite records | iterator runs | steps | particles moved | refused by FindSpot | handed back | verify compared |
+|---|---:|---:|---:|---:|---:|---:|---|
+| bunker, 240 ticks, 1 rescan | 34,991 | 4,780 | 305,504 | 33,022 | 0 | 416 | 5,196 runs, 33,438 records |
+| bunker, 300 ticks, 3 rescans | 101,459 | 11,960 | 764,446 | 98,466 | 20 | 994 | 12,954 runs, 99,460 records |
+| bunker, 240 ticks, two particles a tick put in solid every 10 ticks (`--inject 10`) | 3,838 | 4,780 | 305,920 | 2,920 | 129 | 0 | 4,780 runs |
+| 02_NYC_Street, 240 ticks | 23,512 | 4,302 | 275,328 | 21,710 | 0 | 0 | 4,302 runs |
+| 02_NYC_Street, `--inject 10` | 1,520 | 4,302 | 275,328 | 1,010 | 112 | 0 | 4,302 runs |
+
+The digests of `js`, `rust` and `verify` are equal in every row (`8ef26156a3375408`, `aeb1df1bdd5ee8a2`, `1f85f6dae27349e7`, `0f1d56950a3b8be4`,
+`01f196133c5df880`). In the browser, the bunker's scan route for 40 s with `particleItems=verify&farMove=verify` (`hitch-run.mjs --probe-switches`,
+which now also prints the loop's counters, `iteratorStats` and the trace kernel's): Firefox inline 2,452 drawn frames, no page error, 4,042 runs and
+258,688 steps compared; Chromium in worker mode 2,660 drawn frames, no page error, 4,232 runs and 270,848 steps compared, the worker's own
+`processProbe` listing both switches (the page's flags reach it through `init`). `npm test`: 959 tests, 955 pass, 4 skipped, 0 fail
+(`test/particle-items.test.mjs` is new). Validators: `validate-particles-play`, `-native-particles` (288 updates), `-native-relocation` (1,316 cases),
+`-script-set-location`, `-iterator-frames-play`, `-render-scan-verify-play`, `-sprite-tiles-play`, `-collision-kernel`, `-trace-kernel` (157,117
+cases, 0 mismatches), `-native-far-move-scene` (40 cases, 0 mismatches) pass.
+
+**Firefox inline A/B, bunker**, twelve interleaved pairs in two runs (4 pairs on commit b0ca2c4e, 8 on dfc62117, whose runtime differs by counters
+only) of `hitch-ab.mjs --arms "new:,old:particleItems=js&farMove=nofit" --prefix bunker -- --browser firefox --map 15_Area51_Bunker --mode scan --god
+--seconds 60 --probe-switches` (headless, 60 s, the order alternating; sessions in `.cache/perf/bunker-particles/`; `hitch-ab-table.mjs` now has a
+page-work mean and slowest-tenth column). The old arm is the code before this step: the reference loop and per-item reads, and the core without
+FindSpot's point check. ms, new / old:
+
+| Pair | mean tick | `p.sprites` + `p.actors` | page mean (`animate`) | **page slowest tenth** | page p95 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 5.29 / 4.67 | 2.75 / 2.82 | 13.61 / 12.72 | 21.22 / 21.07 | 19 / 19 |
+| 2 | 5.22 / 4.96 | 2.70 / 2.85 | 13.42 / 13.21 | 21.78 / 22.27 | 20 / 20 |
+| 3 | 4.87 / 5.05 | 2.61 / 2.88 | 12.80 / 13.41 | 20.53 / 22.37 | 19 / 21 |
+| 4 | 5.32 / 5.16 | 2.77 / 2.86 | 13.73 / 13.45 | 22.34 / 22.39 | 20 / 20 |
+| 5 | 5.22 / 5.17 | 2.69 / 2.89 | 13.36 / 13.55 | 21.75 / 22.75 | 20 / 21 |
+| 6 | 5.06 / 5.32 | 2.72 / 2.95 | 13.31 / 13.79 | 21.85 / 23.31 | 20 / 21 |
+| 7 | 5.00 / 5.30 | 2.68 / 2.87 | 13.27 / 13.65 | 23.74 / 22.76 | 21 / 21 |
+| 8 | 4.90 / 4.95 | 2.60 / 2.85 | 12.84 / 13.23 | 21.03 / 22.42 | 19 / 21 |
+| 9 | 5.31 / 5.04 | 2.72 / 2.90 | 13.59 / 13.49 | 21.80 / 23.24 | 20 / 21 |
+| 10 | 5.09 / 5.50 | 2.70 / 2.97 | 13.41 / 14.23 | 21.92 / 23.25 | 20 / 21 |
+| 11 | 5.34 / 5.46 | 2.80 / 3.02 | 13.72 / 14.17 | 22.14 / 23.50 | 20 / 22 |
+| 12 | 4.88 / 5.20 | 2.62 / 2.95 | 12.95 / 13.76 | 20.56 / 24.47 | 19 / 22 |
+| **mean** | **5.13 / 5.15** | **2.70 / 2.90** | **13.33 / 13.56** | **21.72 / 22.82** | **19.8 / 20.8** |
+
+Paired differences (new − old, 12 pairs, `.cache/perf/bunker-particles`, mean ± standard error, pairs where new is faster): `p.sprites` −0.10 ± 0.01 (12 of
+12), `p.actors` −0.10 ± 0.02 (11), mean tick −0.02 ± 0.09 (7), **page slowest tenth −1.10 ± 0.35, median −1.33 (10 of 12)**, page mean −0.22 ± 0.15
+(8), page p95 −1.08 ± 0.29 (8), p50 +0.08 ± 0.23. The second run alone (8 pairs, the final code): page mean −0.43 ± 0.11 (7 of 8), slowest tenth
+−1.36 ± 0.46 (7 of 8). The first four pairs alone had read as noise (mean tick 0.22 worse, page mean 0.19 worse, slowest tenth 0.55 better): the
+tick's difference is session spread (0.09 over twelve pairs), and only the two phases the change touches move in every pair.
+
+**Inside the frame** (the same sessions, `iteratorStats` of `--probe-switches`, which times the scan and the rescans with `performance.now`): the scan costs
+0.444 → 0.332 ms and a child frame's rescan 0.314 → 0.212 ms, 0.758 → 0.544 ms a frame; one child frame a frame (`rescans` = `scans`), 1.24
+iterator runs a frame (scan and rescan together), 18.4 particles moved a frame. Gecko profiles of both arms (60 s each, `prof-new`/`prof-old`):
+in the slowest tenth of `p.actors` (350 frames) that phase is 5.26 → 4.65 ms, `occ_frame_dynamics` 1.13 → 0.41 (against 0.27 and 0.24 in the other
+frames), `particleIteratorItems` 0.88 → 0.14, and the collector work inside those frames halves (0.23 → 0.08 ms of GC frames). The trace
+kernel's counters (`traceKernel` in the probe) show one tracked-model import in 60 s in both arms (38,746 nodes): the world base address the Rust
+move asks for costs nothing.
+
+**Result: merge-worthy.** The slowest tenth of the page's frame work falls by 1.10 ms (the bar is 0.5; ten of twelve pairs, median 1.33), the
+mean by 0.22 ms (the bar is 0.3: reached by the second run alone, 0.43), the digests are unchanged and `verify` is clean in Node, Firefox inline
+and Chromium worker mode. The bunker's page p95 falls from 20.8 to 19.8 ms and stays over 16.7 ms (headless Firefox).
+
+**Left** (each under the bar alone):
+* The script `Init(Camera)` of every iterator, run in every frame's SetupDynamics, is now the largest part of the protocol: `inRenderPass` +
+  `processEvent` is 0.27 ms a frame (LaserIterator 0.16, with its `js_bool` import 0.11, ParticleIterator 0.09). The Rust VM hands a bool read
+  back to JavaScript there (the `Owner.bFrozen` context read); lowering that node would take it, and belongs to the
+  [fallback census](#what-the-rust-vm-still-hands-to-javascript-2026-11-06).
+* `laserIteratorItems` and the laser proxies' own sprite bindings (`updateSprite` 0.52 ms in the slow tenth) are the same family and untouched.
+* A handed-back step (a zone change) reads one particle through the arena and takes the reference path: 0.14% of the steps in the bunker's
+  Node route (416 of 305,504), none in the scan route's 45,601 frames; a zone-change event for a proxy is the one case the core never decides.
+* `trace.rs point_clear` and the Rust move run in doubles, like the JavaScript reference; the original's pass precision (24 bits) for a point
+  exactly on a node plane is not measured ([render-pass precision](render-pass-precision.md)).
 
 ## How each step is measured
 
