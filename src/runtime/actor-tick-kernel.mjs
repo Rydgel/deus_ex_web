@@ -46,6 +46,7 @@ import {propertyReference, propertyCodec} from './script-values.mjs';
 import {setScriptRunaway} from './script-vm.mjs';
 import {probeNames} from '../unreal/probe-names.mjs';
 import {receiverEpoch} from './receiver-epoch.mjs';
+import {HandleMirror} from './actor-handle-mirror.mjs';
 import {actorsEpoch, onActorsEpoch} from './base-epoch.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
@@ -293,6 +294,7 @@ export class ActorTickHost {
     this.depth = 0;
     // The level loop's copy of Level.Actors with a descriptor per slot (level_loop.rs), kept per array, length and actorsEpoch,
     // and the interned descriptor rows.
+    this.mirror = new HandleMirror();
     this.listKey = null; this.listAt = 0; this.descAt = 0; this.listBytes = 0; this.descBytes = 0;
     this.rowIds = new Map(); this.rowsAt = 0; this.rowCapacity = 0;
   }
@@ -628,7 +630,8 @@ export class ActorTickHost {
     const arena = this.vm.arena, listBytes = 4 + 4 * count, descBytes = 16 * count;
     const listAt = arena.alloc(listBytes), descAt = arena.alloc(descBytes), view = arena.view;
     view.setUint32(listAt, count, true);
-    for (let i = 0; i < count; i++) view.setUint32(listAt + 4 + 4 * i, actors[i] ? handleOf(actors[i]) : 0, true);
+    this.mirror.sync(actors);
+    new Uint32Array(arena.memory.buffer, listAt + 4, count).set(this.mirror.handles.subarray(0, count));
     this.x.level_desc_carry(this.listAt, this.descAt, listAt, descAt);
     if (this.listAt) { arena.release(this.listAt, this.listBytes); arena.release(this.descAt, this.descBytes); }
     this.listAt = listAt; this.descAt = descAt; this.listBytes = listBytes; this.descBytes = descBytes;

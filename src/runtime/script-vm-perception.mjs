@@ -20,6 +20,8 @@ import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {execPawnAlliance} from './script-pawn-alliance.mjs';
 import {execAICanSee} from './script-pawn-perception.mjs';
 import {actorsEpoch} from './base-epoch.mjs';
+import {receiverEpoch} from './receiver-epoch.mjs';
+import {HandleMirror, handleMirrorMode} from './actor-handle-mirror.mjs';
 
 /** The fields the Rust bodies read (percep.rs F_*), in index order:
  * [the spelling the JavaScript bodies read, key, cell kind]. */
@@ -112,6 +114,8 @@ export class PerceptionHost {
     this.scanCapacity = 0;
     // The Level.Actors list last built: its array, length and base epoch.
     this.scanKey = null;
+    this.mirror = new HandleMirror();
+    this.scanReceivers = -1;
     this.pending = null;
     this.recording = null;
   }
@@ -262,19 +266,32 @@ export class PerceptionHost {
       return this.scan;
     }
     const bytes = 4 + 8 * count;
+    let moved = false;
     if (bytes > this.scanCapacity) {
       if (this.scan) this.vm.arena.release(this.scan, this.scanCapacity);
       this.scanCapacity = Math.max(4096, bytes * 2);
       this.scan = this.vm.arena.alloc(this.scanCapacity);
+      moved = true;
     }
+    // Only the slots the actors mirror found changed are written again, when the buffer is the one they were written to and no
+    // receiver info can have changed since (the receiver epoch is the one the unchanged slots' entries were computed under).
+    // HANDLE_MIRROR=js keeps the reference: every slot, every time.
+    const changed = this.mirror.sync(actors), handles = this.mirror.handles, receivers = receiverEpoch();
+    const slots = changed !== null && !moved && this.scanReceivers === receivers ? changed : null;
+    this.scanReceivers = -1;
     const view = this.vm.arena.view, base = this.scan;
     view.setUint32(base, count, true);
-    for (let i = 0; i < count; i++) {
+    const put = i => {
       // (scanEntry's pair, without the array)
-      const light = actors[i], h = light ? handleOf(light) : 0, at = base + 4 + 8 * i;
+      const h = handles[i], at = base + 4 + 8 * i;
       view.setUint32(at, h, true);
-      view.setUint32(at + 4, light ? this.vm.receiverInfo(h) : 0, true);
-    }
+      view.setUint32(at + 4, h ? this.vm.receiverInfo(h) : 0, true);
+    };
+    if (slots) for (const i of slots) put(i);
+    else for (let i = 0; i < count; i++) put(i);
+    this.scanReceivers = receivers;
+    // (the rewritten slots only: a list equal to a fresh build, as a reused one is)
+    if (slots && (DIFFERENTIAL || handleMirrorMode() === 'verify')) this.checkScan(actors, count);
     this.scanKey = {actors, count, epoch};
     if (DIFFERENTIAL) differential.scans++;
     return base;

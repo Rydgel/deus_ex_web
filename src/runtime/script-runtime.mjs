@@ -63,7 +63,7 @@ import { readUMeshSurfaces } from './umesh-surfaces.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
 import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
-import { bumpReceiverEpoch } from './receiver-epoch.mjs';
+import { bumpReceiverEpoch,bumpReceiverEpochFor } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
@@ -1329,7 +1329,7 @@ export class ScriptRuntime {
     // while this level lives (script-process-collection.mjs levelSeeds).
     if(instance.cls?.loadRecord)this.classLoader?.originalLoads.reach([instance.cls.loadRecord]);
     if(instance.cls)(this.attachedClasses??=new Set()).add(instance.cls);
-    bumpReceiverEpoch();
+    bumpReceiverEpochFor(receiver);
     stateChanged(receiver);
     // An object the collection model never frees (it was unreachable, so the
     // host's own GC reclaimed it) returns its image range when collected.
@@ -3320,9 +3320,9 @@ export class ScriptRuntime {
     if(field.key==='engine.actor.base')bumpBaseEpoch();else bumpActorsEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
-      if(mirrored){instance.setBinding(field.key,mirrored);instance.bindingsVersion++;bumpReceiverEpoch();return;}
+      if(mirrored){instance.setBinding(field.key,mirrored);instance.bindingsVersion++;bumpReceiverEpochFor(receiver);return;}
     }
-    instance.setBinding(field.key,binding);instance.bindingsVersion++;bumpReceiverEpoch();
+    instance.setBinding(field.key,binding);instance.bindingsVersion++;bumpReceiverEpochFor(receiver);
     this.noteBoundKey(field.key);
   }
   /** A binding whose value changes only through its setter keeps a copy in

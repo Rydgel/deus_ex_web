@@ -45,6 +45,9 @@ export function identityOfHandle(handle) {
 // Called with each released handle: the Rust interpreter's class tables
 // (script-vm-rust.mjs) record it, so a pointer holding it reads None there.
 const releaseListeners = [];
+// Advances on every release, so a cache of handles by identity (actor-handle-mirror.mjs) can tell that one it holds may have ended.
+let releases = 0;
+export const releaseCount = () => releases;
 /** Call `listener(handle)` whenever a handle is released. */
 export const onHandleRelease = listener => { releaseListeners.push(listener); };
 
@@ -54,6 +57,7 @@ export function releaseHandle(identity) {
   if (handle === undefined) return;
   handles.delete(identity);
   identities[handle] = null;
+  releases++;
   for (const listener of releaseListeners) listener(handle);
 }
 
@@ -75,6 +79,7 @@ export function releaseHandleRange(first, end, keep = null) {
     if (identity === null || keep?.(identity)) continue;
     handles.delete(identity);
     identities[handle] = null;
+    releases++;
     for (const listener of releaseListeners) listener(handle);
     released++;
   }
@@ -92,6 +97,7 @@ export function releaseHandlesWhere(owned) {
     if (identity === null || !owned(identity)) continue;
     handles.delete(identity);
     identities[handle] = null;
+    releases++;
     for (const listener of releaseListeners) listener(handle);
     released++;
   }

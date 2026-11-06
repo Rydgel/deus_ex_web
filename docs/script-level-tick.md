@@ -224,7 +224,8 @@ JavaScript ticks.
   A descriptor is current while the receiver epoch (interp.rs RECEIVERS) and the tick table's version are the ones it was written
   under: the epoch advances on every attach, binding, poison, restore and free, which are the events that change `run`'s
   `host` test and `describe`'s masks. Rust asks the host (`js_tick_describe`) for any other; on the Island's scan route the
-  receiver epoch moved in 1 of 299 ticks. A rebuilt list keeps each actor's descriptor (`level_desc_carry`, a forward search
+  receiver epoch moved in 1 of 299 ticks (on the Area 51 bunker's route it moved in most ticks until 2026-11-06, with spawned actors' and windows'
+  construction counted: [the plan](firefox-60fps-plan.md#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06)). A rebuilt list keeps each actor's descriptor (`level_desc_carry`, a forward search
   within 64 slots, Level.Actors keeping its order).
 - **Where a run ends.** At an actor `run` would hand back before its tick (no image, the PlayerPawn, a ScriptedPawn with SP fields
   outside its image), at a prelude hand-back (JavaScript then ticks that actor through the whole chain, which hands it back

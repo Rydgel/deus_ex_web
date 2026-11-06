@@ -21,7 +21,7 @@
  */
 import {createNativeHeap} from './script-native-heap.mjs';
 import {hostNow} from './host-clock.mjs';
-import {bumpReceiverEpoch} from './receiver-epoch.mjs';
+import {bumpReceiverEpochFor} from './receiver-epoch.mjs';
 import {nativeWindowLayout, NATIVE_WINDOW_CLASS_SIZES} from './script-window-native-layout.mjs';
 import * as T from './script-window-tree-natives.mjs';
 import * as F from './script-window-families.mjs';
@@ -582,7 +582,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       instance.setBinding(entry.field.key, binding);
       instance.bindingsVersion++;
       // The object is BOUND now: the Rust receiver table computes it again.
-      bumpReceiverEpoch();
+      bumpReceiverEpochFor(object);
       runtime.noteBoundKey(entry.field.key);
       for (let c = cls; c; c = c.base) {
         const authored = c.defaults?.get(entry.field.key);

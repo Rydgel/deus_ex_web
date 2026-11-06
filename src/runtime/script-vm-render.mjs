@@ -28,6 +28,7 @@ import {classRecordId, fieldKeyId} from './script-vm-lower.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {actorsEpoch} from './base-epoch.mjs';
 import {receiverEpoch} from './receiver-epoch.mjs';
+import {HandleMirror} from './actor-handle-mirror.mjs';
 
 /** The fields render.rs reads (R_*), in index order: [spelling, key, kind]. */
 export const RENDER_FIELDS = Object.freeze([
@@ -135,6 +136,7 @@ export class RenderScanHost {
     this.complete = false;
     this.bits = new WeakMap();
     this.listKey = null;
+    this.mirror = new HandleMirror();
     this.list = 0;
     this.listCapacity = 0;
     this.out = 0;
@@ -226,9 +228,9 @@ export class RenderScanHost {
       this.listCapacity = Math.max(4096, bytes * 2);
       this.list = this.vm.arena.alloc(this.listCapacity);
     }
-    const view = this.vm.arena.view;
-    view.setUint32(this.list, count, true);
-    for (let i = 0; i < count; i++) view.setUint32(this.list + 4 + 4 * i, actors[i] ? handleOf(actors[i]) : 0, true);
+    this.mirror.sync(actors);
+    this.vm.arena.view.setUint32(this.list, count, true);
+    new Uint32Array(this.vm.arena.memory.buffer, this.list + 4, count).set(this.mirror.handles.subarray(0, count));
     this.listKey = {actors, count, epoch};
     return this.list;
   }
