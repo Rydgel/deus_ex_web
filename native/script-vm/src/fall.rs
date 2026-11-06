@@ -20,6 +20,13 @@
 //! every Math.fround, and the 80-bit model (x87.rs `Ext`) where falling.mjs
 //! uses script-vm.mjs's `x87*` (the water and bBobbing integrations, the
 //! apex subdivision, the time refund).
+//!
+//! `perform_projectile` is the same for PHYS_Projectile (physProjectile,
+//! 0x103d4600; the reference is projectile.mjs `projectile` over
+//! script-actor-physics.mjs `runActorProjectile`): the host, the field table,
+//! the move and the tail are the falling body's; the HitWall event is
+//! `js_fall_bounce`'s, a bounce that left the actor falling hands the
+//! remaining time to the JavaScript physFalling (`js_fall_falling`).
 use crate::interp::{live, load32, load8, quiet, receiver_info, HOST};
 use crate::move_actor::{address, flag, store};
 use crate::move_pawn::{move_source, mp_io, MP_DONE};
@@ -49,8 +56,10 @@ const FF_WATER_ZONE: usize = 14;
 // Decoration's bBobbing (written for Decoration classes only).
 const FF_BOBBING: usize = 15;
 const FF_REGION_ZONE: usize = 16;
-// Region.ZoneNumber (17) is the host's, read in js_fall_begin.
-const FF_COUNT: usize = 18;
+// Projectile.MaxSpeed (physProjectile's clamp, for an engine.projectile only).
+const FF_MAX_SPEED: usize = 17;
+// Region.ZoneNumber (18) is the host's, read in js_fall_begin.
+const FF_COUNT: usize = 19;
 // The move table's rows (move-actor-kernel.mjs MOVE_FIELDS).
 const M_DELETE_ME: usize = 6;
 const M_LOCATION: usize = 9;
@@ -59,10 +68,10 @@ static mut FFIELDS: [[u32; 2]; FF_COUNT] = [[0; 2]; FF_COUNT];
 // FALL_IO: a handed-back move's answer [time, nx, ny, nz, actor handle],
 // or the zone fallback's [gravity 3, velocity 3, terminal, friction, water].
 static mut FALL_IO: [f64; 9] = [0.0; 9];
-// FALL_STATE: [0] the source is a Decoration (js_fall_begin writes it).
+// FALL_STATE: [0] the source is a Decoration, [1] an engine.projectile (js_fall_begin writes them).
 static mut FALL_STATE: [u32; 2] = [0; 2];
 // Counts for the differential (actor-physics-kernel.mjs RUST_COUNTS).
-static mut FALL_COUNTS: [u32; 16] = [0; 16];
+static mut FALL_COUNTS: [u32; 24] = [0; 24];
 const C_CALLS: usize = 0;
 const C_SUBSTEPS: usize = 1;
 const C_WATER: usize = 2;
@@ -79,6 +88,13 @@ const C_DELETED: usize = 12;
 const C_TAILS: usize = 13;
 const C_MOVE_HANDBACKS: usize = 14;
 const C_ZONE_FALLBACKS: usize = 15;
+const C_PROJECTILES: usize = 16;
+const C_PROJ_ITERATIONS: usize = 17;
+const C_PROJ_HITS: usize = 18;
+const C_PROJ_FALLS: usize = 19;
+const C_PROJ_CLAMPS: usize = 20;
+const C_PROJ_BOUNCES: usize = 21;
+const C_PROJ_WATER: usize = 22;
 #[inline(always)]
 fn count(i: usize) {
     unsafe { let c = core::ptr::addr_of_mut!(FALL_COUNTS); (*c)[i] = (*c)[i].wrapping_add(1); }
@@ -103,7 +119,7 @@ pub extern "C" fn fall_counts_ptr() -> *mut u32 {
 
 #[link(wasm_import_module = "env")]
 extern "C" {
-    fn js_fall_begin(ctx: u32) -> i32;
+    fn js_fall_begin(ctx: u32, physics: u32) -> i32;
     fn js_fall_move(depth: u32, dx: f64, dy: f64, dz: f64);
     fn js_fall_hit_wall(depth: u32, nx: f64, ny: f64, nz: f64, actor: u32);
     fn js_fall_bounce(depth: u32, nx: f64, ny: f64, nz: f64, actor: u32);
@@ -113,6 +129,7 @@ extern "C" {
     fn js_fall_error(depth: u32, code: u32);
     fn js_fall_tail(depth: u32, dt: f64);
     fn js_fall_end(ctx: u32, depth: u32);
+    fn js_fall_falling(depth: u32, remaining: f64, iterations: u32);
 }
 // js_fall_error codes (actor-physics-kernel.mjs ERRORS).
 const E_NO_ZONE: u32 = 1;
@@ -466,7 +483,7 @@ pub(crate) fn perform(ctx: u32, handle: u32, base: u32, dt: f64) -> bool {
     // static or immovable source (the map host's `playerMove` never tests
     // those) in js_fall_begin, which writes the tables first.
     if !(f(dt) > 0.0) || f(dt) > f(0.4) { return false; }
-    let depth = unsafe { js_fall_begin(ctx) };
+    let depth = unsafe { js_fall_begin(ctx, 2) };
     if depth < 0 { return false; }
     let depth = depth as u32;
     count(C_CALLS);
@@ -474,6 +491,119 @@ pub(crate) fn perform(ctx: u32, handle: u32, base: u32, dt: f64) -> bool {
     falling(&p, dt);
     // performActorPhysics's tail: physicsRotation for a nonzero
     // RotationRate component, then PendingTouch's PostTouch.
+    let tail = !same_image(handle, base) || {
+        let rate = at(base, FF_ROTATION_RATE);
+        (0..3).any(|i| load32(rate + 4 * i) & 0xffff != 0) || live(load32(at(base, FF_PENDING_TOUCH))) != 0
+    };
+    if tail {
+        count(C_TAILS);
+        unsafe { js_fall_tail(depth, dt) };
+    }
+    unsafe { js_fall_end(ctx, depth) };
+    true
+}
+
+/// projectile.mjs `projectile(host, seconds, 0, services)` after the zone-0
+/// test (the caller's): AActor::physProjectile (0x103d4600). `maxspeed` is
+/// set for an engine.projectile, whose MaxSpeed clamps the velocity.
+fn projectile(p: &Faller, seconds: f64, maxspeed: bool) {
+    // actor.oldPosition = [...actor.position]; actor.justTeleported = false.
+    write3(at(p.base, FF_OLD_LOCATION), p.position_bits());
+    p.clear_just_teleported();
+    let dt = l(bits(seconds));
+    let one = l(ONE_BITS);
+    let mut remaining = num(dt.store());
+    let mut bounces = 0;
+    let mut iterations = 0u32;
+    while remaining > 0.0 && iterations < 8 {
+        iterations += 1;
+        count(C_PROJ_ITERATIONS);
+        if p.water() {
+            count(C_PROJ_WATER);
+            // 0x103d46f5: 1 - (ZoneFluidFriction * remaining) * 0.2, stored to
+            // a float32 temporary; Z multiplies the register, X and Y the
+            // temporary.
+            let friction = l(p.zone_float_bits(FF_ZONE_FLUID_FRICTION));
+            let factor = sub87(one, friction.mul(l(bits(remaining))).mul(Ext::load_f64(0.2)));
+            let stored = l(factor.store());
+            let v = p.velocity_bits();
+            p.set_velocity_bits([stored.mul(l(v[0])).store(), stored.mul(l(v[1])).store(), factor.mul(l(v[2])).store()]);
+        }
+        // 0x103d4749: Velocity += Acceleration * remaining, the X and Y
+        // products stored to float32 temporaries, the Z product kept.
+        {
+            let t = l(bits(remaining));
+            let a = p.acceleration_bits();
+            let pz = t.mul(l(a[2]));
+            let py = l(t.mul(l(a[1])).store());
+            let px = l(t.mul(l(a[0])).store());
+            let v = p.velocity_bits();
+            p.set_velocity_bits([px.add(l(v[0])).store(), py.add(l(v[1])).store(), pz.add(l(v[2])).store()]);
+        }
+        let time_tick = remaining;
+        remaining = 0.0;
+        if maxspeed {
+            // 0x103d47d5: MaxSpeed^2 < (X*X + Y*Y) + Z*Z in 80-bit (C0: below
+            // or unordered) clamps to SafeNormal * MaxSpeed.
+            let v = p.velocity_bits();
+            let m = l(cell_bits(at(p.base, FF_MAX_SPEED)));
+            let (vx, vy, vz) = (l(v[0]), l(v[1]), l(v[2]));
+            let sum = vx.mul(vx).add(vy.mul(vy)).add(vz.mul(vz));
+            if m.mul(m).compare(sum).0 {
+                count(C_PROJ_CLAMPS);
+                p.set_velocity_bits(crate::safe_normal(v).map(|c| m.mul(l(c)).store()));
+            }
+        }
+        // 0x103d4853: the move is Velocity * DeltaTime (the call's argument,
+        // not this iteration's remaining time), one float32 store each.
+        let v = p.velocity_bits();
+        let delta = nums([dt.mul(l(v[0])).store(), dt.mul(l(v[1])).store(), dt.mul(l(v[2])).store()]);
+        let hit = p.move_by(delta);
+        if !same_image(p.handle, p.base) {
+            unsafe { js_fall_error(p.depth, E_IMAGE) };
+            return;
+        }
+        let time = l(bits(hit.time));
+        // x87cmp(time, ONE) 'lt' or 'un' is C0.
+        if !time.compare(one).0 || p.deleted() || p.just_teleported() { continue; }
+        count(C_PROJ_HITS);
+        unsafe { js_fall_bounce(p.depth, hit.normal[0], hit.normal[1], hit.normal[2], hit.actor) };
+        p.check_image();
+        if !p.bouncing() { continue; }
+        count(C_PROJ_BOUNCES);
+        if bounces < 2 { remaining = num(sub87(one, time).mul(l(bits(time_tick))).store()); }
+        bounces += 1;
+        if p.physics() == 2 {
+            count(C_PROJ_FALLS);
+            unsafe { js_fall_falling(p.depth, remaining, iterations) };
+            p.check_image();
+        }
+    }
+    if p.bouncing() || p.just_teleported() { return; }
+    // 0x103d49ab: Velocity = (Location - OldLocation) * (1 / DeltaTime). The Y
+    // and Z differences and the reciprocal are stored to float32; X
+    // multiplies both registers.
+    let position = p.position_bits();
+    let old = read3(at(p.base, FF_OLD_LOCATION));
+    let dx = sub87(l(position[0]), l(old[0]));
+    let dy = l(sub87(l(position[1]), l(old[1])).store());
+    let dz = l(sub87(l(position[2]), l(old[2])).store());
+    let reciprocal = one.div(dt);
+    let stored = l(reciprocal.store());
+    p.set_velocity_bits([reciprocal.mul(dx).store(), dy.mul(stored).store(), dz.mul(stored).store()]);
+}
+
+/// The actor tick's physics call for a non-Pawn in PHYS_Projectile (whether
+/// it ran here; false: the callback runs the whole call, nothing done).
+pub(crate) fn perform_projectile(ctx: u32, handle: u32, base: u32, dt: f64) -> bool {
+    let depth = unsafe { js_fall_begin(ctx, 6) };
+    if depth < 0 { return false; }
+    let depth = depth as u32;
+    count(C_PROJECTILES);
+    let maxspeed = unsafe { (*core::ptr::addr_of!(FALL_STATE))[1] } != 0;
+    let p = Faller { depth, handle, base, decoration: false };
+    projectile(&p, dt, maxspeed);
+    // performActorPhysics's tail, as the falling body's.
     let tail = !same_image(handle, base) || {
         let rate = at(base, FF_ROTATION_RATE);
         (0..3).any(|i| load32(rate + 4 * i) & 0xffff != 0) || live(load32(at(base, FF_PENDING_TOUCH))) != 0

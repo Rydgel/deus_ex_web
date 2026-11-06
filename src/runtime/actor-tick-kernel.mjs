@@ -318,6 +318,9 @@ export class ActorTickHost {
     // The level loop's LEVEL_IO: seconds and time at +0 and +8, the L_* words from +16, the deferred slots after them.
     this.levelAt = typeof x.level_io_ptr === 'function' ? x.level_io_ptr() : 0;
     this.levelWords = this.levelAt + 16;
+    // SCRIPT_VM_IMPORT_TIME=1 SCRIPT_VM_IMPORT_CLASS=1 (script-vm-rust.mjs timedImports): each import's time also by the class of the actor
+    // the level loop is ticking, as `<class key> <import>` rows beside the import's own (measurement only).
+    if (env.SCRIPT_VM_IMPORT_CLASS === '1') globalThis.__curActorKey = () => { try { const h = this.vm.arena.view.getUint32(this.levelWords + 4 * L_HANDLE, true); const r = identityOfHandle(h); return r ? this.runtime.instance(r).cls.record.key : '(none)'; } catch { return '(err)'; } };
     this.levelDeferred = this.levelWords + 4 * L_WORDS;
     this.vm.arena.view.setUint32(x.tick_empty_name_ptr(), nameCellWord(''), true);
     // The probe index of each js_tick_probing name, for tick.rs `probing`.

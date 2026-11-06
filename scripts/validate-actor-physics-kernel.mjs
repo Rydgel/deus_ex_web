@@ -1,8 +1,9 @@
-/** A falling non-Pawn's AActor::performPhysics in Rust
+/** A falling or projectile non-Pawn's AActor::performPhysics in Rust
  * (native/script-vm/src/fall.rs, host actor-physics-kernel.mjs,
  * docs/rust-core.md B6c) against its JavaScript reference
  * (actor-physics.mjs `performActorPhysics`, script-actor-physics.mjs
- * `runSpawnedActorFalling`, falling.mjs `falling`), `ACTOR_PHYSICS=js`.
+ * `runSpawnedActorFalling` and `runActorProjectile`, falling.mjs `falling`,
+ * projectile.mjs `projectile`), `ACTOR_PHYSICS=js`.
  *
  * Each run is made twice with the same inputs, on both paths at once: Island
  * as it plays (its crates float in WaterZone1), and both maps with
@@ -24,14 +25,20 @@ import {join} from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'actor-physics-kernel-'));
 const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '30', '--digest-every', '25'];
 const SCENARIO = 'scripts/scenarios/fall-branches.mjs';
+const PROJECTILES = 'scripts/scenarios/projectile-branches.mjs';
 const RUNS = [
   {map: '01_NYC_UNATCOIsland', name: 'as played', args: ['--ticks', '300']},
   {map: '01_NYC_UNATCOIsland', name: 'fall-branches', args: ['--ticks', '300', '--scenario', SCENARIO]},
   {map: '00_Training', name: 'fall-branches', args: ['--ticks', '300', '--scenario', SCENARIO]},
   {map: '01_NYC_UNATCOIsland', name: 'fall-branches at 20 Hz', args: ['--ticks', '200', '--dt', '0.05', '--scenario', SCENARIO]},
+  // PHYS_Projectile (fall.rs perform_projectile): decorations, items and spawned Tracers, Rockets and LAMs launched at walls, floors
+  // and water, past MaxSpeed, bouncing, and handed to physFalling; and the Dockyard's poison gas, as played (it flies through water).
+  {map: '01_NYC_UNATCOIsland', name: 'projectile-branches', args: ['--ticks', '300', '--scenario', PROJECTILES]},
+  {map: '09_NYC_Dockyard', name: 'poison gas as played', args: ['--ticks', '300']},
 ];
 // actor-physics-kernel.mjs RUST_COUNTS.
-const REQUIRED = ['water', 'bobbing', 'apex', 'blocked', 'bounces', 'landings', 'walls', 'slides', 'twoWalls', 'terminal', 'tails'];
+const REQUIRED = ['water', 'bobbing', 'apex', 'blocked', 'bounces', 'landings', 'walls', 'slides', 'twoWalls', 'terminal', 'tails',
+  'projectiles', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater'];
 // FellOutOfWorld stays the reference's.
 const DECLINES = new Set(['zone 0']);
 const totals = {};

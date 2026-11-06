@@ -10,9 +10,10 @@
 // differenced around it. The tick's slowest tenth by wall time and the other nine tenths are averaged per tick by key. A key's self
 // time leaves out the timed keys nested inside it: a call node's row is the JavaScript glue of the call, the callee's Rust
 // statements are the `wasm <function>` rows, its JavaScript statements `js statement ... (callee)` rows. Rows print to stderr at
-// exit; CENSUS_JSON=file also writes them, CENSUS_ROWS=n sets the row count (default 45), CENSUS_SORT=slow|diff (default diff).
+// exit; PLACE=json puts the player at a spot first, CENSUS_JSON=file also writes them, CENSUS_ROWS=n sets the row count (default 45), CENSUS_SORT=slow|diff (default diff).
 import {writeFileSync} from 'node:fs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import {placeProbe} from '../src/viewer/decal-probe.mjs';
 
 const WARM = Number(process.env.SCAN_WARM ?? 60), TICKS = Number(process.env.SCAN_TICKS ?? 300);
 export default ({game, runtime}) => {
@@ -75,6 +76,9 @@ export default ({game, runtime}) => {
   });
   return tick_ => {
     const player = game.player.collisionActor;
+    // PLACE='{"location":[x,y,z],"rotation":[0,yaw,0]}': the player is put there before the first tick (hitch-run.mjs --place), so a
+    // spot of the slow-spot census can be read without a browser; the scan route then turns from that heading
+    if (tick_ === 0 && process.env.PLACE) placeProbe(game, JSON.parse(process.env.PLACE));
     if (tick_ === 0) { fixture.key('KeyW', false); start = runtime.readNamed(player, 'ViewRotation'); }
     if (tick_ >= WARM && (tick_ - WARM) % Math.floor(TICKS / 4) === 0) {
       const k = Math.min(3, Math.floor((tick_ - WARM) / Math.floor(TICKS / 4)));

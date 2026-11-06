@@ -730,7 +730,8 @@ fn tick_body(
             let done = !a.host && if a.flags & C_PAWN != 0 {
                 (physics == 1.0 || physics == 3.0 || physics == 4.0) && crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)
             } else {
-                physics == 2.0 && crate::fall::perform(ctx, a.handle, a.base, delta)
+                (physics == 2.0 && crate::fall::perform(ctx, a.handle, a.base, delta))
+                    || (physics == 6.0 && crate::fall::perform_projectile(ctx, a.handle, a.base, delta))
             };
             if !done {
                 unsafe { js_tick_physics(ctx, delta) };
