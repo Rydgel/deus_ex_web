@@ -15,6 +15,7 @@
 //   node scripts/spot-census.mjs [--maps a,b,...|all] [--browser firefox|chromium] [--points 40] [--settle 500] [--record 750] [--z 8]
 //     [--dir .cache/perf/spot-census] [--god|--no-god] [--no-guard] (no flock/systemd-run) [--lock PATH] [--query k=v] [--url URL]
 //     [--skip REGEX] (maps not measured; default DXMP_*, Entry, DX, DXOnly) [--timeout-min 30] (a map's session is killed when its output has not advanced for this long)
+//   node scripts/spot-census.mjs --repair [--maps ...]      (only the spots a map's census left out: conversation, death, a stop)
 //   node scripts/spot-census.mjs --figures RUN.json...      (the spots of raw hitch-run.mjs --places runs, one line each)
 //   node scripts/spot-census.mjs --summary [--dir ...] [--browser ...] [--over 16.7] [--rows 60]     (the table only, from the saved <map>.spots.json files;
 //     --rebuild first rewrites those from the raw <map>.json runs)
@@ -59,7 +60,7 @@ export function mapFigures(run, extra = {}) {
     const state = spot.player?.state ?? null, cut = Boolean(run.ended) && spot === run.spots.at(-1);
     const target = run.args ? run.args[run.args.indexOf('--map') + 1] : run.status?.map, inMap = !spot.map || String(spot.map).toLowerCase() === String(target).toLowerCase();
     return {map: target ?? null, index: spot.id ?? spot.i, label: spot.label, location: want, yaw: spot.rotation[1], position: spot.position ?? [], moved,
-      state, conversation: spot.conversation ?? null, attempts: spot.attempts ?? 1, valid: inMap && !cut && (state === null || state === 'PlayerWalking') && moved < 150, ...f, ...extra};
+      state, conversation: spot.conversation ?? null, fog: spot.fog ?? null, attempts: spot.attempts ?? 1, valid: inMap && !cut && (state === null || state === 'PlayerWalking') && moved < 150, ...f, ...extra};
   });
 }
 
@@ -94,19 +95,30 @@ if (flag('figures')) {
   }
   process.exit(0);
 }
+/** One map's <browser>-<map>.spots.json from every raw run saved for it (<map>.json, a continued session's <map>.s2.json, a repair's
+ * <map>.r1.json): per spot index the last valid measurement, else the last one. */
+function mergeMap(map) {
+  const files = readdirSync(dir).filter(f => f.startsWith(`${engine}-${map}.`) && f.endsWith('.json') && !/\.(spots|places)\.json$/.test(f)
+    && new RegExp(`^${engine}-${map}(\\.[sr]\\d+)?\\.json$`).test(f)).sort();
+  const byIndex = new Map();
+  let sim = null;
+  for (const f of files) {
+    const run = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
+    sim = run.status?.sim ?? sim;
+    for (const spot of run.spots?.length ? mapFigures(run, {browser: engine}) : []) {
+      const old = byIndex.get(spot.index);
+      if (!old || spot.valid || !old.valid) byIndex.set(spot.index, spot);
+    }
+  }
+  const spots = [...byIndex.values()].sort((a, b) => a.index - b.index);
+  if (spots.length) writeFileSync(path.join(dir, `${engine}-${map}.spots.json`), JSON.stringify({map, browser: engine, sim, runs: files.length, spots}));
+  return spots;
+}
 if (flag('rebuild')) {
-  // the per-map <browser>-<map>.spots.json again, from the raw runs hitch-run.mjs saved (<map>.json and a continued session's <map>.s2.json...)
-  const byMap = new Map();
-  for (const f of readdirSync(dir).filter(f => f.startsWith(`${engine}-`) && f.endsWith('.json') && !/\.(spots|places)\.json$/.test(f))) {
-    const map = f.slice(engine.length + 1, -5).replace(/\.s\d+$/, '');
-    (byMap.get(map) ?? byMap.set(map, []).get(map)).push(f);
-  }
-  for (const [map, runs] of byMap) {
-    const spots = [];
-    let sim = null;
-    for (const f of runs.sort()) { const run = JSON.parse(readFileSync(path.join(dir, f), 'utf8')); sim = run.status?.sim; if (run.spots?.length) spots.push(...mapFigures(run, {browser: engine})); }
-    if (spots.length) writeFileSync(path.join(dir, `${engine}-${map}.spots.json`), JSON.stringify({map, browser: engine, sim, spots}));
-  }
+  // the per-map <browser>-<map>.spots.json again, from the raw runs hitch-run.mjs saved
+  const maps = new Set(readdirSync(dir).filter(f => f.startsWith(`${engine}-`) && f.endsWith('.json') && !/\.(spots|places)\.json$/.test(f))
+    .map(f => f.slice(engine.length + 1, -5).replace(/\.[sr]\d+$/, '')));
+  for (const map of maps) mergeMap(map);
 }
 if (flag('summary') || flag('rebuild')) {
   const text = summary(dir, Number(option('over', 16.7)), Number(option('rows', 60)));
@@ -166,9 +178,21 @@ try {
     // One session per map; when the player dies (the session ends on DXOnly: the Airfield's spot 136), a spot's trigger takes the session to
     // another map, or the simulation stops on an unsupported branch (06_HongKong_Storage: FastLineCheck), the spots after it are visited in a
     // further session (<map>.s2.json...) and the spot itself is left out.
-    let remaining = places.map((p, id) => ({...p, id})), spots = [], sim = null, ended = null, sessions = 0;
+    let remaining = places.map((p, id) => ({...p, id})), sim = null, ended = null, sessions = 0, letter = 's';
+    if (flag('repair')) {
+      // --repair: only the spots a first pass could not measure (drawn from a conversation camera, cut off by a death or a stop), now that a
+      // placement ends a conversation first; the runs are saved as <map>.r1.json... and merged into the map's table.
+      const have = existsSync(`${base}.spots.json`) ? JSON.parse(readFileSync(`${base}.spots.json`, 'utf8')).spots : null;
+      if (!have) { console.log(`${map}: no census to repair`); continue; }
+      const good = new Set(have.filter(x => x.valid).map(x => x.index));
+      remaining = remaining.filter(p => !good.has(p.id)); letter = 'r';
+      if (!remaining.length) { console.log(`${map}: nothing to repair`); continue; }
+      console.log(`${map}: repairing ${remaining.length} of ${places.length} spots`);
+    }
+    let round = letter === 'r' ? readdirSync(dir).filter(f => new RegExp(`^${engine}-${map}\\.r\\d+\\.json$`).test(f)).length : 0;
     while (remaining.length && sessions < 5) {
-      const out = sessions++ ? `${base}.s${sessions}` : base, placesFile = `${out}.places.json`;
+      sessions++;
+      const out = letter === 'r' ? `${base}.r${++round}` : sessions > 1 ? `${base}.s${sessions}` : base, placesFile = `${out}.places.json`;
       writeFileSync(placesFile, JSON.stringify(remaining));
       const args = ['scripts/hitch-run.mjs', '--browser', engine, '--map', map, '--places', placesFile, '--place-settle', settle, '--place-record', record,
         '--url', url, '--out', out, ...(flag('no-god') ? [] : ['--god']), ...(option('query', null) ? ['--query', option('query', null)] : [])];
@@ -176,14 +200,13 @@ try {
       if (code || !existsSync(`${out}.json`)) { console.log(`${map}: failed (exit ${code})`); failed.push({map, why: `exit ${code}`}); break; }
       const run = JSON.parse(readFileSync(`${out}.json`, 'utf8'));
       sim = run.status?.sim; ended = run.ended;
-      spots.push(...mapFigures(run, {browser: engine}));
       const last = run.spots?.at(-1);
       if ((String(run.status?.map).toLowerCase() === map.toLowerCase() && !run.ended) || !last) { remaining = []; break; }
       console.log(`${map}: the session ended on ${run.status?.map} (${run.ended ?? 'left the map'}) at spot ${last.id ?? last.i} (${last.player?.state}); the rest follow in another session`);
       remaining = remaining.filter(p => p.id > (last.id ?? last.i));
     }
+    const spots = mergeMap(map);
     if (!spots.length) continue;
-    writeFileSync(`${base}.spots.json`, JSON.stringify({map, browser: engine, sim, ended, spots}));
     const valid = spots.filter(x => x.valid), worst = [...valid].sort((a, b) => b.page.p50 - a.page.p50)[0];
     console.log(`${map}: ${valid.length}/${spots.length} valid spots in ${Math.round((Date.now() - started) / 1000)} s, sim ${sim}, worst p50 ${f1(worst?.page.p50)} (${worst?.top.join(', ')}), ended ${ended}`);
   }

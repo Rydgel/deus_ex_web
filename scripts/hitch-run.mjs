@@ -213,9 +213,9 @@ async function driver(){
         start=await page.evaluate(()=>performance.now());
         await page.waitForTimeout(recordMs);
         end=await page.evaluate(()=>performance.now());
-        now=await page.evaluate(async()=>{const s=window.deusExViewer.status(),v=await window.deusExViewer.viewProbe({});return {position:s.position,map:s.map,player:{location:v.location.map(Math.round),physics:v.physics,state:v.state,region:v.region},conversation:v.state==='PlayerWalking'?null:JSON.stringify((await window.deusExViewer.conversationProbe({}))?.conPlay?.con??null)};});
+        now=await page.evaluate(async()=>{const s=window.deusExViewer.status(),v=await window.deusExViewer.viewProbe({});return {position:s.position,map:s.map,player:{location:v.location.map(Math.round),physics:v.physics,state:v.state,region:v.region},conversation:v.state==='PlayerWalking'?null:JSON.stringify((await window.deusExViewer.conversationProbe({}))?.conPlay?.con??null),fog:(f=>f?{surfaces:f.stats.surfaces,drawn:f.stats.drawn,texels:f.stats.texels,movers:f.stats.movers,frameMaps:f.stats.frameMaps}:null)(window.deusExViewer.fog?.())};});
       }while(now.player.state!=='PlayerWalking'&&attempts<2);
-      spots.push({i,id:spot.id??i,label:spot.label??null,location:spot.location,rotation:spot.rotation,start,end,position:now.position,map:now.map,player:now.player,conversation:now.conversation,attempts});
+      spots.push({i,id:spot.id??i,label:spot.label??null,location:spot.location,rotation:spot.rotation,start,end,position:now.position,map:now.map,player:now.player,conversation:now.conversation,fog:now.fog,attempts});
       if(String(now.map).toLowerCase()!==map.toLowerCase()){errors.push(`driver: the session left ${map} for ${now.map}`);break;}
     }
     driverDone=true;
