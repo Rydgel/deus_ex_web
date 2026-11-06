@@ -84,7 +84,7 @@ async function play() {
     // is multisampled by default (main.mjs), which anti-aliases every polygon edge and every sub-4-pixel mesh. The comparison
     // runs with ?antialias=0 unless --antialias on.
     // The original's frames lack the detail-texture pass (docs/visual-acceptance.md "Detail textures"): Play draws without it unless --detail on.
-    const query = [option('antialias', 'off') === 'on' ? '' : 'antialias=0',
+    const query = [option('antialias', 'off') === 'on' ? '' : 'antialias=0', 'fogNotes=1',
       option('detail', 'off') === 'on' || /detailTextures=/.test(option('query', '')) ? '' : 'detailTextures=0', option('query', '')].filter(Boolean).join('&');
     await page.goto(debugUrl(`${url}/${query ? `?${query}` : ''}`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});

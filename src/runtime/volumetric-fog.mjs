@@ -203,21 +203,37 @@ const kernelsWithTable = new WeakSet();
 // FOG_EXACT=1 (Node only) keeps every texel on the Ext model, for A/B runs
 // of fog.rs's certain-rounding fast path.
 const FOG_EXACT = typeof process !== 'undefined' && process.env?.FOG_EXACT === '1';
-export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 } }) {
-  if (!lights.length) return null;
-  const fog = kernel.fog;
-  if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); if (FOG_EXACT) fog.setExact(true); kernelsWithTable.add(fog); }
+/** The frame's lights sorted and packed for the kernel: the words (nine per light) and the colour tables. */
+function packLights(lights) {
   const sorted = sortVolumetricLights(lights), words = new Uint32Array(sorted.length * 9), tables = new Uint8Array(sorted.length * 1024);
   sorted.forEach((light, k) => {
     words.set([...light.location.map(bitsOf), bitsOf(light.radiusSq), bitsOf(light.invRadius), bitsOf(light.invRadiusSq),
       bitsOf(light.distanceSq), bitsOf(light.brightness), light.inside ? 1 : 0], k * 9);
     tables.set(light.table, k * 1024);
   });
-  fog.lights(words); fog.tables(tables);
+  return { count: sorted.length, words, tables };
+}
+// A frame's surfaces share one `lights` array (fog-pass.mjs lightsFor: one per frame's coords, never changed after), and the sort, the words
+// and the 1 KB colour tables depend on it alone: they are built once for the array and written into the kernel when the kernel holds another
+// (Firefox, Underground: the per-surface sort and copies were 1.5 to 2 ms of a 14 ms fog phase). FOG_LIGHTS=each in Node, ?fogLights=each in
+// the page, keep the pack and the writes for every surface.
+const lightPacks = new WeakMap(), kernelLights = new WeakMap();
+const lightsEachSurface = () => globalThis.DEUS_EX_FOG_LIGHTS === 'each' || (typeof process !== 'undefined' && process.env?.FOG_LIGHTS === 'each');
+export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 } }) {
+  if (!lights.length) return null;
+  const fog = kernel.fog;
+  if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); if (FOG_EXACT) fog.setExact(true); kernelsWithTable.add(fog); }
+  let pack;
+  if (lightsEachSurface()) { pack = packLights(lights); fog.lights(pack.words); fog.tables(pack.tables); kernelLights.delete(fog); }
+  else {
+    pack = lightPacks.get(lights);
+    if (!pack) lightPacks.set(lights, pack = packLights(lights));
+    if (kernelLights.get(fog) !== lights) { fog.lights(pack.words); fog.tables(pack.tables); kernelLights.set(fog, lights); }
+  }
   fog.grid([...coordsTransform(grid.base, coords), ...coordsTransform(grid.stepU, coords, false),
     ...coordsTransform(grid.stepV, coords, false)].map(bitsOf));
   fog.setMiss(state.missFlag);
-  const texels = fog.map(width, height, sorted.length);
+  const texels = fog.map(width, height, pack.count);
   state.missFlag = fog.miss();
   return texels;
 }
