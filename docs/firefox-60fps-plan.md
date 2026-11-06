@@ -663,6 +663,8 @@ three features above, A/B'd as a bundle against all switches at `js`; expected a
 the bar, and each feature needs its own verify mode. The tenth stays where the natives' bodies put it: 8.70 ms in Node with 3.4 spawns,
 1.4 destroys and 6.6 decal attaches a tick.
 
+(That experiment is the next entry: it passed the bar.)
+
 ### The bunker bundle (2026-11-06)
 
 The task: the [seven exact host cuts](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06) and the three Rust VM features the
@@ -693,7 +695,24 @@ error. What the verify runs compared (the host's counters, `script-vm-foreach.mj
 | Island | 327,750 | 18,012 | 71,252 | 1 |
 | Wan Chai | 33,239 | 18,012 | 34,976 | 1 |
 
-(No actor without a class row reached `classIsA` in any of them: that branch is checked by reading only.) `cargo` is warning-free.
+(No actor without a class row reached `classIsA` in any of them: the validator below covers that branch.) `cargo` is warning-free.
+
+`scripts/validate-script-vm-interp.mjs` (156 kinds, 539,987 checks) gained the three kinds: the cell (current, stale, the verify word, a context
+receiver, `SCRIPT_VM_CHECK`); struct out arguments over a local and over a SELF field for six value sets (a released object, `-0`, a denormal,
+infinity, the extremes of the int, bools sharing a word with other bits set), the padding and neighbours untouched, the unaddressable
+source going to JavaScript whole, two out parameters over one source copied back last first, an omitted argument, the call's value; and the
+foreach against `createCycleActorsIterator` itself over a 11-slot array (null slots, an actor without a class row), five base classes, seven
+start indices (in range, at the count, beyond it, negative) and three break points (105 loops), the yields (a re-entered run, no list, a host
+receiver) and the Return with an iterator active. The statement kind it used for "unknown" (10) is now 11.
+The families' validators pass: iterator-frames-play, play-hud, triggers, trigger-actions, triggerlight-animated, mover-push-play,
+native-mover-push, rider-move-kernel, script-sound-* (4), decal-* (7), input-bindings, keypad, flagbase-iterators, native-config(-classes),
+console-command; `test/player-pawn-graph.test.mjs` and `test/native-registry.test.mjs` (a new `index` comparison in the lowering had to keep
+off the registry scan's pattern) pass.
+
+**In the browsers** (`hitch-run.mjs --mode scan --god --seconds 40 --probe-switches`, which this step added: the DEUS_EX_* switches the
+simulation realm holds, from `processProbe`): Firefox inline with every switch of the bundle at `verify`, 2,448 drawn frames and no page error;
+Chromium in worker mode with the same switches, 2,657 drawn frames, no page error, and the worker's own `processProbe().switches` lists all nine, so
+the page's `?flag=` reaches the worker through `init`; Chromium worker with the defaults, 2,660 drawn frames, no page error.
 
 **Firefox inline A/B, bunker**, four interleaved pairs (`hitch-ab.mjs --arms "new:,old:playerPawn=js&outStruct=js&foreachStart=js&riderTable=js&compactScan=js&soundRead=js&decalFollow=js&configFind=js&inputFields=js"
 --pairs 4 --prefix bunker --dir .cache/perf/bunker-bundle -- --browser firefox --map 15_Area51_Bunker --mode scan --god --seconds 60`; the order alternating; `hitch-ab-table.mjs`). ms:
@@ -732,6 +751,10 @@ only the start the census ranked. No arm-by-arm split was measured.
 epoch word Rust compares would take that import away. Callee runs only: a foreach in a run JavaScript enters again after every
 statement stays on the JavaScript stack. `classIsA` for an actor the class table does not describe is a crossing (never taken in these routes).
 The other `out` parameter shapes (scalars, vectors) ride on the same `P_*` path and are not lowered.
+
+**Result.** The bundle meets both bars on the bunker (0.36 against 0.3 ms in the mean tick, 0.82 against 0.5 ms in the slowest tenth) and
+the Island gains more. It is code on branch `worktree-agent-a53906c07b675a25f`, committed and not merged; the page p95 of the bunker stays over
+16.7 ms in headless Firefox (20.5 ms), which the remaining host work (decal attach, spawns, destroys: [the list above](#bunker-slow-tick-cuts-seven-switches-not-merged-2026-11-06)) has to close.
 
 ### The collision hash reads the image (2026-11-05)
 
