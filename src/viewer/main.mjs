@@ -93,7 +93,9 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
 // CycleActors and ?actorScan= for AllActors and RadiusActors (script-iterators.mjs),
 // ?destroyScan= for DestroyActor's SetOwner/EndTouch scan (script-destroy.mjs), ?fogUpload=page for
-// whole fog pages and ?fogCopy=from for the fog maps' `from` copies (fog-pass.mjs), ?levelScan= for the level loop's
+// whole fog pages and ?fogCopy=from for the fog maps' `from` copies (fog-pass.mjs), ?fogLights=each for the fog kernel's lights sorted and
+// written for every surface (volumetric-fog.mjs fogMapKernel), ?fogNotes=1 for the fog pass' validation notes
+// (fog-pass.mjs; validate-volumetric-fog-play.mjs asks for it), ?levelScan= for the level loop's
 // DistanceFromPlayer and compaction passes (level.rs), ?levelLoop= for its
 // actor loop (level_loop.rs, actor-tick-kernel.mjs `batch`), ?farMove= for the
 // noncolliding FarMoveActor (render.rs far_move), ?particles= for
@@ -146,7 +148,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
-  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
   ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['outStruct','DEUS_EX_OUT_STRUCT'],['foreachStart','DEUS_EX_FOREACH_START'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS']]) {

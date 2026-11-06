@@ -32,6 +32,11 @@ import { FOG_RENDER_ORDER, FOG_RENDER_ORDER_LAST, FOG_RENDER_ORDER_MASKED } from
  * then the mover items' in draw-list order. The display ramp maps the
  * finished frame after the pass blends (display-ramp.mjs), unless
  * ?gamma=material. */
+/** Validation notes (`stats.moverCase`, `frameCase`, `moverItems`: the most fogged maps with their oracle inputs, and why a mover item has none) are
+ * built only when asked (?fogNotes=1, FOG_NOTES=1 in Node): they cost a spread over every mover item's texels, a pass over every map's alpha and
+ * a flatMap of every fragment point each frame (Firefox, Underground: about 1 ms of a 14 ms fog phase). ?fogNotes=1 is what
+ * validate-volumetric-fog-play.mjs and camera-acceptance.mjs ask for; the counters (surfaces, drawn, texels, movers, frameMaps) are always kept. */
+const fogNotesOn = () => globalThis.DEUS_EX_FOG_NOTES === '1' || (typeof process !== 'undefined' && process.env?.FOG_NOTES === '1');
 /** 'tiles' (default): a page whose texture is on the GPU takes only the tiles the frame wrote (copyTextureToTexture from its
  * pixels); 'page' re-uploads every written page whole (?fogUpload=page). */
 const fogUploadMode = () => globalThis.DEUS_EX_FOG_UPLOAD || (typeof process !== 'undefined' && process.env?.FOG_UPLOAD) || 'tiles';
@@ -45,6 +50,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
   const stats = { surfaces: 0, moverPolygons: 0, lights: 0, drawn: 0, texels: 0, kernel: Boolean(kernel) };
   const size = lightAtlas.size;
+  let diagnostics = false;
   // Where a surface's fog map draws among the frame's items (render-layers.mjs: after its surface, a masked one's in the
   // non-occluding list's band); `last` (validation, setLast) puts every map after the other world items.
   let last = false;
@@ -129,6 +135,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   /** Validation (validate-volumetric-fog-play.mjs): the most fogged map of
    * a kind this update, with the loop's inputs for the oracle. */
   function note(key, what, texels, input, missFlag, coords) {
+    if (!diagnostics) return;
     let alpha = 0;
     for (let t = 3; t < texels.length; t += 4) alpha += texels[t];
     if (!alpha || alpha <= (stats[key]?.alpha ?? 0)) return;
@@ -225,11 +232,11 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const record = moverPolygons.get(`${item.mover}:${item.polygon}`);
       // Diagnostics: each item of the root frame, with the map's largest texel or why it has none (stats.moverItems).
       const why = !record ? 'no lit polygon record' : !item.facet ? 'no facet' : !fogZone?.(item.zone) ? `zone ${item.zone} not bFogZone` : null;
-      if (why) { if (frame === 0) noteItem(item, why); continue; }
+      if (why) { if (frame === 0 && diagnostics) noteItem(item, why); continue; }
       const basis = moverBasis(record, item.facet);
       const input = fogInput(record, moverGrid(basis), coords, frameLights, state), missFlag = state.missFlag;
       const texels = kernel ? fogMapKernel(kernel, input) : fogMap(input);
-      if (frame === 0) {
+      if (frame === 0 && diagnostics) {
         const g = input.grid, far = g.base.map((v, k) => v + g.stepU[k] * record.width + g.stepV[k] * record.height), r = v => v.map(x => Math.round(x)).join(',');
         noteItem(item, `${texels ? `max texel ${Math.max(...texels)}` : 'no texels'} lattice ${r(g.base)}..${r(far)} ${record.width}x${record.height} facet ${r(item.facet.slice(0, 3))} n ${item.facet.slice(9, 12).map(x => x.toFixed(2)).join(',')}`);
       }
@@ -335,6 +342,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * frame's maps in place for its pass. */
     update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null, renderer = null } = {}) {
       stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null; stats.moverItems = [];
+      diagnostics = fogNotesOn();
       childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
       for (const slot of items) slot.mesh.visible = false;
       if ((!surfaces.length && !moverPolygons.size) || !lights.length) return;
@@ -375,9 +383,9 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       });
       moverMaps(moverItems, fogZone, coords, frameLights, state, 0, (item, texels, input, missFlag, basis) => {
         stats.movers++; stats.texels += input.width * input.height;
-        // Validation (validate-volumetric-fog-play.mjs): the frame's most
-        // fogged mover item, with the loop's inputs for the oracle and its
-        // fragments' light-map coordinates (texel units) on the map.
+        // Validation (validate-volumetric-fog-play.mjs, ?fogNotes=1): the frame's most fogged mover item, with the loop's inputs for the
+        // oracle and its fragments' light-map coordinates (texel units) on the map.
+        if (!diagnostics) return;
         const uv = item.fragments.flatMap(points => Array.from({ length: points.length / 3 },
           (_, k) => basis.uv([points[3 * k], points[3 * k + 1], points[3 * k + 2]])));
         note('moverCase', { mover: item.mover, polygon: item.polygon, zone: item.zone, fragments: item.fragments.length,

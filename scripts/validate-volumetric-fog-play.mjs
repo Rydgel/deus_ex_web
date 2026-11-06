@@ -52,7 +52,8 @@ let report;
 try {
   const page = await browser.newPage({viewport: {width: 1024, height: 640}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`));
+  // (fogNotes=1: the fog pass builds the notes this validator reads, stats.moverCase and frameCase; Play does not)
+  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/?${['fogNotes=1', query].filter(Boolean).join('&')}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});
