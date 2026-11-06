@@ -236,7 +236,9 @@ stop=true;await driving;sampling=false;await sampler;
 await page.keyboard.up('KeyW').catch(()=>{});
 if(throttle>1&&cdp)await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
 const status=await page.evaluate(()=>{const s=window.deusExViewer.status(),c=document.getElementById('scene');
-  return {map:s.map,sim:s.sim,paused:s.paused,runtimeError:s.runtimeError?.message??s.runtimeError,position:s.position,canvas:[c.width,c.height]};});
+  return {map:s.map,sim:s.sim,paused:s.paused,runtimeError:s.runtimeError?.message??s.runtimeError,position:s.position,canvas:[c.width,c.height],
+  // the mirror pass's stats of the last frame drawn (mirrors.mjs stats: planes drawn, recursion depth reached, scissor pixels): whether a placed view shows a mirror
+  mirrors:s.mirrors??null};});
 // --screenshot FILE: the page as it is at the end of the run (the HUD drawn from the worker's snapshot)
 if(option('screenshot',null))await page.screenshot({path:option('screenshot',null)});
 const dump=await page.evaluate(()=>window.deusExHitch?window.deusExHitch.dump({full:true}):null);
