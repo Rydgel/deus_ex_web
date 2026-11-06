@@ -386,6 +386,16 @@ phase. `anyFog` loops over 32-bit words instead, with the same answer. Battery P
 against the three tiles sessions above: the fog phase 2.44 to 2.54 → 1.24 to 1.34 ms, the page frame p50 20 to 21 → 17 to 18 ms and
 p95 23 to 24 → 21 to 22 ms. validate-volumetric-fog-play passes.
 
+**The child frames' restore (2026-11-06).** After each child frame's pass, `framePass(null)` puts the root frame's tiles back. It
+copied them with `copyTextureToTexture` from `mainSource`, a texture over the whole page, so Firefox copied the page's
+size × size × 4 bytes for every tile restored, after every child pass. Beside the Paris Club's two large mirrors, which meet at a
+corner and reflect each other to recursion 3, that was 165 MB and 36 ms a frame. The user reported the drop as about 30 fps on the
+Mac. The restore now copies the tile's padded rectangle of the page pixels into the surface's tile-sized `scratch`, the source the
+child maps already use, and copies from that. The GPU receives the same texels; `?fogUpload=page` keeps the page source.
+* **Cost:** headless Firefox inline, 10_Paris_Club, `hitch-run.mjs --mode idle --god --seconds 30 --place
+  '{"location":[-100,-1250,40],"rotation":[0,52436,0]}'` (looking at the corner of surfaces 231 and 232): page frame p50 59 → 17 ms,
+  16 → 57 fps, `p.mirrors` 44.9 → 4.0 ms, uploads 165 → 0.85 MB a frame (the same 292 calls).
+
 ## Mesh fog
 
 Recovered 2026-10-06 from Render.dll, D3DDrv.dll (`9e0f8a42…d8ac9f`) and

@@ -422,7 +422,16 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     framePass(frame, renderer) {
       if (!frame) {
         if (!passTiles) return;
-        for (const surface of passTiles) copyTile(renderer, surface, mainSource(surface.fogPage), surface.tile.x - 1, surface.tile.y - 1);
+        // The root frame's padded tile, through the surface's tile-sized scratch: copyTextureToTexture from the whole page
+        // (mainSource) made Firefox copy the page's size * size * 4 bytes for every tile restored, after every child pass (the
+        // Paris club's two facing mirrors: 165 MB and 36 ms a frame). ?fogUpload=page keeps the page source.
+        const tight = fogUploadMode() === 'tiles';
+        for (const surface of passTiles) {
+          const { record, tile, fogPage } = surface;
+          if (!tight) { copyTile(renderer, surface, mainSource(fogPage), tile.x - 1, tile.y - 1); continue; }
+          surface.scratch.pixels.set(rectangle(fogPage.pixels, tile.x - 1, tile.y - 1, record.width + 2, record.height + 2));
+          copyTile(renderer, surface, surface.scratch.texture, 0, 0);
+        }
         for (const surface of surfaces) surface.mesh.visible = surface.mainVisible ?? false;
         for (let i = 0; i < itemsUsed; i++) items[i].mesh.visible = items[i].frame === 0;
         passTiles = null;
