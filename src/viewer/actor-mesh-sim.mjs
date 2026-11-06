@@ -16,7 +16,7 @@ import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodM
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
 import {receiverEpoch} from '../runtime/receiver-epoch.mjs';
-import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
+import {RENDER_MESH,RENDER_SHIFT,renderScanMode,RS_ABSENT,RS_MESH,RS_NOT_OK,RS_STALE} from '../runtime/script-vm-render.mjs';
 import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
 import {nameCellWord} from '../runtime/script-name-ids.mjs';
 import {FieldReader,fieldReaders,hasReader} from './actor-fields.mjs';
@@ -700,7 +700,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
     }
     // (made once per binding: inside meshChanged it made a context object at every call, for every binding of every frame)
     const readChanged=()=>{try{return own.Mesh()!==meshReference;}catch{return true;}};
-    const binding={id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},
+    const binding={id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},meshHandle,row:-1,
       get viewDependent(){return hasEnvironment&&mode==='cpu';},
       get path(){return mode;},
       /** This binding's special vertices (the invisible attachment triangle the LodMesh keeps ahead of its
@@ -1118,6 +1118,37 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   const actors=[],bindings=new Map();
   // Bumped whenever `actors` gains or loses a binding (the pair table of meshReads follows it).
   let actorsVersion=0;
+  // The roster (render.rs roster_reads, docs/firefox-60fps-plan.md "Actors layer in bulk"): one row of four words in the arena for each
+  // binding of `actors`, in its order (the actor's handle, the binding's block, the handle of the Mesh it was made for, its index in
+  // Level.Actors), which the Rust pass reads the blocks, the membership and the Mesh change from for every binding at once. Rows are
+  // kept with the list (rowAdd at a take, rowRemove at a retire) whatever the mode, so a frame the pass cannot run in
+  // (RENDER_SCAN=js, an incomplete field table) takes the JavaScript path and the next one the pass. ACTOR_PLUMBING=no-roster keeps
+  // that path always.
+  const ROW_WORDS=4,NO_POS=0xffffffff;
+  let rows=0,rowsCapacity=0,rowCount=0,rowsDirty=true,positionsEpoch=-1;
+  const rowsArena=()=>runtime.scriptVm?.arena??null;
+  const rowsView=()=>new Uint32Array(rowsArena().memory.buffer);
+  const rowWrite=(k,binding)=>{
+    const u32=rowsView(),at=(rows>>2)+ROW_WORDS*k;
+    u32[at]=handleOf(binding.actor);u32[at+1]=binding.block||0;u32[at+2]=binding.meshHandle??0;u32[at+3]=NO_POS;
+  };
+  const rowAdd=binding=>{
+    const arena=rowsArena();
+    if(!arena)return;
+    if(ROW_WORDS*4*(rowCount+1)>rowsCapacity){
+      const grown=Math.max(4096,2*ROW_WORDS*4*(rowCount+1)),next=arena.alloc(grown);
+      if(rows){new Uint32Array(arena.memory.buffer).copyWithin(next>>2,rows>>2,(rows>>2)+ROW_WORDS*rowCount);arena.release(rows,rowsCapacity);}
+      rows=next;rowsCapacity=grown;
+    }
+    binding.row=rowCount;rowWrite(rowCount,binding);rowCount++;rowsDirty=true;
+  };
+  const rowRemove=binding=>{
+    const k=binding.row;
+    if(!rows||k<0||k>=rowCount||actors[k]===binding)return;   // (called after the list lost the binding: its place holds the next one)
+    rowsView().copyWithin((rows>>2)+ROW_WORDS*k,(rows>>2)+ROW_WORDS*(k+1),(rows>>2)+ROW_WORDS*rowCount);
+    rowCount--;binding.row=-1;
+    for(let j=k;j<actors.length;j++)actors[j].row=j;
+  };
   if(asset.name.toLowerCase()==='00_training') {
     // Measured GObjObjects identities from the same original Training
     // capture select fixtures and cache keys, never character-specific
@@ -1129,7 +1160,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(runtime.readNamed(actor,'bHidden'))continue;
         const binding=await bind(actor,{originalObjectIndex});
         binding.creation.visible=true;
-        npcActors.push(binding);actors.push(binding);actorsVersion++;bindings.set(actor,binding);emitCreation(binding);
+        npcActors.push(binding);actors.push(binding);rowAdd(binding);actorsVersion++;bindings.set(actor,binding);emitCreation(binding);
       } catch(error) {npcErrors.push({actor:name,message:error.message});}
     }
     if(npcActors.length)errors.push(...npcErrors);
@@ -1231,7 +1262,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const options={id:nextId++,kernel,lighting,layout,textures,lod,originalObjectIndex:synthetic++,visible:drawnInWorld,
       childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,reads:true};
     const take=binding=>{
-      bindings.set(actor,binding);actors.push(binding);actorsVersion++;(npc?npcActors:propActors).push(binding);refreshSummary();
+      bindings.set(actor,binding);actors.push(binding);rowAdd(binding);actorsVersion++;(npc?npcActors:propActors).push(binding);refreshSummary();
       // Shown from admission, before its first update (as the layer did).
       binding.creation.visible=drawnInWorld(actor);
       emitCreation(binding);
@@ -1259,6 +1290,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     weapons.drop(binding);
     binding.dispose();bindings.delete(actor);onRelease(binding.id);
     for(const list of [actors,propActors,npcActors]){const at=list.indexOf(binding);if(at>=0)list.splice(at,1);}
+    rowRemove(binding);
     actorsVersion++;
     refreshSummary();
   };
@@ -1290,27 +1322,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     liveEpoch=epoch;
     return true;
   };
-  const reconcile=(reads=null)=>{
+  const reconcileJs=(reads=null)=>{
     if(disposed||!level)return;
-    const epoch=actorsEpoch();
-    if(epoch!==liveEpoch&&live&&extendLive(epoch)){
-      // (Level.Actors only grew at its end: the set, the list, the index and the accessors were extended in place)
-    }else if(epoch!==liveEpoch||!live){
-      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];liveMembers=level.actors.slice();liveActors=level.actors;
-      levelIndex=new Map();
-      for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
-      // (the accessors of the actors still in the level are kept in place, and those of the others dropped: a second Map of all of
-      // them, and the first one filled again, was about 600 KB each time the level's actors change)
-      meshReaders=new Array(liveList.length);
-      for(let i=0;i<liveList.length;i++){
-        const actor=liveList[i];
-        if(!actor){meshReaders[i]=null;continue;}
-        let reader=meshAccessors.get(actor);
-        if(reader===undefined)meshAccessors.set(actor,reader=new FieldReader(actor));
-        meshReaders[i]=reader;
-      }
-      for(const actor of meshAccessors.keys())if(!live.has(actor))meshAccessors.delete(actor);
-    }
+    syncLive();
     // (`actors` holds the bindings in the order `bindings` does, both appended together and removed together by retire; a retired
     // binding leaves the list, so the index stays where it is)
     for(let i=0;i<actors.length;){
@@ -1326,6 +1340,107 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const entries=runtime.scriptVm?.render?.scan(level.actors,{kinds:RENDER_MESH})??null;
     if(entries)for(const entry of entries){const actor=level.actors[entry>>>RENDER_SHIFT];admit(actor,meshAccessors.get(actor));}
     else for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);
+  };
+  // The roster's reconcile: what the loop of reconcileJs decides for every binding, from the Rust pass's attention list (roster_reads),
+  // and the admission scan without the entries admit would turn away without effect. The membership set, the index map and the
+  // accessors of reconcileJs are not made (a frame the pass cannot run in makes them: `syncLive`).
+  const rosterReady=reads=>rosterOn&&(reads?.attn!==undefined||rowCount===0);
+  const rosterOn=plumbing.roster&&Boolean(rowsArena())&&Boolean(runtime.scriptVm?.render)&&renderScanMode()!=='js';
+  const reconcileRoster=reads=>{
+    if(disposed||!level)return;
+    const render=runtime.scriptVm.render,attn=reads?.attn??null;
+    if(attn&&attn.length){
+      // (the retires shift the list, so the bindings are picked first)
+      const picked=new Array(attn.length);
+      for(let i=0;i<attn.length;i++)picked[i]=actors[attn[i]>>>4];
+      for(let i=0;i<attn.length;i++){
+        const binding=picked[i],reasons=attn[i]&15,actor=binding.actor;
+        if(reasons&RS_STALE){rowWrite(binding.row,binding);rowsDirty=true;}
+        if(reasons&RS_ABSENT){retire(actor,binding);continue;}
+        if(reasons&RS_MESH){retired.set(actor,npcActors.includes(binding));retire(actor,binding);continue;}
+        if(reasons&(RS_NOT_OK|RS_STALE)&&binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);}
+      }
+    }
+    const {player,behind,viewTarget}=viewer();
+    const kept=render.admitScan(level.actors,rows,rowCount,{player,behind,viewTarget,childFrames});
+    if(!kept){
+      // (the pass cannot run here: the scan of reconcileJs)
+      const entries=render.scan(level.actors,{kinds:RENDER_MESH});
+      if(entries){for(const entry of entries){const actor=level.actors[entry>>>RENDER_SHIFT];admit(actor,meshAccessors.get(actor));}}
+      else{syncLive();for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);}
+      return;
+    }
+    if(plumbing.verify){const full=render.scan(level.actors,{kinds:RENDER_MESH});if(full)verifyAdmission(full,kept);}
+    for(const entry of kept){const actor=level.actors[entry>>>RENDER_SHIFT];admit(actor,meshAccessors.get(actor));}
+    // A binding made just now is a candidate of this frame's SetupDynamics (reconcileJs' index map held it): its row needs its place.
+    if(rowsDirty&&rowCount>0)positionRows();
+  };
+  const positionRows=()=>{
+    if(!runtime.scriptVm?.render?.rosterPositions(rows,rowCount,level.actors)){rowsDirty=true;return false;}
+    rowsDirty=false;positionsEpoch=actorsEpoch();return true;
+  };
+  // ACTOR_PLUMBING=verify: the roster's rows, positions and attention list against what the JavaScript loop of reconcileJs decides from
+  // the level's array and the bindings.
+  const verifyRoster=(reads,withList)=>{
+    const fail=message=>{throw new Error(`ACTOR_PLUMBING=verify: roster: ${message}`);};
+    if(rowCount!==actors.length)fail(`${rowCount} rows for ${actors.length} bindings`);
+    const u32=rowsView(),first=new Map(),member=new Set();
+    for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor){member.add(actor);if(!first.has(actor))first.set(actor,i);}}
+    const reasonsOf=new Map();
+    for(const entry of reads.attn)reasonsOf.set(entry>>>4,entry&15);
+    for(let k=0;k<actors.length;k++){
+      const binding=actors[k],at=(rows>>2)+ROW_WORDS*k,reasons=reasonsOf.get(k)??0;
+      if(binding.row!==k)fail(`${binding.actor.name} has row ${binding.row}, not ${k}`);
+      if(u32[at]!==handleOf(binding.actor)&&!(reasons&RS_STALE))fail(`${binding.actor.name} row ${k} holds handle ${u32[at]}, not ${handleOf(binding.actor)}`);
+      if(u32[at+1]!==(binding.block||0))fail(`${binding.actor.name} row ${k} holds block ${u32[at+1]}, not ${binding.block}`);
+      if(u32[at+2]!==(binding.meshHandle??0))fail(`${binding.actor.name} row ${k} holds mesh ${u32[at+2]}, not ${binding.meshHandle}`);
+      if(withList){
+        const want=first.has(binding.actor)?first.get(binding.actor):NO_POS;
+        if(u32[at+3]!==want)fail(`${binding.actor.name} row ${k} is at position ${u32[at+3]}, the level has it at ${want}`);
+        if((want===NO_POS)!==Boolean(reasons&RS_ABSENT))fail(`${binding.actor.name} row ${k}: absent is ${Boolean(reasons&RS_ABSENT)}, the level says ${want===NO_POS}`);
+      }
+      if(!reasons&&binding.meshChanged(reads))fail(`${binding.actor.name} row ${k} changed its Mesh and has no reason`);
+      if((reasons&RS_MESH)&&!binding.meshChanged(reads))fail(`${binding.actor.name} row ${k} has the Mesh reason but its Mesh did not change`);
+      // (no pass looked at the membership: the level's array has not changed since one did)
+      if(!withList&&!member.has(binding.actor))fail(`${binding.actor.name} row ${k} is not in the level, and the epoch is the one the positions were made at`);
+    }
+  };
+  // ACTOR_PLUMBING=verify: an entry of the admission scan that admit_filter dropped is for a bound actor or one drawnInWorld rejects.
+  const verifyAdmission=(entries,kept)=>{
+    const keptSet=new Set(kept);
+    for(const entry of entries){
+      if(keptSet.has(entry))continue;
+      const actor=level.actors[entry>>>RENDER_SHIFT];
+      if(bindings.has(actor))continue;
+      if(drawnInWorld(actor)||(childFrames&&drawnInWorld(actor,null,true)))
+        throw new Error(`ACTOR_PLUMBING=verify: roster: the admission filter dropped ${actor.name}, which is not bound and is drawn in the world`);
+    }
+  };
+  // The JavaScript path's membership structures, made when this frame needs them.
+  // (Level.Actors membership only changes with actorsEpoch (base-epoch.mjs), so they are made again only then; the accessors of the
+  // actors still in the level are kept in place, and those of the others dropped: a second Map of all of them, and the first one filled
+  // again, was about 600 KB each time the level's actors change. When Level.Actors only grew at its end, they are extended in place.)
+  const syncLive=()=>{
+    const epoch=actorsEpoch();
+    if(epoch!==liveEpoch&&live&&extendLive(epoch))return;
+    if(epoch===liveEpoch&&live)return;
+    live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];liveMembers=level.actors.slice();liveActors=level.actors;
+    levelIndex=new Map();
+    for(let i=0;i<level.actors.length;i++){const actor=level.actors[i];if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);}
+    meshReaders=new Array(liveList.length);
+    for(let i=0;i<liveList.length;i++){
+      const actor=liveList[i];
+      if(!actor){meshReaders[i]=null;continue;}
+      let reader=meshAccessors.get(actor);
+      if(reader===undefined)meshAccessors.set(actor,reader=new FieldReader(actor));
+      meshReaders[i]=reader;
+    }
+    for(const actor of meshAccessors.keys())if(!live.has(actor))meshAccessors.delete(actor);
+  };
+  const reconcile=reads=>{
+    rosterUsed=rosterReady(reads);
+    if(rosterUsed)reconcileRoster(reads);
+    else reconcileJs(reads);
   };
   // Render-iterator mesh items (docs/lasers.md): each FDynamicSprite of a
   // DT_Mesh item draws through DrawActorSprite (0x10b2556a-0x10b25655), which
@@ -1391,16 +1506,35 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       &&Object.is(Math.fround(runtime.readNamed(actor,'ScaleGlow')),item.scaleGlow);
   };
   /** `binding`'s update in the frame whose SetupDynamics took `sprites` (sprite-scan.mjs `proxies`: actor -> copy). */
+  // A binding's index in Level.Actors (the first slot holding its actor; undefined or NO_POS for none), from the map of the JavaScript
+  // path or the roster's row; `levelPositions` is what packDynamics reads the same from.
+  const levelIndexOf=binding=>{
+    if(!rosterUsed)return levelIndex.get(binding.actor);
+    return binding.row>=0?rowsView()[(rows>>2)+ROW_WORDS*binding.row+3]:undefined;
+  };
+  let rosterUsed=false;
+  const levelPositions={bindings:actors,u32:()=>rowsView().subarray(rows>>2,(rows>>2)+ROW_WORDS*rowCount),NO_POS};
+  // The index map packDynamics orders the bindings by: the roster's rows when this frame's reconcile used them, else the map.
+  const positionsFor=()=>rosterUsed?levelPositions:levelIndex;
   const updateSprite=(sprites,binding,view)=>{
     const item=sprites.get(binding.actor);
     if(!item||sameSprite(item))return binding.update(view);
     // Only the order the shipped maps have is translated: the proxy follows its emitter in Level.Actors (spawned by it), so the
     // frame's SetupDynamics copies the fields after the run. A proxy before its emitter would be copied as the previous run left it.
-    if(levelIndex.get(binding.actor)<item.emitter){
+    if(levelIndexOf(binding)<item.emitter){
       if(view.reads?.verify)throw new Error(`RENDER_SCAN=verify: ${binding.actor.name??'?'} precedes its emitter in Level.Actors (its sprite's fields are the previous run's: unsupported)`);
       return binding.update(view);
     }
     return withItem(item,()=>binding.update(view));
+  };
+  // Whether Level.Actors holds the actor now: the JavaScript path's set, or a set made when asked for at the level's epoch (a frame
+  // the roster served makes none otherwise).
+  let askedLive=null,askedEpoch=-1;
+  const isLive=actor=>{
+    if(!rosterUsed)return Boolean(live?.has(actor));
+    const epoch=actorsEpoch();
+    if(!askedLive||askedEpoch!==epoch){askedLive=new Set(level.actors);askedEpoch=epoch;}
+    return askedLive.has(actor);
   };
   const drawItems=(items,view,records)=>{
     const counts=new Map();
@@ -1419,14 +1553,14 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     }
     for(const [actor,pool] of itemPools){
       const used=counts.get(actor)??0;
-      if(!used&&(!live?.has(actor)||read(actor,'bDeleteMe'))){
+      if(!used&&(!isLive(actor)||read(actor,'bDeleteMe'))){
         for(const entry of pool)if(entry.binding){entry.binding.dispose();onRelease(entry.binding.id);}
         itemPools.delete(actor);continue;
       }
       for(let i=used;i<pool.length;i++)if(pool[i].binding)records.push(pool[i].binding.hide());
     }
     for(const [actor,list] of itemExtras)
-      if(!itemPools.has(actor)&&(!live?.has(actor)||read(actor,'bDeleteMe'))){
+      if(!itemPools.has(actor)&&(!isLive(actor)||read(actor,'bDeleteMe'))){
         for(const entry of list)if(entry.binding){entry.binding.dispose();onRelease(entry.binding.id);}
         itemExtras.delete(actor);
       }
@@ -1492,9 +1626,32 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     }
     return count;
   };
+  // Typed views of the arena's current buffer: a memory growth during an update (the GPU plan, the light selection) replaces it.
+  // (one object, its arrays replaced with the buffer: callers read both at once and keep neither)
+  const viewsOf=arena=>{
+    let buffer=null;
+    const current={u32:null,f32:null};
+    return ()=>{
+      if(arena.memory.buffer!==buffer){buffer=arena.memory.buffer;current.u32=new Uint32Array(buffer);current.f32=new Float32Array(buffer);}
+      return current;
+    };
+  };
+  // The roster's pass in place of meshReads' pair table (render.rs roster_reads): the same blocks, and the rows' positions in
+  // Level.Actors when the level's array or the rows changed since they were last made, and the attention list.
+  const rosterReads=render=>{
+    if(rowCount!==actors.length)return null;
+    const withList=rowsDirty||positionsEpoch!==actorsEpoch(),{player,behind,viewTarget}=viewer();
+    const attn=render.rosterReads(rows,rowCount,{player,behind,viewTarget},withList?level.actors:null);
+    if(!attn)return null;
+    if(withList){rowsDirty=false;positionsEpoch=actorsEpoch();}
+    const reads={views:viewsOf(runtime.scriptVm.arena),verify:renderScanMode()==='verify',attn};
+    if(plumbing.verify)verifyRoster(reads,withList);
+    return reads;
+  };
   const meshReads=()=>{
     const render=runtime.scriptVm?.render;
     if(!render||!actors.length)return null;
+    if(rosterOn){const reads=rosterReads(render);if(reads)return reads;}
     const arena=runtime.scriptVm.arena;
     if(8*actors.length>pairsCapacity){
       if(pairs)arena.release(pairs,pairsCapacity);
@@ -1516,16 +1673,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     }else{count=writePairs(arena,pairs);pairsCount=count;pairsVersion=actorsVersion;pairsActors=actorsEpoch();pairsReceivers=receiverEpoch();}
     const {player,behind,viewTarget}=viewer();
     if(!render.meshReads(pairs,count,{player,behind,viewTarget}))return null;
-    // Typed views of the arena's current buffer: a memory growth during an
-    // update (the GPU plan, the light selection) replaces it.
-    // (one object, its arrays replaced with the buffer: callers read both at once and keep neither)
-    let buffer=null;
-    const current={u32:null,f32:null};
-    const views=()=>{
-      if(arena.memory.buffer!==buffer){buffer=arena.memory.buffer;current.u32=new Uint32Array(buffer);current.f32=new Float32Array(buffer);}
-      return current;
-    };
-    return {views,verify:renderScanMode()==='verify'};
+    return {views:viewsOf(arena),verify:renderScanMode()==='verify'};
   };
   reconcile();await Promise.all(pending.values());refreshSummary();started=true;
   if(!actors.length&&!npcActors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
@@ -1674,7 +1822,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         reconcile(reads);
         scope=newScope(view.items??[]);
         if(view.occlude){
-          const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex,itemCandidates});
+          const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex:positionsFor(),itemCandidates});
           view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod,
             lightFrames:occluded.lightFrames??null,lodFrames:occluded.lodFrames??null};
         }
@@ -1759,7 +1907,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** SetupDynamics' actor candidates for a frame of its own (a
      * ViewportWindow's DrawWorld), read live: the bindings, the iterator
      * items' bindings and the level order (packDynamics' arguments). */
-    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex,itemCandidates};},
+    setupArgs(items=[]){
+      // (a viewport window's SetupDynamics: the positions as of the last reconcile, made now for a binding taken since)
+      if(rosterOn&&rowCount===actors.length&&(!rowsDirty||positionRows()))rosterUsed=true;
+      else{rosterUsed=false;syncLive();}
+      return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex:positionsFor(),itemCandidates};
+    },
     /** The planning of a root frame other than the main one (a ViewportWindow's, in the HUD paint) starts
      * from `baseItems`, the main frame's root items: its items equal to those share their
      * bindings, and the others take extras (itemCandidates' `frame` argument). */
@@ -1809,6 +1962,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** A context loss took the GPU mesh path's cache poses (docs/context-loss.md): every binding on that path leaves it.
      * The page applies the records in this order before any later frame's (actor-mesh-draw.mjs leaveGpu). */
     leaveGpu(reason){hiddenRun.fill(0);return all().map(binding=>binding.leaveGpu(reason)).filter(Boolean);},
-    dispose(){disposed=true;weapons.dispose();for(const binding of all())binding.dispose();itemPools.clear();itemExtras.clear();},
+    dispose(){
+      disposed=true;weapons.dispose();for(const binding of all())binding.dispose();itemPools.clear();itemExtras.clear();
+      if(rows){rowsArena()?.release(rows,rowsCapacity);rows=0;rowsCapacity=0;rowCount=0;}
+    },
   };
 }

@@ -9,11 +9,13 @@
  * and, from the bulk actors layer (docs/firefox-60fps-plan.md "Actors layer in bulk"), the layer's own summary and update loop:
  *
  *   summary the summary object's lists and counts are computed when read (actor-mesh-sim.mjs refreshSummary), not at every take and retire
+ *   roster  the bindings' blocks, their membership in Level.Actors, their Mesh change and the admission scan's candidates are one Rust pass
+ *           over a table of rows kept with the binding list (render.rs roster_reads, admit_filter; actor-mesh-sim.mjs reconcileRoster)
  *   skip    a binding that returned a plain hidden record in a frame with an occlusion result, and is in neither the main frame's
  *           Frame->Sprite nor a child frame's, is not updated again (actor-mesh-sim.mjs update; needs `hidden`)
  *
  * ACTOR_PLUMBING=js (Node) or ?actorPlumbing=js keeps the reference bodies of all of them; `no-hidden`, `no-pairs`, `no-movers`,
- * `no-summary`, `no-skip` (a comma list) keeps one; `verify` runs the new bodies and checks each against the reference as it goes (the page checks that a
+ * `no-summary`, `no-skip`, `no-roster` (a comma list) keeps one; `verify` runs the new bodies and checks each against the reference as it goes (the page checks that a
  * skipped record would have changed nothing). */
 export function actorPlumbing() {
   const value = (typeof process !== 'undefined' && process.env?.ACTOR_PLUMBING) || globalThis.DEUS_EX_ACTOR_PLUMBING || '';
@@ -21,5 +23,5 @@ export function actorPlumbing() {
   const reference = tokens.has('js');
   const on = name => !reference && !tokens.has(`no-${name}`);
   const hidden = on('hidden');
-  return { hidden, pairs: on('pairs'), movers: on('movers'), summary: on('summary'), skip: hidden && on('skip'), verify: tokens.has('verify') };
+  return { hidden, pairs: on('pairs'), movers: on('movers'), summary: on('summary'), roster: on('roster'), skip: hidden && on('skip'), verify: tokens.has('verify') };
 }

@@ -666,17 +666,24 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
     for k in 0..count {
         let h = load32(pairs.wrapping_add(8 * k));
         let block = load32(pairs.wrapping_add(8 * k + 4));
+        mesh_read_block(h, block, player, behind != 0, view_target);
+    }
+}
+
+/// `mesh_reads` for one (handle, block) pair.
+fn mesh_read_block(h: u32, block: u32, player: u32, behind: bool, view_target: u32) {
+    {
         let word = |i: u32| block.wrapping_add(4 * i);
         store32(word(MB_STATUS), 0);
         let a = Obj::of(h);
         if !a.has(MESH_SELF_FIELDS) {
-            continue;
+            return;
         }
         let (Some(drawn), Some(drawn_child)) = (
-            drawn_in_world(&a, h, player, behind != 0, view_target, false),
-            drawn_in_world(&a, h, player, behind != 0, view_target, true),
+            drawn_in_world(&a, h, player, behind, view_target, false),
+            drawn_in_world(&a, h, player, behind, view_target, true),
         ) else {
-            continue;
+            return;
         };
         let mut anim_actor = h;
         if a.flag(R_BANIMBYOWNER) {
@@ -693,7 +700,7 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
             &other
         };
         if !anim.has(MESH_ANIM_FIELDS) {
-            continue;
+            return;
         }
         store32(word(MB_MESH), a.pointer(R_MESH));
         store32(word(MB_STYLE), a.byte(R_STYLE));
@@ -755,6 +762,201 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
         }
         store32(word(MB_STATUS), status);
     }
+}
+
+// The actor mesh layer's roster (actor-mesh-sim.mjs, docs/firefox-60fps-plan.md "Actors layer in bulk"): one row of four words per
+// binding, in the layer's binding order.
+const RW_HANDLE: u32 = 0;
+const RW_BLOCK: u32 = 1;
+const RW_MESH: u32 = 2;
+const RW_POS: u32 = 3;
+const ROW_BYTES: u32 = 16;
+/// A row's position when its actor is not in Level.Actors (or the positions were not asked for).
+const NO_POS: u32 = 0xffff_ffff;
+// What a row gets the host's attention for (`roster_reads`' entries are `row << 4 | reasons`).
+/// The positions were asked for and the actor is not in Level.Actors.
+const AT_ABSENT: u32 = 1;
+/// The block was read and its Mesh is not the one the binding was made for.
+const AT_MESH: u32 = 2;
+/// The image does not answer for the actor's reads (the block's status lacks OK, or the binding has no block): the host reads them.
+const AT_NOT_OK: u32 = 4;
+/// The row's handle has been released since it was written.
+const AT_STALE: u32 = 8;
+
+#[inline(always)]
+fn handle_slot_of(handle: u32, mask: u32) -> u32 {
+    let x = handle.wrapping_mul(0x9e37_79b1);
+    (x ^ (x >> 15)) & mask
+}
+
+/// A table of `slots` (a power of two) [handle, value] pairs at `table`, emptied.
+fn clear_table(table: u32, slots: u32) {
+    for i in 0..slots.wrapping_mul(2) {
+        store32(table.wrapping_add(i.wrapping_mul(4)), 0);
+    }
+}
+
+/// Add `handle` -> `value` to the table unless the handle is in it.
+fn table_add(table: u32, mask: u32, handle: u32, value: u32) {
+    let mut at = handle_slot_of(handle, mask);
+    loop {
+        let entry = table.wrapping_add(at.wrapping_mul(8));
+        let key = load32(entry);
+        if key == handle {
+            return;
+        }
+        if key == 0 {
+            store32(entry, handle);
+            store32(entry.wrapping_add(4), value);
+            return;
+        }
+        at = at.wrapping_add(1) & mask;
+    }
+}
+
+/// The value the table holds for `handle`, or None.
+fn table_get(table: u32, mask: u32, handle: u32) -> Option<u32> {
+    let mut at = handle_slot_of(handle, mask);
+    loop {
+        let entry = table.wrapping_add(at.wrapping_mul(8));
+        let key = load32(entry);
+        if key == handle {
+            return Some(load32(entry.wrapping_add(4)));
+        }
+        if key == 0 {
+            return None;
+        }
+        at = at.wrapping_add(1) & mask;
+    }
+}
+
+/// The table of Level.Actors' handles at `scratch`: each live handle of `list` ([count, handle...]) -> the first index it is at.
+fn level_table(list: u32, scratch: u32, slots: u32) {
+    let mask = slots.wrapping_sub(1);
+    clear_table(scratch, slots);
+    let n = load32(list);
+    for i in 0..n {
+        let h = live(load32(list.wrapping_add(4).wrapping_add(i.wrapping_mul(4))));
+        if h != 0 {
+            table_add(scratch, mask, h, i);
+        }
+    }
+}
+
+/// The positions `roster_reads` writes, alone: each row's index in Level.Actors (NO_POS for none, and for a row whose handle has been
+/// released).
+#[no_mangle]
+pub extern "C" fn roster_positions(rows: u32, count: u32, list: u32, scratch: u32, list_slots: u32) {
+    let mask = list_slots.wrapping_sub(1);
+    level_table(list, scratch, list_slots);
+    for k in 0..count {
+        let row = rows.wrapping_add(k.wrapping_mul(ROW_BYTES));
+        let h = load32(row.wrapping_add(4 * RW_HANDLE));
+        let pos = if h == 0 || live(h) != h { NO_POS } else { table_get(scratch, mask, h).unwrap_or(NO_POS) };
+        store32(row.wrapping_add(4 * RW_POS), pos);
+    }
+}
+
+/// `mesh_reads` over the roster's `count` rows at `rows`, and what the host must look at. Per row with a block: the block as
+/// `mesh_reads` makes it (not for a row whose handle has been released: its block is cleared). With `list` ([count, handle...] of
+/// Level.Actors, `list_slots` a power of two of at least twice its count; `scratch` that many [handle, index] pairs of memory) also
+/// the row's position in it (the first index of its handle, NO_POS when it has none), written to the row. `attn` receives
+/// `row << 4 | reasons` for each row with a reason (AT_*), in row order; returns how many.
+#[no_mangle]
+pub extern "C" fn roster_reads(rows: u32, count: u32, player: u32, behind: u32, view_target: u32, list: u32, scratch: u32, list_slots: u32, attn: u32) -> u32 {
+    let mask = list_slots.wrapping_sub(1);
+    if list != 0 {
+        level_table(list, scratch, list_slots);
+    }
+    let mut written = 0u32;
+    for k in 0..count {
+        let row = rows.wrapping_add(k.wrapping_mul(ROW_BYTES));
+        let h = load32(row.wrapping_add(4 * RW_HANDLE));
+        let block = load32(row.wrapping_add(4 * RW_BLOCK));
+        let mesh = load32(row.wrapping_add(4 * RW_MESH));
+        let mut reasons = 0;
+        let stale = h != 0 && live(h) != h;
+        if stale {
+            reasons |= AT_STALE;
+        }
+        if block != 0 {
+            if stale {
+                store32(block.wrapping_add(4 * MB_STATUS), 0);
+            } else {
+                mesh_read_block(h, block, player, behind != 0, view_target);
+            }
+            let status = load32(block.wrapping_add(4 * MB_STATUS));
+            if status & MS_OK == 0 {
+                reasons |= AT_NOT_OK;
+            } else if load32(block.wrapping_add(4 * MB_MESH)) != mesh {
+                reasons |= AT_MESH;
+            }
+        } else {
+            reasons |= AT_NOT_OK;
+        }
+        if list != 0 {
+            let pos = if h == 0 || stale { NO_POS } else { table_get(scratch, mask, h).unwrap_or(NO_POS) };
+            store32(row.wrapping_add(4 * RW_POS), pos);
+            if pos == NO_POS {
+                reasons |= AT_ABSENT;
+            }
+        }
+        if reasons != 0 {
+            store32(attn.wrapping_add(written.wrapping_mul(4)), k << 4 | reasons);
+            written += 1;
+        }
+    }
+    written
+}
+
+/// The fields `admit_filter` reads: drawnInWorld's.
+const ADMIT_FIELDS: u64 = 1 << R_BHIDDEN | 1 << R_BDELETEME | 1 << R_OWNER | 1 << R_BONLYOWNERSEE | 1 << R_BOWNERNOSEE;
+
+/// The admission scan's mesh entries from `n` render_scan entries at `entries` over `list` (`entry >> 6` the Level.Actors index; the
+/// frame's shared walk, or a walk for the mesh kind): the entries' bits in `keep` (the kinds the consumer asked for and K_JS), an
+/// entry with none is passed over, as the host's `served` does. Of those, without the ones the layer's admit would turn away without
+/// effect: an actor that has a row in the roster (it is bound), and one that drawnInWorld rejects (for a root frame and, with
+/// `child_frames`, for a child frame), when the image answers for it. Entries the image does not answer for (K_JS) and every other
+/// are kept, in order. `scratch` and `slots` are as for `roster_reads`. Returns the number written to `out`.
+#[no_mangle]
+pub extern "C" fn admit_filter(list: u32, entries: u32, n: u32, keep: u32, rows: u32, count: u32, player: u32, behind: u32, view_target: u32,
+    child_frames: u32, scratch: u32, slots: u32, out: u32) -> u32 {
+    let mask = slots.wrapping_sub(1);
+    clear_table(scratch, slots);
+    for k in 0..count {
+        let h = load32(rows.wrapping_add(k.wrapping_mul(ROW_BYTES)).wrapping_add(4 * RW_HANDLE));
+        if h != 0 {
+            table_add(scratch, mask, h, 1);
+        }
+    }
+    let mut written = 0u32;
+    for i in 0..n {
+        let raw = load32(entries.wrapping_add(i.wrapping_mul(4)));
+        let bits = raw & keep & 63;
+        if bits == 0 {
+            continue;
+        }
+        let entry = raw & !63 | bits;
+        if entry & K_JS == 0 {
+            let h = live(load32(list.wrapping_add(4).wrapping_add((entry >> 6).wrapping_mul(4))));
+            if h != 0 {
+                if table_get(scratch, mask, h).is_some() {
+                    continue;
+                }
+                let a = Obj::of(h);
+                if a.has(ADMIT_FIELDS) {
+                    let root = drawn_in_world(&a, h, player, behind != 0, view_target, false);
+                    let child = if child_frames != 0 { drawn_in_world(&a, h, player, behind != 0, view_target, true) } else { Some(false) };
+                    if root == Some(false) && child == Some(false) {
+                        continue;
+                    }
+                }
+            }
+        }
+        store32(out.wrapping_add(written.wrapping_mul(4)), entry);
+        written += 1;
+    }
+    written
 }
 
 // A mover's block (`mover_reads`): status, Location, Rotation, then the pair last given to the tracker and whether there is one.

@@ -106,6 +106,9 @@ const cellIs = (cell, kind) => kind === 'float[4]' || kind === 'pointer[4]'
   : cellKind(cell) === kind;
 /** Entry kinds: `entry >>> RENDER_SHIFT` is the Level.Actors index, the low
  * bits these. */
+/** roster_reads' reasons (render.rs AT_*): the actor is not in Level.Actors, its Mesh is not the binding's, the image does not answer for
+ * its reads, its row's handle has been released. */
+export const RS_ABSENT = 1, RS_MESH = 2, RS_NOT_OK = 4, RS_STALE = 8;
 export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_AMBIENT = 16,
   RENDER_JS = 32, RENDER_SHIFT = 6;
 /** Input only (render.rs K_THROUGH): an ITERATOR entry does not end the scan. */
@@ -426,6 +429,70 @@ export class RenderScanHost {
     if (!this.complete) return false;
     this.x.mesh_reads(pairs, count, player ? handleOf(player) : 0, behind ? 1 : 0, viewTarget ? handleOf(viewTarget) : 0);
     return true;
+  }
+  /** A scratch of the arena of at least `bytes` (kept between calls and grown), as {at, bytes}. */
+  scratchOf(name, bytes) {
+    const held = this[name] ??= {at: 0, bytes: 0};
+    if (bytes > held.bytes) {
+      if (held.at) this.vm.arena.release(held.at, held.bytes);
+      held.bytes = Math.max(4096, 2 * bytes);
+      held.at = this.vm.arena.alloc(held.bytes);
+    }
+    return held;
+  }
+  /** A power of two of slots for a table of `entries` entries, at most half full. */
+  tableSlots(entries) {
+    let slots = 256;
+    while (slots < 2 * entries) slots *= 2;
+    return slots;
+  }
+  /** The roster pass (render.rs roster_reads) over the `count` rows at `rows`: each row's block as meshReads makes it, and the
+   * rows the host must look at, as an array of `row << 4 | reasons` (RS_*), in row order. With `actors` (the Level.Actors array) the
+   * rows' positions in it are written too. Null when the pass cannot run here (the mode is js, the table is not complete, the core
+   * predates it). */
+  rosterReads(rows, count, {player = null, behind = false, viewTarget = null}, actors = null) {
+    if (renderScanMode() === 'js' || typeof this.x.roster_reads !== 'function') return null;
+    this.table();
+    if (!this.complete) return null;
+    const list = actors ? this.listFor(actors) : 0, slots = actors ? this.tableSlots(Math.max(actors.length, count)) : 1;
+    const scratch = actors ? this.scratchOf('rosterScratch', 8 * slots).at : 0, attn = this.scratchOf('rosterAttn', 4 * (count + 1)).at;
+    const n = this.x.roster_reads(rows, count, player ? handleOf(player) : 0, behind ? 1 : 0, viewTarget ? handleOf(viewTarget) : 0,
+      list, scratch, slots, attn);
+    return new Uint32Array(this.vm.arena.memory.buffer, attn, n).slice();
+  }
+  /** The rows' positions in `actors` alone (render.rs roster_positions); false when the pass cannot run here. */
+  rosterPositions(rows, count, actors) {
+    if (renderScanMode() === 'js' || typeof this.x.roster_positions !== 'function') return false;
+    this.table();
+    if (!this.complete) return false;
+    const list = this.listFor(actors), slots = this.tableSlots(Math.max(actors.length, count));
+    this.x.roster_positions(rows, count, list, this.scratchOf('rosterScratch', 8 * slots).at, slots);
+    return true;
+  }
+  /** The mesh entries of the admission scan (the frame's shared walk when it serves it, else a walk of its own) without those render.rs
+   * admit_filter knows the layer's admit would turn away without effect (a row's actor, one drawnInWorld rejects), as an array of
+   * `index << RENDER_SHIFT | kinds`; null when the pass cannot run here. */
+  admitScan(actors, rows, count, {player = null, behind = false, viewTarget = null, childFrames = false}) {
+    if (renderScanMode() === 'js' || typeof this.x.admit_filter !== 'function') return null;
+    this.table();
+    if (!this.complete) return null;
+    // what `served` checks for a consumer of the mesh kind alone
+    const shared = this.shared;
+    let all = null;
+    if (shared) {
+      if (shared.actors === actors && shared.count === actors.length && shared.actorsEpoch === actorsEpoch()
+        && shared.receiverEpoch === receiverEpoch() && shared.runs === this.vm.scriptRuns()) {
+        if (!(shared.served & RENDER_MESH)) { shared.served |= RENDER_MESH; all = shared.entries; }
+      } else this.shared = null;
+    }
+    if (!all) all = this.walk(actors, 0, RENDER_MESH, null, null, true);
+    const list = this.listFor(actors), slots = this.tableSlots(count);
+    const scratch = this.scratchOf('admitScratch', 8 * slots).at, input = this.scratchOf('admitIn', 4 * (all.length + 1)).at;
+    const output = this.scratchOf('admitOut', 4 * (all.length + 1)).at;
+    new Uint32Array(this.vm.arena.memory.buffer, input, all.length).set(all);
+    const n = this.x.admit_filter(list, input, all.length, RENDER_MESH | RENDER_JS, rows, count, player ? handleOf(player) : 0, behind ? 1 : 0,
+      viewTarget ? handleOf(viewTarget) : 0, childFrames ? 1 : 0, scratch, slots, output);
+    return new Uint32Array(this.vm.arena.memory.buffer, output, n).slice();
   }
   /** SetupDynamics' moving brushes' reads (render.rs mover_reads) into each block of the `count` (handle, block) pairs at `pairs`
    * (status, Location, Rotation words); false when they cannot run here (the mode is js, the table is not complete, the core

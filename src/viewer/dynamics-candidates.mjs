@@ -42,11 +42,14 @@ export function packDynamics(occlusion, { sprites = [], iterators = null, bindin
   levelIndex = null, childFrames = false, pool = null }) {
   const entries = pool === null ? [] : pool.list;
   let count = 0;
+  // `levelIndex`: a Map from actor to its Level.Actors index, or the actor mesh layer's roster (actor-mesh-sim.mjs levelPositions): its
+  // rows, in the order of `bindings`, hold the index in their fourth word (NO_POS for none)
+  const rows = levelIndex?.u32 && levelIndex.bindings === bindings ? levelIndex.u32() : null, none = levelIndex?.NO_POS;
   for (let b = 0; b < bindings.length; b++) {
     const binding = bindings[b];
     if (iterators?.has(binding.actor)) continue;
-    const index = levelIndex?.get(binding.actor);
-    if (index === undefined) continue;
+    const index = rows ? rows[4 * b + 3] : levelIndex?.get(binding.actor);
+    if (index === undefined || index === none) continue;
     if (binding.admitted(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, false);
     else if (childFrames && binding.childAdmitted?.(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, true);
   }
