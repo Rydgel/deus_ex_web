@@ -49,6 +49,9 @@ const PROBES_DISABLED = typeof process !== 'undefined' && process.env?.RUST_PROB
 export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2, TICK_POLL_BIT = 4, TICK_PROBE_BIT = 8;
 const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
 export const MAX_RUNS = 256;
+/** The window events Rust runs (dispatch.rs dispatch_window_event): their cache slots' `which` is WINDOW_EVENT_BASE plus the index. */
+export const WINDOW_EVENT_BASE = 16;
+export const WINDOW_EVENTS = Object.freeze(['DrawWindow', 'PostDrawWindow']);
 /** The Actor.Tick events (tick.rs E_*): [name, takes the delta]. */
 export const TICK_EVENTS = Object.freeze([['Tick', true], ['Timer', false], ['Expired', false], ['UpdateEyeHeight', true],
   ['PainTimer', false], ['SpeechTimer', false], ['UpdateTactics', true]]);
@@ -152,6 +155,15 @@ export class EventHost {
     return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0) | (polls ? TICK_POLL_BIT : 0) |
       (probes ? TICK_PROBE_BIT : 0);
   }
+  /** Whether window events may dispatch in Rust: processEvent, executeScript, eventLevelGate and lookup are the runtime's own
+   * (as for the tick events), and scriptability() is true now (the window host's lifecycle answers a constant). */
+  windowEventsAllowed() {
+    const runtime = this.vm.runtime, m = runtime.constructor.originalMethods;
+    return !DISABLED && m !== undefined && runtime.services?.scriptVm === this.vm &&
+      runtime.processEvent === m.processEvent && runtime.executeScript === m.executeScript &&
+      runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup && runtime.scriptability() === true &&
+      ScriptState.prototype.isProbing === originalIsProbing;
+  }
   /** js_event_gate. */
   gate(handle) {
     const vm = this.vm, runtime = vm.runtime, receiver = identityOfHandle(handle);
@@ -183,7 +195,34 @@ export class EventHost {
     return view.getUint32(slot, true) === row && view.getUint32(slot + 4, true) === state &&
       view.getUint32(slot + 8, true) === which && view.getUint32(slot + 12, true) === view.getUint32(this.at + 8, true);
   }
+  /** processScript(window, DrawWindow | PostDrawWindow, [gc]) for the window host (dispatch.rs dispatch_window_event): a window has no
+   * bDeleteMe and no Level (an Actor would have both, which this refuses), so processEvent's Level and pendingKill gates pass for it
+   * (nothing sets a window's pendingKill), and its probing gate does too: these names are no probe names (ename -1), which
+   * ScriptState.isProbing passes whatever the mask (windowEventsAllowed checks it is unwrapped). No such event is no call, as processScript's missing
+   * record is; otherwise the function must be a plain script function of one object parameter. */
+  decideWindow(receiver, which) {
+    const js = {kind: K_JS, code: 0, size: 0, param: 0, template: 0};
+    const vm = this.vm, runtime = vm.runtime, loader = runtime.classLoader;
+    if (receiver === null || !loader) return js;
+    const instance = runtime.instance(receiver);
+    if (!instance || instance.deleteMe !== null || instance.pendingKillValue) return js;
+    for (let cls = instance.cls; cls; cls = cls.base) if (cls.record.key === 'engine.actor') return js;
+    const record = runtime.lookup(receiver, WINDOW_EVENTS[which], false);
+    if (!record) return {...js, kind: K_NOCALL};
+    const fn = record.function;
+    // (processScript's parameter block check precedes processEvent's native test)
+    if (!fn || fn.parameters.length !== 1) return js;
+    if ((fn.script.nativeIndex & 0xffff) !== 0) return {...js, kind: K_NOCALL};
+    if (fn.script.functionFlags & 0x420 || fn.result) return js;
+    const signature = functionSignature(fn, loader);
+    if (!signature || signature.params[0].kind !== 'object') return js;
+    const layout = frameLayout(fn, loader), lowered = layout && vm.loweringFor(fn.compiled, layout, runtime.services, receiver);
+    if (!lowered) return js;
+    return {kind: K_RUN, code: lowered.code, size: layout.size, param: signature.params[0].offset + 1,
+      template: this.template(fn, lowered, layout)};
+  }
   decide(receiver, which) {
+    if (which >= WINDOW_EVENT_BASE) return this.decideWindow(receiver, which - WINDOW_EVENT_BASE);
     const js = {kind: K_JS, code: 0, size: 0, param: 0, template: 0};
     const vm = this.vm, runtime = vm.runtime, loader = runtime.classLoader;
     if (receiver === null || !loader) return js;

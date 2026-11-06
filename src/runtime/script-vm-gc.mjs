@@ -19,6 +19,8 @@ import {drawTileCommand, transientTileCommand} from './script-gc-draw-model.mjs'
 import {gcPushGC} from './script-gc-push-gc.mjs';
 import {gcPopGC} from './script-gc-pop-gc.mjs';
 import {NativeHeapError} from './script-native-heap.mjs';
+import {gcDrawText, glyphCommandFromWords} from './script-gc-draw-text.mjs';
+import {UFontModelBoundaryError} from './script-font-model.mjs';
 
 export const gcNativeMode = () => (typeof process !== 'undefined' && process.env?.GC_NATIVE)
   || globalThis.DEUS_EX_GC_NATIVE || 'rust';
@@ -52,6 +54,14 @@ export class GcHost {
     this.tileAt = x.vm_gc_tile_ptr();
     this.snapAt = x.vm_gc_snap_ptr();
     this.statusAt = x.vm_gc_status_ptr();
+    this.glyphAt = x.vm_gc_glyph_ptr();
+    this.texcAt = x.vm_gc_texc_ptr();
+    this.textUnits = 0;
+    this.textCapacity = 0;
+    this.textServices = null;
+    this.allocated = false;
+    // What verify compared (the stress validator prints it).
+    this.textVerify = {compared: 0, skipped: 0, commands: 0};
   }
   /** The heap stack bodies run in Rust for `heap` (arena-backed). */
   stackReady(heap) { return this.mode !== 'js' && heap.region > 0; }
@@ -71,6 +81,110 @@ export class GcHost {
     if (this.mode === 'verify') { this.verifyStack(heap, () => this.x.vm_gc_pop(base, gcNum | 0), () => gcPopGC(gc, gcNum, services)); return; }
     this.x.vm_gc_pop(base, gcNum | 0);
     this.status(undefined);
+  }
+  /** UGC::DrawText through the Rust body (text.rs) for `object`: true when it ran (the JavaScript body then must not). The text's
+   * units go to an arena buffer, truncated at the first NUL as the reference's textUnitsShared does; the realize cache's head and
+   * count live in Rust (`bindTexCache`). */
+  drawText(heap, services, object, destX, destY, destWidth, destHeight, text) {
+    if (this.mode === 'js' || !(heap.region > 0)) return false;
+    if (this.mode === 'verify') return this.verifyText(heap, services, object, destX, destY, destWidth, destHeight, text);
+    return this.runText(heap, services, object, destX, destY, destWidth, destHeight, text);
+  }
+  runText(heap, services, object, destX, destY, destWidth, destHeight, text) {
+    const base = object.base ?? heap.objectAddress(object);
+    this.useHeap(heap);
+    this.bindTexCache(services.texCache);
+    this.textServices = services;
+    this.textHeap = heap;
+    let length = text.indexOf('\0');
+    if (length < 0) length = text.length;
+    if (length > this.textCapacity) {
+      const capacity = Math.max(length, 2 * this.textCapacity, 256);
+      this.textUnits = this.vm.arena.alloc(2 * capacity);
+      this.textCapacity = capacity;
+    }
+    // (the allocation may grow the memory, detaching an earlier view)
+    const view = this.vm.arena.view, units = this.textUnits;
+    for (let i = 0; i < length; i++) view.setUint16(units + 2 * i, text.charCodeAt(i), true);
+    const x = this.x, pointer = x.__stack_pointer.value;
+    try {
+      x.vm_gc_draw_text(base, destX >>> 0, destY >>> 0, destWidth >>> 0, destHeight >>> 0, units, length);
+    } finally {
+      x.__stack_pointer.value = pointer;
+    }
+    return true;
+  }
+  /** GC_NATIVE=verify: the Rust body, then the JavaScript body from the heap before it, and a difference in what they leave (the GC
+   * image, the GC stack's nodes, the realize cache's records and head and count) or hand the renderer (the DrawTile commands in
+   * order, with the texture Lock calls) throws. The commands of the JavaScript run are the ones forwarded. A PushGC that had to
+   * allocate a node leaves the two runs different heaps (each allocates): that call is not compared. */
+  verifyText(heap, services, object, destX, destY, destWidth, destHeight, text) {
+    const base = object.base ?? heap.objectAddress(object), cache = services.texCache;
+    const ranges = this.textRanges(heap, base, cache), snapshot = ranges.map(([at, size]) => heap.bytes.slice(at - heap.base, at - heap.base + size));
+    const head = cache.head, count = cache.count;
+    const recorded = [], derived = this.derivedServices(services, recorded);
+    this.allocated = false;
+    this.runText(heap, derived, object, destX, destY, destWidth, destHeight, text);
+    if (this.allocated) { this.textVerify.skipped++; this.replay(services, recorded); return true; }
+    const rust = ranges.map(([at, size]) => heap.bytes.slice(at - heap.base, at - heap.base + size)), rustCache = [cache.head, cache.count];
+    ranges.forEach(([at], i) => heap.bytes.set(snapshot[i], at - heap.base));
+    cache.head = head;
+    cache.count = count;
+    const expected = [], reference = this.derivedServices(services, expected, true);
+    gcDrawText(object, destX, destY, destWidth, destHeight, text, reference);
+    ranges.forEach(([at, size], i) => {
+      const js = heap.bytes.subarray(at - heap.base, at - heap.base + size), at0 = js.findIndex((b, j) => b !== rust[i][j]);
+      if (at0 >= 0) throw new Error(`GC_NATIVE verify: DrawText leaves heap +0x${(at + at0 - heap.base).toString(16)} different (range ${i} of ${ranges.length}, +0x${at0.toString(16)} of 0x${size.toString(16)}; rust ${rust[i][at0]}, js ${js[at0]}; ${JSON.stringify(text.slice(0, 40))})`);
+    });
+    if (rustCache[0] !== cache.head || rustCache[1] !== cache.count)
+      throw new Error(`GC_NATIVE verify: DrawText realize cache head/count rust ${rustCache}, js ${[cache.head, cache.count]}`);
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if (recorded.length !== expected.length || recorded.some((entry, i) => !same(entry, expected[i])))
+      throw new Error(`GC_NATIVE verify: DrawText commands differ: rust ${JSON.stringify(recorded.find((e, i) => !same(e, expected[i])))}`
+        + ` js ${JSON.stringify(expected.find((e, i) => !same(recorded[i], e)))} (${recorded.length} against ${expected.length})`);
+    this.textVerify.compared++;
+    this.textVerify.commands += expected.length;
+    this.replay(services, expected);
+    return true;
+  }
+  /** The ranges DrawText can write: the GC, the nodes of its two stacks and the realize cache's records. */
+  textRanges(heap, base, cache) {
+    const ranges = [[base, 0xb8]], seen = new Set([base]);
+    for (const first of [heap.mem.read(base + 0xac, 'u32'), heap.mem.read(base + 0xb0, 'u32')])
+      for (let node = first; node && !seen.has(node) && ranges.length < 256; node = heap.mem.read(node + 0xac, 'u32')) { seen.add(node); ranges.push([node, 0xb8]); }
+    for (const record of [...cache.records, cache.static]) ranges.push([record, 0x84]);
+    return ranges;
+  }
+  /** `services` with callVirtual recording the tile commands (the texture Lock and Unlock calls run as they do): into `out`. With
+   * `reference`, the JavaScript bodies of DrawText, PushGC and PopGC. */
+  derivedServices(services, out, reference = false) {
+    const derived = Object.create(services);
+    Object.defineProperty(derived, 'callVirtual', {value: (slot, object, command) => {
+      if (slot !== 3 && slot !== 4) return services.callVirtual(slot, object, command);
+      out.push({slot, object, command: {...command, color: [...command.color]}});
+      return undefined;
+    }});
+    if (reference) for (const name of ['drawText', 'pushGC', 'popGC']) Object.defineProperty(derived, name, {value: undefined});
+    return derived;
+  }
+  replay(services, commands) {
+    for (const {slot, object, command} of commands) services.callVirtual(slot, object, command);
+  }
+  /** The realize cache's JavaScript object (`services.texCache`) reads and writes its head and count where Rust keeps them (TEXC:
+   * head, count, the five records, the static record). */
+  bindTexCache(cache) {
+    if (cache.rustBound === this) return;
+    const vm = this.vm, at = this.texcAt, head = cache.head, count = cache.count;
+    Object.defineProperty(cache, 'head', {get: () => vm.arena.view.getUint32(at, true), set: v => vm.arena.view.setUint32(at, v >>> 0, true),
+      configurable: true, enumerable: true});
+    Object.defineProperty(cache, 'count', {get: () => vm.arena.view.getUint32(at + 4, true), set: v => vm.arena.view.setUint32(at + 4, v >>> 0, true),
+      configurable: true, enumerable: true});
+    const view = vm.arena.view;
+    view.setUint32(at, head >>> 0, true);
+    view.setUint32(at + 4, count >>> 0, true);
+    cache.records.forEach((record, i) => view.setUint32(at + 8 + 4 * i, record >>> 0, true));
+    view.setUint32(at + 28, cache.static >>> 0, true);
+    Object.defineProperty(cache, 'rustBound', {value: this, configurable: true});
   }
   /** GC_HOST's heap words for `heap` (open() writes them too). */
   useHeap(heap) {
@@ -159,6 +273,28 @@ export class GcHost {
         const view = this.vm.arena.view, at = this.tileAt, word = i => view.getUint32(at + 4 * i, true);
         return this.call(slot, canvas, transientTileCommand(word(0), word(1), word(2), word(3), word(4), word(5), word(6), word(7), word(8), word(9),
           word(10), word(11), word(12), word(13), word(14)));
+      },
+      // UGC::DrawText in Rust (text.rs): the glyph's DrawTile, the realize cache's texture Lock and Unlock, PushGC's allocation and
+      // the JavaScript body's errors.
+      js_gc_glyph: (slot, object) => {
+        const view = this.vm.arena.view, at = this.glyphAt, w = this.glyphWords ??= new Array(16);
+        for (let i = 0; i < 16; i++) w[i] = view.getUint32(at + 4 * i, true);
+        const crossed = this.textServices.callVirtual(slot, object, glyphCommandFromWords(this.textServices, w));
+        if (crossed && typeof crossed.then === 'function') throw new Error('DrawGlyphTile boundary suspended');
+      },
+      js_gc_tex_lock: (slot, texture, record, b0, b4, ri) => {
+        const crossed = this.textServices.callVirtual(slot, texture, {record, b0, b4, arg3: 0xffffffff, ri});
+        if (crossed && typeof crossed.then === 'function') throw new Error('TextureLock boundary suspended');
+      },
+      js_gc_tex_unlock: (slot, texture, record) => {
+        const crossed = this.textServices.callVirtual(slot, texture, {record});
+        if (crossed && typeof crossed.then === 'function') throw new Error('TextureUnlock boundary suspended');
+      },
+      js_gc_text_push: gc => { this.allocated = true; return gcPushGC(this.textHeap.objectAt(gc), this.textServices); },
+      js_gc_text_fail: (kind, value) => {
+        if (kind === 1) throw new NativeHeapError(`Native heap address 0x${(value >>> 0).toString(16)} is outside heap storage`, {address: value >>> 0});
+        throw new UFontModelBoundaryError(value === 0 ? 'UFont glyph lookup with zero charsPerPage hits a native #DE'
+          : 'UFont glyph lookup produced a negative page/index (reads outside the table - unverifiable)', {kind: 'DIVISOR'});
       },
       js_gc_native: (index, handle) => { runGcNative(index, vm.identity(handle), this.args(index), this.services); },
       js_gc_verify: (index, handle, base) => this.verify(index, vm.identity(handle), base),

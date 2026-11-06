@@ -33,6 +33,7 @@ import {AiEventHost} from './script-vm-aievent.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
 import {ParticleHost} from './script-vm-particles.mjs';
 import {GcHost} from './script-vm-gc.mjs';
+import {WindowHost} from './script-vm-window.mjs';
 import {RenderScanHost} from './script-vm-render.mjs';
 import {NavSearchHost} from './script-vm-nav.mjs';
 import {MeshLightHost} from './script-vm-meshlight.mjs';
@@ -317,6 +318,8 @@ export class RustScriptVm {
     // execUpdateParticles (particles.rs).
     this.particles = new ParticleHost(this);
     this.gc = new GcHost(this);
+    // The window host's draw tree and window events in Rust (window.rs, dispatch.rs).
+    this.windows = new WindowHost(this);
     // R3-d: Actor.Tick's bookkeeping (actor-tick-kernel.mjs).
     this.actorTick = new ActorTickHost(this);
     // R3-e: SetActorZone's common case (zone-kernel.mjs).
@@ -376,6 +379,7 @@ export class RustScriptVm {
     this.nav.attach(x);
     this.particles.attach(x);
     this.gc.attach(x);
+    this.windows.attach(x);
     this.meshLight.attach(x);
     this.actorTick.attach(x);
     this.zone.attach(x);
@@ -689,6 +693,7 @@ export class RustScriptVm {
       ...vm.render.imports(),
       ...vm.particles.imports(),
       ...vm.gc.imports(),
+      ...vm.windows.imports(),
       ...vm.meshLight.imports(),
       ...vm.actorTick.imports(),
       ...vm.movePawn.imports(),

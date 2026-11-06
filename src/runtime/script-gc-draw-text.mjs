@@ -193,12 +193,31 @@ const GLYPH_PAYLOAD = {op: 'DrawGlyphTile', node: 0, record: 0, x: 0, y: 0, xl: 
   spanBuffer: 0, z: 0, color: GLYPH_FOG, fog: GLYPH_FOG, polyFlags: 0};
 // The glyph colour as one frozen array shared while the four words stay the same: a text is drawn in a colour or two.
 let glyphColorCache = freeze([-1, -1, -1, -1]);
-function glyphColor(view) {
-  const c0 = view.getUint32(STATE_COLOR, true), c1 = view.getUint32(STATE_COLOR + 4, true),
-    c2 = view.getUint32(STATE_COLOR + 8, true), c3 = view.getUint32(STATE_COLOR + 12, true);
+function glyphColorOf(c0, c1, c2, c3) {
   const cached = glyphColorCache;
   if (c0 !== cached[0] || c1 !== cached[1] || c2 !== cached[2] || c3 !== cached[3]) glyphColorCache = freeze([c0, c1, c2, c3]);
   return glyphColorCache;
+}
+const glyphColor = view => glyphColorOf(view.getUint32(STATE_COLOR, true), view.getUint32(STATE_COLOR + 4, true),
+  view.getUint32(STATE_COLOR + 8, true), view.getUint32(STATE_COLOR + 12, true));
+
+/** The glyph emit block glyphCommand builds, from the sixteen words the Rust body (text.rs GLYPH) computed: node, record, x, y, xl, yl, u,
+ * v, ul, vl, z, the four colour words and polyFlags. The same object and keys, transient or frozen as `services` asks. */
+export function glyphCommandFromWords(services, w) {
+  if (services.transientPayloads === true) {
+    const payload = GLYPH_PAYLOAD;
+    payload.node = w[0]; payload.record = w[1];
+    payload.x = w[2]; payload.y = w[3]; payload.xl = w[4]; payload.yl = w[5];
+    payload.u = w[6]; payload.v = w[7]; payload.ul = w[8]; payload.vl = w[9];
+    payload.z = w[10];
+    payload.color = glyphColorOf(w[11], w[12], w[13], w[14]);
+    payload.polyFlags = w[15];
+    return payload;
+  }
+  return freeze({
+    op: 'DrawGlyphTile', node: w[0], record: w[1], x: w[2], y: w[3], xl: w[4], yl: w[5], u: w[6], v: w[7], ul: w[8], vl: w[9],
+    spanBuffer: 0, z: w[10], color: glyphColorOf(w[11], w[12], w[13], w[14]), fog: GLYPH_FOG, polyFlags: w[15],
+  });
 }
 
 /** The 21-dword glyph emit block handed to FRenderInterface::DrawTile —
@@ -354,6 +373,8 @@ const DRAW_EXTENT = {xExtent: 0, yExtent: 0};
 export function gcDrawText(object, destX, destY, destWidth, destHeight, text, services = {}) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function'))
     fail('GC.DrawText requires a canonical GC object', {kind: 'REFERENCE', value: object});
+  // The Rust body (text.rs, script-vm-gc.mjs drawText) when the window host offers it: the same method, from the same heap.
+  if (services.drawText !== undefined && typeof text === 'string' && services.drawText(object, destX, destY, destWidth, destHeight, text)) return;
   const L = gcMemory(object, services);
   const base = L.base;
   if (!(L.read(base + GC.flags, 'u32') & GC_FLAGS.drawing)) return;
@@ -379,7 +400,8 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
   const wrapInt = (L.read(base + GC.textFlags, 'u32') & GC_TEXT_FLAGS.wordWrap)
     ? Math.trunc(dw) | 0 : 0;                          // [ebp-0x20]
 
-  gcPushGC(object, services);
+  // (the window host's GC stack bodies run in Rust when the host admits them, script-vm-gc.mjs; the same bodies and results)
+  if (services.pushGC !== undefined) services.pushGC(object); else gcPushGC(object, services);
   gcIntersect(object, dx, dy, dw, dh, services);
 
   let lineY = dy;                              // [ebp+0xc] — current line origin
@@ -443,7 +465,7 @@ export function gcDrawText(object, destX, destY, destWidth, destHeight, text, se
     stateA.set(stateB);                        // line end: A <- B
   }
 
-  gcPopGC(object, -1, services);   // the method calls the -1 body 0x100279f0
+  if (services.popGC !== undefined) services.popGC(object, -1); else gcPopGC(object, -1, services);   // the method calls the -1 body 0x100279f0
 }
 
 export const execGcDrawText = gcDrawText;
