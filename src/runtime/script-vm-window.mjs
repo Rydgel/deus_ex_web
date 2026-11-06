@@ -18,7 +18,7 @@ import {O, c0, c3, drawBackground, drawTree as jsDrawTree} from './script-window
 export const windowDrawMode = () => (typeof process !== 'undefined' && process.env?.WINDOW_DRAW)
   || globalThis.DEUS_EX_WINDOW_DRAW || 'rust';
 
-const SLOTS = 512, SLOT = 16, LOG_CAPACITY = 4096;
+const SLOTS = 4096, SLOT = 16, LOG_CAPACITY = 4096;
 /** Slot flag bits (window.rs). */
 const F_DRAW_SCRIPT = 1, F_POST_SCRIPT = 2, F_EXTERNAL = 4, F_DRAW_TEXT = 8, F_DRAW_BUTTON = 16;
 
