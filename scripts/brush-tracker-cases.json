@@ -972,6 +972,17 @@
      }
     }
    ]
+  },
+  {
+   "id": "storage-nonfinite-fragments",
+   "map": "06_HongKong_Storage",
+   "purpose": "Construction (Update(NULL) at the game-thread control word 0x037f) over 06_HongKong_Storage, in full: the Rust tracker leaves three fragment nodes (10829, 10830, 10836; iSurf 4847) with NaN plane components, which stops FastLineCheck's 'Nonfinite plane distance' in Play (docs/fast-line-check.md 'Nonfinite planes'). Equal reports mean the original builds the same nodes.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895
+    }
+   ]
   }
  ]
 }

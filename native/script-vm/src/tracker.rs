@@ -547,6 +547,14 @@ fn numv(p: u32) -> u32 {
 // ---- the GMem scratch arena ----------------------------------------------------------
 
 static mut SCRATCH_TOP: u32 = 0;
+/// The arena starts at the host's scratch block (H_SCRATCH) with each construction. It was left at its static initial 0 until
+/// 2026-11-06: the copies and fragments of a rebuild then went to the bottom of the module's memory (the shadow stack, which a
+/// mover with few fragments never reached the end of) and, past it, over the statics: 06_HongKong_Storage's BreakableGlass0
+/// overwrote 2,138 entries of the sine table (the next rotated mover's vertices came out at x = -10,667) and left three
+/// fragment nodes with NaN planes (docs/brush-tracker.md "The scratch arena").
+fn scratch_reset() {
+    unsafe { *addr_of_mut!(SCRATCH_TOP) = h(H_SCRATCH) }
+}
 fn scratch_mark() -> u32 {
     unsafe { *addr_of!(SCRATCH_TOP) }
 }
@@ -710,6 +718,7 @@ fn add_brush(i: u32) {
 #[no_mangle]
 pub extern "C" fn trk_construct(pc64: u32) -> u32 {
     set_h(H_STATUS, 0);
+    scratch_reset();
     set_h(H_SURFS_TOP, h(H_SURFS_NUM));
     set_h(H_VECTORS_TOP, h(H_VECTORS_NUM));
     set_h(H_PTOP, h(H_POINTS_NUM));
