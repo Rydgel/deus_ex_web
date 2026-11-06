@@ -15,6 +15,7 @@ import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodM
   lodMeshCameraMatrix,publishLodMeshOps} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
+import {receiverEpoch} from '../runtime/receiver-epoch.mjs';
 import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
 import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
 import {nameCellWord} from '../runtime/script-name-ids.mjs';
@@ -1447,11 +1448,13 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // binding's block, or null when the pass cannot run (the script VM has no
   // render host, ?renderScan=js). Item bindings read the snapshot their item
   // writes, so they keep their own reads.
-  // The (handle, block) pairs are a function of the `actors` list alone (a binding's block is made with it and zeroed when it is
-  // retired, which takes it out of the list; an actor's handle never changes), so the table is written when the list changes
-  // (`actorsVersion`) and kept between frames. ACTOR_PLUMBING=no-pairs rewrites it every frame, and `verify` checks the kept
-  // table against a rewrite.
-  let pairs=0,pairsCapacity=0,pairsCount=0,pairsVersion=-1,pairsCheck=0;
+  // The (handle, block) pairs follow the `actors` list (a binding's block is made with it and zeroed when it is retired, which
+  // takes it out of the list) and each actor's handle. A destroyed actor's handle can be released before its binding is retired
+  // at the next membership sync, and handleOf then gives it another: so the table is written again when the list changes
+  // (`actorsVersion`), when Level.Actors changes (actorsEpoch: DestroyActor) or when a receiver is freed (receiverEpoch), and
+  // kept between frames otherwise (the bunker's spawns and destroys made a kept handle stale, caught by verify, 2026-11-06).
+  // ACTOR_PLUMBING=no-pairs rewrites it every frame, and `verify` checks the kept table against a rewrite.
+  let pairs=0,pairsCapacity=0,pairsCount=0,pairsVersion=-1,pairsActors=-1,pairsReceivers=-1,pairsCheck=0;
   const writePairs=(arena,at)=>{
     let count=0;
     for(const binding of actors){
@@ -1471,7 +1474,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       pairsCapacity=Math.max(4096,16*actors.length);pairs=arena.alloc(pairsCapacity);pairsCheck=0;pairsVersion=-1;
     }
     let count;
-    if(plumbing.pairs&&pairsVersion===actorsVersion){
+    if(plumbing.pairs&&pairsVersion===actorsVersion&&pairsActors===actorsEpoch()&&pairsReceivers===receiverEpoch()){
       count=pairsCount;
       if(plumbing.verify){
         // (the rewrite goes to a scratch of its own and is compared word by word)
@@ -1482,7 +1485,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
           if(arena.view.getUint32(pairsCheck+4*k,true)!==arena.view.getUint32(pairs+4*k,true))
             throw new Error(`ACTOR_PLUMBING=verify: the kept pair table differs from a rewrite at word ${k}`);
       }
-    }else{count=writePairs(arena,pairs);pairsCount=count;pairsVersion=actorsVersion;}
+    }else{count=writePairs(arena,pairs);pairsCount=count;pairsVersion=actorsVersion;pairsActors=actorsEpoch();pairsReceivers=receiverEpoch();}
     const {player,behind,viewTarget}=viewer();
     if(!render.meshReads(pairs,count,{player,behind,viewTarget}))return null;
     // Typed views of the arena's current buffer: a memory growth during an
