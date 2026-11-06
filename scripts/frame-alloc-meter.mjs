@@ -7,7 +7,7 @@
  * fixed roam as hud-stream-digest.mjs (a forward hold, a turn every 90 ticks, a jump every 150) through the installed input bindings.
  *
  *   node scripts/frame-alloc-meter.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--pre-tick] [--time] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
+ *     [--pre-tick] [--time] [--place JSON] [--idle] [--god] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
  *
  * Without --sites: the heap-space size of V8's new space around each step (begin, lightFrame, sprites, actors, stamps, coronas, weapon,
  * hud) and around the whole call, as KB a frame (mean, median, p90). A frame a scavenge ran in is left out of that step's numbers;
@@ -70,6 +70,16 @@ const host = await createSimHost(decodeMap(asset.bytes, { triangles: false }), a
   onProgress: () => {} });
 if (!host.game) throw new Error(`No game: ${host.notes.join('; ')}`);
 const { game, session } = host;
+// --place JSON: the player is put there before the frames (decal-probe.mjs placeProbe, as hitch-run.mjs --place does), --god turns on the
+// console's god mode (hitch-run.mjs --god), so a placed run is the same view as a browser run at that spot.
+if (flag('place', null)) {
+  const { placeProbe } = await import('../src/viewer/decal-probe.mjs');
+  placeProbe(game, JSON.parse(flag('place')));
+}
+if (argv.includes('--god')) {
+  const { viewProbe } = await import('../src/viewer/view-probe.mjs');
+  viewProbe(game, { exec: ['set DeusEx.JCDentonMale bCheatsEnabled True', 'god'] });
+}
 const fixture = createPlayerInputFixture(game);
 
 // ---- a fast exact-bits hash of a snapshot (two 32-bit lanes; numbers by their float64 words, -0 and NaN payloads kept)
@@ -129,14 +139,16 @@ for (const name of STEPS) {
   };
 }
 
+const idle = argv.includes('--idle');   // --idle: no forward hold, turns or jumps (hitch-run.mjs --mode idle): the placed view stays
 const FORWARD = 'KeyW', TURN_EVERY = 90, JUMP_EVERY = 150;
 let tick = 0, seconds = 0, scavenged = 0;
 const digestHashes = [];
 function step() {
   simulatedMs += 1000 / 60; seconds += 1 / 60;
-  if (tick === 0) fixture.key(FORWARD, true);
-  if (tick > 0 && tick % TURN_EVERY === 0) fixture.axis('MouseX', (tick / TURN_EVERY) % 3 === 0 ? -40 : 40);
-  if (tick > 0 && tick % JUMP_EVERY === 0) fixture.key('Space', true);
+  if (tick === 0 && !idle) fixture.key(FORWARD, true);
+  if (!idle && tick > 0 && tick % TURN_EVERY === 0) fixture.axis('MouseX', (tick / TURN_EVERY) % 3 === 0 ? -40 : 40);
+  if (idle) { /* no jumps */ }
+  else if (tick > 0 && tick % JUMP_EVERY === 0) fixture.key('Space', true);
   else if (tick > 0 && tick % JUMP_EVERY === 1) fixture.key('Space', false);
   // --pre-tick: the first frame's tick runs ahead of it (sim-session.mjs preTick, as the page asks for it while it waits for its shaders);
   // the frame is posted as the page posts it, `preTicked` with no dt. Every frame's hash must equal the run without it.
