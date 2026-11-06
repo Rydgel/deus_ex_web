@@ -30,6 +30,14 @@ import {probeNames, probeIndex} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
 import {ScriptState, originalProcess, originalIsProbing} from './script-state.mjs';
 
+const env = typeof process !== 'undefined' ? process.env ?? {} : {};
+/** The tick's reads of other objects' state: actorInStasis' zone render time (tick.rs zone_render_time), the owner's bTicked
+ * (`owner_ticked`) and the event gate's Level.bBegunPlay (dispatch.rs `gate`). 'rust' (default) reads them in Rust (the zone times
+ * from a table the host copies before each run or batch, the others from the objects' images), 'js' asks the runtime through
+ * the imports, 'verify' does both and compares every answer. TICK_READS / ?tickReads=. */
+export const tickReadsMode = () => env.TICK_READS || globalThis.DEUS_EX_TICK_READS || 'rust';
+// ACTOR_TICK_DIFFERENTIAL replays the owner's bTicked read and the gate's from a log: they stay imports then.
+const DIFFERENTIAL = typeof process !== 'undefined' && process.env?.ACTOR_TICK_DIFFERENTIAL === '1';
 const DISPATCH_VERIFY = typeof process !== 'undefined' && process.env?.DISPATCH_VERIFY === '1';
 // RUST_EVENTS=0 keeps every tick event in JavaScript (the reference path).
 const DISABLED = typeof process !== 'undefined' && process.env?.RUST_EVENTS === '0';
@@ -82,6 +90,8 @@ export class EventHost {
     const vm = this.vm, arena = vm.arena;
     this.at = x.vm_events_ptr();
     this.deleteAt = x.vm_delete_me_ptr();
+    this.readsAt = typeof x.vm_reads_ptr === 'function' ? x.vm_reads_ptr() : 0;
+    this.readsFilled = false;
     this.runsAt = x.vm_runs_ptr();
     const bytes = SLOTS * SLOT, table = arena.alloc(bytes), view = arena.view;
     arena.bytes.fill(0, table, table + bytes);
@@ -121,6 +131,13 @@ export class EventHost {
   /** Every cache entry is resolved again. */
   bump() {
     if (!this.at) return;
+    // the cells READS describes may be withdrawn: the images are not read until readsTable fills it again
+    if (this.readsAt && this.readsFilled) {
+      const reads = this.vm.arena.view;
+      reads.setUint32(this.readsAt + 16, 0, true);
+      reads.setUint32(this.readsAt + 32, 0, true);
+      this.readsFilled = false;
+    }
     const view = this.vm.arena.view, epoch = (view.getUint32(this.at + 8, true) + 1) >>> 0;
     view.setUint32(this.at + 8, epoch || 1, true);
   }
@@ -164,8 +181,42 @@ export class EventHost {
       runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup && runtime.scriptability() === true &&
       ScriptState.prototype.isProbing === originalIsProbing;
   }
+  /** The cells dispatch.rs `gate` and tick.rs `owner_ticked` read in the images (READS): Actor.Level, LevelInfo.bBegunPlay and
+   * Actor.bTicked, once the registry has all three as the kinds they read; the mode of TICK_READS. Called by the imports that
+   * answer in JavaScript, which is what the Rust side does while READS is empty. */
+  readsTable() {
+    if (this.readsFilled || !this.readsAt) return;
+    const mode = tickReadsMode();
+    if (mode === 'js' || DIFFERENTIAL) return;
+    const level = scalarCell(fieldImageCell('engine.actor.level')), begun = scalarCell(fieldImageCell('engine.levelinfo.bbegunplay')),
+      ticked = scalarCell(fieldImageCell('engine.actor.bticked'));
+    if (level?.kind !== 'object' || begun?.kind !== 'bool' || ticked?.kind !== 'bool') return;
+    const view = this.vm.arena.view, at = this.readsAt;
+    view.setUint32(at, level.offset, true);
+    view.setUint32(at + 4, fieldKeyId('engine.actor.level'), true);
+    view.setUint32(at + 8, begun.offset, true);
+    view.setUint32(at + 12, fieldKeyId('engine.levelinfo.bbegunplay'), true);
+    view.setUint32(at + 16, begun.mask, true);
+    view.setUint32(at + 24, ticked.offset, true);
+    view.setUint32(at + 28, fieldKeyId('engine.actor.bticked'), true);
+    view.setUint32(at + 32, ticked.mask, true);
+    view.setUint32(at + 20, mode === 'verify' ? 2 : 1, true);
+    this.readsFilled = true;
+  }
+  /** js_event_prelude: the first steps of `gate`. */
+  prelude(handle) {
+    const vm = this.vm;
+    if (identityOfHandle(handle) === null) return -1;
+    vm.arena.view.setUint32(vm.runawayAt, scriptRunawayCount(), true);
+    return vm.runtime.scriptability() ? 1 : 0;
+  }
+  /** js_gate_error (TICK_READS=verify): the image answer `ours` differed from `gate`'s. */
+  gateError(handle, ours) {
+    throw new Error(`TICK_READS=verify: the event gate of ${identityOfHandle(handle)?.name} is ${ours} in Rust, ${this.gate(handle)} in the runtime`);
+  }
   /** js_event_gate. */
   gate(handle) {
+    this.readsTable();
     const vm = this.vm, runtime = vm.runtime, receiver = identityOfHandle(handle);
     if (receiver === null) return -1;
     vm.arena.view.setUint32(vm.runawayAt, scriptRunawayCount(), true);

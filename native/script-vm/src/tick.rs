@@ -74,7 +74,9 @@ const F_BLENDTWEEN: usize = 39;
 const F_BLENDLAST: usize = 40;
 const F_BLENDMINRATE: usize = 41;
 const F_LATENTFLOAT: usize = 42;
-const FIELD_COUNT: usize = 43;
+/// Region.ZoneNumber (the table's offset is the struct cell's plus the member's): the zone whose LastRenderTime `zone_render_time` reads.
+const F_REGION: usize = 43;
+const FIELD_COUNT: usize = 44;
 /// js_tick_get/js_tick_set: the animation view's `animFlags` accessor.
 const A_FLAGS: u32 = 64;
 /// The fields the animation phase reads or writes, besides Role,
@@ -117,6 +119,10 @@ const S_WEAPON: u32 = 1;
 // STATE_VERIFY, a probe the state table answered unlike JavaScript.
 const ERR_DEMO: u32 = 1;
 const ERR_PROBE: u32 = 2;
+/// TICK_READS=verify: the table answered unlike the import.
+const ERR_ZONE: u32 = 5;
+/// TICK_READS=verify: the owner's bTicked in its image differed from the runtime's.
+const ERR_OWNER: u32 = 6;
 
 /// T_FIELDS: per field [offset, bool mask or fixed-array element stride],
 /// written by the host from the cell registry.
@@ -162,6 +168,36 @@ pub extern "C" fn tick_probe_names_ptr() -> *mut u32 {
 /// js_tick_zone_time's value was not a number (T_STATE[4]).
 pub(crate) fn zone_time_bad() -> bool {
     unsafe { (*addr_of!(T_STATE))[4] != 0 }
+}
+
+/// The level's zone render times (`level.zoneLastRenderTimes`, a Float32Array of the UModel's zones), copied by the host before each
+/// run or batch of ticks: [0] the mode (0 the import answers, 1 this table answers, 2 both answer and must agree), [1] the number
+/// of zones (at most 256: the zone number is a byte), then the float bits. Nothing writes the array during a tick.
+static mut Z_TABLE: [u32; 258] = [0; 258];
+
+#[no_mangle]
+pub extern "C" fn tick_zones_ptr() -> *mut u32 {
+    addr_of_mut!(Z_TABLE) as *mut u32
+}
+
+/// `level.zoneLastRenderTime(actor)` as js_tick_zone_time answers it, the value and T_STATE[4] (1 when it is not a number: the zone
+/// is outside the table): from the table when the actor's Region.ZoneNumber is in its image, else from the import.
+pub(crate) fn zone_render_time(a: &Actor) -> f64 {
+    let table = unsafe { &*addr_of!(Z_TABLE) };
+    let Some(p) = (if table[0] == 0 { None } else { a.at(F_REGION) }) else {
+        return unsafe { js_tick_zone_time(a.ctx) };
+    };
+    let zone = load8(p) as u32;
+    let (value, bad) = if zone < table[1] { (f32::from_bits(table[2 + zone as usize]) as f64, 0) } else { (0.0, 1) };
+    if table[0] == 2 {
+        let host = unsafe { js_tick_zone_time(a.ctx) };
+        let host_bad = unsafe { (*addr_of!(T_STATE))[4] };
+        if host_bad != bad || host.to_bits() != value.to_bits() {
+            unsafe { js_tick_error(a.ctx, ERR_ZONE) };
+        }
+    }
+    unsafe { (*addr_of_mut!(T_STATE))[4] = bad };
+    value
 }
 
 /// `services.isProbing(actor, name)` for the ticking actor: with the probe
@@ -489,6 +525,23 @@ enum Start {
     Tick,
 }
 
+/// js_tick_owner_ticked's answer (the owner's bTicked as 1 or 0, -1 for no identity), read in the owner's image when the host gave
+/// the cell (dispatch.rs READS) and the field is in it.
+fn owner_ticked(ctx: u32, owner: u32) -> i32 {
+    let g = crate::dispatch::reads();
+    if g[5] != 0 && g[8] != 0 {
+        let (info, bind) = crate::interp::receiver(owner);
+        if let Some(p) = crate::interp::field_addr(info, bind, g[7], g[6]) {
+            let ticked = (load32(p) & g[8] != 0) as i32;
+            if g[5] == 2 && unsafe { js_tick_owner_ticked(ctx, owner) } != ticked {
+                unsafe { js_tick_error(ctx, ERR_OWNER) };
+            }
+            return ticked;
+        }
+    }
+    unsafe { js_tick_owner_ticked(ctx, owner) }
+}
+
 /// The body up to its first effect: the Role gate, actorInStasis, the
 /// stasis destruction test and the owner test. None hands the tick back.
 #[inline(always)]
@@ -507,7 +560,7 @@ fn start(a: &Actor, time_seconds: f64, tick_tag: u32) -> Option<Start> {
         if !a.img_bool(F_BFORCESTASIS)? && physics != 0.0 && physics != 5.0 {
             break 'stasis false;
         }
-        let rendered = unsafe { js_tick_zone_time(a.ctx) };
+        let rendered = zone_render_time(a);
         if unsafe { (*addr_of!(T_STATE))[4] } != 0 {
             // Not a number: the JavaScript body throws.
             return None;
@@ -522,7 +575,7 @@ fn start(a: &Actor, time_seconds: f64, tick_tag: u32) -> Option<Start> {
     }
     let owner = live(a.at(F_OWNER).map(load32)?);
     if owner != 0 {
-        let ticked = unsafe { js_tick_owner_ticked(a.ctx, owner) };
+        let ticked = owner_ticked(a.ctx, owner);
         if ticked >= 0 && ticked as u32 != tick_tag {
             return Some(Start::Defer);
         }

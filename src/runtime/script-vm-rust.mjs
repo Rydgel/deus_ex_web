@@ -738,6 +738,8 @@ export class RustScriptVm {
       // Tick events in Rust (dispatch.rs): processEvent's gates (they run
       // no script) and the event cache's decisions (no script either).
       js_event_gate: handle => vm.events.gate(handle),
+      js_event_prelude: handle => vm.events.prelude(handle),
+      js_gate_error: (handle, ours) => vm.events.gateError(handle, ours),
       js_event_resolve: (handle, which, slot) => vm.events.resolve(handle, which, slot),
       js_call_resolve: (frame, node, handle, sig, slot) => vm.events.callResolve(frame, node, handle, sig, slot),
       // The state table (script-vm-states.mjs); runs no script.

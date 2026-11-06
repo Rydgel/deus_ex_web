@@ -8,7 +8,9 @@
 //!    Level has not begun play does not receive events): `js_event_gate`,
 //!    the runtime's own `eventGate`, which processEvent also calls. It also
 //!    hands the JavaScript runaway count to RUNAWAY (the body's jumps count
-//!    on from it).
+//!    on from it). `gate` below answers the usual case without it: the
+//!    cheap import `js_event_prelude` (runaway count, scriptability), then
+//!    the Level pointer and its LevelInfo's bBegunPlay read in the images.
 //! 2. `state.isProbing(ename)`: the state table entry (natives.rs): a row
 //!    with names is an instance with a ScriptState; its probe words decide.
 //! 3. `lookup(receiver, name)` and the function's checks: the event cache,
@@ -33,7 +35,7 @@
 //! ran, -1 when the caller must dispatch in JavaScript.
 
 use crate::interp::{
-    class_entry, field_addr, float_bits, frames_restore, frames_save, js_class_row, load32, receiver, store32,
+    class_entry, field_addr, float_bits, frames_restore, frames_save, js_class_row, live, load32, receiver, store32,
     vm_frame_push, Run, BUDGET, FRAMES, HANG_BUDGET, RELEASED,
 };
 use crate::natives::state_entry;
@@ -96,11 +98,29 @@ pub extern "C" fn vm_scores_ptr() -> *mut u32 {
     addr_of_mut!(SCORES) as *mut u32
 }
 
+/// READS = [Level's offset, key id, bBegunPlay's offset, key id, mask, mode, bTicked's offset, key id, mask]: the cells `gate` and
+/// tick.rs `owner_ticked` read in the images, written by the host (script-vm-events.mjs readsTable) once the registry has them.
+/// Mode 0 (and every field zero until then) leaves the answers to the imports, 1 reads the images, 2 reads both and compares.
+static mut READS: [u32; 9] = [0; 9];
+
+#[no_mangle]
+pub extern "C" fn vm_reads_ptr() -> *mut u32 {
+    addr_of_mut!(READS) as *mut u32
+}
+pub(crate) fn reads() -> [u32; 9] {
+    unsafe { *addr_of!(READS) }
+}
+
 #[link(wasm_import_module = "env")]
 extern "C" {
     /// The runtime's eventGate (1 pass, 0 processEvent returns false, -1
     /// the JavaScript path); RUNAWAY = the JavaScript runaway count.
     fn js_event_gate(handle: u32) -> i32;
+    /// The first steps of js_event_gate: -1 when the handle names no identity, else RUNAWAY = the JavaScript runaway count and
+    /// scriptability() (1, or 0: processEvent returns false).
+    fn js_event_prelude(handle: u32) -> i32;
+    /// READS mode 2: the image answer for `handle` differed from the runtime's.
+    fn js_gate_error(handle: u32, ours: i32);
     /// Fill the slot at `slot` (kind, code, size, parameter, template) for
     /// `handle`'s event `which`; under verify, compare a filled slot first.
     fn js_event_resolve(handle: u32, which: u32, slot: u32);
@@ -113,7 +133,44 @@ pub(crate) fn event_gate(handle: u32) -> i32 {
     if unsafe { (*addr_of!(SCORES))[2] } == 0 {
         return -1;
     }
-    unsafe { js_event_gate(handle) }
+    gate(handle)
+}
+
+/// js_event_gate's answer, with the Level test made in the images where it passes. eventLevelGate (script-runtime.mjs) is false
+/// only for an Actor whose level exists, whose Level pointer names a LevelInfo, and whose bBegunPlay is clear; every other case is
+/// true. So a null Level pointer, or a LevelInfo with bBegunPlay set, passes whatever `levelFor` answers, and the image holds both;
+/// anything else (a field outside the image, a clear bBegunPlay) is the runtime's.
+fn gate(handle: u32) -> i32 {
+    let g = reads();
+    if g[5] == 0 || g[4] == 0 {
+        return unsafe { js_event_gate(handle) };
+    }
+    let s = unsafe { js_event_prelude(handle) };
+    if s <= 0 {
+        return s;
+    }
+    let (info, bind) = receiver(handle);
+    let Some(level) = field_addr(info, bind, g[1], g[0]) else {
+        return unsafe { js_event_gate(handle) };
+    };
+    let level = live(load32(level));
+    let passes = level == 0 || {
+        let (info, bind) = receiver(level);
+        match field_addr(info, bind, g[3], g[2]) {
+            Some(begun) => load32(begun) & g[4] != 0,
+            None => false,
+        }
+    };
+    if !passes {
+        return unsafe { js_event_gate(handle) };
+    }
+    if g[5] == 2 {
+        let theirs = unsafe { js_event_gate(handle) };
+        if theirs != 1 {
+            unsafe { js_gate_error(handle, 1) };
+        }
+    }
+    1
 }
 
 /// A script function `float Name(Object receiver, Object other, float value)` run on `receiver` from Rust (the AI event manager's score
@@ -280,7 +337,7 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
         return -1;
     }
     // 1. scriptability and the Level gate.
-    match unsafe { js_event_gate(handle) } {
+    match gate(handle) {
         1 => {}
         0 => return 0,
         _ => return -1,

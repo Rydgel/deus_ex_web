@@ -47,6 +47,7 @@ import {setScriptRunaway} from './script-vm.mjs';
 import {probeNames} from '../unreal/probe-names.mjs';
 import {receiverEpoch} from './receiver-epoch.mjs';
 import {actorsEpoch, onActorsEpoch} from './base-epoch.mjs';
+import {tickReadsMode} from './script-vm-events.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.ACTOR_TICK_KERNEL === 'js' || globalThis.DEUS_EX_ACTOR_TICK_KERNEL === 'js';
@@ -113,7 +114,10 @@ export const TICK_FIELDS = Object.freeze([
   ['BlendAnimMinRate', 'engine.actor.blendanimminrate', 'fixed', 'float'],
   // Sleep's remaining time (script-sleep.mjs), polled in Rust.
   ['LatentFloat', 'engine.actor.latentfloat', 'float'],
+  // Region.ZoneNumber's byte, for the zone render time (tick.rs zone_render_time); the table's offset is the struct cell's plus the member's.
+  ['Region', 'engine.actor.region', 'struct'],
 ]);
+const ZONE_NUMBER = 'engine.actor.pointregion.zonenumber';
 /** The fields AScriptedPawn::Tick reads and writes besides TICK_FIELDS's (sptick.rs S_*), in index order: [the spelling, key, cell
  * kind]. A pawn runs the phase in Rust only when its class resolves every one of them to the cell the table describes. */
 export const SP_FIELDS = Object.freeze([
@@ -189,7 +193,7 @@ const BOOL_FIELDS = new Set(TICK_FIELDS.flatMap(([, , kind], i) => kind === 'boo
 // The fields ACTOR_TICK_DIFFERENTIAL compares, besides TICK_FIELDS: the
 // replication planes replicateCompletion writes.
 const STRUCT_FIELDS = new Set(['SimAnim', 'SimBlendAnim', 'AlliancesEx']);
-const SNAPSHOT_FIELDS = [...TICK_FIELDS.map(([name]) => name), ...SP_FIELDS.map(([name]) => name), ...STRUCT_FIELDS];
+const SNAPSHOT_FIELDS = [...TICK_FIELDS.map(([name]) => name).filter(name => name !== 'Region'), ...SP_FIELDS.map(([name]) => name), ...STRUCT_FIELDS];
 // Class flags (tick.rs C_*).
 const C_PAWN = 1, C_PLAYERPAWN = 2, C_WEAPON = 4, C_SCRIPTEDPAWN = 8;
 const HANDBACK = -1, DEFER = -2, HOST = 2;
@@ -302,6 +306,7 @@ export class ActorTickHost {
     this.stackTop = x.__stack_pointer.value;
     this.fieldsAt = x.tick_fields_ptr();
     this.stateAt = x.tick_state_ptr();
+    this.zonesAt = typeof x.tick_zones_ptr === 'function' ? x.tick_zones_ptr() : 0;
     this.f64At = x.tick_f64_ptr();
     this.spAt = x.tick_sp_ptr();
     this.spAllianceAt = x.tick_sp_alliance_ptr();
@@ -317,6 +322,20 @@ export class ActorTickHost {
     const probes = x.tick_probe_names_ptr();
     PROBES.forEach((name, i) => this.vm.arena.view.setUint32(probes + 4 * i, (probeNames.get(name.toLowerCase()) ?? -1) >>> 0, true));
     this.enabled = !DISABLED;
+  }
+  /** The level's zone render times for tick.rs zone_render_time (TICK_READS): copied into the Rust table before a run or batch of ticks
+   * (nothing writes them during a tick: the render feedback and the level reset do, between ticks). Only the level that
+   * script-doors.mjs built (its zoneLastRenderTime is marked `direct`) can be read there; a stub level keeps the import. */
+  syncZones(level) {
+    if (!this.zonesAt) return;
+    const times = level.zoneLastRenderTime?.direct === true ? level.zoneLastRenderTimes : null;
+    const mode = tickReadsMode(), arena = this.vm.arena;
+    if (!(times instanceof Float32Array) || mode === 'js' || DIFFERENTIAL) { arena.view.setUint32(this.zonesAt, 0, true); return; }
+    const count = Math.min(times.length, 256), memory = arena.memory.buffer;
+    if (this.zoneWords?.buffer !== memory) this.zoneWords = new Float32Array(memory, this.zonesAt + 8, 256);
+    this.zoneWords.set(count === times.length ? times : times.subarray(0, count));
+    arena.view.setUint32(this.zonesAt, mode === 'verify' ? 2 : 1, true);
+    arena.view.setUint32(this.zonesAt + 4, count, true);
   }
   /** Fill the table's missing entries from the registry. An entry, once
    * written, never changes (the registry keeps a key's cell or drops it). */
@@ -338,11 +357,17 @@ export class ActorTickHost {
       if (cellKind(cell) !== kind) cell = null;
       if (cell && kind === 'fixed' && (cell.dim !== 4 || cellKind(cell.element) !== element || cell.element.offset !== 0))
         cell = null;
+      // The Region's zone number: a byte member of the struct, addressed from the actor's base.
+      let zone = null;
+      if (cell && kind === 'struct') {
+        zone = cell.members.find(member => member.key === ZONE_NUMBER);
+        if (cellKind(zone) !== 'byte') cell = null;
+      }
       if (!cell) return;
       expected[i] = cell;
       added = true;
-      view.setUint32(this.fieldsAt + 8 * i, cell.offset, true);
-      view.setUint32(this.fieldsAt + 8 * i + 4, kind === 'fixed' ? cell.stride : cell.mask >>> 0, true);
+      view.setUint32(this.fieldsAt + 8 * i, zone ? cell.offset + zone.offset : cell.offset, true);
+      view.setUint32(this.fieldsAt + 8 * i + 4, zone ? 0 : kind === 'fixed' ? cell.stride : cell.mask >>> 0, true);
     });
     if (added) this.version++;
   }
@@ -473,6 +498,7 @@ export class ActorTickHost {
       level.netMode !== 0 || level.demoRecDriver !== null || (level.tickTag !== 0 && level.tickTag !== 1) ||
       typeof level.timeSeconds !== 'number') return this.handback('level');
     this.table();
+    if (this.depth === 0) this.syncZones(level);
     const d = this.describe(instance, receiver);
     if (d.flags & C_PLAYERPAWN) return this.handback('PlayerPawn');
     // A ScriptedPawn whose fields are not all in its image runs AScriptedPawn::Tick in JavaScript (processActorTick).
@@ -552,6 +578,7 @@ export class ActorTickHost {
       level.netMode !== 0 || level.demoRecDriver !== null || (level.tickTag !== 0 && level.tickTag !== 1) ||
       typeof level.timeSeconds !== 'number') return false;
     this.table();
+    this.syncZones(level);
     this.listFor(actors);
     const view = this.vm.arena.view, at = this.levelWords, x = this.x;
     view.setFloat64(this.levelAt, seconds, true);
@@ -775,6 +802,7 @@ export class ActorTickHost {
       },
       js_tick_owner_ticked(i, handle) {
         counted?.('js_tick_owner_ticked');
+        host.vm.events.readsTable();
         const c = context(i), owner = identityOfHandle(handle);
         if (!owner) return -1;
         const value = c.services.read(owner, 'bTicked');
@@ -866,6 +894,7 @@ export class ActorTickHost {
       },
       js_tick_error(i, code) {
         if (code === 3) throw new Error('Original zone render timestamp is not provided');
+        if (code === 5) throw new Error(`TICK_READS=verify: the zone render time of ${context(i).receiver?.name} in Rust differs from level.zoneLastRenderTime`);
         if (code === 4) throw new Error(`Actor tick kernel: ${context(i).receiver?.name} left its image during AScriptedPawn::Tick`);
         if (code === 2) throw new Error(`Actor tick kernel: the state table's IsProbing differs from JavaScript for ${context(i).receiver?.name}`);
         throw new Error('Actor.Tick callback installed an unsupported DemoRecDriver');
