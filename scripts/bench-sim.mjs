@@ -11,7 +11,7 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
- *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666] [--dts 0.0167,0.34,0.17]
+ *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666] [--dts 0.0167,0.34,0.17] [--seed 1]
  *
  * --dt sets the simulated seconds per tick (default 1/60). A longer step
  * reaches physics branches a 60 Hz step cannot (physFalling's apex
@@ -122,7 +122,7 @@ log(`${files.length} files; reading ${map}`);
 const assets = new AssetStore(files), asset = await assets.get(map);
 log(`boot ${map}`);
 const bootStart = realNow();
-const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
+const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: Number(flag('seed', 1)) >>> 0, presentation: true});
 const bootMs = realNow() - bootStart;
 log(`booted in ${Math.round(bootMs)} ms`);
 const runtime = game.doors.scriptRuntime.runtime;

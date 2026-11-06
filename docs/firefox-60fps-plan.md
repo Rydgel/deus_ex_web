@@ -1178,11 +1178,27 @@ maps that hold them, after the fog fix below; Chromium's frame is the larger of 
   (`js::SavedStacks::saveCurrentStack`) at the Warehouse and the Dockyard, 1% of the frame. Under the 5% bar, not changed.
 * **Mirrors:** one slow view is led by `p.mirrors`, `10_Paris_Club` (-137, -1344, 7) yaw 0, 6.7 ms (six Club views have 2.5 ms or more; so do
   the Bars at 2.5 to 4.1 and WanChai_Street at 3.5): left to the mirror survey.
-* **Not slow, but stops the session** (simulation, not host): `06_HongKong_Storage` at (535, 0, -103), every yaw, and (-7, 555, -103) yaw 0:
-  `Nonfinite FastLineCheck plane distance is unsupported`. `09_NYC_ShipBelow` at (-506, 894, -361) yaw 16384: `Runaway loop detected (over
-  10000000 iterations) in PickDestination`, and at (-6437, -183, -489) yaw 0 the same in `Patrolling`. The player dies in god mode (state
-  `Paralyzed`, then DXOnly) at `03_NYC_Airfield` (-1578, 34, 23) yaw 0, `03_NYC_UNATCOHQ` (1730, -847, -40) and `12_Vandenberg_Computer`
-  (1884, 2974, -1993). The census goes on after each (another session).
+* **Not slow, but stops the session** (simulation, not host; run down 2026-11-06, a worker on this branch):
+  * `06_HongKong_Storage` at (535, 0, -103), every yaw, and (-7, 555, -103) yaw 0, `Nonfinite FastLineCheck plane distance is unsupported`:
+    **a fault of ours, fixed.** The moving brush tracker's scratch arena was never pointed at its block, so building the Storage's tracker
+    ran over the module's statics (2,138 sine-table entries, three NaN fragment nodes); no other of the 84 maps with movers was touched. Fixed in
+    `tracker.rs` (`scratch_reset`); the new case `storage-nonfinite-fragments` of `validate-brush-tracker` is equal to the original's
+    construction ([brush-tracker](brush-tracker.md) "The scratch arena", [fast-line-check](fast-line-check.md) "Nonfinite planes").
+    Firefox inline placed at the three spots again: no error.
+  * `09_NYC_ShipBelow` at (-506, 894, -361) yaw 16384 (`PickDestination`) and (-6437, -183, -489) yaw 0 (`Patrolling`), `Runaway loop
+    detected`: **an original script hazard, reproduced and traced to its cause, no fault of ours found.** `ScriptedPawn.Patrolling` loops
+    without yielding when `FindPathToward` finds no path to a route of PatrolPoints with pausetime 0 (WaitForLanding yields only while the
+    pawn is PHYS_Falling); the traced instance is a Bay guard standing inside a closing ME_IgnoreWhenEncroach door, every `MoveActor` blocked
+    at time 0. Core's counter, limit, `Logf(NAME_Critical)` and GError path are pinned against the DLLs. The pawn-in-the-door state itself
+    is not verified against the original; the capture that would settle it is written down
+    ([script-pawn-nav](script-pawn-nav.md) "A patrol that cannot start", [script-level-tick](script-level-tick.md) "Core's runaway-loop guard").
+  * The player dies in god mode (then DXOnly, whose player is `Paralyzed`) at `03_NYC_Airfield`, `03_NYC_UNATCOHQ` and
+    `12_Vandenberg_Computer`: **the census' spots, not the game.** Farthest-point sampling picked navigation points inside the level's solid
+    (PointRegion ZoneNumber 0: (698, -4255, 24), (-36, 1, 264), (782, 2657, -2249); 22 such points on 10 maps, tested where the player is placed, 8 units up), and a pawn in zone 0 takes
+    physWalking's FellOutOfWorld branch, `Pawn.FellOutOfWorld` -> `Died('Fell')`, which does not go through TakeDamage's god-mode test
+    ([walking](walking.md) "Region.ZoneNumber 0"). The listed `Paralyzed` spots (-1578, 34, 23), (1730, -847, -40) and (1884, 2974, -1993)
+    are in real zones; the session had reached DXOnly after the death screen (Dying ends in the splash level). `map-nav-points.mjs` now leaves
+    solid points out (`{solid: true}` keeps them).
 
 **Fog spots, for the fog work.** `p.fog` before the light-pack fix (the census) and after (a single placement, Firefox inline), the level
 surfaces drawn and the mover draw items the pass computed a map for, and the texels, a frame. The pass holds 2092 (02), 809 (08), 804 (04) and

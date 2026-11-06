@@ -160,6 +160,40 @@ bound. `occlude.rs` makes the same test through `tracker::surf_is_dynamic`:
 `iSurf ≥ iOriginalSurfs` while the tracker lives, which is Engine's body
 at `0x1037ac10` (`+0x20`).
 
+## The scratch arena (2026-11-06)
+
+FilterPoly's fragments and Update's polygon copies come from Engine's `GMem` (an FMemStack mark and release around each mover's
+rebuild). The port's arena is `SCRATCH_TOP` in `tracker.rs`, a bump pointer over the 8 MiB block the host allocates
+(`createTrackerHost` `scratch`, header word `SCRATCH`). The pointer was never set to that block: it kept its static initial 0, so the
+arena was the bottom of the module's memory, below the statics (the shadow stack's region). Of the 88 maps scanned (84 have movers) only
+`06_HongKong_Storage` ran the arena up into the statics; the oracle cases never did. Its construction rebuilds `BreakableGlass0`, whose ten
+polygons fragment many times in that map's BSP, and the allocations ran on past the stack and over the module's statics.
+
+What it left (found 2026-11-06 from the slow-spot census, where a player placed at (535, 0, -103) or (-7, 555, -103) in the Storage
+stopped Play with `Nonfinite FastLineCheck plane distance is unsupported` in Firefox inline and in Chromium's worker alike; a headless
+Node run has no tracker, so it never showed):
+
+* 2,138 entries of the rotation sine table (`SINE`, found at 0x1497d8 in the kernel's memory; the first changed entry is 86)
+  overwritten with polygon data (-192.0, 399.99, -3840.0, 1.0 ...). A rotated mover built after it gets a wrong matrix: with the mover's own placement
+  (yaw 3072, PrePivot (-10.87, 11.44, 13.92), identity scales) polygon 0 vertex 0 came out at (-10667.7, -434.4, 1153.9) where the
+  original's FPoly::Transform returns (80.76, -642.69, 1153.85); with a unit vertex and no pivot the rows of the matrix were (0.957,
+  -3840, 0) and (3840, 0.957, 0) at yaw 3072, (-3840, 0.383, 0) at 4096 and (-126, 1, 0) at 16384, while yaw 0, 1024, 2048, 3000 and 8192 were
+  right.
+* Three fragment nodes (10829, 10830, 10836, all `iSurf` 4847, zone 7) whose plane words were 0xFFFFFFFF, garbage and 0xFFFFFFFF
+  (NaN, NaN), reached by the line checks of the pawns and Galaxy that cross the pane. `fastLineCheck` refuses a non-finite plane
+  distance; it was the only place that noticed.
+
+**Evidence.** The case `storage-nonfinite-fragments` (one full `construct` step at control word 0x037f over `06_HongKong_Storage`'s 47
+movers) was added to `scripts/brush-tracker-cases.json`. Before the fix `validate-brush-tracker` failed on it in the first FPoly::Transform
+check, `BreakableGlass0 polygon 0 vertex 0`, port (3324423868, 3285790324, 1150303052) against the original's (1117881703, 3290475628,
+1150303052). So the original builds no NaN planes there: it is the port. After the fix the whole file is equal: 21 cases, 240 steps (59 full
+reports, 181 digests), the 16,575 FPoly::Transform outputs and the mutation check, and `scripts/validate-brush-tracker-scratch.mjs` finds no
+corruption in any of the 84 maps with movers (before: only the Storage; 2,138 table entries, 3 nodes).
+
+**Fix.** `trk_construct` sets `SCRATCH_TOP` to `h(H_SCRATCH)` (`scratch_reset`), and every rebuild's mark and release keep it there. The
+8 MiB is enough for the Storage (the OOM path, `H_STATUS` 2, did not trigger). No other map's tracker bits change: the arena only moved,
+and the polygons it holds are written before they are read (`new_poly` does not zero them, as the original's GMem does not).
+
 ## Verification
 
 **The tracker.** `scripts/validate-brush-tracker.mjs` runs all 20 cases of

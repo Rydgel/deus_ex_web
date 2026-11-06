@@ -252,3 +252,32 @@ ticks, 0 mismatches), `validate-play-frame`, `validate-anim-dilation-play`, `val
 `validate-loadmap-startup`, `validate-script-lights` and `validate-travel-endings` pass, and `?levelLoop=verify` held for 40 s of
 the frame-time route on the Island (Chromium worker and Firefox inline) and Battery Park (Chromium). On the Island's scan route 98.3% of the kernel's ticks run inside Rust runs (276,134 of 280,932;
 the rest are the player and the deferred second pass), about two runs a tick.
+
+## Core's runaway-loop guard (2026-11-06)
+
+Recovered from the installed Core.dll and Engine.dll (`scripts/validate-script-runaway-guard.mjs` pins every byte named here):
+
+* **The counter.** `GRunaway` is the dword at `0x101f81bc`. `UObject::execJump` (`0x1012faf0`) and `execJumpIfNot` (`0x1012fbc0`) increment
+  it on every execution, taken or not, before they do anything else. Nothing else counts: not a native, not a call, not EX_Switch's chain
+  (a script without a jump never trips it, however long it runs).
+* **The limit and the report.** After `inc eax; cmp eax, 0x989680` (10,000,000), `jle` falls into the jump. Past the limit the function reads
+  the command line (`ParseParam(appCmdLine(), L"norunaway")`, the string at `0x101aad58`/`0x101aadc4`); without `-norunaway` it calls
+  `Frame->Logf(NAME_Critical = 0x2f9, L"Runaway loop detected (over %i iterations)", 0x989680)` (`FOutputDevice::Logf`, the FFrame being
+  the output device, `0x1012fb2e` / `0x1012fbff`). The counter is then stored as 0 at `0x1012fb36` / `0x1012fc07` whether or not the line was
+  logged, and the jump goes on (so `-norunaway` keeps running with the count restarted).
+* **It is fatal.** `FFrame::Serialize` (`0x1012e7e0`, export `0x101030c1`) tests the event against `0x2f9` at `0x1012e801`: a critical event
+  goes to `GError->Logf(L"%s (%s:%04X) %s", Object->GetFullName(), Node->GetFullName(), Code - Node->Script, text)` (`0x1012e896`,
+  `0x1012e8a1`): GError is the engine's FOutputDeviceError, which ends the process. Every other event logs the same line to `GLog` as
+  NAME_ScriptWarning (`0x301`), unless `GIsStrict`.
+* **The reset.** `GInitRunaway` (`0x1012e7d0`, export `?GInitRunaway@@YAXXZ` at `0x101020a9`) stores 0 in `0x101f81bc` and its neighbour
+  `0x101f81c0`. ULevel::Tick calls it through Engine's import (IAT `0x10599f60`) at `0x103a5265`, so the budget is 10,000,000 jumps for
+  everything a level tick runs, all actors' state code and events together.
+
+Ours: `script-vm.mjs` (JavaScript) and `interp.rs` (Rust, sharing the count through the object arena) count the same two opcodes, throw
+`Runaway loop detected (over 10000000 iterations) in <function>` at the same count, store 0, and `beginTick` (`script-doors.mjs`) is
+GInitRunaway. `game.tick` rejects with that error and Play pauses on it (`status.runtimeError`), the counterpart of the original's critical
+error. Not reproduced: `-norunaway` (there is no command line), and the object, node and bytecode offset in the text.
+
+**What reaches it.** A state-code loop in which no statement yields. The census met it in `ScriptedPawn.Patrolling`: see
+[script-pawn-nav](script-pawn-nav.md) "A patrol that cannot start". In a browser it is a long freeze first (Firefox inline: 18 minutes for the
+10,000,000 jumps of that loop, each lap a `FindPathToward`), then the pause.

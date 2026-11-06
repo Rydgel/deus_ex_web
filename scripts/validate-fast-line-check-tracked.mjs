@@ -28,7 +28,7 @@ import { fastLineCheck } from '../src/runtime/fast-line-check.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
-const maps = option('maps', '06_HongKong_WanChai_Underworld,00_Training,01_NYC_UNATCOIsland').split(',');
+const maps = option('maps', '06_HongKong_WanChai_Underworld,00_Training,01_NYC_UNATCOIsland,06_HongKong_Storage').split(',');
 const randomLines = Number(option('lines', 400));
 const python = process.env.NATIVE_PROBE_PYTHON ?? path.join(root, '.cache/native-probe-env/bin/python');
 const work = path.join(root, '.cache/fast-line-check-tracked');

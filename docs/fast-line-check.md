@@ -75,3 +75,16 @@ layout). The traversal and its arithmetic are unchanged. Every caller follows: C
 the static one: the capture's line (blocked, as the original's attenuation shows), four lines through each mover in random
 directions and 400 random lines between placements per map. 1,493 lines are equal on both models; 26 are blocked only by a
 mover's fragments.
+
+## Nonfinite planes (2026-11-06)
+
+`fastLineCheck` still refuses a plane distance that is not finite (`Nonfinite FastLineCheck plane distance is unsupported`): the x87
+rules for a NaN or infinity through `(Z*nZ+Y*nY)+X*nX-W`, the sign-bit side test and the `d2/(d2-d1)` split are not ported, and no
+original-game node needs them. The error appeared once, in the slow-spot census, for a player placed at (535, 0, -103) or (-7, 555,
+-103) in `06_HongKong_Storage` (Firefox inline and Chromium's worker): the tracked node block held three fragment nodes (10829, 10830,
+10836, `iSurf` 4847) with NaN plane words, 0xFFFFFFFF for X and W. They were not the original's: the moving brush tracker's scratch
+arena had run over the module's statics during construction ([brush tracker](brush-tracker.md) "The scratch arena"), and the case
+`storage-nonfinite-fragments` of `validate-brush-tracker` is equal to the original's construction only after the fix. With the
+tracker right, `validate-fast-line-check-tracked --maps 06_HongKong_Storage` gives 588 lines equal to Engine.dll's FastLineCheck over
+the tracked and the static model (47 blocked only by a mover's fragments); Storage is now one of its default maps. The guard stays: a
+non-finite plane in a tracker block is a tracker fault, not a case to continue through.

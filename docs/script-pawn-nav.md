@@ -1639,3 +1639,64 @@ a 150 s browser roam had no frame over 50 ms in the path workers.
 
 The `findPathTo` worker (FindPathTo, native 518) shares both. Not ported: `navScoutA`'s anchor test, `navScoutB`–`E` (their reach
 tests run the collision workers) and `reverse`.
+
+## A patrol that cannot start: the 09_NYC_ShipBelow runaway (2026-11-06)
+
+The slow-spot census (docs/firefox-60fps-plan.md) stopped twice in `09_NYC_ShipBelow`, both times with Core's `Runaway loop detected (over
+10000000 iterations)`: in `PickDestination` at (-506, 894, -361) yaw 16384 (the 46th view of the first session, 83 s into it) and in
+`Patrolling` at (-6437, -183, -489) yaw 0 (the 88th view of the repair session). A fresh session placed at the first
+spot, or at the second spot's other three headings, ran on, so the trigger is an NPC's state, not the place.
+
+**The loop** is `ScriptedPawn.Patrolling`'s own state code (package bytecode, `DeusEx.u`; `node scripts/dump-script-function.mjs DeusEx
+ScriptedPawn.Patrolling`):
+
+```
+@7    Patrol:  WaitForLanding()                                  native 527, latent
+@10            PickDestination()                                 Patrolling.PickDestination: destPoint = NextPatrolPoint, or PickStartPoint()
+@72            MoveTarget = FindPathToward(destPoint)            native 517 (skipped when destPoint is within the pawn's cylinder)
+@86            while (MoveTarget != None) { ...MoveToward(MoveTarget...) (latent); ... }
+@212   Pausing: if destPoint's pausetime > 0 or NextPatrolPoint == None { TurnTo; Sleep(...) (latent) }
+@474            Goto('Patrol')
+```
+
+With `FindPathToward` returning None the `while` is skipped; at a PatrolPoint with `pausetime` 0 and a `NextPatrolPoint` the Pausing part
+yields nothing, and `Goto('Patrol')` starts the lap again. The only latent left in the lap is `WaitForLanding`, and Engine's setup
+(`0x103bb6f0`: `LatentFloat = 2.5` always; `StateFrame->LatentAction = 0x210` only when `Physics == PHYS_Falling`, byte test `cmp al, 2`) installs
+nothing for a walking pawn. So the lap never returns to the scheduler. Each lap executes the state code's jumps and `PickDestination`'s,
+and the 10,000,000th jump of the tick (Core: [runaway guard](script-level-tick.md)) is a critical error: the message's function name is whichever
+function runs it (`Patrolling`, `PickDestination`, `PickStartPoint`). The source is in `.cache/research/ScriptedPawn.uc` (State Patrolling, line 10061), which the bytecode matches. The map's routes of that kind: the Bay's `BayPP00..03` and `BayPP10..13`
+(PatrolPoints 18 to 25, four-point cycles, pausetime 0 everywhere; `alwaysPatrol` HKMilitary9 and HKMilitary10) and several other pairs of
+consecutive points with pause 0. The original script has the hazard: it needs only a pawn that cannot path to any point of such a cycle.
+
+**Reproduced** headless in Node (no browser), by replaying the census' first-pass spot list (`scripts/scenarios/places-replay.mjs`) with
+`bench-sim --seed 3 --dt 0.0333333`, 39 ticks a spot, the spots in the random order 11, god mode: the runaway comes at spot 108 (tick 4249).
+Tracing the pawn with the limit lowered to 10^6 (hunting only, not committed) shows it is `HKMilitary9` (OrderTag BayPP00, health 86),
+coming out of `Seeking` into `Patrolling` with `destPoint` PatrolPoint20 (BayPP01), at (-2772, 279, -464):
+
+* every lap is `WaitForLanding`, `FindPathToward` -> None (273 of each in the 3,000 jumps the validator allows; 908,998 in the full 10^7);
+* `FindPathToward`'s worker (`pathTowardWorker`, Engine `0x103db3f0`) returns at the first `scoutB` (`0x103da610`): the pawn-side
+  candidates (16 nav points within 800 units) are all removed. Twelve of them fail the FastLineCheck from the pawn's eye (+40); the four that
+  pass (PathNode206 at 55 units, 213, 209, 207) fail `pointWorker`'s `walkReach`, whose first `checkMove` finds `MoveActor` blocked;
+* the blocker is `DeusExMover18`, a rotating door (Location (-2784, 304, -512), `MoverEncroachType` 3 = ME_IgnoreWhenEncroach, `Mover.uc`).
+  The pawn had stood 35 ticks in `Seeking` at its face (vel 0), the door reached its open key (yaw -16384) at tick 4243, `OpeningDoor` ran
+  from tick 4244 to 4246, and the door changed direction at ticks 4245, 4246 and 4247 (closing, opening, closing: a TriggerToggle door, toggled
+  by `FrobDoor`), so from 4247 the leaf swings back towards KeyNum 0 through the cylinder at (-2772, 279, -464). `MoveActor` of the pawn hits
+  the mover at time 0 in each of the four directions (normal (1, -0.02, 0) towards -x, (0, 1, 0) towards -y), the step-up and step-down
+  probes change nothing, so `checkMove` returns 0 and every reach test fails. The previous laps, with the pawn 14 to 17 units further west,
+  had reached PathNode206 (`walkReach` 1).
+
+**What is original and what is not shown.** Verified against the original: the Patrolling bytecode and its PatrolPoint data (package and map);
+WaitForLanding's setup (above, disassembly); the path worker, `scoutB`, `pointWorker`, `walkReach` and `checkMove` (validate-pawn-nav,
+bit-exact for identical boundary results, [Verification status](#verification-status)); the mover blocking and encroachment contracts the
+`MoveActor` result comes from (`validate-native-mover-blocking`, `validate-native-mover-scene`, `validate-check-encroachment`); Core's counter and
+fatal report ([script-level-tick](script-level-tick.md)). **Not verified**: that the original, run through the same sequence of NPC states,
+leaves HKMilitary9 inside the closing leaf (the door cycle above is the script's FrobDoor/TriggerToggle behaviour, but its timing depends on tick
+lengths and on MoveActor's result for the pawn standing at the face of a door in motion). The capture that would settle it: in DeusEx.exe on
+`09_NYC_ShipBelow`, put an HKMilitary beside the Bay-side door `DeusExMover18` with `Orders Patrolling`/`OrderTag BayPP00`, open the door and
+let the pawn reach it as above; break on `ULevel::MoveActor` (`0x103990e0`) and `APawn::findPathToward` (`0x103db3f0`) and read the
+FCheckResult times, then the lap. If the original's `MoveActor` also returns Time 0 there, its game freezes and dies by the critical error just
+as ours stops; if it lets the pawn slide out, `moveQuery`'s overlap handling for a start inside a moving brush is the next thing to compare.
+
+`scripts/validate-script-runaway-guard.mjs` runs the real Patrolling bytecode of HKMilitary9 with the path search made to fail (an injected
+fault: the ReachSpec table empty for that pawn) and the count started 3,000 jumps below the limit, and pins the guard against the DLLs. The
+second stop (-6437, -183, -489) was not reproduced; it is the same state function, from the same Bay routes.

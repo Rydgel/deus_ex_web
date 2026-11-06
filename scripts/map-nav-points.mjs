@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
+import {pointRegion} from '../src/runtime/zone.mjs';
 
 export const NAV_CLASSES = /^(PathNode|PlayerStart|PatrolPoint|HidePoint|AmbushPoint|SpawnPoint|WanderPoint)$/;
 
@@ -26,14 +27,23 @@ export async function mapNames() {
   return (await readdir(path.join(gameDirectory(), 'Maps'))).filter(n => /\.dx$/i.test(n)).map(n => n.replace(/\.dx$/i, '')).sort();
 }
 
-/** The placed navigation points of a map: [{cls, location:[x,y,z]}], in actor order, duplicates (same rounded location) dropped. */
-export async function navPoints(map) {
-  const model = decodeMap((await (await assetStore()).get(map)).bytes), seen = new Set(), points = [];
-  for (const a of model.actors) {
+/** The placed navigation points of a map: [{cls, location:[x,y,z]}], in actor order, duplicates (same rounded location) dropped.
+ *
+ * A point inside the level's solid (UModel::PointRegion's ZoneNumber 0, the walking-pawn FellOutOfWorld case) is left out: a player placed
+ * there dies on its next walking tick whatever its damage reduction, since Pawn.FellOutOfWorld sets Health -1 and calls Died directly, and
+ * the god mode `ReducedDamageType 'All'` is only read by TakeDamage (docs/walking.md "Region.ZoneNumber 0"). The 2026-11-06 census lost its
+ * 03_NYC_Airfield, 03_NYC_UNATCOHQ and 12_Vandenberg_Computer sessions to such points, which farthest-point sampling prefers because they lie
+ * far from everything else. `{solid: true}` keeps them; `lift` is the height the census adds to a point when it places the player (its `--z`),
+ * which is where the test is made. */
+export async function navPoints(map, {solid = false, lift = 0} = {}) {
+  const decoded = decodeMap((await (await assetStore()).get(map)).bytes), seen = new Set(), points = [];
+  const inWorld = ([x, y, z]) => pointRegion(decoded.model, [x, y, z + lift], {}, [], decoded.model.zones?.length || 1).zoneNumber !== 0;
+  for (const a of decoded.actors) {
     if (!a.values.Location || !NAV_CLASSES.test(a.className)) continue;
     const key = a.values.Location.map(v => Math.round(v)).join(',');
     if (seen.has(key)) continue;
     seen.add(key);
+    if (!solid && !inWorld(a.values.Location)) continue;
     points.push({cls: a.className, location: [...a.values.Location]});
   }
   return points;
