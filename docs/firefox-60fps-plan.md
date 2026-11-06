@@ -266,6 +266,8 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 
   The per-light-level preparation (`js_light_prepare`: the world model and the query's filter context) likely costs more than the
   line checks it saves. Left on its branch. The tail on Battery Park is elsewhere.
+* **2026-11-06, the HUD bundle: `w.hud` down 0.47 ms on the Island and 0.78 ms on the bunker** ([below](#the-hud-bundle-2026-11-06)): the window
+  tree's walk, the plain window events, the Text and Button draws and `DrawText` run in Rust; the references stay behind `?windowDraw=js`.
 * **2026-11-05, the HUD phase: no family reaches 0.5 ms** ([below](#the-hud-phase-2026-11-05)). Firefox's `p.hud` holds the
   simulation's HUD paint as well as the page's draw. Firefox's excess over Chrome is 0.7 to 1.0 ms, spread across about 95 script
   events a frame. No port was made; the profiling tools are in `scripts/` (gecko-phase.mjs, gecko-phase-diff.mjs,
@@ -397,6 +399,51 @@ leaf, named frame or a top-down tree, over a run's drawn frames, or `--all` when
 `scripts/gecko-phase-diff.mjs` (two such results side by side), `scripts/hitch-phase-means.mjs` (a run's phase means),
 `scripts/wasm-names.mjs` (a non-stripped module's names for `wasm-function[N]`), `scripts/hud-census.mjs`; and
 `globalThis.__scriptVmStats` under `SCRIPT_VM_STATS=1`, the maps the census reads between resets.
+
+### The HUD bundle (2026-11-06)
+
+The HUD phase above found no family at 0.5 ms and named a program: Rust dispatch of the window events with a typed native-heap
+path. This bundle took the first, widened it to the window tree's own walk and to `gcDrawText`, and measured the sum. Design,
+evidence and checks: [the draw tree, the window events and DrawText in Rust](script-play-hud.md#the-draw-tree-the-window-events-and-drawtext-in-rust-2026-11-06).
+Switch: `?windowDraw=js` (`WINDOW_DRAW=js`) keeps the previous path; `WINDOW_DRAW=verify` and `GC_NATIVE=verify` run the new
+bodies beside the references.
+
+**Order of the work, and why.** A Gecko profile of the Island after each step (`scripts/gecko-hud-categories.mjs`, ms a frame in
+`paintWindows`, profiled, so about 1.2 times the unprofiled figures):
+
+| After | `paintWindows` | JavaScript around events | tree + heap | `gcDrawText` | other |
+|---|---:|---:|---:|---:|---:|
+| before | 1.52 | 0.32 | 0.26 | 0.26 | 0.68 |
+| tree and plain events in Rust | 1.28 | (in other) | 0.09 | 0.24 | 0.95 |
+| + `DrawText` and its GC stack in Rust | 1.01 | | 0.09 | 0.04 | 0.88 |
+
+The remaining 0.88 is the families' own draws (now also in Rust, the last commit), the four events whose functions have string
+locals, `DrawTargetAugmentation` (a JavaScript call from the augmentation display's PostDrawWindow, 0.23) and the console's
+PostRender (0.21, outside `paintWindows`).
+
+**Interleaved A/B**, headless Firefox inline, `hitch-ab.mjs --pairs 3` (order alternating), `--mode scan --god --seconds 60`, the
+tree at 6ce549a6 (the same code as the final one apart from `WINDOW_DRAW=verify`, which `log()` and one `verified` counter add),
+`new:` against `old:windowDraw=js`. Means of the sessions' per-frame phase means (ms):
+
+| Map | `w.hud` new | `w.hud` old | `p.hud` new | `p.hud` old | page p50 new / old | page p95 new / old |
+|---|---:|---:|---:|---:|---:|---:|
+| Island | 1.23 | 1.70 | 1.81 | 2.27 | 14 / 14.7 | 20.7 / 21.3 |
+| Area 51 bunker | 1.37 | 2.15 | 2.06 | 2.84 | 14 / 15 | 21.7 / 24 |
+
+* **Gain: 0.47 ms on the Island, 0.78 ms on the bunker, in `w.hud` and in `p.hud` alike** (each of the six sessions on the bunker is
+  below each of the old arm's; on the Island the per-session ranges, 1.22 to 1.24 and 1.67 to 1.72, do not overlap). The bundle's
+  bar was 0.5 ms on one of the two: met on the bunker, 0.03 short on the Island. The bunker gains more because its terminal text is
+  drawn through `gcDrawText` (0.55 ms there before).
+* The page frame follows by the HUD's share: p50 down 0.7 to 1 ms and p95 down 0.6 to 2.3 ms. Neither map is near 16.7 ms at p95.
+* Earlier, after the first commit only (events, tree and DrawText; 2600c7ec), the Island's three pairs gave `w.hud` 1.35 against
+  1.71 (a gain of 0.36 ms) and `p.hud` 2.00 against 2.28: the families' draws in Rust added another 0.11.
+* In Node (`hud-census.mjs --time-only`, one paint with Galaxy's update): Island 1.95 → 1.30 ms; bunker 2.0 → 1.6 and 2.4 → 1.8 in two pairs run while a validator sweep loaded the machine.
+
+**Not done, and what is left in the HUD** (all below 0.5 ms alone, as before): `DrawTargetAugmentation` and its `TraceLOS` as
+JavaScript calls (0.23, they need string and struct locals in a Rust frame block, or a JavaScript cleanup after a Rust-begun body); the
+four string-local window events (about 0.2 with their bodies); the console's PostRender (0.21); the bound window fields' reads
+(`js_float` and `js_bool` together about 0.1 in the profiles, so the typed native-heap read the HUD phase proposed is worth
+less than it looked once the tree left JavaScript: its accesses were the tree's, not the scripts'); the page's three.js tile draw.
 
 ## How each step is measured
 

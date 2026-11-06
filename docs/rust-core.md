@@ -918,6 +918,16 @@ re-entered Rust through `vm.resume`. It is now a `CALL` like a virtual call:
   `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1 GLOBAL_CALLS=verify` the five baselines match (17,561 resolutions verified);
   `validate-script-vm-interp`. Census and sizes: docs/firefox-60fps-plan.md "Global function calls run in Rust".
 
+### November 6: the HUD's window draw tree, window events and DrawText in Rust (implemented)
+
+`window.rs` walks the window host's native heap as `drawTree` does (lock, early-outs, GC push and pop, background, DrawWindow, children,
+PostDrawWindow) and runs the plain script events from the event cache of the tick events (`dispatch.rs` `dispatch_window_event`, keyed by
+class row and state row); the Text and Button draws are made there too, over `gc.rs`'s natives (`run_native`) and `text.rs`, which
+transcribes `UGC::DrawText` (scanner, escapes, font lookup, realize cache, glyph emit). The JavaScript bodies stay the references
+(`?windowDraw=js`); `WINDOW_DRAW=verify` and `GC_NATIVE=verify` run both. Firefox inline `w.hud`: Island 1.70 → 1.23 ms, bunker 2.15 →
+1.37 ms. Details, evidence and checks: [script-play-hud.md](script-play-hud.md#the-draw-tree-the-window-events-and-drawtext-in-rust-2026-11-06);
+measurements: [firefox-60fps-plan.md](firefox-60fps-plan.md#the-hud-bundle-2026-11-06).
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
