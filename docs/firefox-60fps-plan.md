@@ -368,6 +368,26 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   On the synthetic 60 Hz clock, eight maps keep every frame at p95; the Island and the bunker drop to 30 Hz at p95. Five maps are
   still over 16.7 ms at page p95 (the Island by 4 ms, Battery Park and the Airfield by 2, Wan Chai by 1, the bunker by 6). The row verdicts
   (7.2.2, 7.2.4) need the headed set on a visible window.
+* **The frame-time set at midday, 2026-11-06** (master e43007c9: since the 04:40 set, the tick reads, the receiver epoch per identity
+  and the Level.Actors handle mirror, the fog restore and byte copies, and the exact fast decal attach; same command, headless,
+  indicative). Page frame p95 (p50), ms, against 04:40, and the headless drawn interval p95:
+
+  | Map | page p95 (p50) | 04:40 p95 | headless interval p95 |
+  |---|---:|---:|---:|
+  | Training | 11 (8) | 11 | 17.1 |
+  | Island | 20 (14) | 21 | 17.1 (was 33.2) |
+  | Bar | 10 (8) | 10 | 17.1 |
+  | Battery Park | 19 (16) | 19 | 17.1 |
+  | Airfield | 19 (15) | 19 | 17.1 |
+  | Wan Chai market | 16 (12) | 18 | 17.1 |
+  | Ship | 13 (10) | 13 | 17.1 |
+  | Chateau | 12 (10) | 12 | 17.1 |
+  | Everett | 9 (8) | 10 | 17.1 |
+  | Area 51 bunker | 22 (13) | 23 | 33.2 |
+
+  On the synthetic 60 Hz clock nine maps keep every frame at p95; the bunker still drops to 30 Hz at p95. Four maps are over
+  16.7 ms of page p95 (the bunker by 5 ms, the Island by 3, Battery Park and the Airfield by 2). The rows' verdicts still need the
+  headed set.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
