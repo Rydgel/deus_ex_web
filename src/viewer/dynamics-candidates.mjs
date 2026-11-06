@@ -67,7 +67,14 @@ function packFromRoster(occlusion, roster, { sprites = [], iterators = null, bin
   skipRows.length = 0;
   if (iterators?.size) for (const actor of iterators) {
     const binding = roster.map.get(actor);
-    if (binding && binding.row >= 0) skipRows.push(binding.row);
+    if (binding && binding.row >= 0) skipRows.push(binding.row << 2 | 1);
+  }
+  // The bindings whose blocks the pass did not read (just made, or not answered by the image): their candidacy is the host's
+  // (admitted, childAdmitted), as packDynamicsJs asks it; an iterator's actor was passed over above
+  for (const list of [roster.hostFresh, roster.hostRows]) for (const binding of list) {
+    if (binding.row < 0 || bindings[binding.row] !== binding || iterators?.has(binding.actor)) continue;
+    if (binding.admitted(reads)) skipRows.push(binding.row << 2 | 2);
+    else skipRows.push(binding.row << 2 | (childFrames && binding.childAdmitted?.(reads) ? 3 : 1));
   }
   const extraN = items.length + sprites.length;
   if (extraWords.length < 3 * extraN) extraWords = new Uint32Array(6 * extraN);

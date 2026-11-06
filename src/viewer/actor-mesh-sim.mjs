@@ -1137,9 +1137,13 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const u32=rowsView(),at=(rows>>2)+ROW_WORDS*k;
     u32[at]=handleOf(binding.actor);u32[at+1]=binding.block||0;u32[at+2]=binding.meshHandle??0;u32[at+3]=NO_POS;u32[at+4]=0;
   };
+  // The bindings the roster pass has not read a block for: made since it ran (hostFresh) and those it found the image does not answer for
+  // (hostRows, its attention list's NOT_OK entries that were not retired). packDynamics decides their candidacy itself (levelPositions.host).
+  const hostFresh=[],hostRows=[];
   const rowAdd=binding=>{
     const arena=rowsArena();
     if(!arena)return;
+    hostFresh.push(binding);
     if(ROW_WORDS*4*(rowCount+1)>rowsCapacity){
       const grown=Math.max(4096,2*ROW_WORDS*4*(rowCount+1)),next=arena.alloc(grown);
       if(rows){new Uint32Array(arena.memory.buffer).copyWithin(next>>2,rows>>2,(rows>>2)+ROW_WORDS*rowCount);arena.release(rows,rowsCapacity);}
@@ -1363,7 +1367,10 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(reasons&RS_STALE){rowWrite(binding.row,binding);rowsDirty=true;}
         if(reasons&RS_ABSENT){retire(actor,binding);continue;}
         if(reasons&RS_MESH){retired.set(actor,npcActors.includes(binding));retire(actor,binding);continue;}
-        if(reasons&(RS_NOT_OK|RS_STALE)&&binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);}
+        if(reasons&(RS_NOT_OK|RS_STALE)){
+          if(binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);}
+          else hostRows.push(binding);
+        }
       }
     }
     const {player,behind,viewTarget}=viewer();
@@ -1521,7 +1528,15 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // (what packDynamics reads of the roster: the positions in the rows' fourth word and, for its Rust form, the rows themselves)
   const levelPositions={bindings:actors,u32:()=>rowsView().subarray(rows>>2,(rows>>2)+ROW_WORDS*rowCount),NO_POS,ROW_WORDS,
     get count(){return rowCount;},get rows(){return rows;},map:bindings,verify:plumbing.verify,
-    render:()=>plumbing.pack&&reads_ok()?runtime.scriptVm.render:null};
+    render:()=>plumbing.pack&&reads_ok()?runtime.scriptVm.render:null,
+    hostFresh,hostRows,
+    // (the Map's own interface, for what asks one actor: a binding's from its row, any other actor's from the JavaScript path's map)
+    get(actor){
+      const binding=bindings.get(actor);
+      if(binding&&binding.row>=0){const pos=rowsView()[(rows>>2)+ROW_WORDS*binding.row+3];return pos===NO_POS?undefined:pos;}
+      syncLive();return levelIndex.get(actor);
+    },
+    has(actor){return this.get(actor)!==undefined;}};
   const reads_ok=()=>rosterUsed&&rowCount===actors.length;
   // The index map packDynamics orders the bindings by: the roster's rows when this frame's reconcile used them, else the map.
   const positionsFor=()=>rosterUsed?levelPositions:levelIndex;
@@ -1652,6 +1667,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     const withList=rowsDirty||positionsEpoch!==actorsEpoch(),{player,behind,viewTarget}=viewer();
     const attn=render.rosterReads(rows,rowCount,{player,behind,viewTarget},withList?level.actors:null);
     if(!attn)return null;
+    hostFresh.length=0;hostRows.length=0;
     if(withList){rowsDirty=false;positionsEpoch=actorsEpoch();}
     const reads={views:viewsOf(runtime.scriptVm.arena),verify:renderScanMode()==='verify',attn};
     if(plumbing.verify)verifyRoster(reads,withList);
@@ -1828,6 +1844,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       frameViewer=null;frameViewer=viewer();
       try{
         const reads=meshReads();
+        if(!reads?.attn){hostFresh.length=0;hostRows.length=0;}   // (no roster pass this frame: nothing to list)
         reconcile(reads);
         scope=newScope(view.items??[]);
         if(view.occlude){

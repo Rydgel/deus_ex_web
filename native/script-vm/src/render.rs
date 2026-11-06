@@ -991,6 +991,9 @@ const PACK_HOST: u32 = 0xffff_ffff;
 /// A binding's Setup candidate words (actor-mesh-sim.mjs packSetup from this frame's block) at `out`, as entry `key` with mesh record
 /// `record`; false when the block's cached GetAnimSeq answer is not for the actor's AnimSequence name word (the host packs it).
 fn pack_binding(block: u32, key: u32, record: u32, excluded: bool, out: u32) -> bool {
+    if block == 0 {
+        return false;
+    }
     let w = |i: u32| load32(block.wrapping_add(4 * i));
     let status = w(MB_STATUS);
     if status & MS_ANIMSEQ == 0 || w(MB_SEQ_VALID) == 0 || w(MB_SEQ_WORD) != w(MB_ANIMSEQ) {
@@ -1021,10 +1024,13 @@ fn pack_binding(block: u32, key: u32, record: u32, excluded: bool, out: u32) -> 
 /// SetupDynamics' candidate order of the main frame (dynamics-candidates.mjs packDynamics) from the roster: the admitted bindings in
 /// Level.Actors order (a row's order is its position times 65536) merged with the host's items and sprites by order, ties in the
 /// order packDynamics builds them (bindings, then items, then sprites, each in its own order); an entry's index is its place in that
-/// order. `skip` ([count, row...]) are the rows the iterators stand in for; `extra` holds `extra_n` triples [order, class, index]
-/// (class 1 an item, 2 a sprite) the host builds; `scratch` is 9 * (count + extra_n) bytes of memory (8-byte aligned). Writes, per
-/// entry, `refs`: class << 30 | EC_EXCLUDED | index (the row, the item or the sprite). Returns the number of entries, or PACK_HOST
-/// when a binding's block is not answered by the image (the host's packDynamics runs).
+/// order. `skip` ([count, row << 2 | mode...]) are the rows the host decided: mode 1 not a candidate (an iterator stands in for the
+/// actor, or the host found it not admitted), 2 a candidate for the root frame, 3 a candidate for child frames only; they are the rows
+/// whose blocks the image does not answer for (a binding just made, one without a block) and the iterators' actors. `extra` holds
+/// `extra_n` triples [order, class, index] (class 1 an item, 2 a sprite) the host builds; `scratch` is 9 * (count + extra_n) bytes of
+/// memory (8-byte aligned). Writes, per entry, `refs`: class << 30 | EC_EXCLUDED | index (the row, the item or the sprite). Returns the
+/// number of entries, or PACK_HOST when a binding's block is not answered by the image and the host did not decide it (the host's
+/// packDynamics runs).
 #[no_mangle]
 pub extern "C" fn pack_order(rows: u32, count: u32, child_frames: u32, skip: u32, extra: u32, extra_n: u32, scratch: u32, refs: u32) -> u32 {
     let keys = scratch as usize as *mut u64;
@@ -1033,14 +1039,15 @@ pub extern "C" fn pack_order(rows: u32, count: u32, child_frames: u32, skip: u32
         crate::interp::store8(flags.wrapping_add(b), 0);
     }
     for k in 0..load32(skip) {
-        let b = load32(skip.wrapping_add(4).wrapping_add(4 * k));
-        if b < count {
-            crate::interp::store8(flags.wrapping_add(b), 1);
+        let entry = load32(skip.wrapping_add(4).wrapping_add(4 * k));
+        if entry >> 2 < count {
+            crate::interp::store8(flags.wrapping_add(entry >> 2), (entry & 3) as u8);
         }
     }
     let mut n = 0u32;
     for b in 0..count {
-        if load8(flags.wrapping_add(b)) != 0 {
+        let mode = load8(flags.wrapping_add(b));
+        if mode == 1 {
             continue;
         }
         let row = rows.wrapping_add(b.wrapping_mul(ROW_BYTES));
@@ -1048,20 +1055,24 @@ pub extern "C" fn pack_order(rows: u32, count: u32, child_frames: u32, skip: u32
         if pos == NO_POS {
             continue;
         }
-        let block = load32(row.wrapping_add(4 * RW_BLOCK));
-        if block == 0 {
-            return PACK_HOST;
-        }
-        let status = load32(block.wrapping_add(4 * MB_STATUS));
-        if status & MS_OK == 0 {
-            return PACK_HOST;
-        }
-        let excluded = if status & MS_DRAWN != 0 {
-            false
-        } else if child_frames != 0 && status & MS_DRAWN_CHILD != 0 {
-            true
+        let excluded = if mode >= 2 {
+            mode == 3
         } else {
-            continue;
+            let block = load32(row.wrapping_add(4 * RW_BLOCK));
+            if block == 0 {
+                return PACK_HOST;
+            }
+            let status = load32(block.wrapping_add(4 * MB_STATUS));
+            if status & MS_OK == 0 {
+                return PACK_HOST;
+            }
+            if status & MS_DRAWN != 0 {
+                false
+            } else if child_frames != 0 && status & MS_DRAWN_CHILD != 0 {
+                true
+            } else {
+                continue;
+            }
         };
         // order, then class (0 bindings), then the row
         unsafe { *keys.add(n as usize) = (pos as u64 * 65536) << 32 | (excluded as u64) << 29 | b as u64 };
