@@ -1781,7 +1781,7 @@ Two changes, both host structure (the entries each consumer receives are the sam
 the scan route on the Island and 02_NYC_Street (particles) without a difference; `validate-iterator-frames-play` and
 `validate-sprite-tiles-play` pass. On the Airfield `?renderScan=verify` stops on `LaserProxy0 word 4 differs in mesh_reads` on
 master (2c93fe2d) as on this change: the mesh reads' verify of a laser proxy whose Location the laser items move, an older issue
-of that check.
+of that check (a real mix of two frames' Location in the proxy's own draw, fixed on 2026-11-06: [lasers.md](lasers.md#the-proxys-own-sprite-2026-11-06)).
 
 Interleaved A/B, master (2c93fe2d) against the change, two rounds of the frame-time route per map, mean worker phase ms a frame:
 

@@ -196,6 +196,10 @@ function floatLocation(runtime, actor) {
   const location = runtime.readNamed(actor, 'Location');
   return [Math.fround(location[0]), Math.fround(location[1]), Math.fround(location[2])];
 }
+/** What FDynamicSprite::Setup (0x10b23910) copies from `actor` into its sprite: ScaleGlow, DrawScale, Location and Rotation, as a
+ * laser item's snapshot. A LaserProxy is drawn twice by SetupDynamics, as its iterator's items (above) and as the level actor it is, whose
+ * sprite takes the fields as the iterator's last CurrentItem left them. */
+export function laserProxySnapshot(runtime, actor) { return snapshotOf(runtime, actor); }
 // An item's snapshot: SetupSprite's ScaleGlow, DrawScale, Location and Rotation (above).
 function snapshotOf(runtime, actor) {
   const rotation = runtime.readNamed(actor, 'Rotation');

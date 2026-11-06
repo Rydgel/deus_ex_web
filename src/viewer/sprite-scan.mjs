@@ -29,7 +29,7 @@
  * classes other than ParticleIterator and LaserIterator, the bHighDetail
  * rule and fog. */
 import { ensureRenderInterface, particleIteratorItems } from '../runtime/script-particles.mjs';
-import { laserIteratorItems } from '../runtime/script-laser.mjs';
+import { laserIteratorItems, laserProxySnapshot } from '../runtime/script-laser.mjs';
 import { handleOf } from '../runtime/script-object-handles.mjs';
 import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
 
@@ -38,13 +38,13 @@ import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-
 export function createSpriteScan(runtime, { player, constructIterator, frand, pin = null }) {
   const notes = new Set();
   const read = (actor, name) => runtime.readNamed(actor, name);
-  const newOut = () => ({ sprites: [], meshItems: [], iterators: new Set(), iteratorIndex: new Map() });
+  const newOut = () => ({ sprites: [], meshItems: [], iterators: new Set(), iteratorIndex: new Map(), proxies: new Map() });
   /** SetupDynamics' visit of one actor for a frame (`out`, newOut's): the
    * sprite records, the iterator items that draw as meshes, the iterating
    * actors and where each stands in Level.Actors. A record made from an
    * iterator's item carries `viaIterator`. */
   function makeVisit(out, firstPerson) {
-    const { sprites, meshItems, iterators, iteratorIndex } = out;
+    const { sprites, meshItems, iterators, iteratorIndex, proxies } = out;
     const viewer = player();
     let order = 0, viaIterator = false;
     const record = (actor, { location, drawScale, scaleGlow }) => {
@@ -83,6 +83,11 @@ export function createSpriteScan(runtime, { player, constructIterator, frand, pi
               order++;
             }
           } finally { viaIterator = false; }
+          // The proxy is an ordinary level actor, and this frame's SetupDynamics visits it after its emitter (a spawned actor follows the
+          // actor that spawned it in Level.Actors): FDynamicSprite::Setup copies its ScaleGlow, DrawScale, Location and Rotation as this run
+          // left them, and DrawActorSprite draws the proxy's own sprite from those copies (docs/lasers.md "The proxy's own sprite").
+          const proxy = read(iterator, 'proxy');
+          if (proxy) proxies.set(proxy, { actor: proxy, emitter: index, ...laserProxySnapshot(runtime, proxy) });
           return;
         }
         if (kind !== 'deusex.particleiterator') {

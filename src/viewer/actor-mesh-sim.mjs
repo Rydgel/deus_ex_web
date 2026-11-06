@@ -1350,6 +1350,29 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       return run();
     }finally{SNAPSHOT.forEach(([name],i)=>runtime.writeNamed(item.actor,name,saved[i]));}
   };
+  // A level actor that an iterator moves is drawn from its sprite's copy of the fields, which the frame's SetupDynamics took after the
+  // iterator last moved it (FDynamicSprite::Setup 0x10b23910, DrawActorSprite 0x10b2556a-0x10b25655: docs/lasers.md "The proxy's own
+  // sprite"). A later SetupDynamics of the same tick (a child frame's, which runs the iterators again) leaves the actor elsewhere, so
+  // the binding of the frame that took the copy updates with it written into the actor, and restored, as for an item.
+  const sameSprite=item=>{
+    const actor=item.actor,location=runtime.readNamed(actor,'Location'),rotation=runtime.readNamed(actor,'Rotation');
+    return Object.is(Math.fround(location[0]),item.location[0])&&Object.is(Math.fround(location[1]),item.location[1])
+      &&Object.is(Math.fround(location[2]),item.location[2])&&rotation[0]===item.rotation[0]&&rotation[1]===item.rotation[1]
+      &&rotation[2]===item.rotation[2]&&Object.is(Math.fround(runtime.readNamed(actor,'DrawScale')),item.drawScale)
+      &&Object.is(Math.fround(runtime.readNamed(actor,'ScaleGlow')),item.scaleGlow);
+  };
+  /** `binding`'s update in the frame whose SetupDynamics took `sprites` (sprite-scan.mjs `proxies`: actor -> copy). */
+  const updateSprite=(sprites,binding,view)=>{
+    const item=sprites.get(binding.actor);
+    if(!item||sameSprite(item))return binding.update(view);
+    // Only the order the shipped maps have is translated: the proxy follows its emitter in Level.Actors (spawned by it), so the
+    // frame's SetupDynamics copies the fields after the run. A proxy before its emitter would be copied as the previous run left it.
+    if(levelIndex.get(binding.actor)<item.emitter){
+      if(view.reads?.verify)throw new Error(`RENDER_SCAN=verify: ${binding.actor.name??'?'} precedes its emitter in Level.Actors (its sprite's fields are the previous run's: unsupported)`);
+      return binding.update(view);
+    }
+    return withItem(item,()=>binding.update(view));
+  };
   const drawItems=(items,view,records)=>{
     const counts=new Map();
     for(const item of items){
@@ -1595,7 +1618,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         view=weapons.interleave(view);
         // (one view for every binding: the bindings read it and change none of it)
         const bindingView=reads?{...view,reads}:view;
-        for(let i=0;i<actors.length;i++)records.push(actors[i].update(bindingView));
+        const sprites=view.proxies?.size?view.proxies:null;
+        for(let i=0;i<actors.length;i++)records.push(sprites?updateSprite(sprites,actors[i],bindingView):actors[i].update(bindingView));
         drawItems(view.items??[],view,records);
         drawExtras(view,records);
         weapons.update(actors,view,records);
@@ -1626,7 +1650,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
         view=weapons.interleave(view);
-        for(const binding of actors)if(ids.has(binding.id))records.push(binding.update(view));
+        const sprites=view.proxies?.size?view.proxies:null;
+        for(const binding of actors)if(ids.has(binding.id))records.push(sprites?updateSprite(sprites,binding,view):binding.update(view));
         // The iterator items the frames draw (shared with the main frame's or this planning's extras),
         // each with its own item (beginFrameItems).
         for(const binding of itemBindings()){

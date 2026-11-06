@@ -39,7 +39,8 @@ Authority:
      actor, calls DrawMesh and restores the actor's own values. Every segment
      therefore draws, and is lit, where CurrentItem put the proxy.
    - **Proxy's own draw.** The proxy is also an ordinary level actor: it is
-     drawn once more at whatever position the iterator left it in.
+     drawn once more, from the copy its frame's SetupDynamics took of it after
+     the iterator last moved it ([the proxy's own sprite](#the-proxys-own-sprite-2026-11-06)).
 3. **CurrentItem** (`ULaserIterator::CurrentItem`, `0x1001a1a0`; First, Next
    and IsDone are URenderIterator's). With no proxy, it returns Outer through
    the base CurrentItem. Otherwise it proceeds in four steps:
@@ -128,6 +129,67 @@ the last item (the one saved at a random place along the beam) is elsewhere
 in each frame ([child frames](bsp-occlusion.md#each-child-frames-own-setupdynamics)).
 Each frame draws its own items: an item that differs from the root frame's at its
 slot is a binding of its own, posed and lit in the frames that hold it (2026-10-11).
+
+## The proxy's own sprite (2026-11-06)
+
+A LaserProxy is drawn twice by SetupDynamics: as its iterator's items (above) and as the level actor it is. The second is an
+ordinary FDynamicSprite, built when the frame's SetupDynamics visits the proxy in Level.Actors order, after its emitter (the
+emitter's PostBeginPlay spawns it; on 03_NYC_Airfield the ElectricityEmitters are Level.Actors 1068-1071 and LaserProxy0-3
+1193-1196).
+
+**Original.**
+- `FDynamicSprite::Setup` (`0x10b23910`, bytes read from Render.dll) loads the sprite's actor from `[this+0x94]` and copies, for
+  any actor, ScaleGlow (`+0x18c` to sprite `+0xbc`), DrawScale (`+0x17c` to `+0xc0`), Location (`+0x114` to `+0xc4`) and Rotation
+  (`+0x120` to `+0xd0`), before the DrawType test.
+- `DrawActorSprite`'s mesh branch (`0x10b2556a..0x10b25655`, one body for every DT_Mesh sprite) saves the actor's four fields,
+  writes the sprite's copies into the actor, calls DrawMesh and restores the actor's.
+- So a frame draws the proxy's own sprite from the fields the frame's SetupDynamics found, which are the fields its emitter's
+  last CurrentItem left (the last item moves the proxy to savedLoc/savedRot). `URender::OccludeFrame` runs SetupDynamics for the
+  root frame, OccludeBsp, then OccludeFrame for each child frame (its own SetupDynamics, the iterators again), and only then
+  does DrawFrame draw, so when it does the proxy's live Location is the last SetupDynamics', the last child frame's.
+  The root frame's own sprite still draws from the root frame's copy.
+
+**The failure.** `?renderScan=verify` on the Airfield stopped on `LaserProxy3 word 4 differs in mesh_reads` (Firefox inline;
+`LaserProxy0` in Chromium's worker) in the fourth frame of the authored view (position 5118.8, -2438.2, 87.75, yaw -16396), and in
+sim-split's paused-clock run of the same view. An instrumented Firefox run (counters and both values in the message, not kept) showed
+the order: the root scan had moved the proxy to x = 5040.54 and `meshReads` read that into the block; one child frame's
+SetupDynamics (`rescans` 2 at the reads, 3 at the update), run by `occlude` between the reads and the binding's update, had moved it
+on to x = 5069.32, the last item of that rescan (the `scan` count had not moved); the binding's JavaScript reads then saw the later
+one. So the block holds the root frame's copy, which is the value the original draws the root frame's sprite with, and it is the
+update's reads that are late: a real stale read, not an artifact of the check. The default path used both values in one update. The
+block's Location chose the LOD, the SetupForActor fields, the cull sphere and whether the pose changed, while GetFrame's matrix and
+the lighting passes' camera matrix (`lodMeshCameraMatrix`) read the actor's live Location, the last child frame's;
+`?renderScan=js` read the live fields throughout. It reaches the pixels whenever the proxy's own sprite is drawn in the root frame in
+such a frame: with the player centred on `LaserProxy3` under sim-split's clock, 2 of the 24 updates over four views of six frames
+found the live fields different from the root's copy and 1 drew the proxy in the root frame; that frame's pixels were `3ccf6f17...`
+(both the Rust and the JavaScript reads, drawn at the last child frame's place), and are `b19cfe6a...` with the fix (both reads
+again equal); the other 23 frames' pixels are unchanged. (At the authored view the proxies are behind the player: the check
+failed, nothing drawn changed. The draw-state digest of `validate-sim-split --draw-state` holds visibility flags only, and was the
+same with and without the fix.)
+
+**Fix.** The sprite scan keeps the copy each iterator run leaves (`proxies`, sprite-scan.mjs: the proxy's fields as
+`laserProxySnapshot` reads them after the run, with the emitter's Level.Actors index), for the root scan and for each rescan;
+the mesh layer's update of a level-actor binding whose actor has a copy, when the live fields differ from it, writes the copy into
+the actor for the update and restores the fields after (`updateSprite`, the swap the items already use), as DrawActorSprite does.
+The block and the JavaScript reads then see the root frame's copy, which is the value `verifyReads` compares: the check now
+compares the Rust read with the scan's copy, not with whatever a later SetupDynamics left. The camera frames of a
+ViewportWindow (`updateFrame`) pass their own root rescan's copies. A proxy that precedes its emitter in Level.Actors would be
+copied as the previous run left it (not translated: the swap is skipped, and `verify` throws).
+
+**Checks (2026-11-06).** `?renderScan=verify` on the Airfield for 60 s of the scan route (four headings): Firefox inline 3,141
+frames and Chromium's worker 4,411 frames with no runtime error (30 s without the fix: stopped in the first frames, both
+browsers); `validate-render-scan-verify-play` (new: the authored view and each proxy centred, 8 frames each, under verify) passes
+and fails without the fix; the state digests of `bench-sim --render-feedback` are those of master on the Island, Training, the
+Airfield, WanChai Market and the Area 51 Bunker; `validate-lasers-play`, `-iterator-frames-play`, `-actor-mesh-scene`,
+`-native-laser`, `-sprite-setup` and `-spawn-mesh-binding` pass. The original is not measured here: the order of the copies and
+the draw is read from Render.dll's bytes (`0x10b23910`, `0x10b2556a..0x10b25655`, OccludeFrame/DrawFrame, above), with no capture
+of a beam compared.
+
+**Not translated.** A child frame's own sprite of the proxy: the original gives the proxy's sprite in each child frame the fields
+that frame's run left, so its Setup candidate (visibility in the child frame), its LOD, pose and lighting in that frame differ
+from the root's. The port updates a binding once per tick, so the proxy's own sprite in a child frame takes the root frame's copy
+(and the child frame's candidate is the root's packed words, `patchDynamics`); the proxy's items are exact in every frame. A
+fix would treat the proxy's own sprite as one more item slot of its iterator (an extra binding per differing copy).
 
 ## Play
 

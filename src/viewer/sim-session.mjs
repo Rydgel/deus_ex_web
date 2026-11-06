@@ -135,7 +135,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
-  const live = { lights: null, meshItems: [], sprites: [], iterators: null, iteratorIndex: null };
+  const live = { lights: null, meshItems: [], sprites: [], iterators: null, iteratorIndex: null, proxies: null };
   // URender::PreRender's light noise (0x10b13080, called at 0x10b146ae on
   // every drawn frame with Level.TimeSeconds, docs/dynamic-lighting.md
   // "Time-varying moving lights"): its appFrand draws come from the game's
@@ -914,7 +914,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // iterators' items made again), then OccludeBsp from its camera with
     // Frame->Sprite's keys for it and each child frame: exactly those actors
     // and sprites are drawn and stamped, as for the main frame.
-    let seen = null, members = null, cameraItems = [], cameraScanned = [];
+    let seen = null, members = null, cameraItems = [], cameraScanned = [], cameraProxies = null;
     if (occlusion && occlusion.setupSupported && actorScene) {
       actorScene.beginFrameItems(live.meshItems);
       const args = { ...actorScene.setupArgs(live.meshItems), childFrames };
@@ -933,7 +933,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             record.main = false; record.frames = null; record.childOnly = true;
           });
           for (const record of made.added) live.sprites.push(record);
-          sprites = made.sprites; cameraScanned = scanned.meshItems; frameArgs = { ...args, items: args.itemCandidates(scanned.meshItems, 'camera') };
+          sprites = made.sprites; cameraScanned = scanned.meshItems; cameraProxies = scanned.proxies; frameArgs = { ...args, items: args.itemCandidates(scanned.meshItems, 'camera') };
         }
         if (rescanning) cameraItems = frameArgs.items;
         const entries = packDynamics(occlusion, { sprites, iterators: live.iterators, ...frameArgs });
@@ -965,7 +965,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // and Light with each frame's Coords (the viewport actor's FovAngle is
       // the window's while Draw holds it). The others are hidden in this pass.
       const lit = Boolean(meshLighting?.frame);
-      pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids, children: childIds,
+      pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids, children: childIds, proxies: cameraProxies,
         ...(seen ? { lod: { ...seen.lod, fov: command.fov },
           lodFrames: childFrames ? lodFramesOf(seen.frames, command.fov) : null, lightFrames: childFrames ? lightFramesOf(seen.frames) : null,
           // the camera frame's own PrjXM..PrjYP (its outcodes of a pawn's special vertices, docs/weapon-attachment.md)
@@ -1116,12 +1116,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     sprites() {
       const errors = [];
       let sprites = [];
-      live.meshItems = [];
+      live.meshItems = []; live.proxies = null;
       try {
         const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems;
         iteratorStats.scans++; iteratorStats.drawsScan += iteratorStats.draws - drawsBefore; iteratorStats.msScan += performance.now() - started;
         iteratorStats.lastFrames = [{ frame: 0, kind: 'root', items: scanned.meshItems }];
-        live.iterators = scanned.iterators; live.iteratorIndex = scanned.iteratorIndex;
+        live.iterators = scanned.iterators; live.iteratorIndex = scanned.iteratorIndex; live.proxies = scanned.proxies;
       } catch (error) { failed = true; errors.push(plainError(error)); }
       if (spriteTextures) for (const sprite of sprites) sprite.size = spriteSize(sprite.texture, sprite.style === 2);
       live.sprites = sprites;
@@ -1299,7 +1299,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (meshLighting && !stopped()) collect(this.lightFrame(input.seconds, input.inspect?.view ?? null));
       time('lighting');
       let sprites = [];
-      live.sprites = []; live.iterators = null; live.iteratorIndex = null;
+      live.sprites = []; live.iterators = null; live.iteratorIndex = null; live.proxies = null;
       if (input.play && !stopped()) {
         const scanned = this.sprites();
         collect(scanned.errors);
@@ -1442,7 +1442,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             lightFrames: lightFramesOf(result.frames), lodFrames: fov !== undefined ? lodFramesOf(result.frames, fov) : null };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
-          items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility),
+          items: inspect ? [] : live.meshItems, proxies: inspect ? null : live.proxies, occlude, lod: inspect ? null : lodOf(current?.visibility),
           // the main frame's PrjXM..PrjYP, which DrawLodMesh's outcodes of a pawn's special vertices read (docs/weapon-attachment.md)
           prj: inspect ? null : frameMaster()?.prj ?? null, ...(pack ? { pack } : {}), main: drawWorld ? undefined : NO_SPRITES });
       } catch (error) { failed = true; errors.push(plainError(error)); }
