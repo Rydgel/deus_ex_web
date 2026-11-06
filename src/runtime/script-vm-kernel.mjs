@@ -448,6 +448,10 @@ export function createScriptVmKernel(instance, memory) {
       storeGrow: (from, to, capacity) => x.decal_store_grow(from >>> 0, to >>> 0, capacity >>> 0),
       storeResize: (from, to, surfaces, capacity) => x.decal_store_resize(from >>> 0, to >>> 0, surfaces >>> 0, capacity >>> 0),
       modelSync: (model, pointCapacity) => x.decal_model_sync(model >>> 0, pointCapacity >>> 0) >>> 0,
+      // The fast surface finder's edge table (decal/fast.rs): null in a core that predates it.
+      fastEntryBytes: typeof x.decal_fast_table !== 'function' ? null : () => x.decal_fast_entry_bytes() >>> 0,
+      fastTable: typeof x.decal_fast_table !== 'function' ? null : (at, entries) => x.decal_fast_table(at >>> 0, entries >>> 0),
+      fastStats: typeof x.decal_fast_table !== 'function' ? null : i => x.decal_fast_stats(i >>> 0) >>> 0,
       recordWords: () => x.decal_record_words(),
       clipFrame: (model, store, frame, stream, words, out, cap) =>
         x.decal_clip_frame(model >>> 0, store >>> 0, frame >>> 0, stream >>> 0, words >>> 0, out >>> 0, cap >>> 0) >>> 0,

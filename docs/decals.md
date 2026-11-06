@@ -482,6 +482,63 @@ scripts/combat-decal-views.sh compare
 node scripts/validate-decal-order.mjs
 ```
 
+## Fast surface finding (2026-11-06)
+
+**What the attach cost.** `FindSurface` walks the hit node's coplanar chain (`iPlane`: every node of the level in that plane, in node
+order) and tests the point against each polygon vertex with about 31 x87 operations; `GatherNodes` clips the quad against every
+polygon of the surface. A 1,500-tick run (300 warm-up) of the scan route, counted in the kernel: the Area 51 bunker made 11,083
+attaches, 5.0 million chain nodes and 17.9 million vertex tests (451 nodes, 1,616 vertex tests an attach) and 4.0 million
+`GatherNodes` distances; the Island 15,822 attaches, 0.45 million chain nodes, 2.4 million vertex tests, 5.0 million distances.
+The Gecko profile of the bunker (Firefox inline, 60 s, god mode) puts `attachDecalSurfaces` at 0.16 ms a drawn frame, of which
+`find_surface` and the `Ext` operations under it 0.11, `gather_nodes` 0.02, the JavaScript glue 0.02; in the slowest tenth of ticks
+the x87 leaves of `find_surface` (`find_surface` itself, `Ext::rounded`, `Ext::add`) are 1.14 ms against 0.03 in the rest.
+
+**What it decides.** Both functions use their floating-point values only for signs. `FindSurface` compares `side = d2 - d1` and
+the f32 store of the previous vertex's with zero; `GatherNodes` compares each clipped point's stored distance with zero and the
+distance goes nowhere else. Two exact steps replace the arithmetic (`native/script-vm/src/decal/fast.rs`; the reference bodies stay in
+`decal.rs` and run for `DECAL_FAST=off`):
+
+1. **The edge plane is a function of nine words.** `cy`, `cz` (stored), `cx`, `d1` (unrounded; `cxf`, `w` stored for `GatherNodes`) come
+   from the vertex, the previous vertex and the surface normal alone. They are computed once by the reference's x87 expressions and kept in
+   a direct-mapped table keyed on those nine words, slot picked by the vertex's place in the vertex pool: a hit is the same inputs, so the
+   same outputs; a mover's polygon that moved simply misses. The table is 16,384 entries of 72 bytes the host allocates in the kernel
+   instance (`decal_fast_table`; the 2 MiB of statics have no room), 256 static entries without it.
+2. **A sign far from zero is decided in f64.** Products of two f32 values are exact in f64 (48 bits); `cx` and `d1` are rounded to f64
+   once, at the table entry. With `Q` the sum of the magnitudes of the terms and `Y` the exact real value of the expression, the f64
+   value `X` has `|X - Y| <= 4 * 2^-53 * Q` (six operations, two roundings of constants, 2^-53 of one term each), and the x87 value at
+   64-bit precision `|S - Y| <= 3.01 * 2^-64 * Q` (three roundings of 2^-64; a rounding never flips a sign and the model's exponent range
+   is unbounded). When `|X| > 2^-44 * Q` (a factor 128 over the bound) and `|X| > 1e-30` (so the f32 store neither underflows nor
+   rounds to zero), `sign(S) = sign(X)`. A NaN or infinity anywhere, a value outside the exponent window the entry accepts, or a sign near
+   zero falls back to the reference expression, and so does every call at 24-bit precision (the render pass; the table and the filter
+   assume 64).
+
+**Evidence.** `scripts/validate-decal-fast.mjs` builds the module with the `selftest` feature (not shipped) and compares the fast sign
+with the x87 expression over 12 million generated cases (random edges and points, points exactly on the edge line, a few ulps off it,
+at the vertex, degenerate edges, normals along an axis): zero mismatches, the filter deciding 67% of the vertex signs and 85% of the
+distances. With the margin shrunk to 2^-55 the same run reports 36,213 mismatches in 2 million cases, so the test sees a wrong bound.
+`DECAL_FAST=verify` (`?decalFast=verify`) runs both bodies on every call and compares the surface found, the node list, every table hit
+against a fresh computation and every filtered sign against the expression; a difference is `DecalKernelFault` 8.
+
+| Check | Result |
+| --- | --- |
+| `bench-sim --render-feedback` digests, `DECAL_FAST=on` and `verify` | the five baselines (Island, Training, Airfield, Wan Chai, bunker) and both long routes (bunker `ccd09a24aaaad820`, Island `0b4d06c72afd1c1d`) unchanged, no tick errors |
+| Firefox inline `?decalFast=verify`, 40 s scan route | bunker and Island: no page errors |
+| `validate-decal-attach` (Unicorn oracle), `on` and `verify` | Training, Training `--tracker`, Island: every FDecal list bit-equal to the original, PASS |
+| `validate-decal-startup`, `npm test` | 6 native comparisons; 947 of 951 pass, 4 skipped, 0 fail |
+| Edge table, 1,500-tick bunker route (Node) | 16,384 entries: 18.84 million hits, 47,107 misses (99.75%); 1,024 entries 71.6%, 4,096 94.1%, 65,536 99.94% (no faster than 16,384). Island: 98.6% at 16,384 |
+| Signs the filter left to the x87 expression | bunker: 0 vertex, 16,035 of 4.0 million distance signs; Island: 318 and 7,530 |
+| Node tick, bunker long route, `off` then `on` | mean 4.94 -> 3.77 ms; Island 6.32 -> 5.92 ms (V8, one run each, indicative) |
+| Firefox inline A/B, bunker scan route, 4 interleaved pairs | mean tick 6.00 -> 5.51 ms, slowest tenth 11.93 -> 10.58 ms, page p50 13.0 -> 12.3, p95 22.3 -> 21.5 |
+| Firefox inline A/B, Island, 2 pairs | mean tick 6.90 -> 6.96 ms, slowest tenth 10.17 -> 10.55 ms: within noise |
+
+Gecko profile of the bunker after the change (Firefox inline, 60 s): `attachDecalSurfaces` 0.16 -> 0.10 ms a drawn frame; in the
+slowest tenth of ticks `fast::edge` (the table lookups) 0.18 ms, `fast::find_surface` 0.10, `Ext::add` and `Ext::rounded` of the
+footprint grid 0.05 each, the JavaScript `setRotation` 0.07. The Chromium worker-mode `validate-decals-play` and
+`validate-decal-vertices-play` pass.
+
+The module's statics grew by 18 KB (`__heap_base` 1.673 to 1.691 MiB of the 2 MiB reserved); the 16,384-entry table (1.2 MB) is
+allocated in the kernel instance's memory at the first level store.
+
 ## Open
 
 - DrawFrame's order of the draw items: Play draws decals item by item in the occlusion stream's order, DrawFrame in its three lists'

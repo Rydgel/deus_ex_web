@@ -21,7 +21,25 @@ export const DECAL_EXITS = Object.freeze(['attached', 'traceMiss', 'noItem', 'no
   'offPlane', 'polyFlags']);
 export const DECAL_FAULTS = Object.freeze({1: 'model index out of range', 2: 'trace fallback',
   3: 'GatherNodes clip buffer assert (24 points, line 0x836)', 4: 'more than 64 nodes on one FDecal',
-  5: 'SurfList longer than 64 entries', 7: 'record store exhausted'});
+  5: 'SurfList longer than 64 entries', 7: 'record store exhausted',
+  8: 'DECAL_FAST=verify: the fast surface finder or node gatherer differs from the x87 reference'});
+
+/** 'on' (default), 'off' or 'verify': DECAL_FAST / DEUS_EX_DECAL_FAST (?decalFast=). 'off' runs FindSurface and GatherNodes as
+ * the reference x87 expressions, 'on' with the per-edge table and the decided-sign filter (decal/fast.rs), 'verify' both on every
+ * call, a difference a DecalKernelFault 8. IO word 16 of the kernel: 0 on, 1 off, 2 verify. */
+export const decalFastMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FAST) || globalThis.DEUS_EX_DECAL_FAST || 'on';
+const DECAL_FAST_WORDS = Object.freeze({on: 0, off: 1, verify: 2});
+const IO_MODE = 16;
+/** Entries of the surface finder's edge table (a power of two; DECAL_FAST_TABLE / DEUS_EX_DECAL_FAST_TABLE): one per polygon vertex
+ * the finder and the gatherer have met, 72 bytes each in the kernel instance's memory, shared by its levels. */
+const fastTableEntries = () => Number((typeof process !== 'undefined' && process.env?.DECAL_FAST_TABLE) || globalThis.DEUS_EX_DECAL_FAST_TABLE || 16384);
+const fastTables = new WeakMap();
+function ensureFastTable(kernel) {
+  if (fastTables.has(kernel) || !kernel.fastTable) return;
+  const entries = fastTableEntries();
+  fastTables.set(kernel, entries);
+  if (entries >= 2) kernel.fastTable(kernel.alloc(entries * kernel.fastEntryBytes()), entries);
+}
 
 export class DecalKernelFault extends Error {
   constructor(code, operation) {
@@ -120,6 +138,8 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
   let at = kernel.alloc(kernel.storeSize(surfaceCount, capacity));
   kernel.storeInit(at, surfaceCount, capacity);
   const recordWords = kernel.recordWords();
+  const fastWord = DECAL_FAST_WORDS[decalFastMode()] ?? 0;
+  ensureFastTable(kernel);
   const io = () => new Uint32Array(kernel.memory.buffer, kernel.ioPtr(), 128);
   function grow() {
     const next = capacity * 2, to = kernel.alloc(kernel.storeSize(surfaceCount, next));
@@ -168,6 +188,7 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
         words.set(decalDir.map(f32Bits), 8);
         words[11] = f32Bits(drawScale);
         words[12] = uSize | 0; words[13] = level | 0; words[14] = texture >>> 0;
+        words[IO_MODE] = fastWord;
         putSurfList(words, surfList);
         setDecalHost({ rand, texture: textureOf });
         let status;
@@ -201,6 +222,9 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
       }
       return out;
     },
+    /** The fast surface finder's counters since the instance began: table hits, misses, vertex signs and distance signs the
+     * filter left to the x87 expressions (null in a core without it). */
+    fastStats: () => kernel.fastStats ? [0, 1, 2, 3].map(i => kernel.fastStats(i)) : null,
     /** The store's byte address in the kernel memory (the renderer's input). */
     get address() { return at; },
     dispose() { kernel.free(at); at = 0; },
