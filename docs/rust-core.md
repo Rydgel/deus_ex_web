@@ -928,6 +928,60 @@ transcribes `UGC::DrawText` (scanner, escapes, font lookup, realize cache, glyph
 1.37 ms. Details, evidence and checks: [script-play-hud.md](script-play-hud.md#the-draw-tree-the-window-events-and-drawtext-in-rust-2026-11-06);
 measurements: [firefox-60fps-plan.md](firefox-60fps-plan.md#the-hud-bundle-2026-11-06).
 
+### November 6: the tick's reads of other objects in Rust (implemented)
+
+Three imports the Rust tick called for nearly every actor each tick were small JavaScript reads of other objects' state: the owner's
+`bTicked` (`js_tick_owner_ticked`), the Model zone's render time for `actorInStasis` (`js_tick_zone_time`) and `processEvent`'s Level
+gate (`js_event_gate`). In the Island's Firefox profile they were 0.16, 0.37 and 0.37 ms a drawn frame, mostly `runtime.instance()`
+(0.51 ms a frame as a leaf, the largest in the tick). They are pure reads with no effect and no order dependency among themselves,
+so each answers from memory Rust can see, and only the cases it cannot see go to the import as before:
+
+* **The owner's `bTicked`** (tick.rs `owner_ticked`): the owner's image, through the receiver table (`field_addr`: a HOST receiver or a
+  bound key goes to the import).
+* **The zone render time** (tick.rs `zone_render_time`): `level.zoneLastRenderTimes` (a Float32Array, written by the render
+  feedback and the level reset, between ticks) is copied into a Rust table before each `run` or batch (`syncZones`; at most 256 zones,
+  the zone number is a byte), and the zone is the actor's `Region.ZoneNumber` byte in its image (the last `TICK_FIELDS` entry,
+  addressed as the struct cell plus the member). A zone past the table is "not a number" (T_STATE[4] = 1), as JavaScript's `undefined`
+  is. Only the level script-doors.mjs builds takes this path (its `zoneLastRenderTime` is marked `direct`); a stub level keeps the
+  import.
+* **The event gate** (dispatch.rs `gate`): `eventLevelGate` is false only for an Actor whose `levelFor` exists, whose `Level` names a
+  LevelInfo and whose `bBegunPlay` is clear; every other case is true. So a null `Level` or a set `bBegunPlay` passes whatever
+  `levelFor` answers, and both are read in the images (`READS`: the three cells, written by `EventHost.readsTable` once the registry has
+  them, cleared by `bump`). A clear `bBegunPlay`, or a field outside the image, takes the full import. The import's other two steps,
+  the runaway count to RUNAWAY and `scriptability()`, remain, as the cheap `js_event_prelude` (57 ns against 1.3 µs for the whole
+  gate in Node).
+
+Switch: `TICK_READS=js|verify|rust` (`?tickReads=`, default rust); `js` keeps every import, `verify` answers in Rust and also asks
+JavaScript, throwing on a difference of any answer (the zone value or its not-a-number state, each owner `bTicked`, each gate decision
+that passed in Rust). `ACTOR_TICK_DIFFERENTIAL` keeps the imports (it replays them from a log). The browser flag reaches the worker with
+the other `DEUS_EX_*` globals (main.mjs forwards them).
+
+Evidence (the answers are the JavaScript references', which are the originals' traced reads; nothing new is decided in Rust):
+* State digests equal in `js`, `rust` and `verify` on the five baseline maps (Island 5adb254a07b1ed6f, Training 07816ec472f29b84,
+  Airfield 46ed0d32ae5b56af, Wan Chai 80d27b37e0944d88, bunker 764a7bdffd2ebe59), with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1
+  TICK_READS=verify` too, and with `RUST_EVENTS=0`. The Island's long scan route reads 3cd535a7a85c9cb4 in `js`, `rust` and `verify` and on
+  the unchanged d64b55bf sources (the 0b4d06c72afd1c1d quoted in the task brief is not what that commit produces on this host).
+* The zone table's edges (`.work/perf/zone-edge.mjs`, a bench-sim scenario: a one-zone table, a 300-zone table, fresh render times every
+  tick): one digest in `js`, `rust` and `verify`, with the same 55 "Original zone render timestamp is not provided" errors.
+* A 60 s Firefox inline session and a 40 s Chromium worker session on the Island with `?tickReads=verify`: no error.
+* Node import counts on the Island (300 ticks, `SCRIPT_VM_IMPORT_TIME=1`): 465 gates, 341 owner reads and 62 zone reads a tick
+  (1,321, 645 and 1,221 ns each in `js`) leave only `js_event_prelude` (57 ns a call).
+* `validate-actor-tick-kernel` (differential: it keeps the imports), `-actor-tick`, `-level-tick`, `-event-manager`,
+  `-player-tick-order`, `-scripted-pawn-tick`, `-pawn-tick-visibility`, `-script-vm-interp` (539,597 checks), `-island-player-start`,
+  `-pawn-physics-kernel`, `-script-spawn`, `-inventory-spawn`, `-infolink-walking-trigger`, `-walk-loop-kernel` pass; `npm test` 947 pass,
+  4 skipped, 0 fail. The two Wine validators (pawn-perception, pawn-locomotion) skip on this host.
+* **Firefox inline, the Island's scan route, six interleaved pairs** (two runs of three, the arm order flipped between them; headless;
+  means over the drawn frames from 5 s after the map), `old` = `?tickReads=js`:
+
+  | | mean tick | slowest tenth | page p50 | page p95 |
+  |---|---:|---:|---:|---:|
+  | new, per pair | 6.41 6.59 6.66 6.53 6.32 6.80 | 9.75 9.83 9.96 9.86 9.45 10.01 | 13 13 14 13 13 14 | 20 20 21 20 19 20 |
+  | old, per pair | 7.18 6.76 6.98 7.14 7.08 6.86 | 10.91 9.92 10.17 10.70 10.62 10.00 | 14 13 14 14 14 13 | 22 20 20 21 21 20 |
+  | **mean** | 6.55 against 7.00 (**-0.45**) | 9.81 against 10.39 (**-0.58**) | 13.33 against 13.67 | 20.00 against 20.67 |
+
+  Five of six pairs favor `rust`. A Gecko profile of the new code shows the three imports gone and the level tick at 6.49 ms a frame
+  (7.13 before); `runtime.instance()`'s own time fell from 0.51 to 0.22 ms a frame.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
