@@ -105,11 +105,22 @@ const count = key => STATS.set(key, (STATS.get(key) ?? 0) + 1);
 // SCRIPT_VM_STATS_TIME=1: also the inclusive wall time of each JavaScript
 // value and effect node, by the same key (measurement only).
 const TIMED = STATS && process.env.SCRIPT_VM_STATS_TIME === '1' ? new Map() : null;
+// (TIMED_SELF: the same minus the timed keys nested inside, with the Rust bodies' vm_run calls timed as `wasm <function>` keys, so
+// a call node's own row is the JavaScript glue of the call and the callee's Rust statements have rows of their own;
+// scripts/script-vm-fallback-census.mjs reads both per tick)
+const TIMED_SELF = TIMED ? new Map() : null;
+let timedChild = 0;
 const timedCount = (key, fn) => {
   count(key);
   if (!TIMED) return fn();
-  const clock = globalThis.__realNow ?? performance.now.bind(performance), start = clock();
-  try { return fn(); } finally { TIMED.set(key, (TIMED.get(key) ?? 0) + clock() - start); }
+  const clock = globalThis.__realNow ?? performance.now.bind(performance), start = clock(), outer = timedChild;
+  timedChild = 0;
+  try { return fn(); } finally {
+    const total = clock() - start;
+    TIMED.set(key, (TIMED.get(key) ?? 0) + total);
+    TIMED_SELF.set(key, (TIMED_SELF.get(key) ?? 0) + total - timedChild);
+    timedChild = outer + total;
+  }
 };
 function shape(run, n, depth = 2) {
   if (n === null || typeof n !== 'object') return String(n);
@@ -128,9 +139,9 @@ function shape(run, n, depth = 2) {
   return `${opName(n)}${type}${name}${kids?.length ? `(${kids.map(k => shape(run, k, depth - 1)).join(', ')})` : ''}`;
 }
 // bench-sim clears its measurements after the warm-up ticks.
-if (STATS) globalThis.__scriptVmStatsReset = () => { STATS.clear(); TIMED?.clear(); };
+if (STATS) globalThis.__scriptVmStatsReset = () => { STATS.clear(); TIMED?.clear(); TIMED_SELF?.clear(); };
 // (scripts that count one step of a frame alone read the maps between resets: hud-stats.mjs)
-if (STATS) globalThis.__scriptVmStats = { counts: STATS, times: TIMED };
+if (STATS) globalThis.__scriptVmStats = { counts: STATS, times: TIMED, self: TIMED_SELF };
 if (STATS) process.on('exit', () => {
   const rows = [...STATS].sort(TIMED ? (a, b) => (TIMED.get(b[0]) ?? 0) - (TIMED.get(a[0]) ?? 0) : (a, b) => b[1] - a[1])
     .slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
@@ -944,7 +955,8 @@ export class RustScriptVm {
         view.setUint32(this.budgetAt, budget, true);
         if (STATS) count('vm_run');
         try {
-          status = x.vm_run(lowered.code, id, frame.locals.base, selfHandle, index);
+          status = TIMED ? timedCount(`wasm ${compiled.displayName}`, () => x.vm_run(lowered.code, id, frame.locals.base, selfHandle, index))
+            : x.vm_run(lowered.code, id, frame.locals.base, selfHandle, index);
         } finally {
           x.__stack_pointer.value = pointer;
           view = this.arena.view;
@@ -1013,7 +1025,8 @@ export class RustScriptVm {
         this.arena.view.setUint32(this.runawayAt, scriptRunawayCount(), true);
         let jumped;
         try {
-          jumped = x.vm_statement(lowered.code, id, 0, selfHandle, index);
+          jumped = TIMED ? timedCount(`wasm state ${compiled.displayName}`, () => x.vm_statement(lowered.code, id, 0, selfHandle, index))
+            : x.vm_statement(lowered.code, id, 0, selfHandle, index);
         } finally {
           x.__stack_pointer.value = pointer;
           setScriptRunaway(this.arena.view.getUint32(this.runawayAt, true));
