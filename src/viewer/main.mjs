@@ -30,7 +30,7 @@ import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
-import { createHudRenderer } from './hud.mjs';
+import { createHudRenderer, hudDrawMode } from './hud.mjs';
 import { expandHudStream } from '../runtime/script-window-command-stream.mjs';
 import { createFlashPass } from './flash-pass.mjs';
 import { createProgressFrame } from './progress-frame.mjs';
@@ -185,7 +185,7 @@ for(const [param,global] of [['x87','DEUS_EX_X87'],['fcoordsCache','DEUS_EX_FCOO
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['sceneWalk','DEUS_EX_SCENE_WALK'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['projectilePhysics','DEUS_EX_PROJECTILE_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['outStruct','DEUS_EX_OUT_STRUCT'],['structArrays','DEUS_EX_STRUCT_ARRAYS'],['setRotation','DEUS_EX_SET_ROTATION'],['cleanupScan','DEUS_EX_CLEANUP_SCAN'],['foreachStart','DEUS_EX_FOREACH_START'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS'],['switchCache','DEUS_EX_SWITCH_CACHE'],['actorNames','DEUS_EX_ACTOR_NAMES'],['hasScan','DEUS_EX_HAS_SCAN'],['imageCheck','DEUS_EX_IMAGE_CHECK']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['outStruct','DEUS_EX_OUT_STRUCT'],['structArrays','DEUS_EX_STRUCT_ARRAYS'],['setRotation','DEUS_EX_SET_ROTATION'],['cleanupScan','DEUS_EX_CLEANUP_SCAN'],['foreachStart','DEUS_EX_FOREACH_START'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS'],['switchCache','DEUS_EX_SWITCH_CACHE'],['actorNames','DEUS_EX_ACTOR_NAMES'],['hasScan','DEUS_EX_HAS_SCAN'],['imageCheck','DEUS_EX_IMAGE_CHECK'],['hudDraw','DEUS_EX_HUD_DRAW']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -2414,6 +2414,8 @@ fog() {
 /** The moving lights' composition (moving-lights.mjs): the body that composes (rust, js or verify) and its counters. */
 movingLights() { return world ? world.movingLightStats() : null; },
 sceneWalk() { return world ? world.sceneWalkStats() : null; },
+/** The HUD tile draw's counters (hud.mjs stats): runs and tiles drawn, and under ?hudDraw=verify the segments and pixels compared. */
+hudDraw() { return hudRenderer ? { mode: hudDrawMode(), ...hudRenderer.stats() } : null; },
 // Each fog page's GPU texture read back against its pixels (fog-pass.mjs pagesMatch): the texels that differ.
 fogPages() { return world?.fog ? world.fog.pagesMatch(renderer) : null; },
 /** Validation only: the 3D view's projection from the pass frame (on, the
@@ -2629,6 +2631,11 @@ function animate(time) {
   hitch?.frameEnd(time);
   if (time - fpsTime > 1000) { $('performance').textContent = world ? `${Math.round(frameCount * 1000 / (time - fpsTime))} fps` : ''; frameCount = 0; fpsTime = time; }
 }
+/** Whether the snapshot's HUD has a command with a texture: a tile of the stream, or another command that names one. */
+function hudHasTexture(hud) {
+  if (hud?.stream) return hud.stream.textures.length > 0 || hud.stream.others.some(command => command.texture);
+  return Boolean(hud?.commands?.some(command => command.texture));
+}
 /** Draws one simulation snapshot (null: no simulation, Inspect over the
  * world alone). */
 let lastVisibility = null, lastCoronaScan = null;
@@ -2642,7 +2649,8 @@ function drawFrame(snap, time) {
   const shownSaving = savingFrames.at(-1);
   if (shownSaving && shownSaving.replacedAt === null) shownSaving.replacedAt = performance.now();
   // The HUD's tile commands arrive as numbers (script-window-command-stream.mjs); the list is made where it is drawn.
-  if (snap?.hud?.stream) { snap.hud.commands = expandHudStream(snap.hud.stream); snap.hud.stream = null; }
+  // (hudDraw=single, the default, draws the stream itself: hud.mjs render; the other modes make the list here or in render)
+  if (snap?.hud?.stream && hudDrawMode() === 'js') { snap.hud.commands = expandHudStream(snap.hud.stream); snap.hud.stream = null; }
   if (graphics.lost) graphics.drawnLost++;
   let playerView = null, renderRect = null;
   // A snapshot draws as the frame it was simulated for, whatever the page's
@@ -2707,7 +2715,7 @@ function drawFrame(snap, time) {
     : runtimeError ? 'Play paused · Player start resets the scene' : '';
   }
   // The credit card follows the flight's view, hidden under any window the root draws (MenuMain over the flight)
-  if (creditParam && snap) creditFrame(playing && frame?.view && currentMap === 'DX' && !snap.hud?.commands?.some(command => command.texture)
+  if (creditParam && snap) creditFrame(playing && frame?.view && currentMap === 'DX' && !hudHasTexture(snap.hud)
     ? frame.view.location[0] : null);
   phase('tick');
   // The GPU timer starts before the actor layer, whose mesh passes
@@ -2761,7 +2769,7 @@ function drawFrame(snap, time) {
   // A ViewportWindow's world frame draws later in the HUD
   // (viewportWorldPass): its OccludeBsp polygons' light maps are drawn too.
   // Without its polygons (no BSP occlusion) every light map is.
-  const viewportPasses = snap?.hud?.commands?.filter(command => command.kind === 'viewport' && command.pass) ?? [];
+  const viewportPasses = (snap?.hud?.stream?.others ?? snap?.hud?.commands)?.filter(command => command.kind === 'viewport' && command.pass) ?? [];
   const viewportSurfaces = viewportPasses.every(command => command.pass.visibility)
     ? viewportPasses.flatMap(command => [command.pass.visibility.nodes, ...(command.pass.frames ?? []).map(frame => frame.nodes)]
       .flatMap(nodes => Array.from(nodes, node => world.nodeSurface[node]))) : null;
@@ -2892,7 +2900,7 @@ function drawFrame(snap, time) {
   phase('weapon');
   if (snap?.hud && hudRenderer) {
     viewportPassesDrawn = [];
-    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
+    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.stream ?? snap.hud.commands,
       { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } },
         // GC.DrawActor (docs/gc-draw-actor.md): the actor's mesh in the master frame, between the tile batches, in the world's
         // viewport rectangle; GC.ClearZ clears the depth buffer there.
