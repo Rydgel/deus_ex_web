@@ -7,7 +7,7 @@
  * fixed roam as hud-stream-digest.mjs (a forward hold, a turn every 90 ticks, a jump every 150) through the installed input bindings.
  *
  *   node scripts/frame-alloc-meter.mjs [--map 01_NYC_UNATCOIsland] [--frames 600] [--warm 60] [--size 1440x960]
- *     [--pre-tick] [--time] [--place JSON] [--idle] [--god] [--out FILE] [--compare FILE] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
+ *     [--pre-tick] [--time] [--place JSON] [--idle] [--god] [--out FILE] [--compare FILE] [--keys FILE] (each frame's hash per top-level snapshot key) [--dump FRAME:KEY] [--series FILE] [--sites N] [--depth D] [--steps begin,actors] [--children]
  *
  * Without --sites: the heap-space size of V8's new space around each step (begin, lightFrame, sprites, actors, stamps, coronas, weapon,
  * hud) and around the whole call, as KB a frame (mean, median, p90). A frame a scavenge ran in is left out of that step's numbers;
@@ -113,7 +113,20 @@ function feed(value, depth) {
   mix(14); mix(keys.length);
   for (const key of keys) { mixString(key); feed(value[key], depth + 1); }
 }
+const hex = () => (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+// --keys FILE: also each frame's hash per top-level snapshot key, to see which step's output two builds disagree on (`keys` below)
+const keyLog = flag('keys', null) ? [] : null;
+const dumpAt = flag('dump', null)?.split(':') ?? null;
+if (dumpAt) dumpAt[0] = Number(dumpAt[0]);
 const hashSnapshot = snapshot => {
+  if (keyLog) {
+    const per = {};
+    for (const key of Object.keys(snapshot)) {
+      if (key === 'timings' || key === 'audioMs') continue;
+      h1 = 0x811c9dc5 | 0; h2 = 0x9747b28c | 0; mixString(key); feed(snapshot[key], 0); per[key] = hex();
+    }
+    keyLog.push(per);
+  }
   h1 = 0x811c9dc5 | 0; h2 = 0x9747b28c | 0;
   for (const key of Object.keys(snapshot)) { if (key === 'timings' || key === 'audioMs') continue; mixString(key); feed(snapshot[key], 0); }
   return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
@@ -206,7 +219,12 @@ if (profileFrame >= 0) {
       for (const [name, bytes] of [...sites].sort((a, b) => b[1] - a[1]).slice(0, 12)) console.log(`${(bytes / 1024).toFixed(0).padStart(7)} KB  ${name}`);
     }
   }
-} else for (let i = 0; i < frames; i++) hashes.push(hashSnapshot(step()));
+} else for (let i = 0; i < frames; i++) {
+  const snapshot = step();
+  hashes.push(hashSnapshot(snapshot));
+  // --dump FRAME:KEY prints that frame's snapshot[KEY] as JSON (bigint as a string, a typed array as a plain array), to read a difference --keys found
+  if (dumpAt && i === dumpAt[0]) console.log(`dump ${dumpAt[0]}:${dumpAt[1]}`, JSON.stringify(snapshot[dumpAt[1]], (k, v) => typeof v === 'bigint' ? `${v}n` : ArrayBuffer.isView(v) ? Array.from(v) : v));
+}
 measuring = false;
 
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
@@ -268,6 +286,7 @@ const digestText = digest.toString(16).padStart(16, '0');
 console.log(JSON.stringify({ map, frames, warm, digest: digestText, distinct: new Set(hashes).size }));
 if (seriesPath) await writeFile(seriesPath, JSON.stringify(series));
 if (outPath) await writeFile(outPath, JSON.stringify({ map, frames, warm, digest: digestText, hashes }));
+if (keyLog) await writeFile(flag('keys', null), JSON.stringify(keyLog));
 let status = 0;
 if (comparePath) {
   const before = JSON.parse(await readFile(comparePath, 'utf8'));

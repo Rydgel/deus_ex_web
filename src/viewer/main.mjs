@@ -187,6 +187,11 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 // ?wordEq=ref loads script-vm-eq-ref.wasm (scripts/build-eq-ref.mjs), the core with core's memcmp-calling `==` on the word arrays that interp.rs
 // words_eq / ints_eq compare in line (docs/firefox-60fps-plan.md "Firefox wasm gap").
+// The bundle's families (docs/firefox-60fps-plan.md "Unshipped bundle"), each default on with the old body reachable and a verify mode:
+// ?walkPrelude= / ?rollingPhysics= / ?showSelf= (=js|verify: the walking surface prelude's scan, PHYS_Rolling and the player's ShowSelf walk
+// in Rust), ?actorTail= (=js|verify: kept candidate words and permeating light runs), ?lightModulation=table, ?lightPack=js|verify and
+// ?uploadBands=off (the class 1 light maps; see above), ?indexRegions=single|verify (one index buffer per world mesh with a region per
+// node set: world-visibility.mjs) and ?ambientScan=js|verify (Galaxy Update's ambient scan and its range test in Rust).
 for(const [param,global] of [['x87','DEUS_EX_X87'],['wordEq','DEUS_EX_WORD_EQ'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['sceneWalk','DEUS_EX_SCENE_WALK'],['lightModulation','DEUS_EX_LIGHT_MODULATION'],['lightPack','DEUS_EX_LIGHT_PACK'],['uploadBands','DEUS_EX_UPLOAD_BANDS'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],

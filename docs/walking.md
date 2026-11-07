@@ -250,6 +250,12 @@ not walking), and a WalkTexture event whose function has nothing to run. Pawn.Wa
 runs the whole call as before (the scan is a query: running it twice changes nothing). `?walkPrelude=js` keeps every prelude in JavaScript;
 `=verify` compares the Rust inputs with `fillScanInputs`'s bit for bit and runs the JavaScript prelude after each fast answer, which must return false.
 
+*Handle numbering.* The event's first parameter is the floor texture, and the host allocates an identity's object handle at its first use
+(script-object-handles.mjs `handleOf`), so the dispatch a fast answer skips used to be where a texture got its handle: every handle made after it
+(the actors' ones in the posted `mesh-create` records, for one) was lower by one with the fast answer on, in `frame-alloc-meter.mjs` digests of the
+Island (`events` of 20 of 300 frames; `bench-sim` digests do not carry handles). `scanFast` asks for the texture's handle when it answers 1, so the
+numbering is the dispatch's (the Island's meter digest is then `5e021f24dcd1a8ed` with `?walkPrelude=js` and without it).
+
 
 ## Original comparison
 

@@ -226,6 +226,10 @@ export class WalkLoopHost {
     if (!scan.floor) return back('floor');
     const texture = pawn.textureForHit(scan.floor);
     if (pawn.physics === 1 && texture && texture.friction < 1) return back('friction');
+    // The WalkTexture event the prelude would send takes this texture as its first argument, and an identity's handle is allocated at its
+    // first use (script-object-handles.mjs): asking for it here leaves every handle made after this one the number the dispatch would
+    // have left (the posted mesh-create records carry actor handles; frame-alloc-meter.mjs digests differ by one without this).
+    if (texture) handleOf(texture);
     counts.scanFast++;
     return 1;
   }
