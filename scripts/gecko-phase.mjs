@@ -4,7 +4,7 @@
 // Rust core's import the sample is under. Milliseconds a drawn frame spends (samples x interval / drawn frames from --skip seconds after
 // the map). Host measurement only (docs/firefox-60fps-plan.md step 4).
 //
-//   node scripts/gecko-phase.mjs RUN.json PROFILE.json --entry REGEX [--within REGEX] [--skip 5] [--all] [--tree MS] [--top 30] [--depth 2] [--json OUT]
+//   node scripts/gecko-phase.mjs RUN.json PROFILE.json --entry REGEX [--within REGEX] [--skip 5] [--all] [--tree MS] [--top 30] [--depth 2] [--json OUT] [--where 'p.lightAnimation>3'] [--spot 140,143]
 //     (--within: only samples with a frame matching it below the entry; the tallies are of what is under that frame)
 //     (--entry matches the frame's profile label, e.g. '^hud \(src/viewer/sim-session' or 'hud\.mjs.*render')
 //
@@ -18,7 +18,14 @@ const treeMin=Number(option('tree',0)),wholeRun=args.includes('--all'),skipS=Num
 const run=JSON.parse(readFileSync(runFile,'utf8')),prof=JSON.parse(readFileSync(profFile,'utf8'));
 const d=run.dump,ci=Object.fromEntries(d.columns.map((c,i)=>[c,i])),started=Date.parse(d.meta.started);
 const mapAt=d.events.filter(e=>e.kind==='map').at(-1)?.t??0;
-const frames=d.rows.filter(r=>r[ci.drawn]&&r[ci.t]>=mapAt+skipS*1000).map(r=>({t:r[ci.t],animate:r[ci.animate],tick:r[ci['p.tick']],hud:r[ci['p.hud']]}));
+// --where 'COLUMN>MIN' ('<' too): only the drawn frames whose hitch-log COLUMN (p.lightAnimation, animate, ...) satisfies it (a place's costly frames among a --places run's)
+const where=option('where',null)?.match(/^(.+?)([<>])(-?[\d.]+)$/);
+if(option('where',null)&&!where)throw new Error("--where takes COLUMN>NUMBER or COLUMN<NUMBER");
+// --spot N[,N...]: only the drawn frames of those spots of a --places run (the window scripts/spot-census.mjs --figures reports: the rows between a spot's start and end)
+const spotWindows=option('spot',null)?.split(',').map(Number).map(i=>run.spots?.[i]).filter(Boolean).map(spot=>[spot.start-d.meta.originMs,spot.end-d.meta.originMs]);
+if(option('spot',null)&&!spotWindows?.length)throw new Error('--spot: no such spot in the run');
+const keep=r=>(!where||(where[2]==='>'?r[ci[where[1]]]>Number(where[3]):r[ci[where[1]]]<Number(where[3])))&&(!spotWindows||spotWindows.some(([a,b])=>r[ci.t]>=a&&r[ci.t]<=b));
+const frames=d.rows.filter(r=>r[ci.drawn]&&r[ci.t]>=mapAt+skipS*1000&&keep(r)).map(r=>({t:r[ci.t],animate:r[ci.animate],tick:r[ci['p.tick']],hud:r[ci['p.hud']]}));
 let thread=null,base=0;
 const walk=q=>{for(const t of q.threads??[])if(t.name==='GeckoMain'&&t.processName==='Web Content'&&(!thread||t.samples.data.length>thread.samples.data.length)){thread=t;base=q.meta.startTime;}
   for(const c of q.processes??[])walk(c);};

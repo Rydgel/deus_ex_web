@@ -7,8 +7,13 @@ import { REENCODE_GLSL } from './original-sampling.mjs';
  * writes white for every fragment this shader draws. Unset, the generated shader is the one it always was. */
 const LIGHT_DEBUG = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lightDebug') : null;
 /** Padded lightmap tiles share texture pages; sample bounds prevent atlas bleeding. */
+/** Whether the page's bytes may be written as 32-bit words (RGBA in memory order is a little-endian word). */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+/** `update` copies a byte source a word per texel, unless ?movingCompose=js (MOVING_COMPOSE=js in Node) keeps the byte loop as the reference. */
+const wordWrites = () => LITTLE_ENDIAN && ((typeof process !== 'undefined' && process.env?.MOVING_COMPOSE) || globalThis.DEUS_EX_MOVING_COMPOSE) !== 'js';
 export class LightAtlas {
-  constructor(size = 1024) {
+  constructor(size = 1024, { words = wordWrites() } = {}) {
+    this.wordWrites = words; this.packedUploads = 0;
     this.size = size; this.pages = []; this.tiles = new WeakMap();
     this.arrayUniform = { value: null }; this.arrayUploaded = false; this.scratch = new Uint8Array(0); this.addPage();
   }
@@ -90,7 +95,18 @@ export class LightAtlas {
     const [left, right] = region ? [region.minU ? region.minU : -1, region.maxU < width ? region.maxU - 1 : width] : [-1, width];
     const [top, bottom] = region ? [region.minV ? region.minV : -1, region.maxV < height ? region.maxV - 1 : height] : [-1, height];
     const samples = lightmap.pixels;
-    for (let row = top; row <= bottom; row++) {
+    if (bytes && this.wordWrites) {
+      // The same bytes, a word a texel.
+      const words = this.pageWords(page);
+      for (let row = top; row <= bottom; row++) {
+        const srcRow = (row < 0 ? 0 : row >= height ? height - 1 : row) * width;
+        let dst = (y + row) * size + x + left;
+        for (let col = left; col <= right; col++, dst++) {
+          const src = (srcRow + (col < 0 ? 0 : col >= width ? width - 1 : col)) * 3;
+          words[dst] = bytes[src] | bytes[src + 1] << 8 | bytes[src + 2] << 16 | 0xff000000;
+        }
+      }
+    } else for (let row = top; row <= bottom; row++) {
       const srcRow = (row < 0 ? 0 : row >= height ? height - 1 : row) * width;
       let dst = ((y + row) * size + x + left) * 4;
       for (let col = left; col <= right; col++, dst += 4) {
@@ -103,6 +119,41 @@ export class LightAtlas {
     if (partial && (page.uploaded || this.arrayUploaded)) page.dirty.push([x + left, y + top, right - left + 1, bottom - top + 1]);
     else this.dirtyPage(page);
     return tile;
+  }
+  /** The page's pixels as 32-bit words (made again when the page's pixels moved into the sealed array). */
+  pageWords(page) {
+    let words = page.pixels32;
+    if (!words || words.buffer !== page.pixels.buffer || words.byteOffset !== page.pixels.byteOffset)
+      words = page.pixels32 = new Uint32Array(page.pixels.buffer, page.pixels.byteOffset, page.pixels.length >> 2);
+    return words;
+  }
+  /** The tile rectangle `update` writes for `region`, as source columns and rows of the light map (-1 and the map's width or height are
+   * the padding); null when the light map has no tile of its size here. */
+  rectOf(lightmap, region) {
+    const tile = this.tiles.get(lightmap);
+    if (!tile || lightmap.width !== tile.width || lightmap.height !== tile.height) return null;
+    const { width, height } = lightmap;
+    return { left: region.minU ? region.minU : -1, right: region.maxU < width ? region.maxU - 1 : width,
+      top: region.minV ? region.minV : -1, bottom: region.maxV < height ? region.maxV - 1 : height };
+  }
+  /** `update` for texels converted elsewhere (moving-compose-kernel.mjs): `packed` holds from word `offset` the RGBA texels of `rect` (rectOf), rows
+   * and columns in order, as 32-bit little-endian words; the page receives the same bytes `update` would write, and the same upload
+   * bookkeeping follows. */
+  writePacked(lightmap, rect, packed, offset = 0, source = null) {
+    const tile = this.tiles.get(lightmap), { page, x, y } = tile, size = this.size, width = rect.right - rect.left + 1;
+    const words = this.pageWords(page);
+    for (let row = 0, rows = rect.bottom - rect.top + 1; row < rows; row++) {
+      let dst = (y + rect.top + row) * size + x + rect.left, src = offset + row * width;
+      for (let end = src + width; src < end; src++, dst++) words[dst] = packed[src];
+    }
+    // The deferred rectangle keeps the packed texels it was made from, as `source` (an object with a `generation` that changes when
+    // those texels are overwritten) still has them at flush(): the upload then takes them as they are, where the page's rows would be
+    // copied into a packed scratch first.
+    if (page.uploaded || this.arrayUploaded) {
+      const entry = [x + rect.left, y + rect.top, width, rect.bottom - rect.top + 1];
+      if (source) entry.push(packed, offset, source, source.generation);
+      page.dirty.push(entry);
+    } else this.dirtyPage(page);
   }
   /** Send deferred tile rectangles; without a renderer the pages re-upload.
    * Array layers take one texSubImage3D per rectangle under one pixel-store
@@ -131,9 +182,14 @@ export class LightAtlas {
       array ??= this.beginArrayUpload(renderer);
       if (!array) { this.dirtyPage(page); continue; }
       const { gl } = array;
-      for (const [x, y, width, height] of rects)
-        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE,
-          this.rectangle(page.pixels, x, y, width, height));
+      for (const rect of rects) {
+        const [x, y, width, height] = rect;
+        // (The packed texels of a deferred rectangle, while they are intact and their memory has not been detached: writePacked.)
+        const direct = rect.length > 4 && rect[6].generation === rect[7] && rect[4].buffer.byteLength > 0;
+        if (direct) this.packedUploads++;
+        const packed = direct ? new Uint8Array(rect[4].buffer, rect[4].byteOffset + rect[5] * 4, width * height * 4) : this.rectangle(page.pixels, x, y, width, height);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, packed);
+      }
     }
   }
   /** A rectangle's texels as one tightly packed view: full-width rows are

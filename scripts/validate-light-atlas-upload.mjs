@@ -11,7 +11,7 @@
  *    changes did not re-upload the whole array and GL reports no error.
  *
  *   node scripts/validate-light-atlas-upload.mjs [--url http://127.0.0.1:5173] [--map 00_Training]
- *     [--browser chromium|firefox]
+ *     [--browser chromium|firefox] [--place JSON] [--packed]
  *   (default: its own dev server of this checkout, Chromium). Firefox copies
  *   each upload's whole source view, so its uploads take another shape
  *   (light-atlas.mjs flush); --browser firefox checks them there.
@@ -97,6 +97,9 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
   await page.waitForFunction(map=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===map;},map,{timeout:180000});
   await page.waitForFunction(()=>window.deusExViewer?.status()?.gameplay?.hud?.health?.head?.displayedHealth===100,{}, {timeout:180000});
   await page.locator('#scene').click({position:{x:600,y:350}});
+  // --place JSON: placeProbe before the flushes (a spot with moving lights in view: --map 03_NYC_MolePeople --place '{"location":[2469,-179,23],"rotation":[0,32768,0]}'),
+  // and --packed: some of the uploads must have come from the core's packed texels (light-atlas.mjs writePacked)
+  if(option('place',null))await page.evaluate(args=>window.deusExViewer.placeProbe(JSON.parse(args)),option('place',null));
   const play=await page.evaluate(async()=>{
     let flushes=0;
     const result=await new Promise(resolve=>{
@@ -124,7 +127,7 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
           (globalThis.__layers??=[]).push(layer);
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER,previous);gl.deleteFramebuffer(fb);
-        resolve({pages:atlas.pages.length,sealed:Boolean(texture),arrayUploaded:atlas.arrayUploaded,
+        resolve({packedUploads:atlas.packedUploads,pages:atlas.pages.length,sealed:Boolean(texture),arrayUploaded:atlas.arrayUploaded,
           pageUploads:atlas.pages.filter(p=>p.uploaded).length,differing,before,pending,fullUploads:globalThis.__fullUploads,layers:globalThis.__layers,diffs:globalThis.__diffs,error:gl.getError()});
       };
       setTimeout(()=>resolve({timeout:true}),60000);
@@ -137,6 +140,7 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
   assert.equal(play.error,0,'GL error after the per-rectangle uploads');
   assert.equal(play.pageUploads,0,'a page texture was uploaded although every surface samples the array');
   assert.equal(play.differing,0,'GPU light-map layers differ from the CPU pages');
+  if(process.argv.includes('--packed'))assert.ok(play.packedUploads>0,'no upload took the core\'s packed texels');
   // Light-map changes resend their tiles; a whole-array upload is a regression
   // (it was 183 of 240 frames on Training before October 2).
   assert.ok(play.fullUploads<=2,`${play.fullUploads} whole-array light-map uploads in 240 frames`);
@@ -144,5 +148,5 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
   assert.equal(status.runtimeError??null,null,'Play paused');
   assert.deepEqual(errors,[]);
   console.log(`Light-map atlas (${engine}): 2D-array layer sampling equals 2D sampling on ${sampling.pixels} pixels (${sampling.distinct} distinct values); `+
-    `on ${map} after 240 flushes, ${play.pages} GPU array layers equal the CPU pages, no page texture was uploaded and ${play.fullUploads} whole-array uploads were owed.`);
+    `on ${map} after 240 flushes, ${play.pages} GPU array layers equal the CPU pages, no page texture was uploaded and ${play.fullUploads} whole-array uploads were owed (${play.packedUploads} rectangle uploads from the core's packed texels).`);
 }finally{await browser.close();await server?.close();}

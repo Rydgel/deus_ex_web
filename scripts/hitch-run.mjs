@@ -11,7 +11,7 @@
 //       it; the marks are in the dump's `spots` as page performance.now() times, which scripts/spot-census.mjs turns into per-spot figures; the
 //       mode is then `places` and the run ends after the last spot, --seconds being only a cap)
 //     [--headed] [--no-hitchlog] [--worker-patch FILE]
-//     [--screenshot FILE] (a PNG of the page at the end of the run)
+//     [--screenshot FILE] (a PNG of the page at the end of the run) [--eval EXPR] (a page expression read at the end, saved as `evaluated`)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
@@ -340,7 +340,10 @@ const probed=flag('probe-switches')?await page.evaluate(async()=>{
 // the render iterators' totals for the run (sim-session iteratorStats: SetupDynamics scans, child frames' rescans, the milliseconds in each)
 const switches=probed&&{...probed.switches,...(probed.particleItems?{particleItemCounts:probed.particleItems}:{}),...(probed.iterators?{iteratorStats:probed.iterators}:{}),...(probed.trace?{traceKernel:probed.trace}:{})};
 if(switches)console.log('switches',JSON.stringify(switches));
-await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,spots,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog,switches}));
+// --eval EXPR: a page expression read at the end of the run and saved as `evaluated` (e.g. 'deusExViewer.movingLights()' under ?movingCompose=verify)
+const evaluated=option('eval',null)?await page.evaluate(expr=>Promise.resolve(eval(expr)).then(v=>JSON.parse(JSON.stringify(v??null))),option('eval',null)).catch(e=>({error:String(e)})):undefined;
+if(evaluated!==undefined)console.log('evaluated',JSON.stringify(evaluated));
+await writeFile(`${out}.json`,JSON.stringify({browser:engine,mode,headings,spots,profileSync,loadTimings,stalls,args:process.argv.slice(2),status,ended,errors,samples,dump,gc,gclog,switches,evaluated}));
 await browser.close();await server?.close();
 console.log(`saved ${out}.json ${engine} ${status.sim} frames ${dump?.summary?.frames} drawn ${dump?.summary?.drawn} rows ${dump?.rows?.length} map ${status.map} ended ${ended} errors ${errors.length}`);
 if(errors.length)console.log(errors.slice(0,5).join('\n'));

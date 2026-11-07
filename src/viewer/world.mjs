@@ -58,7 +58,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   let scriptKernel = null;
   try { scriptKernel = await loadScriptVmKernel(); } catch { scriptKernel = null; }
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
-  const movingLights = createMovingLights(lighting, map.model, movingLightsMode ? { mode: movingLightsMode } : undefined);
+  const movingLights = createMovingLights(lighting, map.model, { ...(movingLightsMode ? { mode: movingLightsMode } : {}), atlas: lightAtlas, kernel: scriptKernel });
   lighting.setMovingApplier(movingLights.apply);
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
@@ -631,7 +631,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
       if (drawn) for (const surfaceIndex of drawn) for (const record of lighting.recordsFor(map.model, surfaceIndex)) drawnRecords.push(record);
       const changed = movingLights.update(lights, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
-      for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
+      for (const { lightmap, region, atlas } of changed) if (!atlas) lightAtlas.update(lightmap, { partial: true, region });
+      movingLights.checkAtlas();
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
       return { lightmaps: changed.length, surfaces: movingLights.surfaces };
     },
@@ -710,6 +711,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     }),
     flushLighting(renderer) { lightAtlas.flush(renderer); },
     movingLightRecords: () => movingLights.records(),
+    movingLightStats: () => ({ mode: movingLights.mode, compose: movingLights.compose, stats: JSON.parse(JSON.stringify(movingLights.stats)) }),
     /** Validation: the current light frame's inputs, and whether the
      * simulation supplied them. */
     lightFrameInputs: () => ({ simFed, frameIndex: lightFrame.frameIndex, timeSeconds: lightFrame.timeSeconds,
@@ -723,7 +725,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); lighting.dispose();
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); movingLights.dispose(); mirrors.dispose(); fog.dispose(); lighting.dispose();
       for (const lease of proceduralLeases) lease.release(); },
   };
   return world;

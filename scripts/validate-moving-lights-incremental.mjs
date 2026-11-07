@@ -216,4 +216,10 @@ if (mapName === '00_Training') {
   for (let i = 0; i < frames; i++) { input.tick(1); frame(i); }
 }
 assert.ok(totals.compared > 0 && totals.full > 0, `${mapName}: the workload recomposed light maps`);
-console.log(JSON.stringify({ map: mapName, ...totals, lightMaps: seen[0].size, notes: full.notes.length }));
+// MOVING_COMPOSE=verify runs the Rust core's composition beside the JavaScript bodies in both incremental worlds and counts what differs.
+const composeStats = [incremental, gated].map(world => world.movingLightStats());
+for (const { stats } of composeStats) assert.deepEqual([stats.verify.bandDiffer, stats.verify.writtenDiffer, stats.verify.atlasDiffer, stats.verify.reachDiffer], [0, 0, 0, 0], `${mapName}: the Rust composition differs`);
+console.log(JSON.stringify({ map: mapName, ...totals, lightMaps: seen[0].size, notes: full.notes.length, compose: composeStats[0].compose,
+  jobs: composeStats[0].stats.jobs + composeStats[1].stats.jobs, skipped: composeStats[0].stats.skipped + composeStats[1].stats.skipped,
+  fallbacks: composeStats[0].stats.fallbacks + composeStats[1].stats.fallbacks, verified: composeStats[0].stats.verify.jobs + composeStats[1].stats.verify.jobs,
+  reaches: composeStats[0].stats.verify.reaches + composeStats[1].stats.verify.reaches }));

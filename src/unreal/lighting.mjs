@@ -377,6 +377,13 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       if (result.moving) movingApplier(result, result.moving);
       else result.staticPixels = null;
     },
+    /** setMoving's state half, for a composition the caller makes itself (moving-compose-kernel.mjs): the record's contributions (at
+     * least one) and its static copy, which exists from the first composition on. The caller then writes the `pixels` rows of the
+     * dirty region: the static texels with the contributions added. */
+    beginMoving(result, contributions) {
+      result.moving = contributions;
+      if (!result.staticPixels) result.staticPixels = Float32Array.from(result.pixels);
+    },
     recordsFor(model, surfaceIndex) { return bySurface.get(model)?.get(surfaceIndex) ?? []; },
     /** Mark `owner`'s brush as a bDynamicLightMover (Mover +0x38c bit 0x10) before its surfaces are made: SetupForSurf
      * lights its surfaces from the level leaf the mover is in (relightMover), not from the brush's own light lists. */

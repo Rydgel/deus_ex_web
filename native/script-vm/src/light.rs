@@ -168,17 +168,25 @@ pub extern "C" fn light_modulation(factors: u32, out: u32) {
     let out = unsafe { bytes(out, 65536) };
     for (row, &factor) in out.chunks_exact_mut(256).zip(factors.iter()) {
         for (byte, entry) in row.iter_mut().enumerate() {
-            let product = (factor * byte as f64) as f32 as f64 - 0.5;
-            *entry = if product.abs() < TWO_52 {
-                // Below 2^52 the nearest-even sum with ±2^52 lands on the
-                // integer grid, so this is `fistp` (ties to even) exactly.
-                let rounded = if product >= 0.0 { (product + TWO_52) - TWO_52 } else { (product - TWO_52) + TWO_52 };
-                (rounded as i64 & 255) as u8
-            } else if product.abs() < TWO_62 {
-                (product as i64 & 255) as u8
-            } else {
-                0
-            };
+            *entry = modulation_entry(factor, byte);
         }
+    }
+}
+
+/// One entry of the modulation table: `fistp(f(factor·byte) − 0.5) & 255`
+/// (the body of `light_modulation`; moving.rs fills the same entries one at
+/// a time, when a texel first asks for them).
+#[inline(always)]
+pub(crate) fn modulation_entry(factor: f64, byte: usize) -> u8 {
+    let product = (factor * byte as f64) as f32 as f64 - 0.5;
+    if product.abs() < TWO_52 {
+        // Below 2^52 the nearest-even sum with ±2^52 lands on the
+        // integer grid, so this is `fistp` (ties to even) exactly.
+        let rounded = if product >= 0.0 { (product + TWO_52) - TWO_52 } else { (product - TWO_52) + TWO_52 };
+        (rounded as i64 & 255) as u8
+    } else if product.abs() < TWO_62 {
+        (product as i64 & 255) as u8
+    } else {
+        0
     }
 }

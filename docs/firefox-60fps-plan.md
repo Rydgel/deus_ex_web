@@ -1172,7 +1172,8 @@ maps that hold them, after the fog fix below; Chromium's frame is the larger of 
   5.7), the Dockyard 5, Battery Park 2 (up to 5.3). At the Mole People spot (2469, -179, 23) yaw 32768:
   `syncMovingLights` is 3.8 ms a frame in Firefox (2.1 `compose`, 1.5 `light-atlas.mjs update`'s float-to-byte copy of each recomposed light
   map), 2.8 ms of Chromium's page frame of 5.4. Original per-frame work (the moving-light recomposition); the conversion is host code that could
-  go to Rust or the GPU.
+  go to Rust or the GPU. Done 2026-11-07: [Moving lights](#moving-lights-2026-11-07) (`p.lightAnimation` 3.99 -> 1.93 ms at the Mole People spot, 5.1 -> 1.4 ms
+  at the Vandenberg alarm light's views).
 * **Exceptions as control flow, small.** `soundField` -> `reflectedField` catches the `Object is not attached to script runtime` error
   `instance()` throws for a receiver that is not a script object, at every sound field read: 0.4 to 0.5 ms a frame in Firefox
   (`js::SavedStacks::saveCurrentStack`) at the Warehouse and the Dockyard, 1% of the frame. Under the 5% bar, not changed.
@@ -1952,6 +1953,145 @@ step, not the goal.
   events and the invalidation, none over 0.13 ms in Node. The next cut is a Rust owner for the spawned instance.
 * Bound sites in the cleanup pass (three a actor, 46,059 in the run) are still read through their bindings in JavaScript; they are the
   cleanup scan's remaining cost, about half of it.
+
+### Moving lights (2026-11-07)
+
+The task: the moving-light recomposition (`p.lightAnimation`) was the largest draw-side cost left that is tied to a place; make it cheaper without
+changing one output bit. Result, all headless Linux (Ryzen 9 8945HS, Node 26, Firefox inline 1440x960, god mode; the Mac is not measured):
+**`p.lightAnimation` 3.99 -> 1.93 ms and `p.lightUpload` 0.91 -> 0.51 ms at the Mole People spot (page mean 17.33 -> 14.10 ms), and 5.14 -> 1.40 ms at the
+Vandenberg Tunnels' alarm-light views (page mean 19.13 -> 14.76 ms, slowest tenth 27.7 -> 19.8 ms)**; the light-map floats and the atlas bytes are
+identical to master's (below). Three changes did it: the composition and the atlas conversion in the Rust core, a turning spotlight keeping its reach,
+and contributions that cannot write a texel left out.
+
+**Reproduction and the phase before.** Spot: `node scripts/hitch-run.mjs --browser firefox --map 03_NYC_MolePeople --mode idle --god --seconds 20
+--place '{"location":[2469,-179,23],"rotation":[0,32768,0]}' --out OUT --profile OUT.gecko.json`, then `node scripts/gecko-phase.mjs OUT.json
+OUT.gecko.json --entry syncMovingLights` (master bc32e5a9). Two findings about the phase itself:
+* `p.lightAnimation` is not only `syncMovingLights`. The mark `phase('lightAnimation')` in main.mjs closes the building of the frame's drawn sets, and
+  the one in `updateTextureAnimation` closes `syncMovingLights` and the class 1 light animation (`lighting.animate` and its atlas writes); `p.lighting` is
+  `relightMovers`, `p.lightUpload` is `flushLighting`. At the Mole People `syncMovingLights` is 3.75 of the 4.12 ms; at Battery Park it is 0.39 of
+  1.9 ms (the class 1 merge and its atlas writes are the rest, see below).
+* The census' hot views are *states*, not places. A fresh idle run at the Vandenberg spot costs 1.7 ms, the census 4.3 to 5.7: the extra is the
+  AlarmLight (`LE_Spotlight`, turning) near spots #48 to #55 of the census' list, which `hitch-run.mjs --places` reproduces from the census' own list
+  (spots 40 to 59 are enough: 4.4 to 5.6 ms at the eight views in master, in each of the runs). The Dockyard's hot views reproduce the same way (2.1 to 2.9 ms
+  at the census' spots #140 to #144, `.cache/perf/spot-census/firefox-MAP.places.json`). **Battery Park's 5.3 ms at (2025, -3396, 263) did not reproduce**: its
+  spots cost 1.6 to 2.3 ms in two places runs and at rest, most of it the class 1 light animation. `gecko-phase.mjs` takes `--spot N,N` (a --places run's spots) and `--where
+  'p.lightAnimation>3'` for this; `hitch-run.mjs --eval EXPR` saves a page expression at the end of a run.
+
+**Ranking (measured before any change; Gecko, ms a frame).**
+
+| Place | Phase | Parts |
+|---|---|---|
+| Mole People (27 barrel fires, FireWaver, 878 light maps) | `syncMovingLights` 3.75 | the atlas conversion (`light-atlas.mjs update`) 1.45; the composition 1.95 (`addDirect` 0.80 self, the modulation lookup 0.34, `setMoving`'s restore 0.29 and its `subarray` calls 0.28); bookkeeping about 0.3 |
+| | `flush` (`p.lightUpload` 0.91) | `texSubImage3D` 0.42; `rectangle()` repacking each rectangle's rows 0.42 |
+| Vandenberg Tunnels, the alarm light's views | `syncMovingLights` 4.3 (build with the Rust composition, before the reach change) | `reachLight` 3.13 (`reachRecord` 1.88: `movingLightRect` 1.0, the grid and facet 0.7; `filterMovingLight` 0.4; `recordsFor` 0.3; `reachOwned` 0.2), the composition 0.54 |
+| Dockyard, hot views | `syncMovingLights` 2.06 (master) | composition 1.07 (the addends of a light that turns, `spotLightSpatial`), `reachOwned` 0.39, `contributionsOf` 0.13 |
+| Battery Park, at rest (Gecko of the build with the Rust composition) | `syncMovingLights` 0.39 of `p.lightAnimation` 1.9 | the class 1 merge 0.30 and its atlas `update` 0.63 (not moving lights) |
+
+The per-texel work at the Mole People is 83,000 texels a frame in the page (about 166 light maps of 500 texels, from the counters of the verify run
+below), so the cost there is the per-texel loops and the per-rectangle JavaScript around them; at the Vandenberg spots it is the per-frame rebuild
+of a light that turns: a light whose inputs change is reached again from scratch (the BSP filter, a rectangle and a facet for each of ~1,700 light
+maps), 3 ms, where the surfaces and rectangles do not depend on the axis.
+
+**What changed** (each old body stays behind `?movingCompose=js|rust|verify`, `MOVING_COMPOSE=` in Node; [dynamic lighting](dynamic-lighting.md#rust-composition-and-the-atlas-conversion-2026-11-07)):
+* **The composition and the atlas conversion in Rust** (`moving.rs`, `moving-compose-kernel.mjs`): `addDirect`'s saturating add on the float32 texels
+  (the double sum rounded to float32, `min(127/255)`), the modulation entries on demand, and `LightAtlas.update`'s float to byte conversion with the
+  padding, for every light map recomposed in a frame in one call, the conversion four texels at a time on wasm simd128 (the same operations). JavaScript
+  keeps the reach, the spatial bytes, the colours and the pages; a light map keeps a kernel block with its contributions' rectangles and spatial bytes
+  while its list of contributions is the same (a list that lives one frame is copied into the batch's scratch). The light atlas copies the packed texels
+  into the page a word at a time (`writePacked`), and a deferred rectangle uploads from the packed texels themselves while they are intact (the
+  upload no longer repacks the page's rows: `flush` 0.91 -> 0.51 ms).
+* **A turning spotlight keeps its reach.** When only a spot light's Rotation changed, the surfaces it reaches, their rectangles, incidence and grids do
+  not (none reads the axis); only the spatial bytes are made again. The mover light maps placed again since are reached on their new facets, as for
+  an unchanged light. `?movingCompose=verify` makes the reach in full beside it and compares (`stats.verify.reaches`).
+* **Dead contributions.** A contribution whose spatial bytes are all 0 writes no texel in any frame (the loop skips a 0 byte before and after the
+  modulation); it is left out of the job, and a light map with nothing else to recompose is not recomposed (master recomposes it unchanged every frame:
+  at the Vandenberg spot 299,000 of the 379,000 composition requests of a 300-frame run in the Node driver had no live contribution).
+* **Byte sources a word at a time:** `LightAtlas.update` with `bytes` (the class 1 merge's texels) copies a word a texel; the byte loop stays under
+  `?movingCompose=js`.
+* Smaller: the batch's job objects are reused, the atlas rectangle of a kept block is kept with it.
+
+**Byte identity.**
+* *Against master, in the Node driver* (`scripts/moving-lights-bench.mjs`, which boots the map through `createGame` and `createWorld`, puts the player at the
+  spot, and each frame hands the world the light frame, the movers and `game.movingLights()`, with the light maps in the view's frustum as the drawn ones):
+  60 frames of warm-up and 240 frames, after every frame a sha1 over the float bits of every moving light map and a sha1 over every atlas page, for the export
+  of master bc32e5a9 (`git archive`, its own wasm) and this branch. **Equal at all six spots and in the Training AugLight room** (F12, the player turning, every
+  light map drawn; 41.6 moving light maps on average):
+
+  | Map, place | moving light maps, recomposed a frame, texels written | texels sha1 (master = branch) | atlas sha1 (master = branch) |
+  |---|---|---|---|
+  | 03_NYC_MolePeople (2469, -179, 23) | 878, 785, 90,628 | 559c9df4a528edd1 | e561a012fa128cc5 |
+  | 12_Vandenberg_Tunnels (-2621, 2725, -2589) | 2,105, 253, 7,385 | fe90000ea315554a | 051ca55a367096ae |
+  | 12_Vandenberg_Tunnels (-2100, 2709, -2589) | 72, 0, 270 | 51a69237a8a4b9d4 | 5b448ea11d5a8e95 |
+  | 09_NYC_Dockyard (2623, 6205, 20) | 513, 0, 371 | e78e6cf1d5711fab | 7bbb098e02db44cb |
+  | 09_NYC_Dockyard (3785, 6204, 20) | 345, 34, 686 | 60aa7341a33ba8b4 | 259c5261a124b852 |
+  | 02_NYC_BatteryPark (2025, -3396, 263) | 575, 193, 26,796 | a6228e218c1f5a65 | 38dc1b9caa96cfc4 |
+  | 00_Training, AugLight | 42, 30, 3,519 | 49e6754830de9681 | 93ee166691f88c5a |
+
+* *In the page* (`?movingCompose=verify`, Firefox inline, idle 20 s at the spot, `deusExViewer.movingLights().stats.verify` read at the end with
+  `hitch-run.mjs --eval`; every job of the Rust composition compared with the JavaScript bodies' result on the same inputs: the rows of floats as bits, the
+  texels written, and after the atlas update the page bytes of the rectangle; every carried-over reach of a turning spotlight against the reach made in full):
+
+  | Run | jobs compared | floats, counts, atlas bytes differing | reaches compared (differing) |
+  |---|---:|---:|---:|
+  | Mole People spot | 207,903 (104 M texels) | 0 | 0 |
+  | Vandenberg spot | 106,781 | 0 | 455 (0) |
+  | Vandenberg, census views 40 to 59 (the alarm light) | 72,781 | 0 | 493 (0) |
+  | Dockyard spot | 260 | 0 | 0 |
+  | Dockyard, census views 132 to 149 | 57,201 | 0 | 684 (0) |
+  | Battery Park spot | 51,604 (33 M texels) | 0 | 0 |
+
+* `validate-moving-convert` (the atlas conversion for all 2^32 float32 bit patterns, and the integer step the bytes follow), `test/moving-compose.test.mjs`
+  (random light maps, colours, steps from -2^31 to 2^31-1, effects 1 to 3; the core against a copy of `addDirect` and the real `LightAtlas.update`; the word
+  copy against the byte loop) and `validate-moving-lights-incremental` with `MOVING_COMPOSE=verify` (Training with the AugLight, Island and Airfield with seeded
+  perturbations: lights leaving and returning, swapped and repeated entries, mover offsets, probe lights on the Strobe/WateryShimmer, NonIncidence, Flicker/
+  FireWaver and turning spotlight bodies; 240 frames each) (Training 270 frames with the AugLight, Island and Airfield 240 each: 15,408, 160,116 and 215,515 jobs verified against the JavaScript bodies and 390 and 406 carried-over reaches against the full reach, no difference; the incremental world equal to the full-mode world, light maps, floats, static copies, moving regions and atlas pages, in 475,795 light-map states, and to the gated world's in every drawn one).
+* Validators, with the new composition on: `validate-dynamic-lighting` and `validate-normal-moving-lighting` (the JavaScript bodies against the original Render.dll under Unicorn), `validate-auglight-lighting` (the AugLight's light maps in Play against it), `validate-moving-light-effects`, `validate-dynamic-light-mover`, `validate-mover-light-maps` and `validate-light-spatial` (the native ones with `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python`), and in the browser `validate-moving-light-effects-play` (Chromium, worker mode: the Island's BarrelFire3 light maps equal the oracle's for each frame) and `validate-mover-light-maps-play` pass. `validate-light-atlas-upload --map 03_NYC_MolePeople --place <the Mole People spot> --packed` (new options): after 240 flushes with the player at the fires the GPU array layers equal the CPU pages in Chromium and in Firefox, with 39,381 and 39,428 rectangle uploads taken from the core's packed texels, no page texture uploaded and no whole-array upload owed. `npm test`: 968 tests, 964 pass, 4 skipped, 0 fail.
+* Sim digests (`bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback`) unchanged: Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84, 03_NYC_Airfield 46ed0d32ae5b56af, 06_HongKong_WanChai_Market 80d27b37e0944d88, 15_Area51_Bunker 764a7bdffd2ebe59, 09_NYC_Dockyard e53f348673f1247b.
+
+**A/B, Firefox inline, interleaved, three pairs a case, the export of master bc32e5a9 (its own wasm) against this branch** (`.work/ml/ab.mjs` runs one
+`hitch-run.mjs` session per arm in turn, the order reversed in every second pair, each under the heavy lock; 20 s idle sessions at a spot, or the census'
+list of views cut around the hot ones; the frames from 5 s after the map; the slowest tenth is the mean of the slowest 10% of frames; the `p.` columns are
+means over the frames counted; every pair has the same order unless said):
+
+| Case | arm | page mean | slowest tenth | p50 / p95 | `p.lightAnimation` | `p.lightUpload` |
+|---|---|---:|---:|---|---:|---:|
+| Mole People (2469, -179, 23) yaw 32768, idle | master | 17.33 | 21.41 | 17.0 / 20.0 | 3.99 | 0.91 |
+| | this branch | 14.10 | 18.10 | 14.0 / 17.0 | 1.93 | 0.51 |
+| Vandenberg Tunnels, the alarm light's eight census views (#48 to #55), within a run of views #40 to #59 | master | 19.13 | 27.67 | 18.7 / 25.7 | 5.14 | 0.12 |
+| | this branch | 14.76 | 19.75 | 14.7 / 19.3 | 1.40 | 0.07 |
+| the same run, all twenty views (frames from 5 s) | master | 15.24 | 25.35 | 14.3 / 23.3 | 2.08 | 0.06 |
+| | this branch | 14.18 | 21.42 | 13.3 / 20.3 | 0.74 | 0.04 |
+| Dockyard, census views #140 to #144 ((3785, 6204, 20) and (2623, 6205, 20)), within views #132 to #149 | master | 27.52 | 43.49 | 26.3 / 42.3 | 2.88 | 0.11 |
+| | this branch | 24.23 | 40.70 | 22.7 / 39.0 | 1.14 | 0.08 |
+| the same run, all eighteen views (frames from 5 s) | master | 23.54 | 39.82 | 22.0 / 37.7 | 1.60 | 0.07 |
+| | this branch | 21.53 | 35.52 | 20.3 / 33.3 | 0.74 | 0.06 |
+| Dockyard (2623, 6205, 20) yaw 0, idle | master | 27.08 | 37.10 | 26.3 / 34.3 | 0.46 | 0.05 |
+| | this branch | 27.95 | 38.19 | 27.3 / 36.0 | 0.48 | 0.04 |
+| Battery Park (2025, -3396, 263) yaw 32768, idle | master | 19.42 | 22.39 | 19.3 / 22.0 | 2.01 | 0.49 |
+| | this branch | 18.20 | 20.95 | 18.0 / 21.0 | 1.50 | 0.43 |
+| Chromium (sim worker), Mole People, two pairs | master | 5.49 | 6.66 | 5.5 / 6.4 | 2.81 | 0.44 |
+| | this branch | 4.45 | 5.35 | 4.4 / 5.1 | 1.97 | 0.23 |
+
+Ship bar (0.3 ms off the page mean, or 0.5 ms off the slowest tenth): passed at the Mole People (3.2 and 3.3 ms off), the Vandenberg views (4.4 and 7.9), the
+Dockyard views (3.3 and 2.8; those views are tick-led and noisy, `p.lightAnimation` 2.88 -> 1.14 is the figure to read), Battery Park (1.2 and 1.4) and in
+Chromium (1.0 and 1.3). **Not passed, and not a regression: the Dockyard spot at rest**, where the phase is 0.46 ms in both trees (page means 27.08 and 27.95
+are the sessions' tick, 14.4 to 15.0 ms, not the phase); the census' 3.5 ms there is the busy state of the hot views above. The page mean falls by more than
+the two light phases together at the Mole People (3.2 ms against 2.5): the tick is 0.5 ms lower in the branch's sessions, which I attribute to less garbage
+(the batch's arrays and the per-rectangle views are gone) and did not isolate.
+
+
+**What is left.**
+* A light that turns still has its spatial bytes made again every frame in JavaScript: the spot body (`spotLightSpatial`, x87 at 24 bits) is 0.3 to 0.5 ms
+  in the views above, and `updateIncremental`'s own loops over the 1,700 light maps it dirties 0.36 ms. The spot and normal bodies and `movingLightRect` are the
+  next Rust port (they have oracles: validate-dynamic-lighting, validate-normal-moving-lighting); a light that *moves* (the AugLight's beams, a drone) still pays the
+  whole reach, 3 ms for 1,700 light maps.
+* At the Mole People: the Rust call is 0.67 ms (83,000 texels a frame, 8 ns a texel in Gecko), the word copy into the page 0.31 ms, `copyBand` 0.11 ms. Moving the
+  atlas pages into the kernel's memory would remove the copy (views over a growing memory need re-deriving, so it was not done); a persistent job list per light map
+  would remove most of the per-rectangle JavaScript.
+* Battery Park's `p.lightAnimation` is mostly the class 1 merge (`lighting.animate`) and its atlas writes, not moving lights (1.5 ms left of 2.0).
+* The Dockyard spot (2623, 6205, 20) at rest costs 0.46 ms in both trees: the census' 3.5 ms there is the busy state, and only the census' own list reproduces it.
+* The Mac and headed runs are not measured. Master's `outdated` recomposes a light map whose contributions are all dead each frame; here it is not
+  (`record.movingFrame` is not refreshed for those, a validation field only).
 
 ## How each step is measured
 
