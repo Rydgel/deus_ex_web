@@ -13,7 +13,7 @@ const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 const wordWrites = () => LITTLE_ENDIAN && ((typeof process !== 'undefined' && process.env?.MOVING_COMPOSE) || globalThis.DEUS_EX_MOVING_COMPOSE) !== 'js';
 export class LightAtlas {
   constructor(size = 1024, { words = wordWrites() } = {}) {
-    this.wordWrites = words;
+    this.wordWrites = words; this.packedUploads = 0;
     this.size = size; this.pages = []; this.tiles = new WeakMap();
     this.arrayUniform = { value: null }; this.arrayUploaded = false; this.scratch = new Uint8Array(0); this.addPage();
   }
@@ -185,8 +185,9 @@ export class LightAtlas {
       for (const rect of rects) {
         const [x, y, width, height] = rect;
         // (The packed texels of a deferred rectangle, while they are intact and their memory has not been detached: writePacked.)
-        const packed = rect.length > 4 && rect[6].generation === rect[7] && rect[4].buffer.byteLength > 0
-          ? new Uint8Array(rect[4].buffer, rect[4].byteOffset + rect[5] * 4, width * height * 4) : this.rectangle(page.pixels, x, y, width, height);
+        const direct = rect.length > 4 && rect[6].generation === rect[7] && rect[4].buffer.byteLength > 0;
+        if (direct) this.packedUploads++;
+        const packed = direct ? new Uint8Array(rect[4].buffer, rect[4].byteOffset + rect[5] * 4, width * height * 4) : this.rectangle(page.pixels, x, y, width, height);
         gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, packed);
       }
     }
