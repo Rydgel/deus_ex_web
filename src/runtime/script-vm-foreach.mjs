@@ -14,7 +14,7 @@
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {readCell} from './script-object-image.mjs';
 import {copyValue} from './script-values.mjs';
-import {outStructMode, foreachStartMode} from './script-vm-lower.mjs';
+import {outStructMode, foreachStartMode, structArraysMode} from './script-vm-lower.mjs';
 import {cycleScanMode, createCycleActorsIterator} from './script-iterators.mjs';
 
 const f32 = new DataView(new ArrayBuffer(4));
@@ -30,8 +30,9 @@ export class ForeachHost {
   attach(x) {
     this.at = x.vm_features_ptr();
     const view = this.vm.arena.view;
-    view.setUint32(this.at, outStructMode() === 'verify' ? 1 : 0, true);
+    view.setUint32(this.at, outStructMode() === 'verify' || structArraysMode() === 'verify' ? 1 : 0, true);
     view.setUint32(this.at + 4, foreachStartMode() === 'verify' ? 1 : 0, true);
+    view.setUint32(this.at + 8, structArraysMode() === 'verify' ? 1 : 0, true);
   }
   /** Whether the lowering may emit the Rust foreach: not the JavaScript reference (FOREACH_START=js, CYCLE_SCAN=js). */
   get ready() { return foreachStartMode() !== 'js' && cycleScanMode() !== 'js'; }
@@ -83,7 +84,8 @@ export class ForeachHost {
     const view = vm.arena.view, value = readCell(srcCell, view, [], from - srcCell.offset);
     const expected = copyValue(dstField, copyValue(srcField, value));
     for (const member of info.members) {
-      const want = expected[member.key], at = to + member.offset;
+      // (a leaf of a nested struct, fixed array or vector: the steps from the struct to it, as flatStructMembers lists them)
+      const want = member.path ? member.path.reduce((value, step) => value[step], expected) : expected[member.key], at = to + member.offset;
       let got, ok;
       switch (member.kind) {
         // the stored bits of a float (a NaN's included), the masked bit of a bool, the handle of an object

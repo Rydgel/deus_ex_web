@@ -56,10 +56,12 @@ const K = {
   STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
   // the bunker bundle (natives.rs player_pawn, interp.rs call, iter.rs)
   S_FOREACH_CYCLE: 10, PLAYER_PAWN: 207, CALL_OUT: 208,
+  // STRUCT_ARRAYS (interp.rs)
+  LOCAL_ELEM_VECTOR: 209, SET_LOCAL_ELEM: 210,
 };
 const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, RETURN_ITERATOR: 8, OUT_STRUCT: 9, FOREACH: 10};
 const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
-const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5, STRUCT: 6};
+const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5, STRUCT: 6, VECTOR: 7, ROTATOR: 8, STRUCT_IN: 9};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
 const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
 // The handle class table (R2b-5): a released handle; a row's unreadable
@@ -1640,9 +1642,9 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
   reset();
   {
     const F = defineFn([S.ret(R.VOID)]);
-    const error = vmError(() => run([S.expr(call(site(F), R.VOID, [arg(9, 0, 0)])), S.ret(R.VOID)]));
+    const error = vmError(() => run([S.expr(call(site(F), R.VOID, [arg(31, 0, 0)])), S.ret(R.VOID)]));
     same(error.code, ERR.KIND, 'bad parameter kind');
-    same(error.node, 9, 'bad parameter kind node');
+    same(error.node, 31, 'bad parameter kind node');
     reset();
     const bad = vmError(() => run([S.expr(call(site(null, () => 0), 7)), S.ret(R.VOID)]));
     same(bad.code, ERR.KIND, 'bad call result kind');
@@ -3824,6 +3826,159 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   const valuedCall = w(K.CALL_OUT, site(valued), R.INT, SIG, 1, structArg(0, 0).length, 1, [0, SRC, 0], structArg(0, 0));
   same(value(R.INT, w(K.INT_ADD, valuedCall, E.int(1))), 42, 'a CALL_OUT as a value');
   same(read(LOCALS + SRC).int, 77, 'a CALL_OUT as a value copies back');
+
+  // A struct passed by value (P_STRUCT_IN): copied in like an out one, nothing copied back.
+  for (const v of VALUES.slice(0, 3)) {
+    reset();
+    classTable();
+    if (v.released) wr32(TABLE + 4 * v.released, RELEASED);
+    fill(LOCALS + SRC, v);
+    const byValue = defineFn([S.yield(), S.expr(w(K.SET_LOCAL_INT, 0, E.int(99))), S.ret(R.VOID)],
+      {steps: {0: info => { seen = Array.from(arena.bytes.subarray(info.base, info.base + 24)); return 1; }}});
+    const structIn = [P.STRUCT_IN, 0, 0, MEMBERS.length, ...MEMBERS.flat()];
+    run([S.expr(callOut(site(byValue), [[0, SRC, 0]], [structIn])), S.ret(R.INT, E.int(1))]);
+    const tag = `by value ${JSON.stringify(v)}`;
+    same(word32(seen, 0), v.int >>> 0, `${tag}: int copied in`);
+    same(word32(seen, 16), v.released && v.object === v.released ? 0 : v.object, `${tag}: object copied in (None once released)`);
+    const after = read(LOCALS + SRC);
+    same(after.int, v.int >>> 0, `${tag}: the callee's change is not copied back`);
+    same(after.around, AROUND, `${tag}: padding and neighbours untouched`);
+    same(framesKey(), '-1,0,0', `${tag}: frame stack restored`);
+  }
+  // A vector and a rotator parameter (P_VECTOR, P_ROTATOR): three words each, stored as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs, in
+  // order with the other arguments; a signaling NaN component is stored quieted.
+  {
+    reset();
+    const order = [];
+    [0x7f800001, bits(2), 0x80000000].forEach((word, i) => wr32(LOCALS + 0x90 + 4 * i, word));
+    const vectorNode = node(() => (order.push('v'), [1.5, f(-2.25), 3]));
+    const rotatorNode = node(() => (order.push('r'), [-5, 65535, 1 << 30]));
+    const floatNode = node(() => (order.push('f'), 0.5));
+    const snapshot = defineFn([S.yield(), S.ret(R.VOID)], {size: 80,
+      steps: {0: info => { seen = Array.from(arena.bytes.subarray(info.base, info.base + 48)); return 1; }}});
+    const args = [
+      [P.VECTOR, 4, 0, ...w(K.JS_VECTOR, vectorNode)],
+      [P.FLOAT, 0, 0, ...w(K.JS_FLOAT, floatNode)],
+      [P.ROTATOR, 20, 0, ...w(K.JS_ROTATOR, rotatorNode)],
+      [P.VECTOR, 32, 0, ...w(K.LOCAL_VECTOR, 0x90, node())],
+    ];
+    run([S.expr(w(K.CALL, site(snapshot), R.VOID, SIG, args.length, args.flat().length, args.flat())), S.ret(R.VOID)]);
+    same(order.join(), 'v,f,r', 'vector and rotator arguments evaluate in order');
+    same([4, 8, 12].map(at => word32(seen, at)).join(), [bits(1.5), bits(-2.25), bits(3)].join(), 'a vector parameter: three float words');
+    same(word32(seen, 0), bits(0.5), 'a float between them');
+    same([20, 24, 28].map(at => word32(seen, at) | 0).join(), [-5, 65535, 1 << 30].join(), 'a rotator parameter: three int words');
+    same([32, 36, 40].map(at => word32(seen, at)).join(), [0x7fc00001, bits(2), 0x80000000].join(), 'a signaling NaN component is stored quieted');
+    same(framesKey(), '-1,0,0', 'frame stack restored after the vector call');
+  }
+}
+// ---- STRUCT_ARRAYS: array elements of a struct local (interp.rs LOCAL_ELEM_VECTOR, SET_LOCAL_ELEM) -------------------------------
+// compileAssign's generic path for `a[i] = V` and `a[i].m = V` (the reference of the element, then the value, then the codec copy stored)
+// and compileEv 0x1a / 0x36 for the vector read: the index first with SELF; an index outside [0, dim) runs the whole node in JavaScript.
+{
+  const ARR = 0x80, STRIDE = 24, DIM = 4, SPAN = DIM * STRIDE;
+  const FEATURES_AT = x.vm_features_ptr();
+  const fillArray = () => arena.bytes.fill(0xee, LOCALS + ARR - 4, LOCALS + ARR + SPAN + 4);
+  const snapshot = () => Array.from(arena.bytes.subarray(LOCALS + ARR - 4, LOCALS + ARR + SPAN + 4));
+  // [name, sub kind, member offset, width, value expression, expected word writes (offset within the element, value)]
+  const STORES = [
+    ['int', 1, 0, [], () => E.int(-77), [[0, -77 >>> 0]], CK.INT, -77],
+    ['byte', 2, 16, [], () => E.int(0x1ff), [[16, 0xff]], CK.INT, 0xff],
+    ['float', 3, 4, [], () => E.float(bits(1.5)), [[4, bits(1.5)]], CK.FLOAT, 1.5],
+    ['float undefined', 3, 4, [], () => w(K.JS_FLOAT, node(() => undefined)), [[4, 0]], CK.FLOAT, 0],
+    ['object', 4, 20, [], () => w(K.LOCAL_OBJECT, 44), [[20, OTHER_H]], CK.OBJECT, OTHER_H],
+    ['vector', 5, 8, [], () => w(K.LIT_VECTOR, bits(1), bits(2.5), bits(-3)), [[8, bits(1)], [12, bits(2.5)], [16, bits(-3)]], CK.VECTOR, null],
+  ];
+  const INDICES = [0, 1, DIM - 1, -1, DIM, 0x7fffffff, -0x80000000];
+  for (const [name, sub, member, , makeValue, writes, ckKind, ckValue] of STORES) {
+    INDICES.forEach((index, i) => {
+      reset();
+      fillArray();
+      wr32(LOCALS + 44, OTHER_H);
+      wr32(LOCALS + 0x70, index);
+      const before = snapshot();
+      const letNode = node(r => (calls.push({imp: 'let-host', receiver: r}), undefined));
+      const checkNode = node();
+      const inRange = index >= 0 && index < DIM;
+      const indexWords = i % 2 ? E.int(index) : w(K.LOCAL_INT, 0x70);
+      const value = makeValue();
+      run([S.expr(w(K.SET_LOCAL_ELEM, sub, ARR + member, STRIDE, DIM, letNode, checkNode, value.length, indexWords, value)), S.ret(R.VOID)]);
+      const after = snapshot();
+      const tag = `element store ${name} [${index}]`;
+      if (inRange) {
+        const expected = before.slice();
+        for (const [offset, word] of writes) {
+          const at = 4 + index * STRIDE + offset;
+          for (let k = 0; k < (name === 'byte' ? 1 : 4); k++) expected[at + k] = (word >>> (8 * k)) & 255;
+        }
+        same(after.join(), expected.join(), `${tag}: only the member's bytes change`);
+        same(calls.filter(c => c.imp === 'let-host').length, 0, `${tag}: no JavaScript`);
+      } else {
+        same(after.join(), before.join(), `${tag}: nothing is stored`);
+        same(calls.filter(c => c.imp === 'let-host').length, 1, `${tag}: the Let runs in JavaScript once`);
+        same(calls.find(c => c.imp === 'let-host').receiver, SELF_H, `${tag}: on the receiver`);
+      }
+      same(calls.filter(c => c.imp === 'check').length, 0, `${tag}: no read-back without the verify word`);
+    });
+    // The verify word: the element is read back through the closure of the target (js_check), in range only.
+    for (const index of [2, DIM]) {
+      reset();
+      fillArray();
+      wr32(LOCALS + 44, OTHER_H);
+      wr32(FEATURES_AT + 8, 1);
+      const checkNode = node(), value = makeValue();
+      run([S.expr(w(K.SET_LOCAL_ELEM, sub, ARR + member, STRIDE, DIM, node(() => {}), checkNode, value.length, E.int(index), value)), S.ret(R.VOID)]);
+      wr32(FEATURES_AT + 8, 0);
+      const checks = calls.filter(c => c.imp === 'check');
+      same(checks.length, index < DIM ? 1 : 0, `element store ${name} verify [${index}]: read back once in range`);
+      if (index < DIM) {
+        const check = checks[0];
+        same([check.node, check.receiver, check.kind].join(), [checkNode, SELF_H, ckKind].join(), `element store ${name} verify: node, receiver, kind`);
+        if (ckValue !== null) same(check.value, ckValue, `element store ${name} verify: value`);
+        else {
+          const f64 = new Float64Array(3);
+          f64.set([1, 2.5, -3]);
+          const words = new Uint32Array(f64.buffer);
+          same(check.values.slice(6).join(), [0, 1, 2].map(k => `${words[2 * k + 1].toString(16)}:${words[2 * k].toString(16)}`).join(),
+            'element store vector verify: the three components as float64');
+        }
+      }
+    }
+  }
+  // The index comes before the value, and the element is the index's even when the value changes the local it read.
+  reset();
+  fillArray();
+  const order = [];
+  wr32(LOCALS + 0x70, 1);
+  const indexNode = node(() => { order.push('index'); return 2; });
+  const valueNode = node(() => { order.push('value'); wr32(LOCALS + 0x70, 3); return 9; });
+  run([S.expr(w(K.SET_LOCAL_ELEM, 1, ARR, STRIDE, DIM, node(), node(), 2, w(K.JS_INT, indexNode), w(K.JS_INT, valueNode))), S.ret(R.VOID)]);
+  same(order.join(), 'index,value', 'the index is evaluated before the value');
+  same(rd32(LOCALS + ARR + 2 * STRIDE), 9, 'the element is the first index\'s');
+  // Vector elements (LOCAL_ELEM_VECTOR): three quiet words, or the closure for an index out of range.
+  const patterns = [bits(1.5), 0x7f800001, 0xffc00000];
+  for (const [name, index, i] of [['in range', 1, 0], ['first', 0, 1], ['last', DIM - 1, 2], ['negative', -1, 3], ['beyond', DIM, 4]]) {
+    reset();
+    fillArray();
+    for (let k = 0; k < DIM; k++) [bits(k), patterns[k % 3], bits(-k)].forEach((word, j) => wr32(LOCALS + ARR + k * STRIDE + 8 + 4 * j, word));
+    const n = node(r => (calls.push({imp: 'elem-host', receiver: r}), [0.25, -0.5, 0.75]));
+    run([S.expr(w(K.SET_LOCAL_VECTOR, 0x60, w(K.LOCAL_ELEM_VECTOR, ARR + 8, STRIDE, DIM, n, i % 2 ? E.int(index) : (wr32(LOCALS + 0x74, index), w(K.LOCAL_INT, 0x74))))), S.ret(R.VOID)]);
+    const got = [0x60, 0x64, 0x68].map(at => rd32(LOCALS + at));
+    if (index >= 0 && index < DIM) {
+      same(got.join(), [bits(index), patterns[index % 3] === 0x7f800001 ? 0x7fc00001 : patterns[index % 3], bits(-index)].join(), `vector element ${name}`);
+      same(calls.filter(c => c.imp === 'elem-host').length, 0, `vector element ${name}: no JavaScript`);
+    } else {
+      same(got.join(), [bits(0.25), bits(-0.5), bits(0.75)].join(), `vector element ${name}: the closure's value`);
+      same(calls.find(c => c.imp === 'vector')?.receiver, SELF_H, `vector element ${name}: the node on the receiver`);
+    }
+  }
+  // CHECK reports the vector element read.
+  reset();
+  fillArray();
+  wr32(CHECK_AT, 1);
+  const vectorNode = node();
+  run([S.expr(w(K.SET_LOCAL_VECTOR, 0x60, w(K.LOCAL_ELEM_VECTOR, ARR + 8, STRIDE, DIM, vectorNode, E.int(1)))), S.ret(R.VOID)]);
+  const vectorCheck = calls.find(c => c.imp === 'check');
+  same([vectorCheck?.node, vectorCheck?.kind].join(), [vectorNode, CK.VECTOR].join(), 'vector element check node and kind');
 }
 {
   // The CycleActors foreach (S_FOREACH_CYCLE), against createCycleActorsIterator over the same array.

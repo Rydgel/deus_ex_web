@@ -114,6 +114,17 @@
 //!   (arrayReference's ArrayIndexOutOfBounds warning and clamp), evaluates
 //!   `node` in JavaScript; otherwise the element at `off + index * stride`.
 //!
+//! STRUCT_ARRAYS (docs/firefox-60fps-plan.md "Tick hand-backs"): a struct local's fixed-array member (`projList.List[i].dist`) is a local
+//! array at the struct's offset plus the member's, so the LOCAL_ELEM_* reads above serve it; LOCAL_ELEM_VECTOR 209 `off, stride, dim,
+//! node` then the index reads a vector element or a vector member of an element (three quiet words, or the closure for an index
+//! outside [0, dim)); SET_LOCAL_ELEM 210 `sub, off, stride, dim, node, check, len`, the index, then `len` words of value, stores a
+//! scalar (E_INT, E_BYTE, E_FLOAT, E_OBJECT) or vector (E_VECTOR) element: the index first (compileAssign evaluates the target's
+//! reference before the value), the value, then the element's bytes; an index outside [0, dim) runs the whole Let `node` in
+//! JavaScript with the value unevaluated. `check` is the target's node: under SCRIPT_VM_CHECK or STRUCT_ARRAYS=verify (FEATURES
+//! word 2) the stored element is read back through the closure of that node and compared. P_VECTOR 7 / P_ROTATOR 8 call parameters
+//! store a vector (the three quiet words of `vector()`) or rotator as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs; P_STRUCT_IN 9
+//! is P_STRUCT's copy in with no copy back (a struct passed by value).
+//!
 //! SCRIPT_VM_CHECK (CHECK nonzero): each of the R2b-5 reads above that Rust
 //! completes calls js_check with its value, and the host compares it with
 //! what the closure computes (castObject on the evaluated value for a cast).
@@ -365,6 +376,16 @@ const IN_STASIS: u32 = 205;
 const PLAYER_PAWN: u32 = 207;
 // A script call with struct out arguments (iter.rs).
 const CALL_OUT: u32 = 208;
+// STRUCT_ARRAYS: a vector element of a local fixed array (or of a struct local's fixed-array member), and a store to a scalar or
+// vector element of one.
+const LOCAL_ELEM_VECTOR: u32 = 209;
+const SET_LOCAL_ELEM: u32 = 210;
+// SET_LOCAL_ELEM's value kinds.
+const E_INT: u32 = 1;
+const E_BYTE: u32 = 2;
+const E_FLOAT: u32 = 3;
+const E_OBJECT: u32 = 4;
+const E_VECTOR: u32 = 5;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -431,6 +452,10 @@ pub(crate) const P_FLOAT: u32 = 3;
 const P_OBJECT: u32 = 4;
 pub(crate) const P_BYTE: u32 = 5;
 pub(crate) const P_STRUCT: u32 = 6;
+// STRUCT_ARRAYS: a vector or rotator parameter, and a struct passed by value (copied in like P_STRUCT, not copied back).
+const P_VECTOR: u32 = 7;
+const P_ROTATOR: u32 = 8;
+pub(crate) const P_STRUCT_IN: u32 = 9;
 
 /// Core's runaway-loop limit (script-vm.mjs SCRIPT_RUNAWAY_LIMIT).
 const RUNAWAY_LIMIT: u32 = 10_000_000;
@@ -1470,6 +1495,58 @@ impl Run {
                 let v = self.rotator(SELF);
                 store3(addr, rotator_words(v));
             }
+            // `a[i] = V` / `a[i].m = V` on a local fixed array (or a struct local's array member): `kind, off, stride, dim, node, check,
+            // len` (`off` includes the member's offset; `node` the whole Let, `check` the target), then the index, then `len` words
+            // of value. compileAssign's generic path: the target's reference first (arrayReference: the index, evaluated with SELF), then
+            // the value, then the store of its codec copy. An index outside [0, dim) (arrayReference's warning and clamp) runs the Let
+            // in JavaScript, the value unevaluated here. The store writes the element's bytes only; JavaScript's member reference
+            // writes the whole struct back (differing in another member's signaling NaN, or an object handle already released).
+            SET_LOCAL_ELEM => {
+                let (sub, offset, stride, dim) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                let (node, check, length) = (self.op(5), self.op(6), self.op(7) as usize);
+                self.skip(8);
+                let index = self.int(SELF) as u32;
+                if index >= dim {
+                    self.skip(length);
+                    self.host_eval(node, SELF);
+                    return;
+                }
+                let addr = self.locals.wrapping_add(offset).wrapping_add(index.wrapping_mul(stride));
+                match sub {
+                    E_INT => {
+                        let v = self.int(SELF);
+                        store32(addr, v as u32);
+                    }
+                    E_BYTE => {
+                        let v = self.int(SELF);
+                        store8(addr, v as u8);
+                    }
+                    E_FLOAT => {
+                        let v = self.float(SELF);
+                        store32(addr, float_bits(v));
+                    }
+                    E_OBJECT => {
+                        let v = self.object(SELF);
+                        store32(addr, pointer_word(v));
+                    }
+                    E_VECTOR => {
+                        let v = self.vector(SELF);
+                        store3(addr, v);
+                    }
+                    _ => self.fail(ERR_KIND, sub),
+                }
+                // CHECK / STRUCT_ARRAYS=verify: the element read back through the target's closure
+                if unsafe { CHECK } != 0 || crate::iter::feature(2) {
+                    match sub {
+                        E_INT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_INT, load32(addr) as i32 as f64) },
+                        E_BYTE => unsafe { js_check(self.frame, check, self.handle(SELF), CK_INT, load8(addr) as f64) },
+                        E_FLOAT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_FLOAT, float_of(load32(addr))) },
+                        E_OBJECT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_OBJECT, live(load32(addr)) as f64) },
+                        _ => self.report(check, SELF, CK_VECTOR, [0.0; 3], [0.0; 3], widen3(load_vector(addr))),
+                    }
+                    self.self_fresh = false;
+                }
+            }
             VCOMPOUND_LOCAL => {
                 let (op, node) = (self.op(1), self.op(3));
                 let addr = self.locals.wrapping_add(self.op(2));
@@ -1592,7 +1669,18 @@ impl Run {
             match pkind {
                 P_SKIP => {}
                 // A struct out parameter: copied in from its source now, back out after the callee (iter.rs).
-                P_STRUCT => self.out_struct_in(&sources, mask, addr, node, &mut outs),
+                P_STRUCT => self.out_struct_in(&sources, mask, addr, node, &mut outs, true),
+                // A struct by value: copied in now, nothing copied back.
+                P_STRUCT_IN => self.out_struct_in(&sources, mask, addr, node, &mut outs, false),
+                // A vector or rotator argument: stored as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs.
+                P_VECTOR => {
+                    let v = self.vector(SELF);
+                    store3(addr, v);
+                }
+                P_ROTATOR => {
+                    let v = self.rotator(SELF);
+                    store3(addr, rotator_words(v));
+                }
                 P_INT => {
                     let v = self.int(SELF);
                     store32(addr, v as u32);
@@ -1857,6 +1945,20 @@ impl Run {
                     }
                     None => self.host_vector(node, r),
                 }
+            }
+            // A vector element of a local fixed array, or a vector member of an element of a struct local's array (`off` includes
+            // the member's offset): compileEv 0x1a / 0x36 as LOCAL_ELEM_* read a scalar one. The index first, with SELF; an index
+            // outside [0, dim) takes the closure (arrayReference's warning and clamp).
+            LOCAL_ELEM_VECTOR => {
+                let (offset, stride, dim, node) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                self.skip(5);
+                let index = self.int(SELF) as u32;
+                if index >= dim {
+                    return self.host_vector(node, r);
+                }
+                let v = load_vector(self.locals.wrapping_add(offset).wrapping_add(index.wrapping_mul(stride)));
+                self.verify3(node, r, CK_VECTOR, widen3(v));
+                v
             }
             JS_VECTOR => {
                 let node = self.op(1);
