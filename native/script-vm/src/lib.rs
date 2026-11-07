@@ -12,6 +12,7 @@
 mod aievent;
 mod callers;
 mod bounds;
+mod cleanup;
 mod hash;
 mod move_actor;
 mod move_pawn;

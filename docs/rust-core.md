@@ -1023,6 +1023,13 @@ Each is a lowered kind with the JavaScript path as its reference and `js` / `ver
   out parameters back in reverse, also when a probe-masked callee did not run. `callSignature` (script-vm-lower.mjs) adds the
   struct parameters to `functionSignature`'s shapes; a source the image cannot address leaves the whole call to JavaScript before
   anything is pushed.
+* `STRUCT_ARRAYS=rust|js|verify` (interp.rs `LOCAL_ELEM_VECTOR` 209, `SET_LOCAL_ELEM` 210, `P_VECTOR` 7, `P_ROTATOR` 8, `P_STRUCT_IN` 9; the
+  lowering's `elementArray`, `elementStore`, `localMemberVectorCell`; script-object-image.mjs `flatStructMembers`): a struct local's fixed-array
+  member is a local array at the struct's offset plus the member's; vector elements and members, stores to array elements, vector and
+  rotator call parameters, structs passed by value, and struct out arguments copied by their flattened leaves (docs/firefox-60fps-plan.md
+  "Tick hand-backs"). `SET_ROTATION` 211 (`SET_ROTATION=rust|js|verify`): the SetRotation statement over the Actor's static, movable,
+  rotation, brush and standing-count fields in the image. cleanup.rs (`CLEANUP_SCAN=rust|js|verify`, script-vm-cleanup.mjs):
+  `vm_cleanup_scan` over an actor's pointer sites and the pass's verdict table, with the NEED / CLEAR protocol to the host.
 * `S_FOREACH_CYCLE` 10 and the run's `Iter` (iter.rs, `FOREACH_START=rust|js|verify`): the `CycleActors(Class'X', out Actor, out int
   Index)` start of a callee run, its IteratorNext and IteratorPop, over render.rs `cycle_scan_step` and the actor list `js_cycle_list`
   returns (`listFor`). Lowered for a body with one foreach, in function (not state) code, and no Return left in JavaScript; a start

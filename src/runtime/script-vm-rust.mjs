@@ -30,6 +30,7 @@ import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, callSignature, classRecordId, nameId, foldedNameId, nameSpelling, globalCallMode} from './script-vm-lower.mjs';
 import {PlayerPawnHost, playerPawnMode} from './script-vm-player-pawn.mjs';
 import {ForeachHost} from './script-vm-foreach.mjs';
+import {CleanupHost} from './script-vm-cleanup.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {AiEventHost} from './script-vm-aievent.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
@@ -327,6 +328,8 @@ export class RustScriptVm {
     this.pawnCell = new PlayerPawnHost(this);
     // The CycleActors foreach and struct out arguments in Rust (iter.rs).
     this.foreach = new ForeachHost(this);
+    // CleanupDestroyed's pointer scan (cleanup.rs).
+    this.cleanup = new CleanupHost(this);
     // The AI event manager (aievent.rs, docs/ai-event-manager.md).
     this.aiEvents = new AiEventHost(this);
     // October 1: the locomotion polls' table (loco.rs).
@@ -397,6 +400,7 @@ export class RustScriptVm {
     this.perception.attach(x);
     this.pawnCell.attach(x);
     this.foreach.attach(x);
+    this.cleanup.attach(x);
     this.aiEvents.attach(x);
     this.loco.attach(x);
     this.render.attach(x);
@@ -800,6 +804,11 @@ export class RustScriptVm {
       js_out_struct_check(frame, node, index, dir, from, to) {
         enter();
         try { vm.foreach.outCheck(frame, node, index, dir, from, to); } finally { leave(); }
+      },
+      // SET_ROTATION=verify: the decision Rust made for a SetRotation statement, decided again from readNamed (script-vm-foreach.mjs).
+      js_set_rotation_check(frame, node, handle, decision, pitch, yaw, roll) {
+        enter();
+        try { vm.foreach.rotationCheck(frame, node, handle, decision, pitch, yaw, roll); } finally { leave(); }
       },
       // GetPlayerPawn's walk for the node's receiver, the cell filled (script-vm-player-pawn.mjs).
       js_player_pawn(frame, node, handle) {

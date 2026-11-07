@@ -1789,6 +1789,170 @@ second, three pairs a spot (the view faces the fog surfaces for part of each tur
   0x200000 reserve).
 * Not measured: the Mac, headed runs. The sim worker's Chromium path pays the same fog pass on the page (below).
 
+### Tick hand-backs (2026-11-07)
+
+The task: after the Dockyard, combat and actors-layer merges the simulation tick is still the largest part of Firefox's frame at the
+Dockyard spot (2623, 6205, 20) yaw 32768 (page mean about 31.9 ms, tick about 15.7) and in the Metro and Vandenberg fights; what is left
+is where the Rust VM hands control back to JavaScript. Each candidate had been measured below the ship bar alone; this is the bundle.
+Master 61cc9524, headless Linux (Firefox 155 inline, Chromium worker mode, 1440x960, god mode, idle at the spot, 25 s sessions measured
+from 5 s after the map); the Mac is not measured. Bar: 0.3 ms in the Firefox page mean or 0.5 ms in its slowest tenth.
+
+**Reproduction.**
+* Dockyard at load: `hitch-run.mjs --browser firefox --map 09_NYC_Dockyard --mode idle --god --seconds 25 --place '{"location":[2623,6205,20],"rotation":[0,32768,0]}' --profile FILE`,
+  read with `gecko-slow-ticks.mjs`, `gecko-under.mjs` (`--anchor '^js_tick_resume'`, `'^cleanupLevelDestroyed'`, `--above` for callers).
+* The same place in Node: a one-spot places file and `PLACES=FILE PER=100000 FROM=0 TO=1 bench-sim --map 09_NYC_Dockyard --warm 100 --ticks 900
+  --render-feedback --idle --seed 1 --scenario scripts/scenarios/places-replay.mjs` (digest `eba45015fec39e3f`), with
+  `scripts/script-vm-fallback-census.mjs` as the scenario (`BASE=scripts/scenarios/places-replay.mjs`, `SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1
+  SCRIPT_VM_STATS_DETAIL=1`) for the hand-back census, `--cpu-profile` for a V8 profile. The Metro fight is the Combat tick's command.
+
+**Ranking on master (Firefox, one Gecko profile, 691 drawn frames; ms a frame by the Rust core's import, rest 622 frames / slowest tenth
+69 frames; the tick is 16.9 ms in the rest, 32.0 in the tenth, 15.2 and 28.3 sampled).**
+
+| Import | rest | slow | note |
+|---|---:|---:|---|
+| `js_eval` | 3.83 | 5.36 | flat in the rest (spawn, AttachDecal, SetRotation, Destroy, PlaySound, small natives) |
+| in Wasm | 1.73 | 1.87 | |
+| JavaScript, no Wasm under it | 1.63 | 4.38 | the slow tenth's `cleanupDestroyed` is 2.90 against 0.17 |
+| `js_tick_resume` | 1.38 | 6.68 | **+5.3: one call, `ScriptedPawn.GetProjectileList` (`js_int` 4.57 against 0.19)** |
+| `js_move_riders` | 0.62 | 1.09 | its leaf `nextCandidate` 0.36 / 0.62 |
+| `js_move_encroach` | 0.52 | 1.41 | the hash query; 0.72 of the tenth's extra is a major GC slice landing in it |
+| `js_walk_prelude`, `js_tick_state`, `js_tick_destroy` | 0.49, 0.38, 0.38 | 0.55, 1.09, 0.52 | |
+| `js_fall_bounce` | 0.30 | 0.49 | the gas's HitWall event |
+
+* **The slowest tenth is two things.** (1) `GetProjectileList` (the pawns' dodge list): the poison gas is a `DeusExProjectile`, so the
+  `RadiusActors` loop in `GetProjectileList` finds a dozen dangerous projectiles and calls `AddProjectileToList(out NearbyProjectileList
+  projList, ...)` for each. Both functions ran in JavaScript's `callFunction`: the callee has an `out` struct parameter (an array of eight
+  structs of an object, a vector and two floats, and a vector: 51 scalar leaves), a vector parameter, and its statements read and wrote
+  `projList.List[i].member`, which the lowering left to the closures (each copied the whole array of structs: `describeEntry`,
+  `copyScalar`, `copyGenericStruct`). Node, census at the same place: the family is 1.24 ms a tick of self time in the slowest tenth and
+  none in the rest, `GetProjectileList` 3.4 ms a call inclusive, `AddProjectileToList` 318 us a call. (2) `CleanupDestroyed`: once 128
+  destroyed actors are pending the original walks every actor of the level and clears each object pointer that names a pending-kill
+  object (9 passes in 900 ticks, 16,936 actor scans, 5 pointers cleared). These are the 25 to 80 ms ticks of the tail: 1% of the frames,
+  2.9 ms of the tenth's average. Its pieces: `cleanupImageSites` 1.34 (the site loop 0.74 self; bound fields' sites read through
+  their bindings 0.4), `release` 0.73 (createLevelCollection.release filtered the whole object registry before and after each release).
+* **The rest frames** are flat (above). Node mean at the spot, self ms a tick: AttachDecal 0.32 (the Rust attach inside), SetRotation
+  0.24, Spawn 0.24, Destroy 0.11, SetLocation (context) 0.10; Firefox: `spawnActor` 1.22 inclusive (0.77 spawns a tick, 1.6 ms each in
+  Firefox against 170 us in Node), `processEvent` 0.60, `checkEncroachment` 0.66, `moveActorRiders` 0.61, `destroyActor` 0.53.
+* Metro fight (spot 54 replayed, Node census): the tenth is 12.6 against 8.2 ms; Spawn 0.49, `FindPathToward` 0.17, `AttachDecal`,
+  the player's tick, small natives; the NearbyProjectile family is 0.15 (the fight has few projectiles near the pawns). Nothing in it is a
+  hand-back family; the three changes below are the Dockyard's and do not move the Metro (below).
+
+**What moved** (three switches, the JavaScript bodies kept as the references).
+1. **Struct arrays in the Rust VM** (`STRUCT_ARRAYS` / `?structArrays=`, `rust` default, `js`, `verify`; script-vm-lower.mjs,
+   script-object-image.mjs `flatStructMembers`, interp.rs `LOCAL_ELEM_VECTOR` 209, `SET_LOCAL_ELEM` 210, `P_VECTOR` 7, `P_ROTATOR` 8,
+   `P_STRUCT_IN` 9, iter.rs). A fixed-array member of a struct local (`projList.List`) is a local array at the struct's offset plus the
+   member's, so the existing element reads serve it (the lowering only had to compose the offsets) and the new kinds add the vector
+   element read, the store to a scalar or vector element (the target's reference first, then the value, then the codec copy of the
+   value into the element's bytes; an index outside the array runs the whole Let in JavaScript with the value unevaluated) and a vector
+   member of a struct local as a local vector (`projList.center = Location`). A call can pass a vector or rotator argument (stored as
+   `SET_LOCAL_VECTOR` stores one) and a struct by value (copied in like an out one, not copied back: `IsLocationDangerous(projList, ...)`),
+   and a struct out argument is copied by its flattened leaves (nested structs, fixed arrays, vector components: 51 leaves for
+   NearbyProjectileList) instead of scalar members only. *Evidence:* every piece is a transcription of the closure for the same node
+   (compileEv 0x1a / 0x36, compileAssign's generic path, callFunction's copies), and the output is the digest of every actor of the level:
+   see Checks. Not the original's bit-for-bit memcpy: a store through the closures rewrites the whole struct through the codecs and a
+   store here writes the member's bytes, which differs only for a signaling NaN in another member or an object handle already
+   released there (reads go through `live`/`identityOfHandle`); the vector codec's NaN canonicalization in a V8 array is not reproduced
+   (the Rust copy is the original's float copy).
+2. **SetRotation statements** (`SET_ROTATION` / `?setRotation=`; interp.rs `SET_ROTATION` 211). A statement `SetRotation(R)` or
+   `X.SetRotation(R)` (native 299) is `setScriptRotation` (docs/script-set-rotation.md, ULevel::MoveActor with a zero Delta) over the five
+   Actor fields in the image: a static or immovable actor and an unchanged rotation are left alone, riders (`StandingCount`, a byte) or a Brush run
+   the native in JavaScript, else the three ints are stored; the context object is evaluated first with SELF. Premises (checked when
+   lowering): the runtime's own `invokeNative` reaches the 299 branch and the level is not an editor level. `=verify` decides every
+   statement again from `readNamed` before storing.
+3. **CleanupDestroyed's pointer scan** (`CLEANUP_SCAN` / `?cleanupScan=`; cleanup.rs, script-vm-cleanup.mjs). The inner loop of
+   `cleanupImageSites` is `vm_cleanup_scan` over the class plan's offsets (copied into the arena once per plan) and a table of the
+   pass's verdicts keyed by handle; the scan stops at a handle with no verdict (the host asks IsValid and IsPendingKill exactly as the
+   loop did at the first site that names the object, and enters the verdict) and at a site that names a pending-kill object (the
+   host clears it through the property reference as before). Every actor has host bindings (Class, Outer, Name, Level), whose sites are
+   read through the binding; they are looked at per actor (one `Map.get` per binding) and read first, before the scan, which passes
+   them: the clears are the same, in another order, and only an error would name another invalid reference first. The release log:
+   `createLevelCollection.release` found the objects a release freed by filtering the registry before and after; `freeObject` now
+   logs them and the call sorts the log by registry index (`=verify` compares the two lists).
+
+**A/B.** The new arm is the defaults, the old arm `structArrays=js&setRotation=js&cleanupScan=js` (the JavaScript references; same commit, same
+inputs). Firefox sessions are pinned to CPUs 4-7 and 12-15 (`hitch-ab.mjs --cpus`, new). The first A/B, of the struct arrays alone with four
+unpinned pairs, was inconclusive and is not used: tick 15.59 new / 15.27 old, page mean 30.58 / 29.90, while the sessions' `p.render`, which
+nothing there touched, ranged from 2.7 to 3.6 ms (another worker's jobs share this host). The A/B below is two sets of six pairs of the
+whole bundle, the arms' order alternating inside a set, from 5 s after the map; ms.
+
+| Firefox inline, Dockyard (12 pairs) | new | old | new - old (pairs) | se | better in |
+|---|---:|---:|---:|---:|---:|
+| tick `p.tick`, mean | 15.75 | 17.03 | -1.28 (median -0.57) | 0.55 | 9 of 12 |
+| tick, slowest tenth | 24.30 | 27.89 | -3.59 (median -3.19) | 1.26 | 10 of 12 |
+| page `animate`, mean | 30.85 | 32.83 | **-1.98** (median -0.71) | 0.96 | 9 of 12 |
+| page `animate`, slowest tenth | 41.69 | 46.41 | **-4.72** (median -4.55) | 1.53 | 10 of 12 |
+| `p.render` (not touched: the drift control) | | | -0.18 | 0.13 | 8 of 12 |
+
+The pairs' page-mean differences (new - old): -4.3 -1.0 +0.2 -0.4 +1.9 -6.9 | +2.8 -3.1 -0.2 -0.1 -5.2 -7.3; the slowest tenth of ticks: -3.8
+-6.5 0.0 -0.8 +2.3 -8.4 | +2.7 -6.3 -2.6 -0.8 -10.1 -8.7. The mean's spread is wide (the old arm has the heavier tail: its sessions with a
+cleanup pass in a slow stretch read 18 to 19.4 ms of tick in four pairs, the new arm's worst is 17.5), so the figure to lean on is the slowest
+tenth (10 pairs of 12) and the median of the mean; the mean's t is -2.1 on 12 pairs.
+The profile-based expectation was smaller (about 1 ms of page mean): one Gecko profile of the new code (not an A/B) reads the slowest tenth
+of ticks at 26.7 ms against 32.0 on master, `js_tick_resume` 2.17 against 6.68 in the tenth, `cleanupLevelDestroyed` 2.2 against 3.0.
+
+| Firefox inline, Metro places run (spots 0 to 60, 4 pairs) | new | old |
+|---|---:|---:|
+| tick mean | 6.70 | 6.72 |
+| tick, slowest tenth | 12.44 | 12.48 |
+| page `animate` mean / slowest tenth | 14.13 / 23.18 | 14.02 / 22.96 |
+
+No effect on the Metro (pair differences of the tick mean -0.12 +0.18 +0.02 -0.16): its places run is mostly quiet spots, and the fight
+spots hold little GetProjectileList work and no cleanup pass (the census above). **Node** (interleaved pairs, order alternating, one lock hold each;
+tick ms of 900 placed ticks / 300 ticks after the replay; the digests of all runs equal):
+
+| Node | new | old | new - old (pairs) |
+|---|---:|---:|---|
+| Dockyard placed, tick mean (5 pairs) | 8.52 | 8.87 | -0.35 (-0.60 -0.41 -0.58 -0.09 -0.08) |
+| Dockyard placed, median | 7.98 | 8.15 | -0.17 |
+| Dockyard placed, slowest tenth | 14.38 | 16.34 | **-1.96** (-2.73 -2.13 -2.33 -1.02 -1.58) |
+| Metro 54 replayed, tick mean (5 pairs) | 8.98 | 9.34 | -0.36 (-0.47 +0.39 -2.33 +0.38 +0.23: one old-arm outlier; the medians of the ticks are 8.67 / 8.68) |
+| Vandenberg 98 replayed, tick mean (3 pairs) | 8.62 | 8.97 | -0.35 (-1.29 -0.04 +0.28) |
+
+**Result: meets the bar at the Dockyard, shipped on this branch** (page mean -1.98 ms against 0.3, slowest tenth -4.7 ms against 0.5; Node
+-0.35 ms and -1.96 ms in the tick's slowest tenth). The Metro fight does not move. The page mean at the Dockyard stays near 31 ms: this is a 6%
+step, not the goal.
+
+**Checks.**
+* `bench-sim --map NAME --warm 60 --ticks 300 --render-feedback`: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield
+  `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, Dockyard `e53f348673f1247b` unchanged (also at
+  `STRUCT_ARRAYS=verify` for the Island, bunker and Wan Chai). Combat replays: Metro 54 replayed `09e2d44972cca30a`, freshly placed
+  `a6011ede7236c1d2`; Vandenberg 98 replayed `ed184bd3eb533bc1`, freshly placed `1db79eb398240a97`: unchanged (the replays also at
+  `STRUCT_ARRAYS=verify`). The 900-tick placed Dockyard run: `eba45015fec39e3f` for the default, each switch at `js`, and all three at `verify`,
+  and, on the struct arrays change alone, with `SCRIPT_VM_CHECK=1` (1,004,454 reads compared with the closures, 80,697 of them array elements).
+* What the verify runs compared at the Dockyard (counters of the hosts): 5,583 stored elements read back through the closure of the
+  target (1,057 vector elements), 13,014 struct copies compared leaf by leaf with the codec copy, 30,013 SetRotation statements
+  decided again from `readNamed` (all agree), 16,936 actors scanned against the JavaScript loop (27,301 scans, 10,360 verdicts
+  decided by the host, 46,059 bound sites read first, 5 pointers cleared, the same sites in every actor), no tick error.
+* `validate-script-vm-interp` (159 kinds, 542,434 checks; new cases: SET_LOCAL_ELEM for five value kinds and seven indices, in and out of
+  range, order of the index and the value, the verify read-back; LOCAL_ELEM_VECTOR with a signaling NaN component; P_VECTOR/P_ROTATOR in
+  order with other arguments; P_STRUCT_IN; SET_ROTATION in all its branches on SELF and on a context, the unaddressable field, None and
+  the order; `vm_cleanup_scan`/`vm_cleanup_insert` against a model over random tables with probe collisions, skipped sites and clears),
+  the validators of the cleanup, destroy, loadmap, plant-push, spawn, play-hud, trigger, decal and rotation families (the rotation
+  family's `validate-native-set-rotation-riders` needs `reports/movement/mover-move/scene.json`, an ignored report this worktree does not
+  have: not a result), `test/script-cleanup.test.mjs` (the dry run and the shared verdict), `test/native-registry.test.mjs` (299 is in the
+  Rust-lowered list; a local named `call` with `.index` in the lowering is a dispatcher to that test). Chromium worker mode and Firefox
+  inline with the three switches at `verify` (`hitch-run.mjs --probe-switches`: the worker lists all three): 2,009 and 994 drawn frames, no
+  page error. `npm test`: 966 tests, 962 passed, 4 skipped, 0 failed. The Rust build is warning-free.
+
+**Tried and not shipped, and what is left.**
+* **The mover rider scan in Rust** (`nextCandidate`, 0.41 ms a rest frame in Firefox, 0.13 in Node): not built. Node counts 40,938 calls
+  and 9.56 million slot visits in 900 ticks (45 calls and 10,600 slots a tick, 12 ns a slot in V8): the cost is the number of visits,
+  not a slow loop, and a Rust loop needs the level's current actor handles, which the mirror syncs with an O(N) pass after every spawn,
+  destroy and compaction (the scans follow those): the pass it would remove is the pass it would need. The exact cut is a rider list kept
+  as identities across CompactActors' stable shifts, not a faster loop; it changes `baseEpoch`'s contract and is not attempted.
+* **`js_fall_bounce`** (0.30 ms a rest frame): the HitWall event's JavaScript hop. `wasm HitWall` is 2.5 calls a tick at 61 us each
+  inclusive; the body is content (spawn, AttachDecal), the hop is not separable in the profile. This step adds the CALL half of an event
+  with a vector argument (P_VECTOR); dispatch.rs's event cache still stores one scalar parameter.
+* **SetRotation** moved 12 of 14 local-rotator statements a tick; the other two (riders or a Brush: a Mover's) and `SetRotation(
+  Rotator(Velocity))` (the gas, 7.7 a tick: the cast's x87 atan2 is not a Rust node) stay in JavaScript; the Node saving is 0.04 ms a tick.
+* **Encroachment** (`js_move_encroach` 0.52 ms rest, 1.41 in the tenth, 0.72 of the tenth's extra a major GC slice landing there): the
+  hash query's blocking test needs the candidates' flags; not built.
+* **Spawns**: `spawnActor` is 1.22 ms of the rest frame (0.77 spawns a tick, 1.6 ms each in Firefox against 170 us in Node), the largest
+  JavaScript item left at the Dockyard; its pieces are the construction (`initProperties`, `Object.defineProperties`), the six script
+  events and the invalidation, none over 0.13 ms in Node. The next cut is a Rust owner for the spawned instance.
+* Bound sites in the cleanup pass (three a actor, 46,059 in the run) are still read through their bindings in JavaScript; they are the
+  cleanup scan's remaining cost, about half of it.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

@@ -11,6 +11,7 @@
  * and the reflected references UStruct::SerializeBin visits
  * (ScriptRuntime.serializeReferences).
  */
+import { cleanupScanMode } from './script-vm-cleanup.mjs';
 import { collectLoadMapGarbage } from './script-loadmap-gc.mjs';
 import { destructScriptObject, freeScriptObject } from './script-object-release.mjs';
 import { releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
@@ -73,6 +74,8 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     runtime.serializeReferences(identity, archive(visit, visitName));
   }
 
+  // The objects freeObject released, in order (release() below reads what a call released from the end of this log).
+  const releasedLog = [];
   const release = {
     gates: { [0x102a2644]: 1, [0x101e5550]: 0 },
     registry, isValid: object => registry.objects[object.index] === object,
@@ -80,7 +83,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     // The host's FStateFrame is the ScriptState record; freeing it releases
     // nothing beyond the object record itself.
     freeStateFrame: () => {},
-    freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpochFor(object.identity); bumpReceiverEpoch(); },
+    freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; releasedLog.push(object); bumpBaseEpochFor(object.identity); bumpReceiverEpoch(); },
     warning: runtime.warning,
   };
   function finalDelete(record, flags) {
@@ -144,7 +147,12 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     release(identity, flags) {
       const record = recordOf(identity);
       if (!record) throw new Error('CleanupDestroyed release requires the actor native record');
-      const live = registry.objects.filter(object => object && !object.released);
+      // The objects this call releases, in registry order. The reference is a filter of the registry before the call and a test of each
+      // object after it (CLEANUP_SCAN=js); the log of freeObject holds the same objects: an object freed through destructScriptObject
+      // was in the registry (its index is not -1) and not released before, and an object freed twice is not (released is set once).
+      const mode = cleanupScanMode();
+      const live = mode === 'rust' ? null : registry.objects.filter(object => object && !object.released);
+      const mark = releasedLog.length;
       if (record.index === null) {
         release.conditionalDestroy(record);
         // ~UObject appends the actor's own slot to GObjAvailable: a pre-placed
@@ -157,7 +165,14 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
           else model.release(measured);   // a measured slot the model never handed out (a pre-placed actor) is the original's own
         }
       } else finalDelete(record, flags);
-      for (const object of live) if (object.released) onReleased?.(object.identity);
+      const logged = releasedLog.splice(mark).filter(object => object.index !== -1 && object.index !== null && object.index !== undefined)
+        .sort((a, b) => a.index - b.index);
+      if (live !== null) {
+        const expected = live.filter(object => object.released);
+        if (mode === 'verify' && (expected.length !== logged.length || expected.some((object, i) => object !== logged[i])))
+          throw new Error(`CLEANUP_SCAN=verify: release of ${record.index} freed ${expected.map(o => o.index)} by the registry filter, ${logged.map(o => o.index)} by the log`);
+        for (const object of expected) onReleased?.(object.identity);
+      } else for (const object of logged) onReleased?.(object.identity);
       runtime.reclaimReleased?.();
     },
     /** LoadMap 0x1038d0ee..0x1038d1e1 after the level reload. */
@@ -165,6 +180,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
       // A Destroy override can delete other objects during the purge (e.g.
       // DConHistory::Destroy), so released records are found afterwards.
       const before = registry.objects.filter(Boolean);
+      releasedLog.length = 0;
       const result = collectLoadMapGarbage({
         registry, levelPackage, levelActors: level.actors, recordOf, isActor, names: construction.names ?? null,
         // The persistent packages stand for loaded packages the host never
@@ -176,6 +192,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
         finalDelete,
         setGarbageCollecting: active => { runtime.garbageCollecting = active; },
       });
+      releasedLog.length = 0;
       const released = before.filter(record => record.released).map(record => record.identity);
       for (const identity of released) onReleased?.(identity);
       runtime.reclaimReleased?.();

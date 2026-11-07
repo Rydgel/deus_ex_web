@@ -114,6 +114,17 @@
 //!   (arrayReference's ArrayIndexOutOfBounds warning and clamp), evaluates
 //!   `node` in JavaScript; otherwise the element at `off + index * stride`.
 //!
+//! STRUCT_ARRAYS (docs/firefox-60fps-plan.md "Tick hand-backs"): a struct local's fixed-array member (`projList.List[i].dist`) is a local
+//! array at the struct's offset plus the member's, so the LOCAL_ELEM_* reads above serve it; LOCAL_ELEM_VECTOR 209 `off, stride, dim,
+//! node` then the index reads a vector element or a vector member of an element (three quiet words, or the closure for an index
+//! outside [0, dim)); SET_LOCAL_ELEM 210 `sub, off, stride, dim, node, check, len`, the index, then `len` words of value, stores a
+//! scalar (E_INT, E_BYTE, E_FLOAT, E_OBJECT) or vector (E_VECTOR) element: the index first (compileAssign evaluates the target's
+//! reference before the value), the value, then the element's bytes; an index outside [0, dim) runs the whole Let `node` in
+//! JavaScript with the value unevaluated. `check` is the target's node: under SCRIPT_VM_CHECK or STRUCT_ARRAYS=verify (FEATURES
+//! word 2) the stored element is read back through the closure of that node and compared. P_VECTOR 7 / P_ROTATOR 8 call parameters
+//! store a vector (the three quiet words of `vector()`) or rotator as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs; P_STRUCT_IN 9
+//! is P_STRUCT's copy in with no copy back (a struct passed by value).
+//!
 //! SCRIPT_VM_CHECK (CHECK nonzero): each of the R2b-5 reads above that Rust
 //! completes calls js_check with its value, and the host compares it with
 //! what the closure computes (castObject on the evaluated value for a cast).
@@ -365,6 +376,18 @@ const IN_STASIS: u32 = 205;
 const PLAYER_PAWN: u32 = 207;
 // A script call with struct out arguments (iter.rs).
 const CALL_OUT: u32 = 208;
+// STRUCT_ARRAYS: a vector element of a local fixed array (or of a struct local's fixed-array member), and a store to a scalar or
+// vector element of one.
+const LOCAL_ELEM_VECTOR: u32 = 209;
+const SET_LOCAL_ELEM: u32 = 210;
+// SET_LOCAL_ELEM's value kinds.
+const E_INT: u32 = 1;
+const E_BYTE: u32 = 2;
+const E_FLOAT: u32 = 3;
+const E_OBJECT: u32 = 4;
+const E_VECTOR: u32 = 5;
+// Actor.SetRotation (native 299) as a statement, on SELF or a context object.
+const SET_ROTATION: u32 = 211;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -431,6 +454,10 @@ pub(crate) const P_FLOAT: u32 = 3;
 const P_OBJECT: u32 = 4;
 pub(crate) const P_BYTE: u32 = 5;
 pub(crate) const P_STRUCT: u32 = 6;
+// STRUCT_ARRAYS: a vector or rotator parameter, and a struct passed by value (copied in like P_STRUCT, not copied back).
+const P_VECTOR: u32 = 7;
+const P_ROTATOR: u32 = 8;
+pub(crate) const P_STRUCT_IN: u32 = 9;
 
 /// Core's runaway-loop limit (script-vm.mjs SCRIPT_RUNAWAY_LIMIT).
 const RUNAWAY_LIMIT: u32 = 10_000_000;
@@ -441,6 +468,9 @@ const TWO_63: f64 = 9_223_372_036_854_775_808.0;
 
 #[link(wasm_import_module = "env")]
 extern "C" {
+    /// SET_ROTATION=verify: what Rust decided for the SetRotation native `node` on `receiver` (0 left alone, 1 unchanged, 2 JavaScript, 3 stored)
+    /// for the requested rotation, which the host decides again from readNamed.
+    fn js_set_rotation_check(frame: u32, node: u32, receiver: u32, decision: u32, pitch: u32, yaw: u32, roll: u32);
     fn js_int(frame: u32, node: u32, receiver: u32) -> i32;
     fn js_float(frame: u32, node: u32, receiver: u32) -> f64;
     fn js_bool(frame: u32, node: u32, receiver: u32) -> i32;
@@ -1470,6 +1500,59 @@ impl Run {
                 let v = self.rotator(SELF);
                 store3(addr, rotator_words(v));
             }
+            // `a[i] = V` / `a[i].m = V` on a local fixed array (or a struct local's array member): `kind, off, stride, dim, node, check,
+            // len` (`off` includes the member's offset; `node` the whole Let, `check` the target), then the index, then `len` words
+            // of value. compileAssign's generic path: the target's reference first (arrayReference: the index, evaluated with SELF), then
+            // the value, then the store of its codec copy. An index outside [0, dim) (arrayReference's warning and clamp) runs the Let
+            // in JavaScript, the value unevaluated here. The store writes the element's bytes only; JavaScript's member reference
+            // writes the whole struct back (differing in another member's signaling NaN, or an object handle already released).
+            SET_LOCAL_ELEM => {
+                let (sub, offset, stride, dim) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                let (node, check, length) = (self.op(5), self.op(6), self.op(7) as usize);
+                self.skip(8);
+                let index = self.int(SELF) as u32;
+                if index >= dim {
+                    self.skip(length);
+                    self.host_eval(node, SELF);
+                    return;
+                }
+                let addr = self.locals.wrapping_add(offset).wrapping_add(index.wrapping_mul(stride));
+                match sub {
+                    E_INT => {
+                        let v = self.int(SELF);
+                        store32(addr, v as u32);
+                    }
+                    E_BYTE => {
+                        let v = self.int(SELF);
+                        store8(addr, v as u8);
+                    }
+                    E_FLOAT => {
+                        let v = self.float(SELF);
+                        store32(addr, float_bits(v));
+                    }
+                    E_OBJECT => {
+                        let v = self.object(SELF);
+                        store32(addr, pointer_word(v));
+                    }
+                    E_VECTOR => {
+                        let v = self.vector(SELF);
+                        store3(addr, v);
+                    }
+                    _ => self.fail(ERR_KIND, sub),
+                }
+                // CHECK / STRUCT_ARRAYS=verify: the element read back through the target's closure
+                if unsafe { CHECK } != 0 || crate::iter::feature(2) {
+                    match sub {
+                        E_INT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_INT, load32(addr) as i32 as f64) },
+                        E_BYTE => unsafe { js_check(self.frame, check, self.handle(SELF), CK_INT, load8(addr) as f64) },
+                        E_FLOAT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_FLOAT, float_of(load32(addr))) },
+                        E_OBJECT => unsafe { js_check(self.frame, check, self.handle(SELF), CK_OBJECT, live(load32(addr)) as f64) },
+                        _ => self.report(check, SELF, CK_VECTOR, [0.0; 3], [0.0; 3], widen3(load_vector(addr))),
+                    }
+                    self.self_fresh = false;
+                }
+            }
+            SET_ROTATION => self.set_rotation(),
             VCOMPOUND_LOCAL => {
                 let (op, node) = (self.op(1), self.op(3));
                 let addr = self.locals.wrapping_add(self.op(2));
@@ -1592,7 +1675,18 @@ impl Run {
             match pkind {
                 P_SKIP => {}
                 // A struct out parameter: copied in from its source now, back out after the callee (iter.rs).
-                P_STRUCT => self.out_struct_in(&sources, mask, addr, node, &mut outs),
+                P_STRUCT => self.out_struct_in(&sources, mask, addr, node, &mut outs, true),
+                // A struct by value: copied in now, nothing copied back.
+                P_STRUCT_IN => self.out_struct_in(&sources, mask, addr, node, &mut outs, false),
+                // A vector or rotator argument: stored as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs.
+                P_VECTOR => {
+                    let v = self.vector(SELF);
+                    store3(addr, v);
+                }
+                P_ROTATOR => {
+                    let v = self.rotator(SELF);
+                    store3(addr, rotator_words(v));
+                }
                 P_INT => {
                     let v = self.int(SELF);
                     store32(addr, v as u32);
@@ -1708,6 +1802,68 @@ impl Run {
                 let v = self.object(SELF);
                 store32(addr, pointer_word(v));
             }
+        }
+    }
+
+    /// SET_ROTATION 211 `ctx, node, has_ctx, bStatic (off, key, mask), bMovable (off, key, mask), Rotation (off, key), Brush (off, key),
+    /// StandingCount (off, key), len`, the context object's code (when `has_ctx`), then the rotator's `len` words: script-set-rotation.mjs
+    /// setScriptRotation, ULevel::MoveActor with a zero Delta on a non-editor level (docs/script-set-rotation.md). The context object comes
+    /// first, evaluated with SELF (None: Accessed None at `ctx`, the rotator unevaluated); a receiver whose five fields the image does not
+    /// all answer for runs the native node in JavaScript before the rotator is evaluated. Then: a static or immovable actor is left alone
+    /// (MoveActor returns false), so is one whose Rotation already equals the requested ints, one with a Brush or a nonzero StandingCount
+    /// (riders) runs the native in JavaScript (the rotator is a read without imports, evaluated again there), and any other stores the three
+    /// ints at Rotation. FEATURES word 3 (SET_ROTATION=verify) has the host decide the same from readNamed first (js_set_rotation_check).
+    fn set_rotation(&mut self) {
+        let (ctx, node, has_ctx) = (self.op(1), self.op(2), self.op(3) != 0);
+        let (s_off, s_key, s_mask) = (self.op(4), self.op(5), self.op(6));
+        let (m_off, m_key, m_mask) = (self.op(7), self.op(8), self.op(9));
+        let (r_off, r_key, b_off, b_key, c_off, c_key) = (self.op(10), self.op(11), self.op(12), self.op(13), self.op(14), self.op(15));
+        let length = self.op(16) as usize;
+        self.skip(17);
+        let r = if has_ctx {
+            let object = self.object(SELF);
+            if object == 0 || object == UNDEFINED {
+                self.skip(length);
+                self.accessed_none(ctx);
+                return;
+            }
+            let (info, bind) = receiver(object);
+            Recv { handle: object, info, bind }
+        } else {
+            SELF
+        };
+        let addresses = (self.field(r, s_key, s_off), self.field(r, m_key, m_off), self.field(r, r_key, r_off), self.field(r, b_key, b_off), self.field(r, c_key, c_off));
+        let (Some(stat), Some(movable), Some(rotation), Some(brush), Some(standing)) = addresses else {
+            self.skip(length);
+            self.set_rotation_native(node, r, has_ctx);
+            return;
+        };
+        let want = self.rotator(SELF);
+        // 0 left alone (static or immovable), 1 unchanged, 2 riders or a Brush (JavaScript), 3 stored
+        let decision = if load32(stat) & s_mask != 0 || load32(movable) & m_mask == 0 {
+            0
+        } else if load_rotator(rotation) == want {
+            1
+        } else if live(load32(brush)) != 0 || load8(standing) != 0 {
+            2
+        } else {
+            3
+        };
+        if crate::iter::feature(3) {
+            unsafe { js_set_rotation_check(self.frame, node, self.handle(r), decision, want[0] as u32, want[1] as u32, want[2] as u32) };
+            self.self_fresh = false;
+        }
+        match decision {
+            2 => self.set_rotation_native(node, r, has_ctx),
+            3 => store3(rotation, rotator_words(want)),
+            _ => {}
+        }
+    }
+    fn set_rotation_native(&mut self, node: u32, r: Recv, has_ctx: bool) {
+        if has_ctx {
+            self.host_eval_on(node, r);
+        } else {
+            self.host_eval(node, SELF);
         }
     }
 
@@ -1857,6 +2013,20 @@ impl Run {
                     }
                     None => self.host_vector(node, r),
                 }
+            }
+            // A vector element of a local fixed array, or a vector member of an element of a struct local's array (`off` includes
+            // the member's offset): compileEv 0x1a / 0x36 as LOCAL_ELEM_* read a scalar one. The index first, with SELF; an index
+            // outside [0, dim) takes the closure (arrayReference's warning and clamp).
+            LOCAL_ELEM_VECTOR => {
+                let (offset, stride, dim, node) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                self.skip(5);
+                let index = self.int(SELF) as u32;
+                if index >= dim {
+                    return self.host_vector(node, r);
+                }
+                let v = load_vector(self.locals.wrapping_add(offset).wrapping_add(index.wrapping_mul(stride)));
+                self.verify3(node, r, CK_VECTOR, widen3(v));
+                v
             }
             JS_VECTOR => {
                 let node = self.op(1);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cleanupLevelDestroyed,cleanupScriptReferences} from '../src/runtime/script-cleanup.mjs';
+import {cleanupLevelDestroyed,cleanupScriptReferences,cleanupImageSites,siteVerdict,clearSite,readSite} from '../src/runtime/script-cleanup.mjs';
+import {handleOf} from '../src/runtime/script-object-handles.mjs';
 import {propertyReference} from '../src/runtime/script-values.mjs';
 import {baseEpoch} from '../src/runtime/base-epoch.mjs';
 
@@ -67,4 +68,26 @@ test('CompactActors with the flagged slots gives the loop\'s result, reading bDe
     for(const id of flagged.reads)assert.ok(base[id].bDeleteMe||id%3===0,`slot ${id} was read`);
     assert.ok(flagged.reads.length<=reference.reads.length);
   }
+});
+
+test('cleanupImageSites reads the image, asks each object once; a record is a dry run; siteVerdict keeps one answer per object',()=>{
+  const live={name:'live'},dead={name:'dead'};
+  const view=new DataView(new ArrayBuffer(64));
+  // sites at 8, 12 and 16 hold live, dead and nothing
+  view.setUint32(8,handleOf(live),true);view.setUint32(12,handleOf(dead),true);
+  const sites=[{key:'a.one',top:'a.one'},{key:'a.two',top:'a.two'},{key:'a.three',top:'a.three'}];
+  const offsets=Uint32Array.from([8,12,16]);
+  const asked=[],services={isValid:()=>true,isPendingKill:target=>(asked.push(target.name),target===dead)};
+  const record=[];
+  cleanupImageSites(sites,offsets,view,0,null,field=>({field}),services,new Map(),record);
+  assert.deepEqual(record,[1],'the dry run records the pending site');
+  assert.deepEqual(asked,['live','dead']);
+  assert.equal(view.getUint32(12,true),handleOf(dead),'a dry run clears nothing');
+  const verdicts=new Map(),calls=[];
+  const counting={isValid:()=>true,isPendingKill:target=>(calls.push(target),true)};
+  assert.equal(siteVerdict(dead,sites[0],counting,verdicts),true);
+  assert.equal(siteVerdict(dead,sites[1],counting,verdicts),true);
+  assert.deepEqual(calls,[dead],'IsPendingKill is asked once per object');
+  assert.throws(()=>siteVerdict(live,sites[0],{isValid:()=>false,isPendingKill:()=>false},new Map()),/invalid or unregistered reference: a\.one/);
+  assert.equal(typeof clearSite,'function');assert.equal(typeof readSite,'function');
 });

@@ -17,7 +17,7 @@
  * convert it: int `v | 0`, bool `Boolean(v)`, float `+v` (undefined is kept
  * apart, since the float store codec turns it into 0), object its handle.
  */
-import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell, cellKind, scalarStructMembers} from './script-object-image.mjs';
+import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell, cellKind, scalarStructMembers, flatStructMembers} from './script-object-image.mjs';
 import {GC_RUST_NATIVES} from './script-vm-gc.mjs';
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
@@ -31,7 +31,7 @@ const K = {
   LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34, vector: 161, rotator: 176},
   FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44, vector: 162, rotator: 177},
   FIELD_ELEM: {int: 25, byte: 26, bool: 27, float: 28, object: 29},
-  LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39},
+  LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39}, LOCAL_ELEM_VECTOR: 209, SET_LOCAL_ELEM: 210, SET_ROTATION: 211,
   DEFAULT: {int: 45, byte: 46, bool: 47, float: 48},
   JS: {int: 50, byte: 50, bool: 52, float: 53, object: 54, vector: 163, rotator: 178, name: 195}, JS_VOID: 55,
   SET_LOCAL: {int: 60, byte: 61, bool: 62, float: 63, object: 68, vector: 196, rotator: 198},
@@ -162,7 +162,7 @@ const SMALL_NATIVES = new Set([284, 723, 721]);
  * compound assignments, the composite operators, IsA, the short-circuit pair, the perception and small natives and the
  * GC natives gc.rs runs). Each runs the body its JavaScript case has, so the list is src/runtime/native-registry.mjs's
  * `rust` layer: a native outside it, or outside the JavaScript dispatchers, never reaches a Rust kind. */
-export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, 720, ...OPERATORS.keys(), ...INCREMENTS.keys(),
+export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, 299, 720, ...OPERATORS.keys(), ...INCREMENTS.keys(),
   ...COMPOUNDS.keys(), ...COMPOSITE_OPERATORS.keys(), ...VCOMPOUNDS.keys(), ...PERCEPTION.keys(), ...SMALL_NATIVES,
   ...GC_RUST_NATIVES.keys()])].sort((a, b) => a - b));
 const STASIS_FIELDS = [['engine.actor.lastrendertime', 'float'], ['engine.actor.bstasis', 'bool'], ['engine.actor.physics', 'byte'],
@@ -184,12 +184,23 @@ const CASTS = new Map([
 export const globalCallMode = () => (typeof process !== 'undefined' && process.env?.GLOBAL_CALLS) || globalThis.DEUS_EX_GLOBAL_CALLS || 'rust';
 
 // A call's argument and result kinds (interp.rs CALL).
-const PARAM_KIND = {int: 1, bool: 2, float: 3, object: 4, byte: 5};
+const PARAM_KIND = {int: 1, bool: 2, float: 3, object: 4, byte: 5, vector: 7, rotator: 8};
 const P_STRUCT = 6;
+// A struct parameter passed by value: copied in from its source like an out one, and not copied back.
+const P_STRUCT_IN = 9;
 const RESULT_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4};
 const RESULT_TYPE = {int: 'int', byte: 'int', bool: 'bool', float: 'float', object: 'object', class: 'object'};
 const CALL_KIND = {0: 'void', 1: 'int', 2: 'bool', 3: 'float', 4: 'object'};
 const CALL_PARAM_KINDS = new Set(['int', 'byte', 'bool', 'float', 'object']);
+// A vector or rotator parameter (STRUCT_ARRAYS): three words stored as SET_LOCAL_VECTOR stores them.
+const VECTOR_PARAM_KINDS = new Set(['vector', 'rotator']);
+/** A parameter's cell for a call signature: a scalar, or with STRUCT_ARRAYS a vector or rotator (with the mask the shape wants). */
+const paramCell = cell => {
+  const scalar = scalarCell(cell);
+  if (scalar || structArraysMode() === 'js') return scalar;
+  const vector = vectorCell(cell);
+  return vector && {...vector, mask: 0};
+};
 
 // Signatures by shape, shared by every runtime: a call site is lowered for one
 // shape and runs in Rust only when the resolved function has it.
@@ -208,8 +219,8 @@ export function functionSignature(fn, loader) {
   if (layout && !layout.slotFields && resultType &&
     !fn.fields.some(field => field.metadata?.flags & 0x00400000) &&
     fn.parameters.every(field => !field.metadata?.out)) {
-    const params = fn.parameters.map((field, index) => scalarCell(layout.parameterCells[index]));
-    if (params.every(param => param && CALL_PARAM_KINDS.has(param.kind))) {
+    const params = fn.parameters.map((field, index) => paramCell(layout.parameterCells[index]));
+    if (params.every(param => param && (CALL_PARAM_KINDS.has(param.kind) || VECTOR_PARAM_KINDS.has(param.kind)))) {
       const rkind = resultType === 'void' ? 0 : RESULT_KIND[resultType];
       const shape = `${rkind}|${params.map(param => `${param.kind}:${param.offset}:${param.mask}`).join(',')}`;
       let id = signatureIds.get(shape);
@@ -229,8 +240,22 @@ export const outStructMode = () => (typeof process !== 'undefined' && process.en
  * IteratorNext run in Rust (interp.rs S_FOREACH_CYCLE, iter.rs) where 'rust'; 'js' keeps the JavaScript iterator; 'verify' compares each
  * step with a shadow JavaScript iterator. */
 export const foreachStartMode = () => (typeof process !== 'undefined' && process.env?.FOREACH_START) || globalThis.DEUS_EX_FOREACH_START || 'rust';
+/** 'rust' (default), 'js' or 'verify': SET_ROTATION / DEUS_EX_SET_ROTATION / `?setRotation=`. A statement `SetRotation(R)` or `X.SetRotation(R)`
+ * (native 299) runs in Rust (interp.rs SET_ROTATION) where 'rust'; 'js' keeps the native in the JavaScript VM (setScriptRotation); 'verify'
+ * runs the JavaScript native on a copy of what Rust did and compares the Rotation words (script-vm-foreach.mjs). */
+export const setRotationMode = () => (typeof process !== 'undefined' && process.env?.SET_ROTATION) || globalThis.DEUS_EX_SET_ROTATION || 'rust';
+/** 'rust' (default), 'js' or 'verify': STRUCT_ARRAYS / DEUS_EX_STRUCT_ARRAYS / `?structArrays=`. The parts of a local struct the Rust
+ * interpreter reaches in memory: a fixed-array member of a struct local (`projList.List[i].dist`), vector members and vector array
+ * elements, stores to array elements (`List[i].Projectile = p`), and struct out arguments whose members are nested structs, fixed
+ * arrays or vectors (ScriptedPawn.GetProjectileList's NearbyProjectileList). 'js' leaves them to the JavaScript VM, as before the
+ * switch; 'verify' also reads every stored element back through the JavaScript closure and compares the nested struct copies leaf
+ * by leaf with the codec copy (script-vm-foreach.mjs). */
+export const structArraysMode = () => (typeof process !== 'undefined' && process.env?.STRUCT_ARRAYS) || globalThis.DEUS_EX_STRUCT_ARRAYS || 'rust';
 
 const MAX_OUT_STRUCTS = 4;
+/** The members a struct out argument is copied by: its scalar members as before the switch, or every leaf of a nested struct, fixed
+ * array or vector member (STRUCT_ARRAYS). */
+const outStructMembers = cell => structArraysMode() === 'js' ? scalarStructMembers(cell) : flatStructMembers(cell);
 const outSignatures = new WeakMap();
 /** functionSignature's signature, or for a function with `out` struct parameters of scalar members (HUDHitDisplay.SetHitColor's
  * `out BodyPart`) one whose params include {kind: 'struct', offset, mask: 0, struct: {offset, members}} for each: the call copies the
@@ -248,20 +273,22 @@ export function callSignature(fn, loader) {
     let outs = 0;
     for (let index = 0; index < fn.parameters.length; index++) {
       const field = fn.parameters[index], cell = layout.parameterCells[index];
-      if (field.metadata?.out) {
-        const struct = field.metadata.type === 'struct' ? scalarStructMembers(cell) : null;
+      // A struct passed by value (STRUCT_ARRAYS) is copied in like an out one and not copied back.
+      const byValue = !field.metadata?.out && cellKind(cell) === 'struct' && structArraysMode() !== 'js';
+      if (field.metadata?.out || byValue) {
+        const struct = field.metadata.type === 'struct' ? outStructMembers(cell) : null;
         if (!struct || ++outs > MAX_OUT_STRUCTS) { params.length = 0; break; }
-        params.push({kind: 'struct', offset: struct.offset, mask: 0, struct});
+        params.push({kind: 'struct', offset: struct.offset, mask: 0, struct, byValue});
       } else {
-        const param = scalarCell(cell);
-        if (!param || !CALL_PARAM_KINDS.has(param.kind)) { params.length = 0; break; }
+        const param = paramCell(cell);
+        if (!param || !(CALL_PARAM_KINDS.has(param.kind) || VECTOR_PARAM_KINDS.has(param.kind))) { params.length = 0; break; }
         params.push(param);
       }
     }
     if (outs > 0 && params.length === fn.parameters.length) {
       const rkind = resultType === 'void' ? 0 : RESULT_KIND[resultType];
       const shape = `${rkind}|${params.map(param => param.kind === 'struct'
-        ? `S:${param.offset}:${param.struct.members.map(m => `${m.kind}.${m.offset}.${m.mask}`).join('+')}`
+        ? `${param.byValue ? 'V' : 'S'}:${param.offset}:${param.struct.members.map(m => `${m.kind}.${m.offset}.${m.mask}`).join('+')}`
         : `${param.kind}:${param.offset}:${param.mask}`).join(',')}`;
       let id = signatureIds.get(shape);
       if (id === undefined) signatureIds.set(shape, id = signatureIds.size + 1);
@@ -378,6 +405,19 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     const field = operand(n);
     return field?.metadata ? vectorCell(layout.cells.get(field.key)) : null;
   };
+  // A vector or rotator member of a struct local (`projList.center`, STRUCT_ARRAYS): the cell of a local vector at the member's offset in
+  // the local's. Its reads and stores are a local vector's; a store writes the member's three words, where the closure's member reference
+  // rewrites the whole struct (the scalar member stores' difference, storeTarget).
+  const localMemberVectorCell = n => {
+    if (structArraysMode() === 'js' || !isNode(n) || n.op !== 0x36 || !isNode(n.value) || n.value.op !== 0x00) return null;
+    if (services.structValue !== runtime.services.structValue || services.structReference !== runtime.services.structReference) return null;
+    const member = operand(n), holder = operand(n.value);
+    if (!member?.metadata || !holder?.metadata) return null;
+    const struct = layout.cells.get(holder.key);
+    if (cellKind(struct) !== 'struct') return null;
+    const part = struct.members.find(item => item.key === member.key), vector = part && vectorCell(part);
+    return vector && {kind: vector.kind, offset: struct.offset + vector.offset};
+  };
   const fieldVectorCell = n => {
     const field = operand(n);
     if (!field?.metadata) return null;
@@ -456,7 +496,11 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       if (!member?.metadata || !variable?.metadata) return null;
       if (n.value.op === 0x00) {
         const cell = structMemberCell(layout.cells.get(variable.key), member);
-        if (!cell) return null;
+        if (!cell) {
+          // a vector or rotator member of a struct local (`projList.center`): the local vector at the member's offset
+          const vector = localMemberVectorCell(n);
+          return vector && typed(vector.kind, [K.LOCAL[vector.kind], vector.offset, nodeId(n)]);
+        }
         return typed(cell.kind, cell.kind === 'bool' ? [K.LOCAL.bool, cell.offset, cell.mask] : [K.LOCAL[cell.kind], cell.offset]);
       }
       const struct = fieldImageCell(variable.key);
@@ -565,11 +609,17 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         // an out struct parameter: its source is a variable of the same struct (its members compared by key), copied in and back
         const source = outStructSource(arg, param.struct);
         if (!source || !runtime.scriptVm?.foreach?.outStructReady) { unsupported = true; return; }
-        args.push(P_STRUCT, param.offset, sources.length, param.struct.members.length,
+        args.push(param.byValue ? P_STRUCT_IN : P_STRUCT, param.offset, sources.length, param.struct.members.length,
           ...param.struct.members.flatMap(member => [PARAM_KIND[member.kind], member.offset, member.mask]));
         sources.push(source.words);
         infos.push({index: sources.length - 1, argIndex: index, members: param.struct.members, callerCell: source.cell, callerField: source.field,
-          calleeField: target.parameters[index], calleeCell: frameLayout(target, runtime.classLoader).parameterCells[index]});
+          calleeField: target.parameters[index], calleeCell: frameLayout(target, runtime.classLoader).parameterCells[index],
+          byValue: Boolean(param.byValue)});
+      } else if (VECTOR_PARAM_KINDS.has(param.kind)) {
+        // a vector or rotator argument: its value as a lowered vector, stored as SET_LOCAL_VECTOR stores one
+        const value = valueExpr(arg, param.kind);
+        if (!value) { unsupported = true; return; }
+        args.push(PARAM_KIND[param.kind], param.offset, param.mask, ...value);
       } else args.push(PARAM_KIND[param.kind], param.offset, param.mask, ...expr(arg, param.kind));
     });
     if (unsupported) return null;
@@ -591,7 +641,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       cell = fieldImageCell(field.key);
       if (!cell) { missingField = true; return null; }
     }
-    const mine = scalarStructMembers(cell);
+    const mine = outStructMembers(cell);
     if (!mine || mine.members.length !== struct.members.length || mine.members.some((m, i) => {
       const w = struct.members[i];
       return m.key !== w.key || m.kind !== w.kind || m.offset !== w.offset || m.mask !== w.mask;
@@ -604,35 +654,67 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   // `a`): the element's bytes in the variable's cell. The index must
   // evaluate without an import (a literal or a local), since the JavaScript
   // path (a field on it, an index out of range) evaluates it again.
+  //
+  // STRUCT_ARRAYS adds a fixed-array member of a struct local as the array (`projList.List[i].dist`, EX_StructMember over a local
+  // variable: the member's cell sits in the local's, so the element is at the local's offset plus the member's) and vector elements
+  // and members (LOCAL_ELEM_VECTOR).
+  function elementArray(variable) {
+    if (!isNode(variable)) return null;
+    if (variable.op === 0x00 || variable.op === 0x01) {
+      const field = operand(variable);
+      if (!field?.metadata) return null;
+      const cell = variable.op === 0x00 ? layout.cells.get(field.key) : fieldImageCell(field.key);
+      if (!cell) {
+        if (variable.op === 0x01) missingField = true;
+        return null;
+      }
+      const shape = fixedArrayShape(field);
+      return isFixedCell(cell) && shape && shape.dimension === cell.dim ? {field, cell, local: variable.op === 0x00} : null;
+    }
+    if (variable.op !== 0x36 || structArraysMode() === 'js' || !isNode(variable.value) || variable.value.op !== 0x00) return null;
+    const rs = runtime.services;
+    if (services.structValue !== rs.structValue || services.structReference !== rs.structReference) return null;
+    const member = operand(variable), holder = operand(variable.value);
+    if (!member?.metadata || !holder?.metadata) return null;
+    const struct = layout.cells.get(holder.key), part = cellKind(struct) === 'struct' ? struct.members.find(item => item.key === member.key) : null;
+    const shape = part && isFixedCell(part) ? fixedArrayShape(member) : null;
+    if (!shape || shape.dimension !== part.dim) return null;
+    return {field: member, cell: {offset: struct.offset + part.offset, stride: part.stride, dim: part.dim, element: part.element}, local: true};
+  }
+  // The element's value cell: `a` itself (the whole element) or the member `n` of it, as a scalar, or with STRUCT_ARRAYS a vector.
+  function elementTarget(cell, a, n) {
+    let part;
+    if (n === a) part = cell.element;
+    else {
+      const member = operand(n);
+      if (!member?.metadata) return null;
+      const target = structMemberCell(cell.element, member);
+      if (target) return target;
+      part = cellKind(cell.element) === 'struct' ? cell.element.members.find(item => item.key === member.key) : null;
+      if (part) part = {...part, offset: part.offset + cell.element.offset};
+    }
+    const scalar = part && scalarCell(part);
+    if (scalar || !part || structArraysMode() === 'js') return scalar;
+    const vector = cellKind(part) === 'vector' ? vectorCell(part) : null;
+    return vector && {...vector, mask: 0};
+  }
   function element(a, n) {
     const rs = runtime.services;
     if (services.arrayReference !== rs.arrayReference) return null;
     if (n !== a && (services.structValue !== rs.structValue || services.structReference !== rs.structReference)) return null;
-    const variable = a.right;
-    if (!isNode(variable) || (variable.op !== 0x00 && variable.op !== 0x01)) return null;
+    const array = elementArray(a.right);
+    if (!array) return null;
     const index = pureIndex(a.left);
     if (!index) return null;
-    const field = operand(variable);
-    if (!field?.metadata) return null;
-    const cell = variable.op === 0x00 ? layout.cells.get(field.key) : fieldImageCell(field.key);
-    if (!cell) {
-      if (variable.op === 0x01) missingField = true;
-      return null;
-    }
-    const shape = fixedArrayShape(field);
-    if (!isFixedCell(cell) || !shape || shape.dimension !== cell.dim) return null;
-    let target;
-    if (n === a) target = scalarCell(cell.element);
-    else {
-      const member = operand(n);
-      if (!member?.metadata) return null;
-      target = structMemberCell(cell.element, member);
-    }
+    const {field, cell, local} = array;
+    const target = elementTarget(cell, a, n);
     if (!target) return null;
     const offset = cell.offset + target.offset, id = nodeId(n);
-    const words = variable.op === 0x00 ? [K.LOCAL_ELEM[target.kind], offset, cell.stride, cell.dim, id]
+    if (target.kind === 'vector') return local ? typed('vector', [K.LOCAL_ELEM_VECTOR, offset, cell.stride, cell.dim, id, ...index]) : null;
+    if (target.kind === 'rotator') return null;
+    const words = local ? [K.LOCAL_ELEM[target.kind], offset, cell.stride, cell.dim, id]
       : [K.FIELD_ELEM[target.kind], offset, cell.stride, cell.dim, id, fieldKeyId(field.key)];
-    if (variable.op === 0x01) fieldNodes.add(id);
+    if (!local) fieldNodes.add(id);
     if (target.kind === 'bool') words.push(target.mask);
     return typed(target.kind, [...words, ...index]);
   }
@@ -832,18 +914,40 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   // it needs at most one import (the value's, or the field's JS path).
   function vectorAssignment(n) {
     const target = n.left;
-    if (!isNode(target) || (target.op !== 0x00 && target.op !== 0x01)) return null;
+    if (!isNode(target) || (target.op !== 0x00 && target.op !== 0x01 && target.op !== 0x36)) return null;
     const mark = imports;
-    const cell = target.op === 0x00 ? localVectorCell(target) : fieldVectorCell(target);
+    const cell = target.op === 0x00 ? localVectorCell(target) : target.op === 0x36 ? localMemberVectorCell(target) : fieldVectorCell(target);
     if (!cell) return null;
     const value = valueExpr(n.right, cell.kind);
     if (!value || imports - mark > 1) {
       imports = mark;
       return null;
     }
-    if (target.op === 0x00) return [K.SET_LOCAL[cell.kind], cell.offset, ...value];
+    if (target.op !== 0x01) return [K.SET_LOCAL[cell.kind], cell.offset, ...value];
     fieldNodes.add(nodeId(n));
     return [K.SET_FIELD[cell.kind], cell.offset, nodeId(n), cell.key, value.length, ...value];
+  }
+
+  // `a[i] = V` and `a[i].m = V` (EX_Let whose target is an EX_ArrayElement of a local fixed array or of a struct local's array member, or
+  // a scalar or vector member of one) as SET_LOCAL_ELEM (STRUCT_ARRAYS): the index, then the value, then the element's bytes. The index
+  // must be pure (pureIndex), since an index out of range runs the whole Let in JavaScript, which evaluates it again.
+  const ELEM_SUB = {int: 1, byte: 2, float: 3, object: 4, vector: 5};
+  function elementStore(n, target) {
+    if (structArraysMode() === 'js') return null;
+    const rs = runtime.services;
+    if (services.arrayReference !== rs.arrayReference || services.structValue !== rs.structValue || services.structReference !== rs.structReference) return null;
+    const a = target.op === 0x1a ? target : target.value;
+    const array = elementArray(a.right);
+    if (!array?.local) return null;
+    const index = pureIndex(a.left);
+    if (!index) return null;
+    const part = elementTarget(array.cell, a, target);
+    if (!part || !ELEM_SUB[part.kind]) return null;
+    const mark = imports;
+    const value = part.kind === 'vector' ? valueExpr(n.right, 'vector') : expr(n.right, part.kind);
+    if (!value) { imports = mark; return null; }
+    return [K.SET_LOCAL_ELEM, ELEM_SUB[part.kind], array.cell.offset + part.offset, array.cell.stride, array.cell.dim, nodeId(n), nodeId(target),
+      value.length, ...index, ...value];
   }
 
   function assignment(n, bool) {
@@ -853,6 +957,11 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     else if (bool) return null;
     if (!bool && isNode(target) && (target.op === 0x00 ? localVectorCell(target)
       : target.op === 0x01 && vectorCell(fieldImageCell(operand(target)?.key)))) return vectorAssignment(n);
+    if (!bool && localMemberVectorCell(target)) return vectorAssignment(n);
+    if (!bool && isNode(target) && (target.op === 0x1a || target.op === 0x36 && isNode(target.value) && target.value.op === 0x1a)) {
+      const store = elementStore(n, target);
+      if (store) return store;
+    }
     const cell = storeTarget(target);
     if (!cell || (bool && cell.kind !== 'bool')) return null;
     const value = expr(n.right, cell.kind);
@@ -894,6 +1003,38 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     if (isLocal(n.args[0])) return [K.COMPOUND_LOCAL, op, cell.offset, ...value];
     fieldNodes.add(nodeId(n));
     return [K.COMPOUND_FIELD, op, cell.offset, nodeId(n), cell.key, value.length, ...value];
+  }
+
+  // `SetRotation(R)` or `X.SetRotation(R)` as a statement (native 299, SET_ROTATION): script-set-rotation.mjs setScriptRotation, which is
+  // ULevel::MoveActor with a zero Delta (docs/script-set-rotation.md): nothing for a static or immovable actor, nothing for an unchanged
+  // rotation, the three ints stored at Actor.Rotation when the actor has neither a Brush nor riders; the other cases (and any of the five
+  // fields not in the object image) run the native node in JavaScript. The rotation is evaluated by Rust without imports, so the JavaScript
+  // path evaluating it again is unobservable. The context object is evaluated first with SELF (None: Accessed None, nothing else).
+  // Premises: the runtime's own invokeNative reaches the 299 branch, and the level is not an editor level (setScriptRotation's `!level.editor`).
+  const ROT_FIELDS = ['engine.actor.bstatic', 'engine.actor.bmovable', 'engine.actor.rotation', 'engine.actor.brush', 'engine.actor.standingcount'];
+  function setRotationEffect(n) {
+    if (setRotationMode() === 'js') return null;
+    const invoked = n.op === 0x19 ? n.value : n;
+    if (!isNode(invoked) || invoked.op !== 'native' || invoked.index !== 299 || !Array.isArray(invoked.args) || invoked.args.length !== 1) return null;
+    if (services.invokeNative !== runtime.services.invokeNative || Object.hasOwn(runtime, 'invokeNative') || runtime.boundaryNatives?.has(299)) return null;
+    if (typeof runtime.levelFor !== 'function' || runtime.levelFor(instance)?.editor !== false) return null;
+    const mark = imports;
+    let context = [];
+    if (n.op === 0x19) {
+      if (!isNode(n.context) || (n.context.op !== 0x00 && n.context.op !== 0x01)) return null;
+      context = expr(n.context, 'object');
+      if (imports !== mark) { imports = mark; return null; }
+    }
+    const value = valueExpr(invoked.args[0], 'rotator');
+    if (!value || imports !== mark) { imports = mark; return null; }
+    const cells = ROT_FIELDS.map(key => fieldImageCell(key));
+    if (cells.some(cell => !cell)) { missingField = true; return null; }
+    const [stat, movable, rotation, brush, standing] = [scalarCell(cells[0]), scalarCell(cells[1]), vectorCell(cells[2]), scalarCell(cells[3]), scalarCell(cells[4])];
+    if (stat?.kind !== 'bool' || movable?.kind !== 'bool' || rotation?.kind !== 'rotator' || brush?.kind !== 'object' || standing?.kind !== 'byte') return null;
+    return [K.SET_ROTATION, nodeId(n), nodeId(invoked), n.op === 0x19 ? 1 : 0,
+      stat.offset, fieldKeyId(ROT_FIELDS[0]), stat.mask, movable.offset, fieldKeyId(ROT_FIELDS[1]), movable.mask,
+      rotation.offset, fieldKeyId(ROT_FIELDS[2]), brush.offset, fieldKeyId(ROT_FIELDS[3]), standing.offset, fieldKeyId(ROT_FIELDS[4]),
+      value.length, ...context, ...value];
   }
 
   // `gc.Native(...)` as a statement for a GC native gc.rs runs (GC_EFFECT),
@@ -1015,6 +1156,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         if (n.op === 0x1b || n.op === 0x1c || (n.op === 0x38 && globalCalls)) {
           const lowered = call(n, true);
           if (lowered) return [K.S_EXPR, ...lowered.words];
+        }
+        if (n.op === 0x19 || (n.op === 'native' && n.index === 299)) {
+          const rotation = setRotationEffect(n);
+          if (rotation) return [K.S_EXPR, ...rotation];
         }
         if (n.op === 0x19) {
           const words = gcEffect(n);

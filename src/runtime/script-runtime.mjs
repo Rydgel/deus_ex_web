@@ -3305,8 +3305,14 @@ export class ScriptRuntime {
     if(!services)throw new Error('CleanupDestroyed requires native reference validity and pending-kill services');
     const instance=this.instance(receiver),reference=field=>this.fieldReference(receiver,field);
     const plan=editor?null:cleanupPlan(instance);
-    if(plan)return cleanupImageSites(plan.sites,plan.offsets,instance.arena.view,instance.base,
-      instance.bindings.size?instance.bindings:null,reference,services,verdicts??new Map());
+    if(plan){
+      verdicts??=new Map();
+      // The pointer scan of a pass in the Rust core (script-vm-cleanup.mjs): an actor it takes is done; else the loop below.
+      const scan=this.scriptVm?.cleanup;
+      if(scan?.ready&&scan.scanActor(receiver,instance,plan,reference,services,verdicts))return;
+      return cleanupImageSites(plan.sites,plan.offsets,instance.arena.view,instance.base,
+        instance.bindings.size?instance.bindings:null,reference,services,verdicts);
+    }
     return cleanupScriptReferences(instance.cls.propertyLink,reference,services,{editor});
   }
   /** Reflected reference traversal only. A native class Serialize override

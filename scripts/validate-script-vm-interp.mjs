@@ -56,10 +56,12 @@ const K = {
   STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
   // the bunker bundle (natives.rs player_pawn, interp.rs call, iter.rs)
   S_FOREACH_CYCLE: 10, PLAYER_PAWN: 207, CALL_OUT: 208,
+  // STRUCT_ARRAYS (interp.rs)
+  LOCAL_ELEM_VECTOR: 209, SET_LOCAL_ELEM: 210, SET_ROTATION: 211,
 };
 const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, RETURN_ITERATOR: 8, OUT_STRUCT: 9, FOREACH: 10};
 const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
-const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5, STRUCT: 6};
+const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5, STRUCT: 6, VECTOR: 7, ROTATOR: 8, STRUCT_IN: 9};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
 const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
 // The handle class table (R2b-5): a released handle; a row's unreadable
@@ -252,6 +254,7 @@ const imports = {
   js_cycle_class_test(frame, n, actor) { calls.push({imp: 'classTest', frame, node: n, actor}); return nativeHost.classTest(actor) ? 1 : 0; },
   js_foreach_check(frame, n, phase, start, found, cursor) { calls.push({imp: 'foreachCheck', frame, node: n, phase, start, found, cursor}); },
   js_out_struct_check(frame, n, index, dir, from, to) { calls.push({imp: 'outCheck', frame, node: n, index, dir, from, to}); },
+  js_set_rotation_check(frame, n, receiver, decision, pitch, yaw, roll) { calls.push({imp: 'rotationCheck', frame, node: n, receiver, decision, rotation: [pitch, yaw, roll]}); },
   // October 1: the event dispatch host (script-vm-events.mjs protocol).
   js_event_gate(handle) {
     calls.push({imp: 'gate', receiver: handle, frames: framesKey()});
@@ -1640,9 +1643,9 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
   reset();
   {
     const F = defineFn([S.ret(R.VOID)]);
-    const error = vmError(() => run([S.expr(call(site(F), R.VOID, [arg(9, 0, 0)])), S.ret(R.VOID)]));
+    const error = vmError(() => run([S.expr(call(site(F), R.VOID, [arg(31, 0, 0)])), S.ret(R.VOID)]));
     same(error.code, ERR.KIND, 'bad parameter kind');
-    same(error.node, 9, 'bad parameter kind node');
+    same(error.node, 31, 'bad parameter kind node');
     reset();
     const bad = vmError(() => run([S.expr(call(site(null, () => 0), 7)), S.ret(R.VOID)]));
     same(bad.code, ERR.KIND, 'bad call result kind');
@@ -3824,6 +3827,307 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   const valuedCall = w(K.CALL_OUT, site(valued), R.INT, SIG, 1, structArg(0, 0).length, 1, [0, SRC, 0], structArg(0, 0));
   same(value(R.INT, w(K.INT_ADD, valuedCall, E.int(1))), 42, 'a CALL_OUT as a value');
   same(read(LOCALS + SRC).int, 77, 'a CALL_OUT as a value copies back');
+
+  // A struct passed by value (P_STRUCT_IN): copied in like an out one, nothing copied back.
+  for (const v of VALUES.slice(0, 3)) {
+    reset();
+    classTable();
+    if (v.released) wr32(TABLE + 4 * v.released, RELEASED);
+    fill(LOCALS + SRC, v);
+    const byValue = defineFn([S.yield(), S.expr(w(K.SET_LOCAL_INT, 0, E.int(99))), S.ret(R.VOID)],
+      {steps: {0: info => { seen = Array.from(arena.bytes.subarray(info.base, info.base + 24)); return 1; }}});
+    const structIn = [P.STRUCT_IN, 0, 0, MEMBERS.length, ...MEMBERS.flat()];
+    run([S.expr(callOut(site(byValue), [[0, SRC, 0]], [structIn])), S.ret(R.INT, E.int(1))]);
+    const tag = `by value ${JSON.stringify(v)}`;
+    same(word32(seen, 0), v.int >>> 0, `${tag}: int copied in`);
+    same(word32(seen, 16), v.released && v.object === v.released ? 0 : v.object, `${tag}: object copied in (None once released)`);
+    const after = read(LOCALS + SRC);
+    same(after.int, v.int >>> 0, `${tag}: the callee's change is not copied back`);
+    same(after.around, AROUND, `${tag}: padding and neighbours untouched`);
+    same(framesKey(), '-1,0,0', `${tag}: frame stack restored`);
+  }
+  // A vector and a rotator parameter (P_VECTOR, P_ROTATOR): three words each, stored as SET_LOCAL_VECTOR / SET_LOCAL_ROTATOR store theirs, in
+  // order with the other arguments; a signaling NaN component is stored quieted.
+  {
+    reset();
+    const order = [];
+    [0x7f800001, bits(2), 0x80000000].forEach((word, i) => wr32(LOCALS + 0x90 + 4 * i, word));
+    const vectorNode = node(() => (order.push('v'), [1.5, f(-2.25), 3]));
+    const rotatorNode = node(() => (order.push('r'), [-5, 65535, 1 << 30]));
+    const floatNode = node(() => (order.push('f'), 0.5));
+    const snapshot = defineFn([S.yield(), S.ret(R.VOID)], {size: 80,
+      steps: {0: info => { seen = Array.from(arena.bytes.subarray(info.base, info.base + 48)); return 1; }}});
+    const args = [
+      [P.VECTOR, 4, 0, ...w(K.JS_VECTOR, vectorNode)],
+      [P.FLOAT, 0, 0, ...w(K.JS_FLOAT, floatNode)],
+      [P.ROTATOR, 20, 0, ...w(K.JS_ROTATOR, rotatorNode)],
+      [P.VECTOR, 32, 0, ...w(K.LOCAL_VECTOR, 0x90, node())],
+    ];
+    run([S.expr(w(K.CALL, site(snapshot), R.VOID, SIG, args.length, args.flat().length, args.flat())), S.ret(R.VOID)]);
+    same(order.join(), 'v,f,r', 'vector and rotator arguments evaluate in order');
+    same([4, 8, 12].map(at => word32(seen, at)).join(), [bits(1.5), bits(-2.25), bits(3)].join(), 'a vector parameter: three float words');
+    same(word32(seen, 0), bits(0.5), 'a float between them');
+    same([20, 24, 28].map(at => word32(seen, at) | 0).join(), [-5, 65535, 1 << 30].join(), 'a rotator parameter: three int words');
+    same([32, 36, 40].map(at => word32(seen, at)).join(), [0x7fc00001, bits(2), 0x80000000].join(), 'a signaling NaN component is stored quieted');
+    same(framesKey(), '-1,0,0', 'frame stack restored after the vector call');
+  }
+}
+// ---- SET_ROTATION: Actor.SetRotation (native 299) as a statement (interp.rs set_rotation) ------------------------------------------
+// script-set-rotation.mjs setScriptRotation on a non-editor level: a static or immovable actor and an unchanged rotation are left alone, a Brush
+// or riders run the native in JavaScript, anything else stores the three ints; fields the image does not answer for run the native in JavaScript
+// before the rotator is evaluated; a context object is evaluated first with SELF (None: Accessed None).
+{
+  const FEATURES_AT = x.vm_features_ptr();
+  const STAT = 0x50, MOV = 0x54, ROT = 0x58, BRUSH = 0x64, STAND = 0x68, KEYS = [4, 5, 6, 7, 8];
+  const header = (ctx, node, hasCtx, valueLength, keys = KEYS) => [ctx, node, hasCtx, STAT, keys[0], 1, MOV, keys[1], 1, ROT, keys[2], BRUSH, keys[3], STAND, keys[4], valueLength];
+  const setup = (base, {stat = 0, mov = 1, rot = [10, 20, 30], brush = 0, stand = 0} = {}) => {
+    wr32(base + STAT, stat); wr32(base + MOV, mov);
+    rot.forEach((v, i) => wr32(base + ROT + 4 * i, v));
+    wr32(base + BRUSH, brush); wr32(base + STAND, stand);
+  };
+  const rotation = base => [0, 1, 2].map(i => rd32(base + ROT + 4 * i) | 0);
+  const WANT = [-5, 65535, 1 << 30];
+  const rotator = () => w(K.LIT_ROTATOR, ...WANT);
+  const statement = (hasCtx, ctxWords, nativeNode, ctxNode, value = rotator()) =>
+    run([S.expr(w(K.SET_ROTATION, ...header(ctxNode, nativeNode, hasCtx, value.length), ...ctxWords, ...value)), S.ret(R.VOID)]);
+  const CASES = [
+    ['stored', {}, 3, WANT], ['unchanged', {rot: WANT}, 1, WANT], ['static', {stat: 1}, 0, [10, 20, 30]], ['not movable', {mov: 0}, 0, [10, 20, 30]],
+    ['static and not movable', {stat: 1, mov: 0}, 0, [10, 20, 30]], ['a bit of another flag', {stat: 0xfffffffe, mov: 0x3}, 3, WANT],
+    ['standing', {stand: 2}, 2, [10, 20, 30]], ['brush', {brush: OTHER_H}, 2, [10, 20, 30]],
+    ['unchanged beats riders', {rot: WANT, stand: 1}, 1, WANT], ['static beats riders', {stat: 1, stand: 1}, 0, [10, 20, 30]],
+  ];
+  for (const withContext of [false, true]) {
+    for (const [name, state, decision, after] of CASES) {
+      for (const verify of [0, 1]) {
+        reset();
+        const base = withContext ? OTHER_IMG : SELF_IMG, receiver = withContext ? OTHER_H : SELF_H;
+        setup(base, state);
+        wr32(LOCALS + 44, OTHER_H);
+        wr32(FEATURES_AT + 12, verify);
+        const nativeNode = node(r => calls.push({imp: 'native-host', receiver: r}));
+        statement(withContext ? 1 : 0, withContext ? w(K.LOCAL_OBJECT, 44) : [], nativeNode, node());
+        wr32(FEATURES_AT + 12, 0);
+        const tag = `SetRotation ${withContext ? 'on a context' : 'on SELF'} ${name}${verify ? ' (verify)' : ''}`;
+        same(rotation(base).join(), (decision === 2 ? [10, 20, 30] : after).join(), `${tag}: Rotation`);
+        const hosted = calls.filter(c => c.imp === 'native-host');
+        same(hosted.length, decision === 2 ? 1 : 0, `${tag}: the native runs in JavaScript only for riders or a Brush`);
+        if (decision === 2) same(hosted[0].receiver, receiver, `${tag}: on the receiver`);
+        const checks = calls.filter(c => c.imp === 'rotationCheck');
+        same(checks.length, verify ? 1 : 0, `${tag}: the verify import`);
+        if (verify) same([checks[0].decision, checks[0].node, checks[0].receiver, ...checks[0].rotation.map(v => v | 0)].join(),
+          [decision, nativeNode, receiver, ...WANT].join(), `${tag}: decision, node, receiver and rotation reported`);
+        same((rd32(base + STAT) + rd32(base + MOV) + rd32(base + BRUSH) + rd32(base + STAND)) >>> 0,
+          ((state.stat ?? 0) + (state.mov ?? 1) + (state.brush ?? 0) + (state.stand ?? 0)) >>> 0, `${tag}: nothing else is written`);
+      }
+    }
+  }
+  // A released Brush handle reads as None: the rotation is stored.
+  reset();
+  classTable();
+  setup(SELF_IMG, {brush: 22});
+  wr32(TABLE + 4 * 22, RELEASED);
+  statement(0, [], node(), node());
+  same(rotation(SELF_IMG).join(), WANT.join(), 'SetRotation: a released Brush is None');
+  // A field the image does not answer for (a bound key, a host receiver): the native runs in JavaScript with the rotator unevaluated.
+  for (const [flags, name] of [[BOUND, 'bound'], [HOST, 'host']]) {
+    for (const [slot, field] of ['bStatic', 'bMovable', 'Rotation', 'Brush', 'StandingCount'].entries()) {
+      if (flags === HOST && slot > 0) continue;
+      reset();
+      setup(SELF_IMG);
+      infos.set(SELF_H, SELF_IMG | flags);
+      const valueNode = node(() => { throw new Error('the rotator must not be evaluated'); });
+      const value = w(K.JS_ROTATOR, valueNode);
+      const hostNode = node(r => calls.push({imp: 'native-host', receiver: r}));
+      // (the bound key 3 stands in for the field's own key)
+      const words = header(node(), hostNode, 0, value.length, flags === BOUND ? KEYS.map((key, i) => i === slot ? 3 : key) : KEYS);
+      run([S.expr(w(K.SET_ROTATION, ...words, ...value)), S.ret(R.VOID)]);
+      same(calls.filter(c => c.imp === 'native-host').length, 1, `SetRotation: ${field} on a ${name} receiver runs the native in JavaScript`);
+      same(rotation(SELF_IMG).join(), '10,20,30', `SetRotation: ${field} on a ${name} receiver: nothing stored`);
+    }
+  }
+  // A context object that is None: Accessed None at the context node, the rotator and the native not evaluated.
+  reset();
+  setup(OTHER_IMG);
+  const noneNode = node();
+  statement(1, E.none(), node(), noneNode, w(K.JS_ROTATOR, node()));
+  same(calls.filter(c => c.imp === 'none').map(c => c.node).join(), String(noneNode), 'SetRotation on None: Accessed None');
+  same(rotation(OTHER_IMG).join(), '10,20,30', 'SetRotation on None: nothing stored');
+  // The context object is evaluated before the rotator, both with SELF.
+  reset();
+  setup(OTHER_IMG);
+  const order = [];
+  wr32(LOCALS + 44, OTHER_H);
+  const contextNode = node(r => (order.push(['context', r]), OTHER_H));
+  const rotatorNode = node(r => (order.push(['rotator', r]), WANT));
+  statement(1, w(K.JS_OBJECT, contextNode), node(), node(), w(K.JS_ROTATOR, rotatorNode));
+  same(order.map(o => o.join()).join(';'), `context,${SELF_H};rotator,${SELF_H}`, 'SetRotation: the context object, then the rotator, both with SELF');
+  same(rotation(OTHER_IMG).join(), WANT.join(), 'SetRotation: the context receiver is stored');
+}
+// ---- CLEANUP_SCAN: the pointer scan of CleanupDestroyed (cleanup.rs vm_cleanup_scan / vm_cleanup_insert) ------------------------------
+// script-cleanup.mjs cleanupImageSites' loop over one actor's sites against a model of it: the handle at each site (0 skipped), looked up in the
+// pass's verdicts (1 not pending, 2 pending, none: the host decides), the scan stopping at the first site that needs the host or clears.
+{
+  const COUNT = 40, MASK = 63, BASE = arena.alloc(4 * 64), OFFSETS = arena.alloc(4 * COUNT), SKIP = arena.alloc(COUNT), TABLE = arena.alloc(8 * (MASK + 1)), IO = x.vm_cleanup_io_ptr();
+  let seed = 12345;
+  const random = n => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) % n;
+  const STATUS = {DONE: 0, NEED: 1, CLEAR: 2};
+  for (let round = 0; round < 60; round++) {
+    arena.bytes.fill(0, TABLE, TABLE + 8 * (MASK + 1));
+    // the sites: scattered offsets (some sharing a word), handles drawn from a small set (so some repeat) with empties
+    const offsets = Array.from({length: COUNT}, () => 4 * random(60));
+    offsets.forEach((offset, i) => wr32(OFFSETS + 4 * i, offset));
+    for (let word = 0; word < 64; word++) wr32(BASE + 4 * word, random(4) === 0 ? 0 : 100 + random(24) * 7);
+    const verdicts = new Map();
+    // verdicts for a random part of the handles, entered in a random order (the table's probe sequences cross)
+    const handles = [...new Set(Array.from({length: 24}, (_, i) => 100 + i * 7))].sort(() => random(3) - 1);
+    for (const handle of handles) if (random(3) > 0) {
+      const verdict = 1 + random(2);
+      verdicts.set(handle, verdict);
+      x.vm_cleanup_insert(TABLE, MASK, handle, verdict);
+    }
+    // an entered verdict can be replaced
+    if (verdicts.size) {
+      const handle = [...verdicts.keys()][random(verdicts.size)], verdict = 1 + random(2);
+      verdicts.set(handle, verdict);
+      x.vm_cleanup_insert(TABLE, MASK, handle, verdict);
+    }
+    // some rounds skip sites (the bound fields': the host reads those through the binding)
+    const skipping = round % 2 === 1, skipped = Array.from({length: COUNT}, () => skipping && random(4) === 0);
+    skipped.forEach((flag, i) => { arena.bytes[SKIP + i] = flag ? 1 : 0; });
+    for (let from = 0, steps = 0; steps < 100; steps++) {
+      // the model
+      let expected = [STATUS.DONE, 0, 0];
+      for (let i = from; i < COUNT; i++) {
+        if (skipped[i]) continue;
+        const handle = rd32(BASE + offsets[i]);
+        if (handle === 0 || verdicts.get(handle) === 1) continue;
+        expected = [verdicts.has(handle) ? STATUS.CLEAR : STATUS.NEED, i, handle];
+        break;
+      }
+      const status = x.vm_cleanup_scan(BASE, OFFSETS, COUNT, from, TABLE, MASK, skipping ? SKIP : 0);
+      same(status, expected[0], `cleanup scan round ${round} from ${from}: status`);
+      if (status === STATUS.DONE) break;
+      same([rd32(IO + 4), rd32(IO + 8)].join(), expected.slice(1).join(), `cleanup scan round ${round} from ${from}: site and handle`);
+      if (status === STATUS.NEED) {
+        // the host decides the handle (not pending, or pending) and the scan resumes at the same site
+        const verdict = 1 + random(2);
+        verdicts.set(expected[2], verdict);
+        x.vm_cleanup_insert(TABLE, MASK, expected[2], verdict);
+      } else {
+        wr32(BASE + offsets[expected[1]], 0);
+        from = expected[1] + 1;
+      }
+    }
+  }
+}
+// ---- STRUCT_ARRAYS: array elements of a struct local (interp.rs LOCAL_ELEM_VECTOR, SET_LOCAL_ELEM) -------------------------------
+// compileAssign's generic path for `a[i] = V` and `a[i].m = V` (the reference of the element, then the value, then the codec copy stored)
+// and compileEv 0x1a / 0x36 for the vector read: the index first with SELF; an index outside [0, dim) runs the whole node in JavaScript.
+{
+  const ARR = 0x80, STRIDE = 24, DIM = 4, SPAN = DIM * STRIDE;
+  const FEATURES_AT = x.vm_features_ptr();
+  const fillArray = () => arena.bytes.fill(0xee, LOCALS + ARR - 4, LOCALS + ARR + SPAN + 4);
+  const snapshot = () => Array.from(arena.bytes.subarray(LOCALS + ARR - 4, LOCALS + ARR + SPAN + 4));
+  // [name, sub kind, member offset, width, value expression, expected word writes (offset within the element, value)]
+  const STORES = [
+    ['int', 1, 0, [], () => E.int(-77), [[0, -77 >>> 0]], CK.INT, -77],
+    ['byte', 2, 16, [], () => E.int(0x1ff), [[16, 0xff]], CK.INT, 0xff],
+    ['float', 3, 4, [], () => E.float(bits(1.5)), [[4, bits(1.5)]], CK.FLOAT, 1.5],
+    ['float undefined', 3, 4, [], () => w(K.JS_FLOAT, node(() => undefined)), [[4, 0]], CK.FLOAT, 0],
+    ['object', 4, 20, [], () => w(K.LOCAL_OBJECT, 44), [[20, OTHER_H]], CK.OBJECT, OTHER_H],
+    ['vector', 5, 8, [], () => w(K.LIT_VECTOR, bits(1), bits(2.5), bits(-3)), [[8, bits(1)], [12, bits(2.5)], [16, bits(-3)]], CK.VECTOR, null],
+  ];
+  const INDICES = [0, 1, DIM - 1, -1, DIM, 0x7fffffff, -0x80000000];
+  for (const [name, sub, member, , makeValue, writes, ckKind, ckValue] of STORES) {
+    INDICES.forEach((index, i) => {
+      reset();
+      fillArray();
+      wr32(LOCALS + 44, OTHER_H);
+      wr32(LOCALS + 0x70, index);
+      const before = snapshot();
+      const letNode = node(r => (calls.push({imp: 'let-host', receiver: r}), undefined));
+      const checkNode = node();
+      const inRange = index >= 0 && index < DIM;
+      const indexWords = i % 2 ? E.int(index) : w(K.LOCAL_INT, 0x70);
+      const value = makeValue();
+      run([S.expr(w(K.SET_LOCAL_ELEM, sub, ARR + member, STRIDE, DIM, letNode, checkNode, value.length, indexWords, value)), S.ret(R.VOID)]);
+      const after = snapshot();
+      const tag = `element store ${name} [${index}]`;
+      if (inRange) {
+        const expected = before.slice();
+        for (const [offset, word] of writes) {
+          const at = 4 + index * STRIDE + offset;
+          for (let k = 0; k < (name === 'byte' ? 1 : 4); k++) expected[at + k] = (word >>> (8 * k)) & 255;
+        }
+        same(after.join(), expected.join(), `${tag}: only the member's bytes change`);
+        same(calls.filter(c => c.imp === 'let-host').length, 0, `${tag}: no JavaScript`);
+      } else {
+        same(after.join(), before.join(), `${tag}: nothing is stored`);
+        same(calls.filter(c => c.imp === 'let-host').length, 1, `${tag}: the Let runs in JavaScript once`);
+        same(calls.find(c => c.imp === 'let-host').receiver, SELF_H, `${tag}: on the receiver`);
+      }
+      same(calls.filter(c => c.imp === 'check').length, 0, `${tag}: no read-back without the verify word`);
+    });
+    // The verify word: the element is read back through the closure of the target (js_check), in range only.
+    for (const index of [2, DIM]) {
+      reset();
+      fillArray();
+      wr32(LOCALS + 44, OTHER_H);
+      wr32(FEATURES_AT + 8, 1);
+      const checkNode = node(), value = makeValue();
+      run([S.expr(w(K.SET_LOCAL_ELEM, sub, ARR + member, STRIDE, DIM, node(() => {}), checkNode, value.length, E.int(index), value)), S.ret(R.VOID)]);
+      wr32(FEATURES_AT + 8, 0);
+      const checks = calls.filter(c => c.imp === 'check');
+      same(checks.length, index < DIM ? 1 : 0, `element store ${name} verify [${index}]: read back once in range`);
+      if (index < DIM) {
+        const check = checks[0];
+        same([check.node, check.receiver, check.kind].join(), [checkNode, SELF_H, ckKind].join(), `element store ${name} verify: node, receiver, kind`);
+        if (ckValue !== null) same(check.value, ckValue, `element store ${name} verify: value`);
+        else {
+          const f64 = new Float64Array(3);
+          f64.set([1, 2.5, -3]);
+          const words = new Uint32Array(f64.buffer);
+          same(check.values.slice(6).join(), [0, 1, 2].map(k => `${words[2 * k + 1].toString(16)}:${words[2 * k].toString(16)}`).join(),
+            'element store vector verify: the three components as float64');
+        }
+      }
+    }
+  }
+  // The index comes before the value, and the element is the index's even when the value changes the local it read.
+  reset();
+  fillArray();
+  const order = [];
+  wr32(LOCALS + 0x70, 1);
+  const indexNode = node(() => { order.push('index'); return 2; });
+  const valueNode = node(() => { order.push('value'); wr32(LOCALS + 0x70, 3); return 9; });
+  run([S.expr(w(K.SET_LOCAL_ELEM, 1, ARR, STRIDE, DIM, node(), node(), 2, w(K.JS_INT, indexNode), w(K.JS_INT, valueNode))), S.ret(R.VOID)]);
+  same(order.join(), 'index,value', 'the index is evaluated before the value');
+  same(rd32(LOCALS + ARR + 2 * STRIDE), 9, 'the element is the first index\'s');
+  // Vector elements (LOCAL_ELEM_VECTOR): three quiet words, or the closure for an index out of range.
+  const patterns = [bits(1.5), 0x7f800001, 0xffc00000];
+  for (const [name, index, i] of [['in range', 1, 0], ['first', 0, 1], ['last', DIM - 1, 2], ['negative', -1, 3], ['beyond', DIM, 4]]) {
+    reset();
+    fillArray();
+    for (let k = 0; k < DIM; k++) [bits(k), patterns[k % 3], bits(-k)].forEach((word, j) => wr32(LOCALS + ARR + k * STRIDE + 8 + 4 * j, word));
+    const n = node(r => (calls.push({imp: 'elem-host', receiver: r}), [0.25, -0.5, 0.75]));
+    run([S.expr(w(K.SET_LOCAL_VECTOR, 0x60, w(K.LOCAL_ELEM_VECTOR, ARR + 8, STRIDE, DIM, n, i % 2 ? E.int(index) : (wr32(LOCALS + 0x74, index), w(K.LOCAL_INT, 0x74))))), S.ret(R.VOID)]);
+    const got = [0x60, 0x64, 0x68].map(at => rd32(LOCALS + at));
+    if (index >= 0 && index < DIM) {
+      same(got.join(), [bits(index), patterns[index % 3] === 0x7f800001 ? 0x7fc00001 : patterns[index % 3], bits(-index)].join(), `vector element ${name}`);
+      same(calls.filter(c => c.imp === 'elem-host').length, 0, `vector element ${name}: no JavaScript`);
+    } else {
+      same(got.join(), [bits(0.25), bits(-0.5), bits(0.75)].join(), `vector element ${name}: the closure's value`);
+      same(calls.find(c => c.imp === 'vector')?.receiver, SELF_H, `vector element ${name}: the node on the receiver`);
+    }
+  }
+  // CHECK reports the vector element read.
+  reset();
+  fillArray();
+  wr32(CHECK_AT, 1);
+  const vectorNode = node();
+  run([S.expr(w(K.SET_LOCAL_VECTOR, 0x60, w(K.LOCAL_ELEM_VECTOR, ARR + 8, STRIDE, DIM, vectorNode, E.int(1)))), S.ret(R.VOID)]);
+  const vectorCheck = calls.find(c => c.imp === 'check');
+  same([vectorCheck?.node, vectorCheck?.kind].join(), [vectorNode, CK.VECTOR].join(), 'vector element check node and kind');
 }
 {
   // The CycleActors foreach (S_FOREACH_CYCLE), against createCycleActorsIterator over the same array.

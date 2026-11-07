@@ -74,14 +74,15 @@ pub(crate) struct Iter {
 pub(crate) const NO_ITER: Iter =
     Iter { active: false, node: 0, rid: 0, body: 0, after: 0, cursor: 0, steps: 0, bound: 0, actor: (0, 0, 0), index: (0, 0, 0) };
 
-/// [OUT_STRUCT=verify, FOREACH_START=verify, 0, 0] (script-vm-foreach.mjs).
+/// [OUT_STRUCT=verify or STRUCT_ARRAYS=verify, FOREACH_START=verify, STRUCT_ARRAYS=verify, 0] (script-vm-foreach.mjs). The third word
+/// makes interp.rs read back every element store through the closure of the store's target.
 static mut FEATURES: [u32; 4] = [0; 4];
 #[no_mangle]
 pub extern "C" fn vm_features_ptr() -> *mut u32 {
     addr_of_mut!(FEATURES) as *mut u32
 }
 #[inline(always)]
-fn feature(i: usize) -> bool {
+pub(crate) fn feature(i: usize) -> bool {
     unsafe { *(addr_of!(FEATURES) as *const u32).add(i) != 0 }
 }
 
@@ -149,7 +150,7 @@ impl Run {
         true
     }
     /// A P_STRUCT argument: `n`, the members, then the copy in from source `index` to the callee's parameter at `dst`.
-    pub(crate) fn out_struct_in(&mut self, sources: &Sources, index: u32, dst: u32, node: u32, outs: &mut Outs) {
+    pub(crate) fn out_struct_in(&mut self, sources: &Sources, index: u32, dst: u32, node: u32, outs: &mut Outs, back: bool) {
         let n = self.op(0) as usize;
         let members = unsafe { self.pc.add(1) };
         self.skip(1 + 3 * n);
@@ -159,6 +160,10 @@ impl Run {
         if feature(0) {
             unsafe { js_out_struct_check(self.frame, node, index, 0, src, dst) };
             self.self_fresh = false;
+        }
+        // (a struct passed by value is copied in only)
+        if !back {
+            return;
         }
         if outs.count >= MAX_OUT {
             self.fail(ERR_OUT_STRUCT, node);

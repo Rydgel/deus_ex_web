@@ -193,6 +193,40 @@ export function scalarStructMembers(cell) {
   return {offset: cell.offset, members};
 }
 
+/** A struct cell flattened to its scalar leaves: every byte, int, bool, float and object-pointer member, and the three components of
+ * a vector (float) or rotator (int) member, with nested structs and fixed arrays walked in order. {offset, members}, the members
+ * {key, kind, offset (within the struct), mask, path} as scalarStructMembers describes them (a leaf's key is that of the member it
+ * lies in); `path` is the steps from the struct's value to the leaf (a member key, an array index or a component index), for a
+ * check against the codec copy. Null when any part is a name, string, dynamic array or other cell with no byte form, or the struct
+ * has no leaf. */
+export function flatStructMembers(cell) {
+  if (!cell || cell.tag !== STRUCT || !cell.members.length) return null;
+  const members = [];
+  const walk = (part, base, path, key) => {
+    key = part.key ?? key;
+    const kind = MEMBER_KINDS[part.tag];
+    if (kind) {
+      members.push({key, kind, offset: base + part.offset, mask: part.mask >>> 0, path});
+      return true;
+    }
+    switch (part.tag) {
+      case VECTOR: case ROTATOR:
+        for (let i = 0; i < 3; i++)
+          members.push({key, kind: part.tag === VECTOR ? 'float' : 'int', offset: base + part.offset + 4 * i, mask: 0, path: [...path, i]});
+        return true;
+      case STRUCT:
+        return part.members.length > 0 && part.members.every(member => walk(member, base + part.offset, [...path, member.key], member.key));
+      case FIXED:
+        if (!(part.dim > 0)) return false;
+        for (let i = 0; i < part.dim; i++) if (!walk(part.element, base + part.offset + i * part.stride, [...path, i], key)) return false;
+        return true;
+      default: return false;
+    }
+  };
+  for (const member of cell.members) if (!walk(member, 0, [member.key], member.key)) return null;
+  return {offset: cell.offset, members};
+}
+
 /** A Core vector or rotator cell (three float32 or int32 words at 4-byte
  * steps, structCell checks the linked layout): its kind ('vector' or
  * 'rotator') and offset, for the Rust interpreter's lowering. Null for any

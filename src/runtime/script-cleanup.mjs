@@ -102,7 +102,7 @@ function siteReference(site,reference) {
  * CleanupDestroyed pass: neither answer changes while the pass clears
  * references); a pending one's site is cleared through `reference`, as
  * cleanupScriptReferences clears it. */
-export function cleanupImageSites(sites,offsets,view,base,bound,reference,services,verdicts) {
+export function cleanupImageSites(sites,offsets,view,base,bound,reference,services,verdicts,record=null) {
   for(let index=0;index<sites.length;index++){
     const site=sites[index];
     let target;
@@ -112,17 +112,27 @@ export function cleanupImageSites(sites,offsets,view,base,bound,reference,servic
       target=handle===0?null:identityOfHandle(handle);
     }
     if(target===null)continue;
-    let pending=verdicts.get(target);
-    if(pending===undefined){
-      if(typeof services.isValid!=='function'||services.isValid(target)!==true)
-        throw new Error(`CleanupDestroyed found an invalid or unregistered reference: ${site.key}`);
-      if(typeof services.isPendingKill!=='function')throw new Error('CleanupDestroyed requires the native IsPendingKill binding');
-      pending=Boolean(services.isPendingKill(target));
-      verdicts.set(target,pending);
-    }
-    if(pending)siteReference(site,reference).set(null);
+    // (`record`, an Array, is the host's dry run of this loop, script-vm-cleanup.mjs CLEANUP_SCAN=verify: the sites it would clear, in order)
+    if(siteVerdict(target,site,services,verdicts)){if(record!==null)record.push(index);else siteReference(site,reference).set(null);}
   }
 }
+/** The pass's verdict on `target` (a non-null reference found at `site`): IsValid and IsPendingKill, asked once per object and kept in
+ * `verdicts`; true when the reference is to be cleared. */
+export function siteVerdict(target,site,services,verdicts) {
+  let pending=verdicts.get(target);
+  if(pending===undefined){
+    if(typeof services.isValid!=='function'||services.isValid(target)!==true)
+      throw new Error(`CleanupDestroyed found an invalid or unregistered reference: ${site.key}`);
+    if(typeof services.isPendingKill!=='function')throw new Error('CleanupDestroyed requires the native IsPendingKill binding');
+    pending=Boolean(services.isPendingKill(target));
+    verdicts.set(target,pending);
+  }
+  return pending;
+}
+/** The value of the bound field's site (cleanupImageSites reads it through the binding). */
+export const readSite=(site,reference)=>siteReference(site,reference).get();
+/** Clear the pointer at `site` (cleanupImageSites' store) through the property reference. */
+export const clearSite=(site,reference)=>{siteReference(site,reference).set(null);};
 
 /** Engine CompactActors103963e0: stable compaction only after Level+110.
  * A caller must supply that native index; filtering the whole array changes
