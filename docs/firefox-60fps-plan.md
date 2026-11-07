@@ -2953,6 +2953,103 @@ sessions above, `frame-time-set.mjs --ff-prefs` was syntax-checked and passes th
   slowest tenth and p99 (bunker p99 23.5 ms).
 * Not measured: the Mac, headed runs, more than one 20 us session per map.
 
+### Actors phase (2026-11-07)
+
+The task: `p.actors` (1.78 ms Island, 1.48 Battery Park, 1.75 bunker in the frame-time set on master 7e501a2a) is the second phase after the tick, and the
+Island, Battery Park and the bunker sit at a page p95 of 17 ms, one step over 16.7. Re-rank the phase on those three maps, port the largest families
+exactly, and ship if an interleaved Firefox A/B takes 0.3 ms off the page mean or 0.5 ms off the slowest tenth on one of the two scan maps without
+regressing the other. **Result: the bar is not met. The phase has no family left that is worth a port: its two large parts are the original OccludeBsp
+pass in Rust (which is the algorithm) and the drawn bindings' update, and everything the Dockyard ranking named is now 0.00 to 0.06 ms.** The two
+ports that the ranking supports (about 0.05 ms between them) are exact and are on branch `actors-phase-unshipped` (`ad271713`); this section is the only change on the
+worktree branch. Everything below is headless Linux (Firefox 155 inline, 1440x960, god mode, pinned to `taskset -c 4-7,12-15`, one heavy job at a time); the Mac is not measured.
+
+**Ranking** (Gecko profile of a Firefox inline session on master 7e501a2a: `hitch-run.mjs --browser firefox --profile`, Island and bunker `--mode scan --god`
+40 s, Battery Park `--mode idle --god --place '{"location":[2025,-3396,263],"rotation":[0,32768,0]}'` 30 s; read with `gecko-phase.mjs --entry '^actors \(src/viewer/sim-session'`
+from 5 s after the map, 1 ms samples; the profiler inflates the host by about a fifth, so this ranks and does not A/B; ms a frame, inclusive):
+
+| Part | Island | bunker | Battery Park |
+|---|---:|---:|---:|
+| `p.actors` / `w.actors` of the profiled run (all drawn frames) | 1.93 / 1.64 | 1.93 / 1.73 | 2.25 / 1.94 |
+| the `actors` step (simulation half) | 1.59 | 1.69 | 1.63 |
+| `occludeMain` | 0.90 | 1.10 | 0.86 |
+| - the OccludeBsp pass in Rust (`occ_run`), its own wasm | 0.47 | 0.50 | 0.49 |
+| - the child frames' SetupDynamics, script callbacks out of that pass (`occ_frame_dynamics`: the laser and particle iterators' rescans) | 0.12 | 0.23 | 0.09 |
+| - JavaScript around the pass (`packDynamics` 0.04 / 0.06 / 0.03, output decode 0.03, Setup 0.03, detail block 0.01 to 0.03, decal block 0.02 / 0.06 / 0.03, `lightFramesOf` 0.02, ...) | 0.31 | 0.37 | 0.28 |
+| the bindings' update (`updateBindings`) | 0.43 | 0.34 | 0.56 |
+| - SetupForActor lighting (`lightFrame`) | 0.20 | 0.14 | 0.26 |
+| - `planGpu` | 0.07 | 0.04 | 0.09 |
+| `meshReads` (the roster's Rust pass) / `reconcile` / weapons | 0.07 / 0.05 / 0.06 | 0.06 / 0.06 / 0.05 | 0.07 / 0.04 / 0.04 |
+| the page's half (`apply`: the GPU mesh pass, texSubImage2D 0.07 of it) | 0.26 | 0.19 | 0.26 |
+| `membership` (script-vm-meshlight), `newScope` with its `itemKey`, `drawItems`, `drawExtras`, `retire`, `compactRecords` | 0.00 each | 0.00 each (`admit` 0.01) | 0.00 each |
+
+The rows the Dockyard ranking carried to the next pass are not in these maps' profiles: Level.Actors is not rewritten in most frames here, so the light-membership rebuild
+does not register (0.00), the few iterator items (lasers, particles) make `newScope` and `itemKey` 0.00, and the bulk passes of [Actors layer in bulk](#actors-layer-in-bulk-2026-11-06) made `reconcile` 0.04 to 0.06.
+Inside the pass (wasm names from a non-stripped build, `wasm-names.mjs`; self time under `visibility`): `occlude` 0.31 / 0.34 / 0.33, `SpanBuffer::copy_from_raster` 0.08 /
+0.08 / 0.07, `occ_setup` 0.02 / 0.03 / 0.04, `setup::rotate` 0.02 / 0.02 / 0.03, `bound_visible_box` 0.02 / 0.03 / 0.03, `SpanBuffer::merge_with` 0.02, `detail_run` 0.02.
+A V8 CPU profile of the same pass in Node with the pass' helpers marked `#[inline(never)]` in a scratch build (not committed; Island roaming, 660 frames,
+`node --cpu-prof`, 1.01 ms a frame under `occ_run`) splits `occlude` further: its own body 0.26, `clip_bsp_surf` 0.20, `copy_from_raster` 0.12, `rasterize` 0.06,
+`filter_chunks` 0.04, `bound_visible_box` 0.03, `detail_run` 0.03, `merge_with` 0.03, `occ_setup` 0.02, `rotate` 0.02, `setup_sprites` 0.02. These are the original's polygon clip, span and BSP loops,
+already one pass of straight Rust at `opt-level = 3` with LTO, bulk memory and saturating conversions on; nothing in them is host plumbing, and there is no `perf` or `wasm-opt` on this host to go below function level.
+
+**The slowest tenth is the same code, with more of it.** In the profiled runs the slowest tenth of page frames has `p.actors` 3.50 (Island), 3.65 (bunker), 2.61 (Battery Park)
+against 1.93, 1.93, 2.25. The Island's frames with `p.actors` over 3 ms (the `actors` step 2.81 against 1.59): `occlude` 0.79 self (0.31), `copy_from_raster` 0.17 (0.08), the bindings' update 0.77 (0.43; lighting
+0.37 against 0.20: more drawn actors, more of the same per-actor work), Minor GC 0.05. The bunker's (3.70 against 1.69): `occlude` 0.55, and a Major GC mark slice of 0.56 ms landing in the
+phase (0.03 on average). Nothing in the slow frames is a spike of one function; the view has more geometry and more drawn actors in it.
+
+**What the long tail is.** The JavaScript left in the simulation half is about 1.0 ms of the Island's 1.59, in pieces of 0.01 to 0.07 ms, none from a loop over the ~500 bindings any more
+(`updateBindings` itself 0.02 self, `isPawn` over all bindings 0.01, `rosterReads` 0.06 and `admitScan` 0.05 are Rust). Reads of actor fields through `readNamed` add up to 0.11 ms at
+the Island but come from a dozen callers (`lightRecord` 0.015, the sprite scan's `read` 0.011, `finishSetup`'s ambient reads 0.007, `readLaserState` 0.006, `zoneSkies` 0.005, ...).
+Allocation in the step is 268 KB a frame (`frame-alloc-meter.mjs --sites`): `readComposite` 24, `decode` 17, the laser reads 18, `updateDrawn` 8, no site above 24 KB.
+
+**What changed** (each body is kept behind `?actorTail=js|verify`, `ACTOR_TAIL=` in Node; default `on`; `src/viewer/actor-tail.mjs`, listed in main.mjs' switch list):
+* **`candidateWords`** (dynamics-candidates.mjs): the root frame's packed SetupDynamics candidates, kept for the child frames' `patchDynamics`, were a `.slice()` of 25 to 30 KB at every
+  occlusion run (0.022 ms a frame in the Firefox profile at the Island and the bunker, an off-heap typed array each time). They are copied into a scratch kept per call site (`slot`: the main frame's run, a
+  viewport window's planning) and handed out as a view of exactly their length; the child frames read them and nothing keeps them past the run (`verify` compares each with a fresh slice).
+* **`permeatingRun`** (mesh-lighting-view.mjs): a BSP leaf's permeating static lights as handles (`exportName`, the name map's lookup and `handleOf` per light) were made again for
+  every leaf of every frame (0.03 to 0.05 ms in `rustSetup`). They are kept across frames while the model, the actor name map object and `actorsEpoch()` are the ones they were made for (the
+  bound `levelMembership` itself uses); `verify` makes the run again at every reuse and compares refs and handles.
+
+**Evidence for fidelity.** Neither body touches the simulation or any original-game computation (they change how the host holds a copy and a lookup), so the check is the output:
+* The six `bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback` digests are unchanged: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`,
+  Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`.
+* `frame-alloc-meter.mjs` (every snapshot hashed with its numbers' exact bits, 300 frames, warm-up 60): the reference bodies (`ACTOR_TAIL=js`) write the hashes and `ACTOR_TAIL=verify` and
+  the defaults `--compare` against them: identical on the Island (`5e021f24dcd1a8ed`), bunker (`e79f8ee485bbfd2a`), Battery Park (`2619df1a6eed0e52`), Airfield (`a04d154da0b6a1a0`) and Dockyard
+  (`35a4f60ce160360e`), with no `verify` error. (The Island and Airfield digests are the ones the previous section recorded; Battery Park and Dockyard have moved with later commits.)
+* Validators (`run-validators.mjs --jobs 1 --filter`, one at a time): actor-mesh-scene, gpu-mesh, bsp-occlusion, spawn-mesh-binding, npc-mesh-preview, umesh-play, sprite-setup, play-frame,
+  first-draw-pose, lodmesh-lod-play, dynamic-light-mover, brush-tracker, leaf-lights, mesh-lighting, mesh-light-types: 18 passed, 0 failed (the last two filters match two validators each).
+* In the browser: `validate-mesh-path-frames.mjs --frames 90 --query '&actorTail=verify' --plumbing` PASS (the Paris club's mirrors, 1280x720 identical); `validate-sim-split.mjs --draw-state --pixels --query-b 'actorTail=js'`
+  PASS in worker mode and with `--query 'sim=inline'` (Island, 240 frames, 4 digests, every binding's draw state and the pixels equal); Firefox inline sessions with `actorTail=verify`
+  (`hitch-run.mjs --browser firefox --mode scan --god --seconds 40 --query actorTail=verify`): Island 2,623 drawn frames, bunker 2,664, no page error, so no `verify` throw.
+* `npm test` on the branch's tree: 983 tests, 979 passed, 4 skipped, 0 failed. No Rust changed, so `npm run build:wasm` is as warning-free as it was.
+
+**A/B** (`hitch-ab.mjs --guard --cpus 4-7,12-15 --arms "tail:,js:actorTail=js" --pairs 6 -- --browser firefox --map M --mode scan --god --seconds 60`, the arms' order alternating, six pairs a map;
+`.work/ab-pairs.mjs` for the paired figures; ms; the `/` is the defaults against `actorTail=js`):
+
+| Map (6 pairs) | | `p.actors` | `w.actors` | tick | page mean | page slowest tenth |
+|---|---|---:|---:|---:|---:|---:|
+| Island, scan route | tail / js | 1.80 / 1.84 | 1.52 / 1.56 | 5.91 / 5.87 | 12.66 / 12.68 | 18.72 / 18.70 |
+| | difference (se; pairs lower) | -0.03 (0.01; 5 of 6) | -0.04 (0.01; 6 of 6) | +0.05 (0.05; 2 of 6) | -0.02 (0.09; 4 of 6) | +0.02 (0.41; 4 of 6) |
+| Area 51 bunker, scan route | tail / js | 1.71 / 1.73 | 1.51 / 1.53 | 4.71 / 4.82 | 11.68 / 11.79 | 19.82 / 19.20 |
+| | difference (se; pairs lower) | -0.02 (0.03; 4 of 6) | -0.02 (0.03; 3 of 6) | -0.11 (0.10; 4 of 6) | -0.10 (0.19; 4 of 6) | +0.61 (0.71; 2 of 6) |
+
+By pair (tail minus js): Island `p.actors` -0.02, -0.07, -0.03, -0.02, -0.07, +0.01; page mean -0.05, -0.11, -0.15, +0.08, -0.23, +0.35; slowest tenth 0.00, -0.21, -0.78, +0.09, -0.89, +1.91.
+Bunker `p.actors` -0.10, +0.07, +0.08, -0.09, 0.00, -0.07; page mean -0.34, +0.68, +0.13, -0.34, -0.14, -0.62; slowest tenth -1.10, +3.54, +0.70, +1.38, +0.14, -0.98. Page p95 (whole ms), tail / js by pair:
+Island 18/18, 18/19, 18/18, 18/17, 18/19, 19/18; bunker 17/18, 19/17, 17/17, 18/17, 17/17, 18/18.
+
+Ship bar (0.3 ms off the page mean or 0.5 ms off the slowest tenth on one of the two maps, no regression on the other): **not met**. The phase figures move by what the profile said
+they would (`w.actors` -0.04 ms, every Island pair), and the page figures do not separate from the sessions' noise (the Island's slowest-tenth difference has a standard error of 0.41 ms).
+The code is therefore not on this branch: `actors-phase-unshipped` carries `actor-tail.mjs`, the two bodies and the switch.
+
+**What is still open** (ms a frame, Firefox, profiled; a port's ceiling is its whole row, and none is likely to be cut whole):
+* **The OccludeBsp pass itself**, 0.47 to 0.50 ms and 0.8 to 1.0 in the slow frames: `occlude` 0.31 to 0.34, `copy_from_raster` 0.07 to 0.08. It is the original's loops; a cut needs a line-level
+  profile of the wasm (counters in a scratch build, or a tool this host lacks) and is bit-exact work on `occlude.rs`.
+* **The child frames' iterator rescans**, 0.09 to 0.23 (bunker): original script runs through the VM. At the bunker 0.05 of them is `js_bool` for `0x2d(0x36:bool(0x1a))` (a `bool` member of a
+  struct-array element, eight per laser iterator's `Init`, 38 a frame) and each `Init` reads `Outer` in JavaScript; lowering those two nodes is VM compiler work (script-vm-lower.mjs), not this layer's.
+* **The glue around the pass**, 0.28 to 0.37, in pieces: `packDynamics` 0.03 to 0.06, output decode 0.03 (17 KB of arrays a frame), the detail and decal blocks 0.04 to 0.09, Setup 0.03, `lightFramesOf` 0.02.
+* **SetupForActor's bookkeeping**, 0.14 to 0.26 of the bindings' update: the Rust selection (`select`) is 0.03 to 0.04; the rest is `lightRecord` field reads, `finishSetup`, `setupAmbient`, the per-leaf moving-light lists
+  (`get` 0.03 to 0.05) and `lodMeshCameraMatrix` 0.02 to 0.04.
+* **`planGpu`** 0.04 to 0.09 (`planLodMeshFrame`, `frameContext` 0.03) and the page's `uploadDirty` (texSubImage2D 0.07).
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
