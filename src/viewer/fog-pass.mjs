@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getAxes } from '../runtime/camera.mjs';
 import { movingLightConstants } from '../runtime/dynamic-lighting.mjs';
-import { coordsTransform, volumetricLight, fogMap, fogMapKernel } from '../runtime/volumetric-fog.mjs';
+import { coordsTransform, volumetricLight, fogMap, fogMapKernel, fogKernelVerify, fogModes } from '../runtime/volumetric-fog.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { lightmapBasis } from '../unreal/lighting.mjs';
@@ -45,12 +45,19 @@ const fogUploadMode = () => globalThis.DEUS_EX_FOG_UPLOAD || (typeof process !==
  * `Array.from`. SpiderMonkey runs both `from` calls through the iterator protocol (a self-hosted `next` per byte): beside the Paris
  * club's mirrors the fog update fell from 2.25 to 1.71 ms a frame without them (docs/mirror-surfaces.md "Firefox spot survey"). */
 const fogCopyMode = () => globalThis.DEUS_EX_FOG_COPY || (typeof process !== 'undefined' && process.env?.FOG_COPY) || 'copy';
+/** A 32-bit view of an aligned byte array (little-endian hosts), or null. */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+const words = bytes => LITTLE_ENDIAN && bytes.byteOffset % 4 === 0 && bytes.length % 4 === 0 ? new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2) : null;
+/** A BGRA texel word as the RGBA word of the atlas (the red and blue bytes exchanged). */
+const swizzle = v => (v & 0xff00ff00) | ((v >>> 16) & 0xff) | ((v & 0xff) << 16);
 export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, notes, kernel = null }) {
   const root = new THREE.Group(), surfaces = [], lights = [], pages = new Map(), moverPolygons = new Map();
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
-  const stats = { surfaces: 0, moverPolygons: 0, lights: 0, drawn: 0, texels: 0, kernel: Boolean(kernel) };
+  const stats = { surfaces: 0, moverPolygons: 0, lights: 0, drawn: 0, texels: 0, kernel: Boolean(kernel), verify: fogKernelVerify };
   const size = lightAtlas.size;
   let diagnostics = false;
+  // The switches (volumetric-fog.mjs fogModes), read once per update.
+  let modes = fogModes();
   // Where a surface's fog map draws among the frame's items (render-layers.mjs: after its surface, a masked one's in the
   // non-occluding list's band); `last` (validation, setLast) puts every map after the other world items.
   let last = false;
@@ -62,7 +69,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const texture = new THREE.DataTexture(pixels, size, size, THREE.RGBAFormat);
       texture.minFilter = texture.magFilter = THREE.LinearFilter;
       texture.generateMipmaps = false; texture.flipY = false; texture.colorSpace = THREE.NoColorSpace;
-      pages.set(index, { pixels, texture, uniform: { value: texture } });
+      pages.set(index, { pixels, pixels32: words(pixels), texture, uniform: { value: texture } });
     }
     return pages.get(index);
   }
@@ -130,7 +137,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   function lightsFor(coords) { return lightInputs(coords).map(volumetricLight); }
   function fogInput(record, grid, coords, frameLights, state) {
     return { grid: { base: grid.start, stepU: grid.stepU, stepV: grid.stepV }, width: record.width,
-      height: record.height, coords, lights: frameLights, state };
+      height: record.height, coords, lights: frameLights, state, modes };
   }
   /** Validation (validate-volumetric-fog-play.mjs): the most fogged map of
    * a kind this update, with the loop's inputs for the oracle. */
@@ -154,13 +161,37 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   }
   /** BGRA texels into an RGBA buffer of row length `stride` at (x, y), the
    * one-texel padding repeated. */
-  function writeTile(pixels, stride, x, y, record, texels) {
+  function writeTileReference(pixels, stride, x, y, record, texels) {
     for (let row = -1; row <= record.height; row++) for (let col = -1; col <= record.width; col++) {
       const src = (Math.max(0, Math.min(record.height - 1, row)) * record.width + Math.max(0, Math.min(record.width - 1, col))) * 4;
       const dst = ((y + row) * stride + x + col) * 4;
       pixels[dst] = texels[src + 2]; pixels[dst + 1] = texels[src + 1];
       pixels[dst + 2] = texels[src]; pixels[dst + 3] = texels[src + 3];
     }
+  }
+  /** The same tile a word at a time (the texel's four bytes read as one 32-bit word, the red and blue bytes exchanged): Firefox ran the byte loop at
+   * 0.33 ms of the Underground's 11 ms fog phase. `pixels32` is the tile buffer's 32-bit view; without it, or with ?fogPass=reference, the byte loop. */
+  function writeTile(pixels, stride, x, y, record, texels, pixels32 = null) {
+    const mode = modes.pass, source = pixels32 && mode !== 'reference' ? words(texels) : null;
+    if (!source) return writeTileReference(pixels, stride, x, y, record, texels);
+    const { width, height } = record;
+    for (let row = -1; row <= height; row++) {
+      const s = Math.max(0, Math.min(height - 1, row)) * width, d = (y + row) * stride + x;
+      pixels32[d - 1] = swizzle(source[s]);
+      for (let col = 0; col < width; col++) pixels32[d + col] = swizzle(source[s + col]);
+      pixels32[d + width] = swizzle(source[s + width - 1]);
+    }
+    if (mode === 'verify') verifyTile(pixels, stride, x, y, record, texels);
+  }
+  /** ?fogPass=verify: the byte loop's tile into a scratch buffer, compared with what the word loop wrote. */
+  let tileScratch = new Uint8Array(0);
+  function verifyTile(pixels, stride, x, y, record, texels, kind = 'tiles') {
+    const w = record.width + 2, h = record.height + 2;
+    if (tileScratch.length < w * h * 4) tileScratch = new Uint8Array(w * h * 4);
+    writeTileReference(tileScratch, w, 1, 1, record, texels);
+    stats.verify[kind]++;
+    for (let row = 0; row < h; row++) for (let i = 0; i < w * 4; i++)
+      if (pixels[((y - 1 + row) * stride + x - 1) * 4 + i] !== tileScratch[row * w * 4 + i]) { stats.verify[`${kind}Differing`]++; return; }
   }
   /** Whether a fog map has a nonzero byte (texels.some(Boolean), which in Firefox calls back for every byte: 1.26 ms of Battery
    * Park's frame): a loop over 32-bit words where the bytes are aligned. */
@@ -228,47 +259,115 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
    * an item in a bFogZone zone, of a lit polygon, gets one. Each goes to a
    * mesh over the item's fragments tagged with `frame`. */
   function moverMaps(moverItems, fogZone, coords, frameLights, state, frame, each) {
+    const mode = modes.pass;
     for (const item of moverItems ?? []) {
       const record = moverPolygons.get(`${item.mover}:${item.polygon}`);
       // Diagnostics: each item of the root frame, with the map's largest texel or why it has none (stats.moverItems).
       const why = !record ? 'no lit polygon record' : !item.facet ? 'no facet' : !fogZone?.(item.zone) ? `zone ${item.zone} not bFogZone` : null;
       if (why) { if (frame === 0 && diagnostics) noteItem(item, why); continue; }
-      const basis = moverBasis(record, item.facet);
-      const input = fogInput(record, moverGrid(basis), coords, frameLights, state), missFlag = state.missFlag;
+      // The basis and lattice are pure functions of the polygon's record and the facet: the pooled mesh this item would take keeps the last
+      // ones with the facet they came from (a mover at rest sends the same facet every frame).
+      const held = mode === 'reference' ? null : items[itemsUsed];
+      const cached = Boolean(held?.basis) && held.record === record && sameNumbers(held.facetKey, item.facet, 12);
+      let basis = cached ? held.basis : moverBasis(record, item.facet), grid = cached ? held.grid : moverGrid(basis);
+      if (cached && mode === 'verify') {
+        const freshBasis = moverBasis(record, item.facet), fresh = moverGrid(freshBasis);
+        stats.verify.grids++;
+        if (!['start', 'stepU', 'stepV'].every(name => sameNumbers(fresh[name], grid[name], 3))) stats.verify.gridsDiffering++;
+        basis = freshBasis;
+      }
+      const input = fogInput(record, grid, coords, frameLights, state), missFlag = state.missFlag;
       const texels = kernel ? fogMapKernel(kernel, input) : fogMap(input);
       if (frame === 0 && diagnostics) {
         const g = input.grid, far = g.base.map((v, k) => v + g.stepU[k] * record.width + g.stepV[k] * record.height), r = v => v.map(x => Math.round(x)).join(',');
         noteItem(item, `${texels ? `max texel ${Math.max(...texels)}` : 'no texels'} lattice ${r(g.base)}..${r(far)} ${record.width}x${record.height} facet ${r(item.facet.slice(0, 3))} n ${item.facet.slice(9, 12).map(x => x.toFixed(2)).join(',')}`);
       }
       if (!texels) continue;
-      itemMesh(item, record, basis, texels, frame);
+      itemMesh(item, record, basis, grid, texels, frame, cached);
       each(item, texels, input, missFlag, basis);
     }
   }
+  function sameNumbers(a, b, length) {
+    if (!a || !b) return false;
+    for (let i = 0; i < length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  /** Whether a pooled mesh's last fragments (`slot.flat` with each fragment's length in `slot.lengths`) are `fragments` number for number. */
+  function fragmentsMatch(slot, fragments) {
+    const { flat, lengths } = slot;
+    if (!flat || lengths.length !== fragments.length) return false;
+    let at = 0;
+    for (let f = 0; f < fragments.length; f++) {
+      const points = fragments[f], n = points.length;
+      if (n !== lengths[f] || at + n > flat.length) return false;
+      for (let i = 0; i < n; i++) if (points[i] !== flat[at + i]) return false;
+      at += n;
+    }
+    return at === flat.length;
+  }
   /** The next pooled item mesh: the item's fragments (fans, view space),
    * its map in a padded texture of its own, and light UVs into it from the
-   * basis (lightmapBasis.uv: texel centres at +0.5). */
-  function itemMesh(item, record, basis, texels, frame) {
+   * basis (lightmapBasis.uv: texel centres at +0.5).
+   *
+   * A mesh whose inputs did not change since it last drew keeps what it has (?fogPass=reference rebuilds all of it every frame, as before
+   * 2026-11-07; ?fogPass=verify rebuilds it beside the kept one and counts the differences): the geometry is a pure function of the
+   * facet, the polygon's record and the fragments' points, so a mover at rest (the camera may move) keeps its three attributes; the
+   * texture is a pure function of the map, so a map equal to the last one written is not written or uploaded again. */
+  function itemMesh(item, record, basis, grid, texels, frame, facetSame) {
+    const mode = modes.pass;
     let slot = items[itemsUsed];
     if (!slot) {
       const uniform = { value: null }, mesh = new THREE.Mesh(new THREE.BufferGeometry(), material(uniform));
       mesh.matrixAutoUpdate = false; mesh.frustumCulled = false;
       root.add(mesh);
-      slot = items[itemsUsed] = { mesh, uniform, texture: null, width: 0, height: 0 };
+      slot = items[itemsUsed] = { mesh, uniform, texture: null, pixels32: null, lastTexels: null, width: 0, height: 0, flat: null, lengths: [] };
     }
     itemsUsed++;
     slot.masked = moverMasked.has(`${item.mover}:${item.polygon}`);
     slot.mesh.renderOrder = orderOf(slot.masked);
     const w = record.width + 2, h = record.height + 2;
+    let reshaped = false;
     if (slot.width !== w || slot.height !== h) {
       slot.texture?.dispose();
-      slot.texture = new THREE.DataTexture(new Uint8Array(w * h * 4), w, h, THREE.RGBAFormat);
+      const pixels = new Uint8Array(w * h * 4);
+      slot.texture = new THREE.DataTexture(pixels, w, h, THREE.RGBAFormat);
       slot.texture.minFilter = slot.texture.magFilter = THREE.LinearFilter;
       slot.texture.generateMipmaps = false; slot.texture.flipY = false; slot.texture.colorSpace = THREE.NoColorSpace;
-      slot.uniform.value = slot.texture; slot.width = w; slot.height = h;
+      slot.uniform.value = slot.texture; slot.width = w; slot.height = h; slot.pixels32 = words(pixels); slot.lastTexels = null; reshaped = true;
     }
-    writeTile(slot.texture.image.data, w, 1, 1, record, texels);
-    slot.texture.needsUpdate = true;
+    // The map: written (and uploaded, at the render) unless it equals the one the texture holds.
+    const now = mode === 'reference' ? null : words(texels);
+    let unchanged = Boolean(now) && !reshaped && slot.lastTexels?.length === now.length;
+    if (unchanged) for (let i = 0; i < now.length; i++) if (now[i] !== slot.lastTexels[i]) { unchanged = false; break; }
+    if (!unchanged) {
+      writeTile(slot.texture.image.data, w, 1, 1, record, texels, slot.pixels32);
+      slot.texture.needsUpdate = true;
+      if (now) { if (slot.lastTexels?.length === now.length) slot.lastTexels.set(now); else slot.lastTexels = now.slice(); } else slot.lastTexels = null;
+    } else if (mode === 'verify') verifyTile(slot.texture.image.data, w, 1, 1, record, texels, 'textures');
+    // The geometry.
+    if (!facetSame) { slot.basis = basis; slot.grid = grid; slot.record = record; slot.facetKey = Float64Array.from(item.facet.slice(0, 12)); }
+    const keep = mode !== 'reference' && facetSame && !reshaped && Boolean(slot.mesh.geometry.getAttribute('position')) && fragmentsMatch(slot, item.fragments);
+    if (!keep || mode === 'verify') {
+      const built = buildItemGeometry(item, basis, w, h);
+      if (keep) {
+        stats.verify.geometries++;
+        const geometry = slot.mesh.geometry;
+        if (!['position', 'lightUV', 'lightBounds'].every(name => geometry.getAttribute(name).array.length === built[name].array.length
+          && sameNumbers(geometry.getAttribute(name).array, built[name].array, built[name].array.length))) stats.verify.geometriesDiffering++;
+      } else {
+        const geometry = slot.mesh.geometry;
+        geometry.setAttribute('position', built.position);
+        geometry.setAttribute('lightUV', built.lightUV);
+        geometry.setAttribute('lightBounds', built.lightBounds);
+        slot.lengths = item.fragments.map(points => points.length);
+        slot.flat = Float64Array.from(item.fragments.flatMap(points => Array.from(points)));
+      }
+    }
+    slot.frame = frame; slot.mesh.visible = frame === 0;
+  }
+  /** The three attributes of an item's fan triangles in view space (positions, light UVs into the padded `w` by `h` texture, and the
+   * clamp box of each vertex). */
+  function buildItemGeometry(item, basis, w, h) {
     const positions = [], uvs = [], bounds = [], box = [1.5 / w, 1.5 / h, (w - 1.5) / w, (h - 1.5) / h];
     // Each fan triangle faces the eye as the world's do (geometry.mjs
     // buildSurfaceGeometry): one whose Unreal winding runs along the facet's
@@ -287,11 +386,8 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
         if (along > 0) { vertex(0); vertex(k + 1); vertex(k); } else { vertex(0); vertex(k); vertex(k + 1); }
       }
     }
-    const geometry = slot.mesh.geometry;
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(uvs, 3));
-    geometry.setAttribute('lightBounds', new THREE.Float32BufferAttribute(bounds, 4));
-    slot.frame = frame; slot.mesh.visible = frame === 0;
+    return { position: new THREE.Float32BufferAttribute(positions, 3), lightUV: new THREE.Float32BufferAttribute(uvs, 3),
+      lightBounds: new THREE.Float32BufferAttribute(bounds, 4) };
   }
   return {
     root, stats,
@@ -341,6 +437,8 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * flag carried through. `framePass(frame, renderer)` puts a child
      * frame's maps in place for its pass. */
     update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null, renderer = null } = {}) {
+      modes = fogModes();
+      modes.record?.frame();
       stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null; stats.moverItems = [];
       diagnostics = fogNotesOn();
       childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
@@ -377,7 +475,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       levelMaps(drawn, frustum, coords, frameLights, state, (surface, texels) => {
         const { record, tile, mesh, fogPage } = surface;
         if (anyFog(texels)) rootFogged.add(surface.surfaceIndex);
-        writeTile(fogPage.pixels, size, tile.x, tile.y, record, texels);
+        writeTile(fogPage.pixels, size, tile.x, tile.y, record, texels, fogPage.pixels32);
         dirty.add(fogPage); written.push(surface);
         surface.mainVisible = mesh.visible = true; stats.drawn++; stats.texels += record.width * record.height;
       });
@@ -471,9 +569,9 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
           const pixels = new Uint8Array((record.width + 2) * (record.height + 2) * 4);
           const texture = new THREE.DataTexture(pixels, record.width + 2, record.height + 2, THREE.RGBAFormat);
           texture.flipY = false;
-          return { pixels, texture };
+          return { pixels, pixels32: words(pixels), texture };
         })();
-        writeTile(surface.scratch.pixels, record.width + 2, 1, 1, record, texels);
+        writeTile(surface.scratch.pixels, record.width + 2, 1, 1, record, texels, surface.scratch.pixels32);
         copyTile(renderer, surface, surface.scratch.texture, 0, 0);
         surface.mesh.visible = true;
         passTiles.push(surface);

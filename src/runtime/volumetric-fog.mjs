@@ -219,21 +219,55 @@ function packLights(lights) {
 // the page, keep the pack and the writes for every surface.
 const lightPacks = new WeakMap(), kernelLights = new WeakMap();
 const lightsEachSurface = () => globalThis.DEUS_EX_FOG_LIGHTS === 'each' || (typeof process !== 'undefined' && process.env?.FOG_LIGHTS === 'each');
-export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 } }) {
+// The loop that answers outside FOG_EXACT: 'blocks' (fog.rs walk_blocks, the default), 'reference' (walk, one texel at a time per light;
+// FOG_KERNEL=reference in Node, ?fogKernel=reference in the page) or 'verify' (the block loop's answer, after running both from the same
+// incoming flag and counting the maps that differ in `fogKernelVerify`).
+const fogKernelMode = () => globalThis.DEUS_EX_FOG_KERNEL || (typeof process !== 'undefined' && process.env?.FOG_KERNEL) || 'blocks';
+export const fogKernelVerify = { maps: 0, declined: 0, differing: 0, bytes: 0, tiles: 0, tilesDiffering: 0, grids: 0, gridsDiffering: 0, geometries: 0, geometriesDiffering: 0, textures: 0, texturesDiffering: 0 };
+/** 'fast' (default) or 'reference' (?fogPass=reference, FOG_PASS=reference in Node): the fog pass' host side as it was before the
+ * 2026-11-07 changes (a copy of each map, byte-wise tile writes, item meshes rebuilt every frame) -- fog-pass.mjs; 'verify' runs both and
+ * counts what differs. */
+export const fogPassMode = () => globalThis.DEUS_EX_FOG_PASS || (typeof process !== 'undefined' && process.env?.FOG_PASS) || 'fast';
+/** The switches above, read once (the fog pass reads them once per update and passes them to every kernel call: a `globalThis` property read
+ * is 1 to 2 microseconds in Firefox, and a frame makes about two hundred calls), with the replay capture hook of scripts/fog-capture-play.mjs. */
+export const fogModes = () => ({ kernel: fogKernelMode(), pass: fogPassMode(), lightsEach: lightsEachSurface(), record: globalThis.DEUS_EX_FOG_RECORD ?? null });
+// The kernel's loop as last set, per kernel; the grid words of a call.
+const kernelPaths = new WeakMap();
+const gridFloats = new Float32Array(9), gridWords = new Uint32Array(gridFloats.buffer);
+/** The nine grid words of a call (the base and the two steps through the frame's coords) in a scratch array, the bits `bitsOf` gives them. */
+function gridOf(grid, coords) {
+  const a = coordsTransform(grid.base, coords), b = coordsTransform(grid.stepU, coords, false), c = coordsTransform(grid.stepV, coords, false);
+  for (let i = 0; i < 3; i++) { gridFloats[i] = a[i]; gridFloats[3 + i] = b[i]; gridFloats[6 + i] = c[i]; }
+  // Float32Array stores and DataView.setFloat32 round alike for every finite value; the rest keeps bitsOf.
+  if (!a.every(Number.isFinite) || !b.every(Number.isFinite) || !c.every(Number.isFinite)) gridWords.set([...a, ...b, ...c].map(bitsOf));
+  return gridWords;
+}
+export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 }, modes = fogModes() }) {
   if (!lights.length) return null;
   const fog = kernel.fog;
   if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); if (FOG_EXACT) fog.setExact(true); kernelsWithTable.add(fog); }
+  const path = modes.kernel === 'reference' ? 'reference' : 'blocks';
+  if (fog.setPath && kernelPaths.get(fog) !== path) { fog.setPath(path); kernelPaths.set(fog, path); }
   let pack;
-  if (lightsEachSurface()) { pack = packLights(lights); fog.lights(pack.words); fog.tables(pack.tables); kernelLights.delete(fog); }
+  if (modes.lightsEach) { pack = packLights(lights); fog.lights(pack.words); fog.tables(pack.tables); kernelLights.delete(fog); }
   else {
     pack = lightPacks.get(lights);
     if (!pack) lightPacks.set(lights, pack = packLights(lights));
     if (kernelLights.get(fog) !== lights) { fog.lights(pack.words); fog.tables(pack.tables); kernelLights.set(fog, lights); }
   }
-  fog.grid([...coordsTransform(grid.base, coords), ...coordsTransform(grid.stepU, coords, false),
-    ...coordsTransform(grid.stepV, coords, false)].map(bitsOf));
-  fog.setMiss(state.missFlag);
-  const texels = fog.map(width, height, pack.count);
+  const words = gridOf(grid, coords);
+  fog.grid(words);
+  const missIn = state.missFlag;
+  fog.setMiss(missIn);
+  if (modes.kernel === 'verify' && fog.verify) {
+    const differ = fog.verify(width, height, pack.count);
+    fogKernelVerify.maps++;
+    if (differ === 0x10000000) fogKernelVerify.declined++; else if (differ) { fogKernelVerify.differing++; fogKernelVerify.bytes += differ; }
+    fog.setMiss(missIn);
+  }
+  // The page's pass reads the map at once, so the kernel's own buffer is enough; ?fogPass=reference keeps the copy `map` makes.
+  const texels = fog.view && modes.pass !== 'reference' ? fog.view(width, height, pack.count) : fog.map(width, height, pack.count);
   state.missFlag = fog.miss();
+  modes.record?.onCall(pack, words, missIn, width, height, texels, state.missFlag);
   return texels;
 }

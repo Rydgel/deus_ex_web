@@ -201,6 +201,58 @@ generic over three register models (`Reg`):
   WanChai Market 0.85 → 0.76, Ship 0.49 → 0.45, BatteryPark 1.06 → 1.06.
   `coordsTransform`'s grid transforms, three per surface, moved from the
   BigInt model to doubles. Browser timings are not measured here.
+- **Block loop (2026-11-07).** `fog_map` is answered by `walk_blocks`; `walk`
+  above stays as the reference (`?fogKernel=reference`, `FOG_KERNEL=reference`,
+  `fog.setPath('reference')`). The reference does the whole of Render.dll's
+  per-texel body for every light and every texel, 1.3 million texel-lights a
+  frame at the 02_NYC_Underground spots (20 lights): in the captured calls 33%
+  of them are `A` (the light is behind the ray: nothing changes), 62% miss
+  (`R² < h²`: only the flag is set) and 4.5% hit. The block loop makes the
+  terms that do not depend on the light once per surface (the lattice by the
+  reference's own float additions, `PP = (Px² + Pz²) + Py²`, the
+  finite/bounds/tiny-square test of each block of four) and classifies four
+  texels at a time with wasm simd128: the same IEEE binary32 operations as
+  `Single` (`f32x4` add, multiply and divide are correctly rounded), so the
+  same bits. Per block of four texels:
+  - the three products of `dot`, then `dot` and the sign mask (`A` unless the
+    light is inside); a block of four `A` texels is done;
+  - `dot²`, `dd/PP`, `h² = |L|² − dd/PP` and the miss mask; the texels the
+    light is not behind and that miss set the flag, the last one decides it
+    (a miss sets it, a hit clears it, `A` leaves it, and a hit that the
+    quick test `PP·|L|² − dot² > PP·R²` drops while the flag is set leaves it
+    as it is);
+  - only a hit runs the chord (`texel_tail`, the reference's code from
+    `table_sqrt(PP)` on) on `Single`, one texel at a time, with the quick test
+    first when the flag is set.
+  A block with a product or quotient at or below binary32's smallest normal
+  (an exact zero included), or with a texel outside `Single`'s bounds (|P|
+  above 2³⁰, non-finite) or a light outside them, runs the reference's body
+  (`dispatch`: `Single`, `Wide` on a rerun, `Exact` for a non-finite input) on
+  its texels from the flag it is at, so those cases are the reference's own.
+  The map starts cleared: the first light writes `table[0]` for the texels it
+  does not hit, and `table[0]` is all zero in every table the host builds, so
+  only its hits are written (a first table whose entry 0 is not zero makes
+  the block loop decline the surface, `fog_block_stat(1)`). A surface larger
+  than the 8192-texel scratch is done in bands of whole rows, each light over
+  its bands in order, the lattice of a band made again for each light from
+  the row starts. The map buffer is 16-byte aligned so that the host reads
+  it through 32-bit views. The scratch adds 165 KB of statics to the
+  module (`__heap_base` 0x1b21b0 → 0x1da9e0 of the 0x200000 reserved) and 29 KB of code.
+  The module now needs wasm SIMD (Chrome 91, Firefox 89, Safari 16.4).
+  - **Check.** The block loop is the reference loop's arithmetic, so the check
+    is equality with it, not a new oracle: `fog.verify` (`?fogKernel=verify`)
+    runs both from the same incoming flag and compares the two maps byte for
+    byte (a map above 8192 texels by two 32-bit hash lanes) and the final
+    flags; `validate-fog-blocks.mjs` does so on 1,500 random surfaces of
+    every shape the loop has a branch for (1×1 to 8192 wide, 30,000 tall,
+    several bands, zero steps, exact-zero and near-smallest-normal positions,
+    positions beyond 2³⁰, non-finite ones, one to eight lights inside, behind
+    and far, both incoming flags) and against `Exact` on the smaller ones;
+    `validate-volumetric-fog-fast.mjs` adds the reference loop and
+    `fog.verify` to its replay of Play's inputs; `scripts/fog-replay.mjs`
+    replays the kernel calls a real Play session made (`fog-capture-play.mjs`,
+    headless Firefox, 240 views a map, movers included, with the hash of each
+    answer) through both loops.
 
 ## Play
 
