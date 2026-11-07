@@ -38,15 +38,146 @@ let recordAt = new Uint32Array(1024);
 /** `pool` (the main frame's call, whose entries nothing keeps past the frame): a `{ objects: [], list: [], sorted: [], used: 0 }`
  * the entries are made in and reused from frame to frame (an entry object per candidate each frame was most of this function's
  * allocation). The returned array is the pool's `list`; objects past the count are cleared so they keep no actor alive. */
-export function packDynamics(occlusion, { sprites = [], iterators = null, bindings = [], items = [], reads = null,
+export function packDynamics(occlusion, args) {
+  const {levelIndex = null, pool = null, reads = null} = args;
+  // The roster's pass (render.rs pack_order) for the main frame, when the layer's roster served this frame's reads
+  if (pool !== null && levelIndex?.render && reads?.attn) {
+    const packed = packFromRoster(occlusion, levelIndex, args);
+    if (packed) { packStats.roster++; return packed; }
+    packStats.declined++;
+  }
+  return packDynamicsJs(occlusion, args);
+}
+/** How often the main frame's candidates came from the roster's pass, were declined by it, and how many binding entries the host packed
+ * for it (scripts/frame-alloc-meter.mjs prints them). */
+export const packStats = {roster: 0, declined: 0, hosted: 0, entries: 0};
+
+// packFromRoster's scratches: the skipped rows, and the items' and sprites' [order, class, index] triples.
+const skipRows = [];
+let extraWords = new Uint32Array(3 * 256);
+const nonBinding = [];
+/** packDynamics for the main frame from the layer's roster: the rows (actor-mesh-sim.mjs levelPositions) hold each binding's position,
+ * block and mesh record, and Rust orders the candidates and writes the bindings' words (render.rs pack_order, pack_words); the host
+ * makes the entries' objects, the mesh records in the order packDynamics would, the items' and sprites' words and the words of a
+ * binding whose block has no current GetAnimSeq answer. The same entries and the same words packDynamicsJs gives; null when the
+ * pass cannot run (the host's packDynamics runs). `verify` runs packDynamicsJs too and throws on a difference. */
+function packFromRoster(occlusion, roster, { sprites = [], iterators = null, bindings = [], items = [], reads = null, childFrames = false, pool }) {
+  const render = roster.render?.();
+  if (!render || roster.count !== bindings.length || roster.bindings !== bindings) return null;
+  skipRows.length = 0;
+  if (iterators?.size) for (const actor of iterators) {
+    const binding = roster.map.get(actor);
+    if (binding && binding.row >= 0) skipRows.push(binding.row << 2 | 1);
+  }
+  // The bindings whose blocks the pass did not read (just made, or not answered by the image): their candidacy is the host's
+  // (admitted, childAdmitted), as packDynamicsJs asks it; an iterator's actor was passed over above
+  for (const list of [roster.hostFresh, roster.hostRows]) for (const binding of list) {
+    if (binding.row < 0 || bindings[binding.row] !== binding || iterators?.has(binding.actor)) continue;
+    if (binding.admitted(reads)) skipRows.push(binding.row << 2 | 2);
+    else skipRows.push(binding.row << 2 | (childFrames && binding.childAdmitted?.(reads) ? 3 : 1));
+  }
+  const extraN = items.length + sprites.length;
+  if (extraWords.length < 3 * extraN) extraWords = new Uint32Array(6 * extraN);
+  for (let k = 0; k < items.length; k++) { extraWords[3 * k] = items[k].item.order; extraWords[3 * k + 1] = 1; extraWords[3 * k + 2] = k; }
+  for (let k = 0; k < sprites.length; k++) {
+    const at = 3 * (items.length + k);
+    extraWords[at] = sprites[k].order; extraWords[at + 1] = 2; extraWords[at + 2] = k;
+  }
+  const order = render.packOrder(roster.rows, roster.count, childFrames, skipRows, extraWords, extraN);
+  if (!order) return null;
+  const n = order.n, entries = pool.list, arena = render.vm.arena;
+  if (recordAt.length < n) recordAt = new Uint32Array(2 * n);
+  const records = recordAt, stride = roster.ROW_WORDS;
+  // The rows' fifth word keeps the address of the binding's mesh record in `occlusion`'s memory. A Player start LoadMap makes a new
+  // occlusion model (sim-host.mjs buildOcclusion) and frees the old one's blocks: the addresses kept for another model are dropped.
+  if (roster.recordsFor !== occlusion) {
+    const u = roster.u32();
+    for (let k = 0; k < roster.count; k++) u[stride * k + 4] = 0;
+    roster.recordsFor = occlusion;
+  }
+  nonBinding.length = 0;
+  let count = 0;
+  {
+    // (views of the arena for this loop only: a mesh record may grow the occlusion kernel's memory, never the arena)
+    const refs = new Uint32Array(arena.memory.buffer, order.refs, n), rows = roster.u32();
+    for (let i = 0; i < n; i++) {
+      const ref = refs[i], index = ref & 0x1fffffff, cls = ref >>> 30;
+      if (cls === 0) {
+        const binding = bindings[index], at = stride * index;
+        count = addEntry(entries, pool, count, rows[at + 3] * 65536, binding, null, null, (ref & 0x20000000) !== 0);
+        let record = rows[at + 4];
+        if (record === 0) {
+          const key = binding.mesh.key;
+          record = occlusion.meshRecordAt?.(key) ?? occlusion.meshRecord(key, meshRecordFields(binding.payload));
+          rows[at + 4] = record;
+        }
+        records[i] = record;
+      } else if (cls === 1) {
+        const {item, binding} = items[index], key = binding.mesh.key;
+        count = addEntry(entries, pool, count, item.order, binding, item, null, undefined);
+        records[i] = occlusion.meshRecordAt?.(key) ?? occlusion.meshRecord(key, meshRecordFields(binding.payload));
+        nonBinding.push(i);
+      } else {
+        count = addEntry(entries, pool, count, sprites[index].order, null, null, sprites[index], undefined);
+        records[i] = 0;
+        nonBinding.push(i);
+      }
+    }
+  }
+  for (let k = count; k < pool.used; k++) { const stale = pool.objects[k]; stale.binding = stale.item = stale.sprite = null; }
+  pool.used = count;
+  entries.length = count;
+  // Mesh records before the views: a new record may grow the memory.
+  render.packWords(roster.rows, order);
+  const views = occlusion.setupCandidates(count), {u32, f32, i32} = views;
+  const words = new Uint32Array(arena.memory.buffer);
+  u32.set(words.subarray(order.words >> 2, (order.words >> 2) + SETUP.WORDS * count), views.at);
+  for (let k = 0; k < nonBinding.length; k++) {
+    const i = nonBinding[k], e = entries[i], at = views.at + SETUP.WORDS * i;
+    if (e.binding) {
+      e.binding.packSetup(views, at, i, records[i], reads, e.item);
+      u32[at + SETUP.FLAGS] = 0;
+    } else packSprite(views, at, i, e.sprite);
+  }
+  const host = new Uint32Array(arena.memory.buffer, order.host, 1 + count), hosted = host[0];
+  packStats.hosted += hosted; packStats.entries += count;
+  for (let k = 0; k < hosted; k++) {
+    const i = host[1 + k], e = entries[i], at = views.at + SETUP.WORDS * i;
+    e.binding.packSetup(views, at, i, records[i], reads, null);
+    u32[at + SETUP.FLAGS] = e.rootExcluded ? SETUP_ROOT_EXCLUDED : 0;
+  }
+  if (roster.verify) verifyRosterPack(occlusion, entries, count, views, arguments[2]);
+  return entries;
+}
+
+/** ACTOR_PLUMBING=verify: packDynamicsJs on the same arguments gives these entries and these words. */
+function verifyRosterPack(occlusion, entries, count, views, args) {
+  const made = entries.slice(0, count).map(e => [e.order, e.binding, e.item, e.sprite, e.rootExcluded]);
+  const wordsMade = views.u32.slice(views.at, views.at + SETUP.WORDS * count);
+  const reference = packDynamicsJs(occlusion, args);
+  const fail = message => { throw new Error(`ACTOR_PLUMBING=verify: roster pack: ${message}`); };
+  if (reference.length !== count) fail(`${count} entries, the reference ${reference.length}`);
+  const again = occlusion.setupCandidates(count);
+  for (let i = 0; i < count; i++) {
+    const e = reference[i], m = made[i];
+    if (e.order !== m[0] || e.binding !== m[1] || e.item !== m[2] || e.sprite !== m[3] || e.rootExcluded !== m[4]) fail(`entry ${i} differs`);
+    for (let k = 0; k < SETUP.WORDS; k++)
+      if (again.u32[again.at + SETUP.WORDS * i + k] !== wordsMade[SETUP.WORDS * i + k]) fail(`entry ${i} word ${k} is ${wordsMade[SETUP.WORDS * i + k]}, the reference ${again.u32[again.at + SETUP.WORDS * i + k]}`);
+  }
+}
+
+function packDynamicsJs(occlusion, { sprites = [], iterators = null, bindings = [], items = [], reads = null,
   levelIndex = null, childFrames = false, pool = null }) {
   const entries = pool === null ? [] : pool.list;
   let count = 0;
+  // `levelIndex`: a Map from actor to its Level.Actors index, or the actor mesh layer's roster (actor-mesh-sim.mjs levelPositions): its
+  // rows, in the order of `bindings`, hold the index in their fourth word (NO_POS for none)
+  const rows = levelIndex?.u32 && levelIndex.bindings === bindings ? levelIndex.u32() : null, none = levelIndex?.NO_POS, stride = levelIndex?.ROW_WORDS;
   for (let b = 0; b < bindings.length; b++) {
     const binding = bindings[b];
     if (iterators?.has(binding.actor)) continue;
-    const index = levelIndex?.get(binding.actor);
-    if (index === undefined) continue;
+    const index = rows ? rows[stride * b + 3] : levelIndex?.get(binding.actor);
+    if (index === undefined || index === none) continue;
     if (binding.admitted(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, false);
     else if (childFrames && binding.childAdmitted?.(reads)) count = addEntry(entries, pool, count, index * 65536, binding, null, null, true);
   }

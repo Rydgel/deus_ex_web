@@ -6,6 +6,14 @@ change was made at first** (a second pass the same day built three of the four c
 [below](#host-plumbing-2026-11-05-second-pass): -0.4 to -0.6 ms). The phase is a flat spread of per-actor host work and the OccludeBsp pass, and most of the gap to Chrome is
 that Firefox adds the page's half to the same number.
 
+**Revised 2026-11-06:** the reading "flat, so nothing to cut" was right for each function and wrong for their sum. The per-binding
+host loops (the membership rebuild, the Mesh-change test, the pair table, the admission calls for ~500 bound actors, the candidate
+pack, the update of the hidden bindings) are 3.4 ms of the Dockyard's 7.4 ms `p.actors` and about a fifth of the Island's. Moved into
+the Rust core as one pass over a table of rows, they cut `p.actors` from 8.1 to 5.4 ms at the Dockyard (Firefox inline, four interleaved pairs) and from 4.0 to
+3.2 ms on the Island, with every snapshot byte-identical: see [Actors layer in bulk](firefox-60fps-plan.md#actors-layer-in-bulk-2026-11-06).
+What stays in the phase is the original OccludeBsp pass (1.1 to 1.6 ms in Rust) and the render iterators' rescans in the child
+frames (1.0 ms at the Dockyard), which are the algorithm and its script callbacks, not host plumbing.
+
 ## What `p.actors` is
 
 In inline mode the frame adds each simulation step's time to the page phase of the same name (main.mjs `drawFrame`:

@@ -566,6 +566,13 @@ const MB_OWN_ANIMFRAME: u32 = MB_ZONE + 7;
 /// valid with MS_ANIMSEQ: Setup's GetAnimSeq looks the name up only when
 /// it changes.
 const MB_ANIMSEQ: u32 = MB_ZONE + 8;
+/// FDynamicSprite::Setup's GetAnimSeq answer for the name word it was made for (the host writes them in packSetup; `pack_candidates`
+/// reads them): valid flag, that name word, found, StartFrame, NumFrames.
+const MB_SEQ_VALID: u32 = MB_ANIMSEQ + 1;
+const MB_SEQ_WORD: u32 = MB_ANIMSEQ + 2;
+const MB_SEQ_HIT: u32 = MB_ANIMSEQ + 3;
+const MB_SEQ_START: u32 = MB_ANIMSEQ + 4;
+const MB_SEQ_FRAMES: u32 = MB_ANIMSEQ + 5;
 /// The numeric pose: animation actor, bParticles, DrawScale, Location,
 /// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
 const POSE_WORDS: u32 = 17;
@@ -666,17 +673,24 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
     for k in 0..count {
         let h = load32(pairs.wrapping_add(8 * k));
         let block = load32(pairs.wrapping_add(8 * k + 4));
+        mesh_read_block(h, block, player, behind != 0, view_target);
+    }
+}
+
+/// `mesh_reads` for one (handle, block) pair.
+fn mesh_read_block(h: u32, block: u32, player: u32, behind: bool, view_target: u32) {
+    {
         let word = |i: u32| block.wrapping_add(4 * i);
         store32(word(MB_STATUS), 0);
         let a = Obj::of(h);
         if !a.has(MESH_SELF_FIELDS) {
-            continue;
+            return;
         }
         let (Some(drawn), Some(drawn_child)) = (
-            drawn_in_world(&a, h, player, behind != 0, view_target, false),
-            drawn_in_world(&a, h, player, behind != 0, view_target, true),
+            drawn_in_world(&a, h, player, behind, view_target, false),
+            drawn_in_world(&a, h, player, behind, view_target, true),
         ) else {
-            continue;
+            return;
         };
         let mut anim_actor = h;
         if a.flag(R_BANIMBYOWNER) {
@@ -693,7 +707,7 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
             &other
         };
         if !anim.has(MESH_ANIM_FIELDS) {
-            continue;
+            return;
         }
         store32(word(MB_MESH), a.pointer(R_MESH));
         store32(word(MB_STYLE), a.byte(R_STYLE));
@@ -755,6 +769,349 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
         }
         store32(word(MB_STATUS), status);
     }
+}
+
+// The actor mesh layer's roster (actor-mesh-sim.mjs, docs/firefox-60fps-plan.md "Actors layer in bulk"): one row of eight words per
+// binding, in the layer's binding order.
+const RW_HANDLE: u32 = 0;
+const RW_BLOCK: u32 = 1;
+const RW_MESH: u32 = 2;
+const RW_POS: u32 = 3;
+/// The mesh record's address in the occlusion kernel (the host writes it once; `pack_candidates` reads it).
+const RW_RECORD: u32 = 4;
+const ROW_BYTES: u32 = 32;
+/// A row's position when its actor is not in Level.Actors (or the positions were not asked for).
+const NO_POS: u32 = 0xffff_ffff;
+// What a row gets the host's attention for (`roster_reads`' entries are `row << 4 | reasons`).
+/// The positions were asked for and the actor is not in Level.Actors.
+const AT_ABSENT: u32 = 1;
+/// The block was read and its Mesh is not the one the binding was made for.
+const AT_MESH: u32 = 2;
+/// The image does not answer for the actor's reads (the block's status lacks OK, or the binding has no block): the host reads them.
+const AT_NOT_OK: u32 = 4;
+/// The row's handle has been released since it was written.
+const AT_STALE: u32 = 8;
+
+#[inline(always)]
+fn handle_slot_of(handle: u32, mask: u32) -> u32 {
+    let x = handle.wrapping_mul(0x9e37_79b1);
+    (x ^ (x >> 15)) & mask
+}
+
+/// A table of `slots` (a power of two) [handle, value] pairs at `table`, emptied.
+fn clear_table(table: u32, slots: u32) {
+    for i in 0..slots.wrapping_mul(2) {
+        store32(table.wrapping_add(i.wrapping_mul(4)), 0);
+    }
+}
+
+/// Add `handle` -> `value` to the table unless the handle is in it.
+fn table_add(table: u32, mask: u32, handle: u32, value: u32) {
+    let mut at = handle_slot_of(handle, mask);
+    loop {
+        let entry = table.wrapping_add(at.wrapping_mul(8));
+        let key = load32(entry);
+        if key == handle {
+            return;
+        }
+        if key == 0 {
+            store32(entry, handle);
+            store32(entry.wrapping_add(4), value);
+            return;
+        }
+        at = at.wrapping_add(1) & mask;
+    }
+}
+
+/// The value the table holds for `handle`, or None.
+fn table_get(table: u32, mask: u32, handle: u32) -> Option<u32> {
+    let mut at = handle_slot_of(handle, mask);
+    loop {
+        let entry = table.wrapping_add(at.wrapping_mul(8));
+        let key = load32(entry);
+        if key == handle {
+            return Some(load32(entry.wrapping_add(4)));
+        }
+        if key == 0 {
+            return None;
+        }
+        at = at.wrapping_add(1) & mask;
+    }
+}
+
+/// The table of Level.Actors' handles at `scratch`: each live handle of `list` ([count, handle...]) -> the first index it is at.
+fn level_table(list: u32, scratch: u32, slots: u32) {
+    let mask = slots.wrapping_sub(1);
+    clear_table(scratch, slots);
+    let n = load32(list);
+    for i in 0..n {
+        let h = live(load32(list.wrapping_add(4).wrapping_add(i.wrapping_mul(4))));
+        if h != 0 {
+            table_add(scratch, mask, h, i);
+        }
+    }
+}
+
+/// The positions `roster_reads` writes, alone: each row's index in Level.Actors (NO_POS for none, and for a row whose handle has been
+/// released).
+#[no_mangle]
+pub extern "C" fn roster_positions(rows: u32, count: u32, list: u32, scratch: u32, list_slots: u32) {
+    let mask = list_slots.wrapping_sub(1);
+    level_table(list, scratch, list_slots);
+    for k in 0..count {
+        let row = rows.wrapping_add(k.wrapping_mul(ROW_BYTES));
+        let h = load32(row.wrapping_add(4 * RW_HANDLE));
+        let pos = if h == 0 || live(h) != h { NO_POS } else { table_get(scratch, mask, h).unwrap_or(NO_POS) };
+        store32(row.wrapping_add(4 * RW_POS), pos);
+    }
+}
+
+/// `mesh_reads` over the roster's `count` rows at `rows`, and what the host must look at. Per row with a block: the block as
+/// `mesh_reads` makes it (not for a row whose handle has been released: its block is cleared). With `list` ([count, handle...] of
+/// Level.Actors, `list_slots` a power of two of at least twice its count; `scratch` that many [handle, index] pairs of memory) also
+/// the row's position in it (the first index of its handle, NO_POS when it has none), written to the row. `attn` receives
+/// `row << 4 | reasons` for each row with a reason (AT_*), in row order; returns how many.
+#[no_mangle]
+pub extern "C" fn roster_reads(rows: u32, count: u32, player: u32, behind: u32, view_target: u32, list: u32, scratch: u32, list_slots: u32, attn: u32) -> u32 {
+    let mask = list_slots.wrapping_sub(1);
+    if list != 0 {
+        level_table(list, scratch, list_slots);
+    }
+    let mut written = 0u32;
+    for k in 0..count {
+        let row = rows.wrapping_add(k.wrapping_mul(ROW_BYTES));
+        let h = load32(row.wrapping_add(4 * RW_HANDLE));
+        let block = load32(row.wrapping_add(4 * RW_BLOCK));
+        let mesh = load32(row.wrapping_add(4 * RW_MESH));
+        let mut reasons = 0;
+        let stale = h != 0 && live(h) != h;
+        if stale {
+            reasons |= AT_STALE;
+        }
+        if block != 0 {
+            if stale {
+                store32(block.wrapping_add(4 * MB_STATUS), 0);
+            } else {
+                mesh_read_block(h, block, player, behind != 0, view_target);
+            }
+            let status = load32(block.wrapping_add(4 * MB_STATUS));
+            if status & MS_OK == 0 {
+                reasons |= AT_NOT_OK;
+            } else if load32(block.wrapping_add(4 * MB_MESH)) != mesh {
+                reasons |= AT_MESH;
+            }
+        } else {
+            reasons |= AT_NOT_OK;
+        }
+        if list != 0 {
+            let pos = if h == 0 || stale { NO_POS } else { table_get(scratch, mask, h).unwrap_or(NO_POS) };
+            store32(row.wrapping_add(4 * RW_POS), pos);
+            if pos == NO_POS {
+                reasons |= AT_ABSENT;
+            }
+        }
+        if reasons != 0 {
+            store32(attn.wrapping_add(written.wrapping_mul(4)), k << 4 | reasons);
+            written += 1;
+        }
+    }
+    written
+}
+
+/// The fields `admit_filter` reads: drawnInWorld's.
+const ADMIT_FIELDS: u64 = 1 << R_BHIDDEN | 1 << R_BDELETEME | 1 << R_OWNER | 1 << R_BONLYOWNERSEE | 1 << R_BOWNERNOSEE;
+
+/// The admission scan's mesh entries from `n` render_scan entries at `entries` over `list` (`entry >> 6` the Level.Actors index; the
+/// frame's shared walk, or a walk for the mesh kind): the entries' bits in `keep` (the kinds the consumer asked for and K_JS), an
+/// entry with none is passed over, as the host's `served` does. Of those, without the ones the layer's admit would turn away without
+/// effect: an actor that has a row in the roster (it is bound), and one that drawnInWorld rejects (for a root frame and, with
+/// `child_frames`, for a child frame), when the image answers for it. Entries the image does not answer for (K_JS) and every other
+/// are kept, in order. `scratch` and `slots` are as for `roster_reads`. Returns the number written to `out`.
+#[no_mangle]
+pub extern "C" fn admit_filter(list: u32, entries: u32, n: u32, keep: u32, rows: u32, count: u32, player: u32, behind: u32, view_target: u32,
+    child_frames: u32, scratch: u32, slots: u32, out: u32) -> u32 {
+    let mask = slots.wrapping_sub(1);
+    clear_table(scratch, slots);
+    for k in 0..count {
+        let h = load32(rows.wrapping_add(k.wrapping_mul(ROW_BYTES)).wrapping_add(4 * RW_HANDLE));
+        if h != 0 {
+            table_add(scratch, mask, h, 1);
+        }
+    }
+    let mut written = 0u32;
+    for i in 0..n {
+        let raw = load32(entries.wrapping_add(i.wrapping_mul(4)));
+        let bits = raw & keep & 63;
+        if bits == 0 {
+            continue;
+        }
+        let entry = raw & !63 | bits;
+        if entry & K_JS == 0 {
+            let h = live(load32(list.wrapping_add(4).wrapping_add((entry >> 6).wrapping_mul(4))));
+            if h != 0 {
+                if table_get(scratch, mask, h).is_some() {
+                    continue;
+                }
+                let a = Obj::of(h);
+                if a.has(ADMIT_FIELDS) {
+                    let root = drawn_in_world(&a, h, player, behind != 0, view_target, false);
+                    let child = if child_frames != 0 { drawn_in_world(&a, h, player, behind != 0, view_target, true) } else { Some(false) };
+                    if root == Some(false) && child == Some(false) {
+                        continue;
+                    }
+                }
+            }
+        }
+        store32(out.wrapping_add(written.wrapping_mul(4)), entry);
+        written += 1;
+    }
+    written
+}
+
+// Setup candidate words, as setup.rs C_* and bsp-occlusion.mjs SETUP lay them out.
+const SU_KEY: u32 = 0;
+const SU_DRAWTYPE: u32 = 1;
+const SU_MESH: u32 = 2;
+const SU_LOCATION: u32 = 6;
+const SU_ROTATION: u32 = 9;
+const SU_DRAWSCALE: u32 = 12;
+const SU_PREPIVOT: u32 = 13;
+const SU_PARTICLES: u32 = 16;
+const SU_SEQ: u32 = 17;
+const SU_SEQ_START: u32 = 18;
+const SU_SEQ_FRAMES: u32 = 19;
+const SU_ANIMFRAME: u32 = 20;
+const SU_FLAGS: u32 = 21;
+const SU_WORDS: u32 = 22;
+/// refs bit: the binding is a candidate only for child frames (SETUP_ROOT_EXCLUDED).
+const EC_EXCLUDED: u32 = 1 << 29;
+/// `pack_candidates`' answer when the host must pack the frame itself.
+const PACK_HOST: u32 = 0xffff_ffff;
+
+/// A binding's Setup candidate words (actor-mesh-sim.mjs packSetup from this frame's block) at `out`, as entry `key` with mesh record
+/// `record`; false when the block's cached GetAnimSeq answer is not for the actor's AnimSequence name word (the host packs it).
+fn pack_binding(block: u32, key: u32, record: u32, excluded: bool, out: u32) -> bool {
+    if block == 0 {
+        return false;
+    }
+    let w = |i: u32| load32(block.wrapping_add(4 * i));
+    let status = w(MB_STATUS);
+    if status & MS_ANIMSEQ == 0 || w(MB_SEQ_VALID) == 0 || w(MB_SEQ_WORD) != w(MB_ANIMSEQ) {
+        return false;
+    }
+    let put = |i: u32, value: u32| store32(out.wrapping_add(4 * i), value);
+    put(SU_KEY, key);
+    put(SU_DRAWTYPE, w(MB_DRAWTYPE));
+    put(SU_MESH, record);
+    put(3, 0);
+    put(4, 0);
+    put(5, 0);
+    for k in 0..3 {
+        put(SU_LOCATION + k, w(MB_LOCATION + k));
+        put(SU_ROTATION + k, w(MB_POSE + 6 + k));
+        put(SU_PREPIVOT + k, w(MB_PREPIVOT + k));
+    }
+    put(SU_DRAWSCALE, w(MB_DRAWSCALE));
+    put(SU_PARTICLES, w(MB_OWN_PARTICLES));
+    put(SU_SEQ, w(MB_SEQ_HIT));
+    put(SU_SEQ_START, w(MB_SEQ_START));
+    put(SU_SEQ_FRAMES, w(MB_SEQ_FRAMES));
+    put(SU_ANIMFRAME, w(MB_OWN_ANIMFRAME));
+    put(SU_FLAGS, excluded as u32);
+    true
+}
+
+/// SetupDynamics' candidate order of the main frame (dynamics-candidates.mjs packDynamics) from the roster: the admitted bindings in
+/// Level.Actors order (a row's order is its position times 65536) merged with the host's items and sprites by order, ties in the
+/// order packDynamics builds them (bindings, then items, then sprites, each in its own order); an entry's index is its place in that
+/// order. `skip` ([count, row << 2 | mode...]) are the rows the host decided: mode 1 not a candidate (an iterator stands in for the
+/// actor, or the host found it not admitted), 2 a candidate for the root frame, 3 a candidate for child frames only; they are the rows
+/// whose blocks the image does not answer for (a binding just made, one without a block) and the iterators' actors. `extra` holds
+/// `extra_n` triples [order, class, index] (class 1 an item, 2 a sprite) the host builds; `scratch` is 9 * (count + extra_n) bytes of
+/// memory (8-byte aligned). Writes, per entry, `refs`: class << 30 | EC_EXCLUDED | index (the row, the item or the sprite). Returns the
+/// number of entries, or PACK_HOST when a binding's block is not answered by the image and the host did not decide it (the host's
+/// packDynamics runs).
+#[no_mangle]
+pub extern "C" fn pack_order(rows: u32, count: u32, child_frames: u32, skip: u32, extra: u32, extra_n: u32, scratch: u32, refs: u32) -> u32 {
+    let keys = scratch as usize as *mut u64;
+    let flags = scratch.wrapping_add(8 * count.wrapping_add(extra_n));
+    for b in 0..count {
+        crate::interp::store8(flags.wrapping_add(b), 0);
+    }
+    for k in 0..load32(skip) {
+        let entry = load32(skip.wrapping_add(4).wrapping_add(4 * k));
+        if entry >> 2 < count {
+            crate::interp::store8(flags.wrapping_add(entry >> 2), (entry & 3) as u8);
+        }
+    }
+    let mut n = 0u32;
+    for b in 0..count {
+        let mode = load8(flags.wrapping_add(b));
+        if mode == 1 {
+            continue;
+        }
+        let row = rows.wrapping_add(b.wrapping_mul(ROW_BYTES));
+        let pos = load32(row.wrapping_add(4 * RW_POS));
+        if pos == NO_POS {
+            continue;
+        }
+        let excluded = if mode >= 2 {
+            mode == 3
+        } else {
+            let block = load32(row.wrapping_add(4 * RW_BLOCK));
+            if block == 0 {
+                return PACK_HOST;
+            }
+            let status = load32(block.wrapping_add(4 * MB_STATUS));
+            if status & MS_OK == 0 {
+                return PACK_HOST;
+            }
+            if status & MS_DRAWN != 0 {
+                false
+            } else if child_frames != 0 && status & MS_DRAWN_CHILD != 0 {
+                true
+            } else {
+                continue;
+            }
+        };
+        // order, then class (0 bindings), then the row
+        unsafe { *keys.add(n as usize) = (pos as u64 * 65536) << 32 | (excluded as u64) << 29 | b as u64 };
+        n += 1;
+    }
+    for k in 0..extra_n {
+        let at = extra.wrapping_add(12 * k);
+        let (order, class, index) = (load32(at), load32(at.wrapping_add(4)), load32(at.wrapping_add(8)));
+        unsafe { *keys.add(n as usize) = (order as u64) << 32 | (class as u64) << 30 | index as u64 };
+        n += 1;
+    }
+    let sorted = unsafe { core::slice::from_raw_parts_mut(keys, n as usize) };
+    sorted.sort_unstable();
+    for (i, &key) in sorted.iter().enumerate() {
+        store32(refs.wrapping_add(4 * i as u32), key as u32);
+    }
+    n
+}
+
+/// The candidate words of the binding entries of `pack_order`'s `refs` (`n` entries) at `words` (SU_WORDS each, the key the entry's
+/// index, the mesh record the row's); `host` ([count, entry...]) receives the binding entries whose block does not hold the sequence
+/// answer for the actor's AnimSequence name word, which the host packs.
+#[no_mangle]
+pub extern "C" fn pack_words(rows: u32, refs: u32, n: u32, words: u32, host: u32) {
+    let mut hosted = 0u32;
+    for i in 0..n {
+        let low = load32(refs.wrapping_add(4 * i));
+        if low >> 30 != 0 {
+            continue;
+        }
+        let row = rows.wrapping_add((low & 0x1fff_ffff).wrapping_mul(ROW_BYTES));
+        let block = load32(row.wrapping_add(4 * RW_BLOCK));
+        let record = load32(row.wrapping_add(4 * RW_RECORD));
+        if !pack_binding(block, i, record, low & EC_EXCLUDED != 0, words.wrapping_add(4 * SU_WORDS * i)) {
+            store32(host.wrapping_add(4).wrapping_add(4 * hosted), i);
+            hosted += 1;
+        }
+    }
+    store32(host, hosted);
 }
 
 // A mover's block (`mover_reads`): status, Location, Rotation, then the pair last given to the tracker and whether there is one.
