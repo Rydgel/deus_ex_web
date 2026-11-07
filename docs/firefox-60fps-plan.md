@@ -1328,13 +1328,134 @@ Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bd
 (`emitter.SetRotation(Rotation)`, `SetLocation`) as Rust nodes, the encroachment query in Rust (the hash's extent walk exists as
 `collision-kernel.mjs`; the blocking test needs the candidates' flags), and the gas's spawn path. Each is 0.3 to 0.6 ms of the profile's
 units; none is a family.
-* **The actors layer** (`p.actors` 7.4 ms rest, 13 slow; `actor-mesh-sim.mjs update`) is flat: `occludeMain` 2.65 inclusive (the Rust
+* **The actors layer** (`p.actors` 7.4 ms rest, 13 slow; `actor-mesh-sim.mjs update`; moved into the Rust core the same day: [Actors layer in bulk](#actors-layer-in-bulk-2026-11-06)) is flat per function: `occludeMain` 2.65 inclusive (the Rust
   occlusion pass and its glue), `reconcile` 1.5, `updateSprite` 2.0, `updateDrawn` 1.5, `lightIn` 0.85, `refreshSummary` 0.4; no self time
   over 0.5 ms (the largest, `reconcile`, 0.46). The slow tenth adds Major/Minor GC 1.4 and `admit`/`createMeshBindingNow` 2.1 (the gas
   puffs' new bindings). It is the plan's actors family, not a trap, and nothing there is a cut. Not measured as a GPU candidate.
 * **The goal is not reached.** The page mean is 32.4 ms against 16.7: the tick is 15.7 of it, the actors layer 7, the render 2.7, the HUD 2.
   Even a free tick would leave 17. At this spot Firefox stays at half the rate; the Dockyard needs the tick and the actors layer both
   to lose a third.
+
+### Actors layer in bulk (2026-11-06)
+
+The task: `p.actors` (in Firefox inline mode the simulation's `w.actors` plus the page's apply/GPU half) is the largest cost after the
+tick at the slowest maps, in both browsers, and the [earlier pass](firefox-actors-phase.md) found no function over 0.5 ms in it. The
+work is a flat per-binding host loop, so this step moves the loop, not a function: one Rust pass over a table of rows kept with the
+binding list reads every binding's fields from the object image and says which bindings need the host at all. Everything below is
+headless Linux (Firefox 155 inline, Chromium worker mode, 1440x960, god mode, idle at the spot, 25 s sessions measured from 5 s after
+the map); the Mac is not measured. Baseline: master 28fdc8aa.
+
+**What the layer holds at the spots** (`frame-alloc-meter.mjs --place`, 300 frames; the counters were a local patch, not committed): the
+Dockyard spot (2623, 6205, 20) yaw 32768 has about 500 bindings (mesh actors bound; 496 to 511 over two windows), 2 to 5 of them drawn
+(`view.main`), 39 render-iterator items, no child-frame binding; Level.Actors changes structurally in 40% of the frames (the gas puffs
+are spawned and destroyed within frames), so the pair table was written in 0.6 frames a frame. The Island has about 510 bindings and
+4.8 drawn. **Cost per binding** (Dockyard, Firefox rest frames, the host loops below / 496): 6.9 us.
+
+**Baseline ranking** (Gecko profile of the Firefox inline session, 669 drawn frames of which 602 are rest frames; ms a frame,
+inclusive; the profile inflates the host by about a fifth, so these rank and do not A/B):
+
+| Sub-step (Dockyard) | rest ms | what it is |
+|---|---:|---|
+| `occludeMain` | 2.93 | the original OccludeBsp pass in Rust 1.55 (of it 1.01 is its child frames' SetupDynamics calling back into JavaScript: the laser and particle iterators' rescans), `packDynamics` 0.86 |
+| `reconcile` | 1.55 | membership Set/Map rebuild 0.44 (self), `admit` 0.47 (a call for every bound actor), `retire` 0.27, `meshChanged` 0.23, render scan 0.14 |
+| the bindings' `update` | 1.52 | `updateDrawn` 1.05 of it (the 2 to 5 drawn: lighting 0.64); the other ~495 return a plain hidden record |
+| `meshReads` | 0.57 | pair table written 0.37 (`get block` 0.2), Rust `mesh_reads` 0.20 |
+| `refreshSummary` (in `reconcile`) | 0.34 | the summary lists made from every binding at each take and retire |
+| `drawItems`, `newScope`, weapons | 0.35 | |
+
+The per-binding host loops (`reconcile`, `meshReads`, `packDynamics`, the hidden updates, the summary) add to **3.4 ms of the 7.4 ms**.
+Other spots, same profile (`p.actors` 4.10 Island, 4.30 Vandenberg_Cmd, 3.76 Battery Park): the OccludeBsp pass is the largest row
+(1.34, 1.54, 0.49 ms in Rust), then the bindings' update (0.79, 0.94, 1.17), `reconcile` (0.46, 0.36, 0.49), `packDynamics` (0.27, 0.29,
+0.38). The census's 9.2 and 7.7 ms at Vandenberg_Cmd and Battery Park were after a player had teleported around; idle at load they
+are 4.3 and 3.8. The slowest tenth at the Dockyard (67 frames, `p.actors` 13.6) adds Major/Minor GC 2.2 and the bindings made for the
+puffs (`admitNew`, `createMeshBindingNow`, 0.9).
+
+**Design.**
+1. **The roster** (render.rs `roster_reads`, actor-mesh-sim.mjs `rowAdd`/`rowRemove`): one row of eight words in the arena for each
+   binding, in `actors` order: the actor's handle, the binding's block, the handle of the Mesh it was made for, its index in
+   Level.Actors, its mesh record. The pass makes every block as `mesh_reads` does (the same function, now per block), finds each
+   row's index in Level.Actors with a hash of the level's handles (made when the level's array or the rows changed), and returns the
+   rows the host must look at as `row << 4 | reasons`: not in the level, Mesh changed, the image does not answer (the block's status
+   lacks OK, or no block), handle released. `reconcileRoster` then does what `reconcileJs`'s loop did for those rows alone and in the
+   same order (`retire`, `retired.set`); the Set, Map and accessor rebuilds of `reconcileJs` are not made (`syncLive` makes them in a
+   frame the pass cannot run in).
+2. **The admission scan** (`admit_filter`): the frame's shared walk's mesh entries without those `admit` turns away without effect
+   (a row's actor, one `drawnInWorld` rejects in the root frame and, with child frames, in a child frame), so `admit` runs for the few
+   that remain instead of ~500. `admit`'s other returns are not moved.
+3. **The candidates** (`pack_order`, `pack_words`, dynamics-candidates.mjs `packFromRoster`): the admitted bindings in Level.Actors
+   order merged with the iterator items and sprites by order, with the stable tie order `packDynamics` builds, and their 22 Setup words
+   from the blocks, in one pass; the host makes the entries' objects, the mesh records in `packDynamics`' order, the items' and sprites'
+   words, and the words of a binding whose block holds no current GetAnimSeq answer (the block now keeps the last one). A binding made
+   after the pass in the same update, or one the image does not answer for, is decided by the host (`admitted`, `childAdmitted`, as
+   `packDynamicsJs` asks) and handed to Rust in the skip list.
+4. **Quiet hidden bindings are not updated** (`updateBindings`): in a frame with an occlusion result a binding in neither the main
+   frame's nor a child frame's Frame->Sprite returns a plain hidden record with its state at rest; one that did so in the previous such
+   frame, whose record the page holds (`hiddenRun`) and that is not an iterator's moved actor, finds the same state and is not updated.
+5. **The summary is made when read** (`makeSummary`): a take or a retire marks it dirty instead of making three lists from every binding.
+
+Every piece keeps its JavaScript body as the reference behind `ACTOR_PLUMBING` / `?actorPlumbing=` (`no-roster`, `no-pack`, `no-skip`,
+`no-summary`; `js` all of them; `verify` runs the new body and the reference and throws on a difference: the rows against a rewrite, the
+positions against a fresh index map, every attention reason against the loop's decision, every dropped admission entry against
+`drawnInWorld`, the candidate entries and all 22 words of each against `packDynamicsJs`, a skipped binding against its update, the
+summary against the refresh at the change).
+
+**Evidence for fidelity.** The layer's output is what the page draws from, so the check is the output itself: `frame-alloc-meter.mjs`
+hashes every snapshot (records, plans, lighting, camera, sprites, HUD; numbers by their exact bits) for 300 frames and `--compare`s
+against a run of master:
+identical on the Dockyard, Island (roaming), Vandenberg_Cmd, Battery Park and the Airfield, after each commit, with `ACTOR_PLUMBING=verify`
+clean on the same five. Nothing in the layer's behavior was invented: the Rust pass is `mesh_reads`' body, `drawnInWorld`'s,
+`packDynamics`' order and `packSetup`'s words, moved.
+
+**A/B** (interleaved, `hitch-ab.mjs`, the arms' order alternating; old = `actorPlumbing=no-summary,no-skip,no-roster,no-pack`, the
+plumbing master had; ms):
+
+| Spot, browser (pairs) | | `p.actors` | `w.actors` | tick | page mean | page slowest tenth |
+|---|---|---:|---:|---:|---:|---:|
+| Dockyard (2623, 6205, 20), Firefox inline (4) | new / old | 5.44 / 8.07 (-2.64) | 4.79 / 7.38 (-2.59) | 16.43 / 16.89 | 31.86 / 34.60 (-2.74) | 44.31 / 48.49 (-4.18) |
+| Island at load, Firefox inline (4) | new / old | 3.15 / 3.96 (-0.81) | 2.75 / 3.56 (-0.81) | 7.44 / 7.80 | 17.15 / 18.58 (-1.43) | 20.04 / 22.35 (-2.31) |
+| Dockyard, Chromium worker (3) | new / old | 0.38 / 0.37 | 3.91 / 5.62 (-1.71) | | `animate` 5.09 / 5.26 | 7.13 / 7.17 |
+
+Both Firefox rows pass the bar (0.3 ms page mean, 0.5 ms slowest tenth). The `p.actors` and `w.actors` differences are the firm ones: every
+pair is negative (Dockyard pairs -3.35, -1.83, -3.68, -1.69; Island -1.01, -0.75, -0.63, -0.83). The page-level figures carry the sessions'
+noise (the Dockyard page mean per pair: -5.2, -1.0, -5.3, +0.5; the tick moved by -0.5 ms with no change to it, which is session noise or a
+secondary effect of the lower allocation, not claimed). An earlier A/B set at the previous commit (9c015524: the roster and the pack
+without the host-decided rows; 4 pairs each, Firefox; 3 Chromium) gave the same picture: Dockyard `p.actors` 5.31 / 8.32, page mean
+30.51 / 35.71, slowest tenth 41.64 / 49.25; Island `p.actors` 3.09 / 3.82, page mean 16.88 / 17.77; Chromium `w.actors` 3.86 / 5.56. In the
+Chromium worker the page half (`p.actors`) is unchanged, 0.4 ms; the worker frame `w.tick + w.actors` falls by the 1.7 ms. The headless
+Node frame (`frame-alloc-meter.mjs --time`, the V8 `actors` step, noisy because the host is shared): Dockyard 3.8 and 3.5 ms with the new
+switches off, 2.6, 2.4 and 2.7 with them on. Allocation in the `actors` step at the Dockyard, same tool, KB a frame: 966 on master, 731 at
+9c015524 (the Level.Actors Set and Map rebuilds and the summary lists were about 170 KB of it); the remainder is mostly the iterators' script
+reads in the child frames.
+
+**Checks.** The six `bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback` digests are unchanged
+(Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, Area 51 bunker
+`764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`). `frame-alloc-meter.mjs --compare` against master: identical snapshots for 300 frames on the five
+maps with the final code (digests `bccd360db7639087` Dockyard, `5e021f24dcd1a8ed` Island, `7ddf9e6db3768f2c` Vandenberg_Cmd,
+`6b271eec9ac0e72e` Battery Park, `a04d154da0b6a1a0` Airfield), and `ACTOR_PLUMBING=verify` runs clean on the same five (the main frame's
+candidates came from the roster in all 1,980 measured and warm-up frames, none declined; 0.1 to 0.4% of the binding entries are packed by
+the host). Validators (`run-validators.mjs --filter`, one job): actor-mesh-scene, gpu-mesh, bsp-occlusion, spawn-mesh-binding (its
+`levelIndex.has` call is why the roster's index object has the Map's `get` and `has`), npc-mesh-preview, umesh-play, sprite-setup, play-frame,
+first-draw-pose, lodmesh-lod-play, dynamic-light-mover, brush-tracker; in the browser `validate-mesh-path-frames.mjs --frames 90 --query
+'&actorPlumbing=verify' --plumbing` (the Paris club's mirrors, 1280x720 identical, the plumbing arm identical) and `validate-sim-split.mjs
+--draw-state --pixels` default against `actorPlumbing=js`, inline and worker (state digests, every binding's draw state and the pixels
+equal). `npm test`: 958 passed, 4 skipped, 0 failed. No Rust warning. Not tested: the Mac; Chromium inline; the Training start (its 18
+captured NPC bindings have no block, so the host decides them each frame: covered by actor-mesh-scene, not by a frame-by-frame comparison);
+a context loss (`leaveGpu` clears `hiddenRun`, so nothing is skipped after one, by reading, not by a run).
+
+**What is left** (profile of the final code at the Dockyard, rest frames): `update` 4.76 ms (7.35 before) of the profiled p.actors 5.60: `occludeMain` 2.28, of it the OccludeBsp pass in Rust about 1.6 (the child
+frames' iterator rescans 1.0 of that, script callbacks that are original behavior and untouched) and `packDynamics` 0.21 (0.86 before); the
+bindings' update 1.42 (the 2 to 5 drawn: lighting 0.6, of which the light-membership rebuild `membership` in script-vm-meshlight.mjs
+is 0.2 whenever Level.Actors changes, a Rust candidate: the mirror's handle list already exists); `reconcile` 0.35 (1.65), of it the
+puffs' bindings 0.17 and the admission scan 0.12; the roster pass 0.21 (`meshReads` 0.59); `drawItems` 0.16; `newScope` 0.12 (the
+`itemKey` strings of 39 items, a candidate); weapons 0.13. The slowest tenth still adds Major/Minor GC. Fields: the pass reads only fields that
+`RENDER_FIELDS` already holds in the image (bHidden, bDeleteMe, Owner, bOnlyOwnerSee, bOwnerNoSee, Mesh, Style, ScaleGlow, Location,
+PrePivot, DrawScale, bAnimByOwner, Rotation, DrawType, bParticles, AnimFrame, BlendAnimFrame, Region, AmbientGlow, the light flags, the
+AnimSequence name word); an actor the image does not answer for (a bound or host field, an owner chain over 64) stays with the host
+through the attention list. Host-side and kept there: the binding's closures, its mesh record, the GetAnimSeq lookup by name (cached in
+the block), the iterator items and sprites. Nothing was moved to a side branch: the pieces passed the bar together and were not measured
+one by one in Firefox; the profiles rank them at the Dockyard (rest, inclusive, before / after): `reconcile` 1.65 / 0.35 and the pair
+table or roster pass 0.59 / 0.21 (the roster, the lazy summary, whose 0.34 was inside `reconcile`), `packDynamics` 0.86 / 0.21 (the pack),
+the bindings' update 1.70 / 1.42 (the skipped hidden bindings).
 
 ## How each step is measured
 
