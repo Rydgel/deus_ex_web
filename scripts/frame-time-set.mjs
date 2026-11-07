@@ -6,7 +6,8 @@
 //
 //   node scripts/frame-time-set.mjs [--browser chromium|firefox] [--seconds 60] [--maps a,b,...] [--dir .cache/perf/frame-time-set]
 //     [--query k=v] [--url URL] [--headed] (a window on the display: its vsync paces the drawn frames, as row 7.2.2 needs; headless
-//     draws on a synthetic 60 Hz clock)
+//     draws on a synthetic 60 Hz clock) [--ff-prefs JSON] (Firefox preferences for every session; '{"privacy.reduceTimerPrecision":false}'
+//     gives the page clock 20 us steps instead of 1 ms, and scripts/hitch-slow-frames.mjs then reads the true p95)
 import {spawn} from 'node:child_process';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -38,7 +39,8 @@ try{
     const out=`${dir}/${engine}-${map}`;
     // god mode: a hostile map's NPCs would otherwise kill the standing player, and a death leads to DXOnly (the bunker, 2026-11-04)
     const args=['scripts/hitch-run.mjs','--browser',engine,'--map',map,'--mode','scan','--seconds',seconds,'--url',url,'--out',out,'--god',
-      ...(option('query',null)?['--query',option('query',null)]:[]),...(process.argv.includes('--headed')?['--headed']:[])];
+      ...(option('query',null)?['--query',option('query',null)]:[]),...(option('ff-prefs',null)?['--ff-prefs',option('ff-prefs',null)]:[]),
+      ...(process.argv.includes('--headed')?['--headed']:[])];
     const code=await new Promise(resolve=>spawn(process.execPath,args,{stdio:'inherit'}).on('exit',resolve));
     if(code){results.push({map,failed:`exit ${code}`});continue;}
     const run=JSON.parse(readFileSync(`${out}.json`,'utf8'));
