@@ -416,6 +416,28 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   On the synthetic 60 Hz clock nine maps keep every frame at p95; the bunker still drops to 30 Hz at p95. Four maps are over
   16.7 ms of page p95 (the bunker by 5 ms, the Island by 3, Battery Park and the Airfield by 2). The rows' verdicts still need the
   headed set.
+* **The frame-time set, 2026-11-07 evening** (master 5303a2d6: since midday 2026-11-06, the combat tick, the actors layer in bulk,
+  the Underground fog phase, the tick hand-backs, the moving lights and the Dockyard spawns and js_eval step; same command,
+  `frame-time-set.mjs --browser firefox`, headless, indicative; runs in `.cache/perf/frame-time-set/ff-5303a2d6`). Page frame p95 (p50),
+  ms, against midday 2026-11-06, and the phase means over drawn frames from 5 s on:
+
+  | Map | page p95 (p50) | 11-06 midday p95 | tick | HUD | actors | render | fog |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | Training | 11 (8) | 11 | | | | | |
+  | Island | 19 (13) | 20 | 5.94 | 1.87 | 1.90 | 1.87 | 0 |
+  | Bar | 10 (8) | 10 | | | | | |
+  | Battery Park | 19 (15) | 19 | 5.73 | 1.23 | 1.63 | 2.91 | 1.03 |
+  | Airfield | 17 (13) | 19 | 4.95 | 1.75 | 1.78 | 1.02 | 0 |
+  | Wan Chai market | 15 (10) | 16 | | | | | |
+  | Ship | 11 (9) | 13 | | | | | |
+  | Chateau | 11 (9) | 12 | | | | | |
+  | Everett | 9 (7) | 9 | | | | | |
+  | Area 51 bunker | 18 (12) | 22 | 4.97 | 2.01 | 1.75 | 1.48 | 0 |
+
+  The headless drawn interval p95 is 17.1 ms on all ten maps (every frame on the synthetic 60 Hz clock, the bunker included, which
+  dropped to 30 Hz at p95 before). Four maps are still over 16.7 ms of page p95: the Island and Battery Park by 2 ms, the bunker by 1,
+  the Airfield by less than 1. Battery Park is the one whose median is also near the bound (15 ms). The rows' verdicts still need
+  the headed set.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
