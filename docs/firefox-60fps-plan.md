@@ -438,6 +438,26 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   dropped to 30 Hz at p95 before). Four maps are still over 16.7 ms of page p95: the Island and Battery Park by 2 ms, the bunker by 1,
   the Airfield by less than 1. Battery Park is the one whose median is also near the bound (15 ms). The rows' verdicts still need
   the headed set.
+* **The frame-time set, 2026-11-07 night** (master 1d1f5758: since 5303a2d6, Battery Park at rest (the world root's matrix walk), the
+  Firefox wasm gap (word arrays compared in line) and the HUD remainder (one HUD vertex buffer, string-local frames begun in Rust); same
+  command, runs in `.cache/perf/frame-time-set/ff-1d1f5758`). Page frame p95 (p50), ms, against the evening set, and the phase means:
+
+  | Map | page p95 (p50) | evening p95 | tick | HUD | actors | render | fog |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | Training | 10 (7) | 11 | | | | | |
+  | Island | 17 (12) | 19 | 5.78 | 1.39 | 1.78 | 1.69 | 0 |
+  | Bar | 9 (7) | 10 | | | | | |
+  | Battery Park | 17 (13) | 19 | 5.18 | 0.91 | 1.48 | 2.07 | 1.02 |
+  | Airfield | 15 (12) | 17 | 4.67 | 1.30 | 1.73 | 0.90 | 0 |
+  | Wan Chai market | 14 (10) | 15 | | | | | |
+  | Ship | 11 (8) | 11 | | | | | |
+  | Chateau | 10 (8) | 10 | | | | | |
+  | Everett | 9 (7) | 9 | | | | | |
+  | Area 51 bunker | 17 (11) | 18 | 4.79 | 1.56 | 1.75 | 1.31 | 0 |
+
+  Firefox's page clock reads whole milliseconds, so a p95 of 17 is just over the bound and 16 would be under it. The Airfield is under now;
+  the Island, Battery Park and the bunker are at 17, one millisecond step over. The tick (4.8 to 5.8 ms) is still the largest phase on all
+  three, then the actors layer (1.5 to 1.8) and, at Battery Park, the render (2.1).
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
