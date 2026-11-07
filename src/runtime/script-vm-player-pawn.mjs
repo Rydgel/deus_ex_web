@@ -15,10 +15,11 @@
  * the cell (when current) is compared with a fresh walk, and js_object's direct path is compared with the JavaScript VM's own.
  */
 import {handleOf} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const UNDEFINED = 0xffffffff;
 
-export const playerPawnMode = () => (typeof process !== 'undefined' && process.env?.PLAYER_PAWN) || globalThis.DEUS_EX_PLAYER_PAWN || 'rust';
+export const playerPawnMode = switchReader('PLAYER_PAWN', 'DEUS_EX_PLAYER_PAWN', 'rust');
 
 export class PlayerPawnHost {
   constructor(vm) {

@@ -21,9 +21,9 @@ import {gcPopGC} from './script-gc-pop-gc.mjs';
 import {NativeHeapError} from './script-native-heap.mjs';
 import {gcDrawText, glyphCommandFromWords} from './script-gc-draw-text.mjs';
 import {UFontModelBoundaryError} from './script-font-model.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-export const gcNativeMode = () => (typeof process !== 'undefined' && process.env?.GC_NATIVE)
-  || globalThis.DEUS_EX_GC_NATIVE || 'rust';
+export const gcNativeMode = switchReader('GC_NATIVE', 'DEUS_EX_GC_NATIVE', 'rust');
 
 /** The natives gc.rs runs, by index: argument kinds after dispatchGcNative's
  * conversions (int, bool, color, float, object). */

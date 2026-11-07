@@ -17,11 +17,11 @@
  * before); RenderIterator classes other than ParticleIterator and
  * LaserIterator and the bHighDetail rule are the sprite scan's. */
 import { SETUP, SETUP_ROOT_EXCLUDED, SETUP_TEXTURE_SIZED, SETUP_TEXTURE_UNKNOWN, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 /** ACTOR_OCCLUSION=frustum (Node) or ?actorOcclusion=frustum keeps the
  * frustum-tested drawn set (drawn-set.mjs) for the main frame's actors. */
-export const actorOcclusionMode = () => (typeof process !== 'undefined' && process.env?.ACTOR_OCCLUSION)
-  || globalThis.DEUS_EX_ACTOR_OCCLUSION || 'bsp';
+export const actorOcclusionMode = switchReader('ACTOR_OCCLUSION', 'DEUS_EX_ACTOR_OCCLUSION', 'bsp');
 
 /** Pack the frame's candidates into `occlusion`'s Setup buffer: `sprites`
  * (sprite-scan records), `iterators` (the actors iterating in their items'

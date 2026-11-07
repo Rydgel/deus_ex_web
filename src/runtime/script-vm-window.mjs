@@ -14,9 +14,9 @@ import {handleOf} from './script-object-handles.mjs';
 import {NativeHeapError} from './script-native-heap.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';
 import {O, c0, c3, drawBackground, drawTree as jsDrawTree} from './script-window-tree-natives.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-export const windowDrawMode = () => (typeof process !== 'undefined' && process.env?.WINDOW_DRAW)
-  || globalThis.DEUS_EX_WINDOW_DRAW || 'rust';
+export const windowDrawMode = switchReader('WINDOW_DRAW', 'DEUS_EX_WINDOW_DRAW', 'rust');
 
 const SLOTS = 4096, SLOT = 16, LOG_CAPACITY = 4096;
 /** Slot flag bits (window.rs). */

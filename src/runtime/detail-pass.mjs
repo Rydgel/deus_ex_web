@@ -17,6 +17,7 @@
  * Every operation is one `Math.fround` (the render pass runs at precision control 24: docs/render-pass-precision.md). */
 import { d3dVertex, viewPoint } from './frame-projection.mjs';
 import { readTexture } from '../unreal/textures.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const f32 = Math.fround;
 const bitsOf = new Uint32Array(1), floatOf = new Float32Array(bitsOf.buffer);
@@ -69,8 +70,7 @@ export const DETAIL_TABLE_WORDS = 16;
  * URenderDevice.DetailTextures from the ini), so the default is on. `?detailTextures=0` (Node: DETAIL_TEXTURES=0) models
  * a device without that cap, where SetRes zeroes the field and DrawComplexSurface skips the pass; Wine's ddraw lacks the cap,
  * so every stored Wine capture of the original needs it (docs/visual-acceptance.md). */
-export const detailTexturesMode = () => (typeof process !== 'undefined' && process.env?.DETAIL_TEXTURES)
-  || globalThis.DEUS_EX_DETAIL_TEXTURES || 'on';
+export const detailTexturesMode = switchReader('DETAIL_TEXTURES', 'DEUS_EX_DETAIL_TEXTURES', 'on');
 export const detailTexturesOn = () => !['0', 'off', 'false', 'no'].includes(String(detailTexturesMode()).toLowerCase());
 
 /** Each model surface's detail texture (null without one), from the map's textures: the surface texture's `DetailTexture`,

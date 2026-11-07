@@ -1,6 +1,7 @@
 /** Original class loading with the VM's canonical identity/value representation.
  * See docs/script-load-graph.md for original authority and remaining services.
  */
+import {DefaultsMap} from './defaults-map.mjs';
 import {readClass} from '../unreal/classes.mjs';
 import {ClassMetadata} from './class-metadata.mjs';
 import {createScriptLoadGraph} from './script-load-graph.mjs';
@@ -236,7 +237,7 @@ export class ScriptClassLoader {
       labelTableOffset: slotOf(loaded, 0x80), scriptSize: slotOf(loaded, 0x48)});
     const cls = {record, metadata, base, loadRecord: loaded, nameCounter: 0,
       fields: new Map(), methods: new Map(), states: new Map(), stateOrder: [],
-      propertyOrder: [], defaults: new Map(), defaultsSource: 'original-linker-serialized'};
+      propertyOrder: [], defaults: new DefaultsMap(), defaultsSource: 'original-linker-serialized'};
     for (let child = slotOf(loaded, 0x38); child; child = slotOf(child, 0x2c)) {
       const identity = this.identity(child);
       const kind = propertyKindOf(child), name = nameText(slotOf(child, 0x20)).toLowerCase();

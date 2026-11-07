@@ -135,6 +135,15 @@ const AMBIENT_FIELDS: u64 = 1 << R_AMBIENTSOUND;
 /// Owners followed before an actor is handed to JavaScript.
 const OWNER_WALK: u32 = 64;
 
+/// How `Obj::has` (here and in loco.rs) asks a BOUND receiver's binding set: 0 walks the set bits of the question, 1 every position of the
+/// field table (the reference), 2 both, trapping on a difference. The host sets it once, when it attaches the interpreter.
+pub(crate) static mut HAS_MODE: u32 = 0;
+
+#[no_mangle]
+pub extern "C" fn vm_has_mode(mode: u32) {
+    unsafe { HAS_MODE = mode };
+}
+
 /// R_FIELDS: per field [offset, bool mask, key id], written by the host.
 static mut R_FIELDS: [[u32; 3]; FIELD_COUNT] = [[0; 3]; FIELD_COUNT];
 
@@ -187,16 +196,44 @@ impl Obj {
         let fields = (load32(at) & !COMPUTED) as u64 | (load32(at.wrapping_add(4)) as u64) << 31;
         Obj { info, bind, fields }
     }
-    /// Whether every field of `set` is read in the image.
+    /// Whether every field of `set` is read in the image. A BOUND receiver (every actor: its header fields are bound) asks the binding
+    /// set about each field of `set` alone: the set bits are walked, not all FIELD_COUNT positions (51 iterations for the two to
+    /// seven bits a scan asks about, in every slot of every scan). `vm_has_mode`: 0 walks the bits, 1 is the position-by-position
+    /// reference, 2 runs both and traps on a difference.
     pub(crate) fn has(&self, set: u64) -> bool {
         if self.fields & set != set {
             return false;
         }
-        if self.info & BOUND != 0 {
-            for i in 0..FIELD_COUNT {
-                if set & (1 << i) != 0 && bound_key(self.bind, rfield(i)[2]) {
-                    return false;
-                }
+        if self.info & BOUND == 0 {
+            return true;
+        }
+        match unsafe { HAS_MODE } {
+            0 => self.bits_free(set),
+            1 => self.positions_free(set),
+            _ => {
+                let walked = self.bits_free(set);
+                assert!(walked == self.positions_free(set));
+                walked
+            }
+        }
+    }
+    #[inline(always)]
+    fn bits_free(&self, set: u64) -> bool {
+        let mut rest = set & ((1u64 << FIELD_COUNT) - 1);
+        while rest != 0 {
+            let i = rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            if bound_key(self.bind, rfield(i)[2]) {
+                return false;
+            }
+        }
+        true
+    }
+    /// The reference: every position of the field table in turn.
+    fn positions_free(&self, set: u64) -> bool {
+        for i in 0..FIELD_COUNT {
+            if set & (1 << i) != 0 && bound_key(self.bind, rfield(i)[2]) {
+                return false;
             }
         }
         true

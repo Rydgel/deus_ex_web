@@ -125,16 +125,40 @@ impl Obj {
         }
         Obj { info, bind, row, fields: load32(at) }
     }
-    /// Whether every field of `set` is read in the image.
+    /// Whether every field of `set` is read in the image (the set bits are walked, as render.rs `has`, under the same `vm_has_mode`).
     fn has(&self, set: u32) -> bool {
         if self.fields & set != set {
             return false;
         }
-        if self.info & BOUND != 0 {
-            for i in 0..FIELD_COUNT {
-                if set & (1 << i) != 0 && bound_key(self.bind, lfield(i)[2]) {
-                    return false;
-                }
+        if self.info & BOUND == 0 {
+            return true;
+        }
+        match unsafe { crate::render::HAS_MODE } {
+            0 => self.bits_free(set),
+            1 => self.positions_free(set),
+            _ => {
+                let walked = self.bits_free(set);
+                assert!(walked == self.positions_free(set));
+                walked
+            }
+        }
+    }
+    #[inline(always)]
+    fn bits_free(&self, set: u32) -> bool {
+        let mut rest = set & ((1u32 << FIELD_COUNT) - 1);
+        while rest != 0 {
+            let i = rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            if bound_key(self.bind, lfield(i)[2]) {
+                return false;
+            }
+        }
+        true
+    }
+    fn positions_free(&self, set: u32) -> bool {
+        for i in 0..FIELD_COUNT {
+            if set & (1 << i) != 0 && bound_key(self.bind, lfield(i)[2]) {
+                return false;
             }
         }
         true

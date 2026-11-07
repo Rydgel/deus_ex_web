@@ -22,8 +22,9 @@
  */
 import {identityOfHandle} from './script-object-handles.mjs';
 import {cleanupImageSites, clearSite, readSite, siteVerdict} from './script-cleanup.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-export const cleanupScanMode = () => (typeof process !== 'undefined' && process.env?.CLEANUP_SCAN) || globalThis.DEUS_EX_CLEANUP_SCAN || 'rust';
+export const cleanupScanMode = switchReader('CLEANUP_SCAN', 'DEUS_EX_CLEANUP_SCAN', 'rust');
 
 const DONE = 0, NEED = 1;
 // 8,192 entries of 8 bytes [handle, verdict]; the table is kept under half full.

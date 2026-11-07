@@ -7,6 +7,7 @@
  * poison cleared, storage is restored, or an object is freed. (A handle's
  * own release clears its entry directly.) */
 import {existingHandle} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 let epoch = 1;
 const listeners = [];
@@ -19,7 +20,7 @@ export function bumpReceiverEpoch() {
 }
 
 /** 'identity' (default) or 'global': EPOCH_SCOPE / DEUS_EX_EPOCH_SCOPE, what `bumpReceiverEpochFor` does. */
-export const epochScopeMode = () => (typeof process !== 'undefined' && process.env?.EPOCH_SCOPE) || globalThis.DEUS_EX_EPOCH_SCOPE || 'identity';
+export const epochScopeMode = switchReader('EPOCH_SCOPE', 'DEUS_EX_EPOCH_SCOPE', 'identity');
 
 /** The advance for an event that changes `identity` only (an instance attached to it, a host binding added to it). A table entry
  * is per handle, and a handle is allocated at the identity's first use and never reused (script-object-handles.mjs), so an

@@ -23,6 +23,7 @@ import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {fixedArrayShape} from './script-values.mjs';
 import {nameId} from './script-name-ids.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -181,7 +182,7 @@ const CASTS = new Map([
  * the CALL kind as virtual calls are, with the state skipped in its resolution (runtime.lookup(receiver, name, true): UObject::
  * execGlobalFunction's FindFunctionChecked(Name, 1)); 'js' keeps the JavaScript kind (the whole node evaluated by the JavaScript
  * VM); 'verify' is 'rust' and checks each resolution against the class chain (script-vm-rust.mjs `callRecord`). */
-export const globalCallMode = () => (typeof process !== 'undefined' && process.env?.GLOBAL_CALLS) || globalThis.DEUS_EX_GLOBAL_CALLS || 'rust';
+export const globalCallMode = switchReader('GLOBAL_CALLS', 'DEUS_EX_GLOBAL_CALLS', 'rust');
 
 // A call's argument and result kinds (interp.rs CALL).
 const PARAM_KIND = {int: 1, bool: 2, float: 3, object: 4, byte: 5, vector: 7, rotator: 8};
@@ -235,22 +236,22 @@ export function functionSignature(fn, loader) {
 /** 'rust' (default), 'js' or 'verify': OUT_STRUCT / DEUS_EX_OUT_STRUCT / `?outStruct=`. Calls to a function with `out` struct
  * parameters run in Rust (interp.rs CALL_OUT, iter.rs) where 'rust'; 'js' keeps them whole in JavaScript; 'verify' compares each
  * struct copy with the JavaScript codec (script-vm-foreach.mjs). */
-export const outStructMode = () => (typeof process !== 'undefined' && process.env?.OUT_STRUCT) || globalThis.DEUS_EX_OUT_STRUCT || 'rust';
+export const outStructMode = switchReader('OUT_STRUCT', 'DEUS_EX_OUT_STRUCT', 'rust');
 /** 'rust' (default), 'js' or 'verify': FOREACH_START / DEUS_EX_FOREACH_START / `?foreachStart=`. The CycleActors foreach start and its
  * IteratorNext run in Rust (interp.rs S_FOREACH_CYCLE, iter.rs) where 'rust'; 'js' keeps the JavaScript iterator; 'verify' compares each
  * step with a shadow JavaScript iterator. */
-export const foreachStartMode = () => (typeof process !== 'undefined' && process.env?.FOREACH_START) || globalThis.DEUS_EX_FOREACH_START || 'rust';
+export const foreachStartMode = switchReader('FOREACH_START', 'DEUS_EX_FOREACH_START', 'rust');
 /** 'rust' (default), 'js' or 'verify': SET_ROTATION / DEUS_EX_SET_ROTATION / `?setRotation=`. A statement `SetRotation(R)` or `X.SetRotation(R)`
  * (native 299) runs in Rust (interp.rs SET_ROTATION) where 'rust'; 'js' keeps the native in the JavaScript VM (setScriptRotation); 'verify'
  * runs the JavaScript native on a copy of what Rust did and compares the Rotation words (script-vm-foreach.mjs). */
-export const setRotationMode = () => (typeof process !== 'undefined' && process.env?.SET_ROTATION) || globalThis.DEUS_EX_SET_ROTATION || 'rust';
+export const setRotationMode = switchReader('SET_ROTATION', 'DEUS_EX_SET_ROTATION', 'rust');
 /** 'rust' (default), 'js' or 'verify': STRUCT_ARRAYS / DEUS_EX_STRUCT_ARRAYS / `?structArrays=`. The parts of a local struct the Rust
  * interpreter reaches in memory: a fixed-array member of a struct local (`projList.List[i].dist`), vector members and vector array
  * elements, stores to array elements (`List[i].Projectile = p`), and struct out arguments whose members are nested structs, fixed
  * arrays or vectors (ScriptedPawn.GetProjectileList's NearbyProjectileList). 'js' leaves them to the JavaScript VM, as before the
  * switch; 'verify' also reads every stored element back through the JavaScript closure and compares the nested struct copies leaf
  * by leaf with the codec copy (script-vm-foreach.mjs). */
-export const structArraysMode = () => (typeof process !== 'undefined' && process.env?.STRUCT_ARRAYS) || globalThis.DEUS_EX_STRUCT_ARRAYS || 'rust';
+export const structArraysMode = switchReader('STRUCT_ARRAYS', 'DEUS_EX_STRUCT_ARRAYS', 'rust');
 
 const MAX_OUT_STRUCTS = 4;
 /** The members a struct out argument is copied by: its scalar members as before the switch, or every leaf of a nested struct, fixed

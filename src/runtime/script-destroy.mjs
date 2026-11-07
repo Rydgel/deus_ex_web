@@ -7,6 +7,7 @@
  */
 
 import { bumpActorsEpoch } from './base-epoch.mjs';
+import {switchReader} from './switch-reader.mjs';
 const AUTHORITY_ROLE = 4;
 
 const present = value => value !== null && value !== undefined;
@@ -61,7 +62,7 @@ function nextTouch(callbacks, read, actor, receiver, from) {
 }
 
 /** 'rust' (default), 'js' or 'verify': DESTROY_SCAN / DEUS_EX_DESTROY_SCAN, the SetOwner/EndTouch scan below. */
-export const destroyScanMode = () => (typeof process !== 'undefined' && process.env?.DESTROY_SCAN) || globalThis.DEUS_EX_DESTROY_SCAN || 'rust';
+export const destroyScanMode = switchReader('DESTROY_SCAN', 'DEUS_EX_DESTROY_SCAN', 'rust');
 
 // The SetOwner/EndTouch scan's next slot at or after `from` that may need its body: a host `scan(actors, from, receiver)` (the
 // Rust core's destroy_scan over the image's Owner and Touching cells) passes over the slots whose Owner is not `receiver` and

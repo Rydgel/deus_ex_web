@@ -11,6 +11,8 @@ import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
 import { actorsEpoch, bumpBaseEpoch } from '../runtime/base-epoch.mjs';
+import { ActorNames } from '../runtime/actor-names.mjs';
+import { switchReader } from '../runtime/switch-reader.mjs';
 import { RENDER_LIGHT, RENDER_SHIFT } from '../runtime/script-vm-render.mjs';
 import { brushMatrix } from './transforms.mjs';
 import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
@@ -31,6 +33,7 @@ import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS, levelUrlAfterLoad } from '../runtime/furl.mjs';
 import { exportAt } from '../unreal/objects.mjs';
+const actorNamesMode = switchReader('ACTOR_NAMES', 'DEUS_EX_ACTOR_NAMES', 'kept');
 
 /** Bind decoded resources to the renderer-independent simulation. */
 /** The game left the level (UGameEngine::Tick's client travel to `url`): Browse and LoadMap are Stage 6, so Play stops here. */
@@ -331,7 +334,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     if (seed) doors.scriptRuntime.runtime.seedOriginalObjectIndex({count: seed.count, freeIndices: seed.freeIndices, exact: seed.exact,
       source: `${asset.name} open capture (${seed.holes} holes)`});
   }
-  let zoneNames = null;
+  // surfacePan's name -> actor map (runtime/actor-names.mjs). ACTOR_NAMES / ?actorNames=: 'kept' (default), 'js' (rebuilt whenever the epoch
+  // advances) or 'verify'.
+  const zoneNames = new ActorNames();
   // Map travel (docs/travel.md): a session created with `travel` runs ClientTravel as recovered and the tick's travel step browses to the
   // next level; one without keeps the named stop (ClientTravelBoundary). `travel.arrival` is the travel that brought the player here,
   // `travel.lastURL` the engine's LastURL (docs/travel.md "Unresolved" 7).
@@ -402,14 +407,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
      * TexVPanSpeed, by name (zone actors are pre-placed). */
     surfacePan() {
       const level = runtime.levelFor(player.collisionActor);
-      // The first Level.Actors entry of each name, rebuilt when the array's
-      // membership changes (actorsEpoch).
-      if (zoneNames?.actors !== level.actors || zoneNames.epoch !== actorsEpoch()) {
-        const byName = new Map();
-        for (const actor of level.actors) if (actor && !byName.has(actor.name)) byName.set(actor.name, actor);
-        zoneNames = { actors: level.actors, epoch: actorsEpoch(), byName };
-      }
-      const { byName } = zoneNames;
+      // The first Level.Actors entry of each name, kept as the array's membership changes (actorsEpoch).
+      const byName = zoneNames.at(level.actors, actorsEpoch(), actorNamesMode());
       return { timeSeconds: levelTime.get(), zoneSpeeds: name => {
         const actor = byName.get(name);
         return actor ? [runtime.readNamed(actor, 'TexUPanSpeed'), runtime.readNamed(actor, 'TexVPanSpeed')] : null;

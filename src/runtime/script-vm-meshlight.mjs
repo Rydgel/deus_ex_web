@@ -18,9 +18,9 @@
  */
 import {squareRootTable} from './dynamic-lighting.mjs';
 import {handleOf} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-export const meshLightMode = () => (typeof process !== 'undefined' && process.env?.MESH_LIGHT)
-  || globalThis.DEUS_EX_MESH_LIGHT || 'rust';
+export const meshLightMode = switchReader('MESH_LIGHT', 'DEUS_EX_MESH_LIGHT', 'rust');
 
 const SLOT_WORDS = 10, CACHE_BLOCK = 8 + 16 * 8, OUT_WORDS = 1 + 2 * 120 + 1 + 120;
 const SL_STATIC = 1, SL_MOVABLE = 2, SL_SPECIAL = 4, SL_ALIVE = 8, SL_RECORD = 16;

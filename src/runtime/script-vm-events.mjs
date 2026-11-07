@@ -29,13 +29,13 @@ import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-ob
 import {probeNames, probeIndex} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
 import {ScriptState, originalProcess, originalIsProbing} from './script-state.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 /** The tick's reads of other objects' state: actorInStasis' zone render time (tick.rs zone_render_time), the owner's bTicked
  * (`owner_ticked`) and the event gate's Level.bBegunPlay (dispatch.rs `gate`). 'rust' (default) reads them in Rust (the zone times
  * from a table the host copies before each run or batch, the others from the objects' images), 'js' asks the runtime through
  * the imports, 'verify' does both and compares every answer. TICK_READS / ?tickReads=. */
-export const tickReadsMode = () => env.TICK_READS || globalThis.DEUS_EX_TICK_READS || 'rust';
+export const tickReadsMode = switchReader('TICK_READS', 'DEUS_EX_TICK_READS', 'rust');
 // ACTOR_TICK_DIFFERENTIAL replays the owner's bTicked read and the gate's from a log: they stay imports then.
 const DIFFERENTIAL = typeof process !== 'undefined' && process.env?.ACTOR_TICK_DIFFERENTIAL === '1';
 const DISPATCH_VERIFY = typeof process !== 'undefined' && process.env?.DISPATCH_VERIFY === '1';

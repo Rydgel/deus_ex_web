@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { toView } from '../unreal/geometry.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 /** OccludeBsp takes the mirror path only while Frame->Recursion (+0x1c) is
  * below 3 (0x10b18881); CreateChildFrame gives a child its parent's
@@ -103,8 +104,7 @@ export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible,
 /** OccludeFrame's child frames switch: ?childFrames=off (Node:
  * CHILD_FRAMES=off) keeps the main frame's requests and the frustum-tested
  * mirror and sky passes (docs/bsp-occlusion.md "Child frames"). */
-export const childFramesMode = () => (typeof process !== 'undefined' && process.env?.CHILD_FRAMES)
-  || globalThis.DEUS_EX_CHILD_FRAMES || 'on';
+export const childFramesMode = switchReader('CHILD_FRAMES', 'DEUS_EX_CHILD_FRAMES', 'on');
 
 /** Each child frame's own SetupDynamics (docs/bsp-occlusion.md "Child
  * frames"): the render iterators' items are built again for every frame.
@@ -112,8 +112,7 @@ export const childFramesMode = () => (typeof process !== 'undefined' && process.
  * items in every child frame (measurement and fallback); `full` packs every
  * frame's candidates from scratch and `verify` also checks the patched ones
  * against that (measurement and validation). */
-export const iteratorFramesMode = () => (typeof process !== 'undefined' && process.env?.ITERATOR_FRAMES)
-  || globalThis.DEUS_EX_ITERATOR_FRAMES || 'on';
+export const iteratorFramesMode = switchReader('ITERATOR_FRAMES', 'DEUS_EX_ITERATOR_FRAMES', 'on');
 
 /** The mirror groups a child frame looks through (sim-session.mjs
  * `visibility` frames). CreateChildFrame merges every request of one parent

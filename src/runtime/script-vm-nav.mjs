@@ -24,6 +24,7 @@
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell} from './script-object-image.mjs';
 import {fieldKeyId} from './script-vm-lower.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 /** The fields nav.rs reads (N_*), in index order: [spelling, key, kind]. */
 export const NAV_FIELDS = Object.freeze([
@@ -58,8 +59,7 @@ const cellIs = (cell, kind) => kind === 'int[16]'
 const FOUND = 1, HANDBACK = 2, FAULT = 3;
 
 /** 'rust' (default), 'js' or 'verify'. */
-export const navSearchMode = () => (typeof process !== 'undefined' && process.env?.NAV_SEARCH)
-  || globalThis.DEUS_EX_NAV_SEARCH || 'rust';
+export const navSearchMode = switchReader('NAV_SEARCH', 'DEUS_EX_NAV_SEARCH', 'rust');
 
 export class NavSearchHost {
   constructor(vm) {

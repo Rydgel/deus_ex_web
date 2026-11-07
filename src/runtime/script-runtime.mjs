@@ -14,6 +14,8 @@ import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
 import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference, NO_BINDINGS, setBindingOf, deleteBindingOf } from './script-bindings.mjs';
+import {DefaultsMap} from './defaults-map.mjs';
+import {switchReader} from './switch-reader.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
@@ -430,6 +432,23 @@ const sameDefaults=(snapshot,defaults)=>{
   for(const [key,values] of defaults)if(snapshot.get(key)!==values)return false;
   return true;
 };
+// IMAGE_CHECK / ?imageCheck=: how a class image is told to be current. 'version' (default): the class's DefaultsMap counts its changes, and an
+// image made at the version it has now is current without the walk; 'js': sameDefaults at every construction (the reference, and for a class
+// whose defaults are a plain Map); 'verify': the version and the walk, which must agree.
+const imageCheckMode=switchReader('IMAGE_CHECK','DEUS_EX_IMAGE_CHECK','version');
+const imageCurrent=(image,cls)=>{
+  const defaults=cls.defaults;
+  if(!(defaults instanceof DefaultsMap)||image.version===undefined||imageCheckMode()==='js')return sameDefaults(image.defaults,defaults);
+  if(image.version===defaults.version){
+    if(imageCheckMode()==='verify'&&!sameDefaults(image.defaults,defaults))
+      throw new Error(`IMAGE_CHECK=verify: the class image of ${cls.record?.key} is at the defaults' version ${defaults.version} but differs from them`);
+    return true;
+  }
+  // A change that left the entries as they were (the same Map set again) is not one: the walk decides, and the version is taken again.
+  if(!sameDefaults(image.defaults,defaults))return false;
+  image.version=defaults.version;
+  return true;
+};
 /** exec bodies resolve each out expression to a raw address; a non-assignable
  * expression lands in a private temporary whose writes never escape. */
 const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{set(){}};
@@ -792,7 +811,7 @@ export class ScriptRuntime {
           const metadata=readClass(record.asset,record.index);
           const base=metadata.base?await this.loadClass(record.asset,metadata.base):null;
           cls={record,metadata,base,nameCounter:0,...await this.members(record),
-            ...await this.linkedChildren(record,metadata.children),defaults:new Map(base?.defaults)};
+            ...await this.linkedChildren(record,metadata.children),defaults:new DefaultsMap(base?.defaults)};
           cls.propertyLink=[...cls.propertyOrder,...(base?.propertyLink??[])];
           cls.destructorLink=cls.propertyLink.filter(field=>field.metadata.flags&0x00400000);
           for(const property of metadata.properties){
@@ -962,7 +981,7 @@ export class ScriptRuntime {
     if(!layout)return null;
     const classImages=this.classImages??=new WeakMap();
     let image=classImages.get(cls);
-    if(image&&sameDefaults(image.defaults,cls.defaults))return image;
+    if(image&&imageCurrent(image,cls))return image;
     const arena=this.objectArena(),base=arena.alloc(layout.size);
     const defaults=new Map(cls.defaults),refs=new Array(layout.refCount).fill(null);
     let poison=null;
@@ -975,7 +994,7 @@ export class ScriptRuntime {
     }
     // A replaced default image is only a copy source; its range is released.
     if(image)image.arena.release(image.base,image.layout.size);
-    image={layout,defaults,arena,base,refs,poison};
+    image={layout,defaults,arena,base,refs,poison,version:cls.defaults.version};
     classImages.set(cls,image);
     // The Rust interpreter reads DefaultVariable in class images (R2b-5).
     classDefaultsChanged();
@@ -986,7 +1005,7 @@ export class ScriptRuntime {
    * DefaultVariable there (script-vm-rust.mjs). */
   currentClassImage(cls) {
     const image=this.classImages?.get(cls);
-    return image&&sameDefaults(image.defaults,cls.defaults)?image:null;
+    return image&&imageCurrent(image,cls)?image:null;
   }
   /** The runtime's object arena (docs/rust-core.md, R0). Harnesses built with
    * Object.create(ScriptRuntime.prototype) get theirs on first use. */

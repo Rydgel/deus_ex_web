@@ -2,6 +2,7 @@ import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLight
   normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv, fistp } from '../runtime/dynamic-lighting.mjs';
 import { lightTypeBrightness, spotLightSpatial } from '../runtime/static-lighting.mjs';
 import { fcoordsAxes } from '../runtime/script-pawn-locomotion.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 const MAX = 127 / 255, TWO_52 = 4503599627370496, f = Math.fround;
 // The effect table at 0x10b2a0f0 (docs/static-lighting.md): the normal body
@@ -24,8 +25,7 @@ const union = rects => rects.length ? {
 /** 'incremental' (default) recomposes only the light maps a changed light or
  * mover reaches; MOVING_LIGHTS=full in Node or ?movingLights=full in the
  * viewer keeps the whole-frame recompute as the reference. */
-const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.MOVING_LIGHTS)
-  || globalThis.DEUS_EX_MOVING_LIGHTS || 'incremental';
+const movingLightsMode = switchReader('MOVING_LIGHTS', 'DEUS_EX_MOVING_LIGHTS', 'incremental');
 
 /** Per-frame moving lights over the world's lightmap records: the recovered
  * Render.dll surface path (docs/dynamic-lighting.md) as a lighting.mjs
