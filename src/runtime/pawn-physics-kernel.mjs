@@ -187,7 +187,7 @@ export class PawnPhysicsHost {
     view.setUint32(walk.stateAt + 4, ops.worldActor ? handleOf(ops.worldActor) : 0, true);
     const depth = this.vm.movePawn.contexts.length;
     this.vm.movePawn.contexts.push(this.moveContext(depth, pawn, actor, ops.move));
-    walk.contexts[depth] = this.walkContext(depth, pawn, actor, ops);
+    walk.contexts[depth] = this.walkContext(depth, pawn, actor, ops, instance);
     c.pawnDepth = depth;
     c.walkCounts = directWalkBegin(walk);
     c.walkHandedBack = false;
@@ -203,10 +203,10 @@ export class PawnPhysicsHost {
     c.ignoreBases = undefined; c.start = undefined; c.extent = undefined; c.keepsHit = undefined;
     return c;
   }
-  walkContext(depth, pawn, actor, ops) {
+  walkContext(depth, pawn, actor, ops, instance) {
     let c = this.walkPool[depth];
-    if (c === undefined) return this.walkPool[depth] = {pawn, actor, ops};
-    c.pawn = pawn; c.actor = actor; c.ops = ops;
+    if (c === undefined) return this.walkPool[depth] = {pawn, actor, ops, instance};
+    c.pawn = pawn; c.actor = actor; c.ops = ops; c.instance = instance;
     return c;
   }
   /** The walk's contexts popped (also after an import threw). */
@@ -216,7 +216,7 @@ export class PawnPhysicsHost {
     c.pawnDepth = undefined;
     const used = this.movePool[depth], walked = this.walkPool[depth];
     if (used !== undefined) { used.pawn = used.actor = used.ops = used.hits = null; }
-    if (walked !== undefined) { walked.pawn = walked.actor = walked.ops = null; }
+    if (walked !== undefined) { walked.pawn = walked.actor = walked.ops = walked.instance = null; }
     directWalkEnd(this.vm.walkLoop, c.walkCounts, c.walkHandedBack);
     c.walkCounts = null;
     this.vm.movePawn.contexts.length = depth;

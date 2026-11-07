@@ -28,16 +28,32 @@ import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell, scalarCell} f
 import {handleOf} from './script-object-handles.mjs';
 import {identityOfHandle} from './script-object-handles.mjs';
 import {flyFrom} from './walking.mjs';
+import {switchReader} from './switch-reader.mjs';
+import {bareReturn} from './script-empty-body.mjs';
+import {surfaceScanInputs} from './walking-surface.mjs';
+import {o3} from './o3-record.mjs';
+import {HASH_DIFFERENTIAL} from './collision-kernel.mjs';
+import {TRACE_DIFFERENTIAL} from './trace-kernel.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.WALK_LOOP_KERNEL === 'js' || globalThis.DEUS_EX_WALK_LOOP_KERNEL === 'js';
 const DIFFERENTIAL = env.WALK_LOOP_DIFFERENTIAL === '1';
+/** 'rust' (default), 'js' or 'verify': WALK_PRELUDE / DEUS_EX_WALK_PRELUDE / `?walkPrelude=`. The surface prelude of a walking or swimming
+ * pawn (walking-surface.mjs `walkingSurfacePrelude`) with its scan inputs made in Rust and its common outcome decided in one import
+ * (`js_walk_scan`): no ladder, a floor the walk may stand on and a WalkTexture event that is a bare `return`. `js` keeps every prelude
+ * in JavaScript; `verify` also makes the inputs again in JavaScript (bit for bit) and runs the whole JavaScript prelude after the fast
+ * answer, which must return false. */
+export const walkPreludeMode = switchReader('WALK_PRELUDE', 'DEUS_EX_WALK_PRELUDE', 'rust');
 // The Rust-side counters, in the state block's order from word 2 (walk_loop.rs WL_STATE).
 export const COUNTERS = ['moves', 'slopeProbes', 'nudges', 'slides', 'retreats', 'stepUps'];
-const counts = {calls: 0, handedBack: 0, declined: 0, declinedBy: {}, prelude: 0, lines: 0, handedBackMoves: 0, zoneFallbacks: 0,
-  hitWalls: 0, fallingEvents: 0, mayFalls: 0, supportBases: 0, physicsSets: 0, farMoves: 0, fallings: 0, swims: 0, flyings: 0,
+const counts = {calls: 0, handedBack: 0, declined: 0, declinedBy: {}, prelude: 0, scans: 0, scanFast: 0, scanBack: {}, lines: 0, handedBackMoves: 0, zoneFallbacks: 0,
+  verified: 0, hitWalls: 0, fallingEvents: 0, mayFalls: 0, supportBases: 0, physicsSets: 0, farMoves: 0, fallings: 0, swims: 0, flyings: 0,
   ...Object.fromEntries(COUNTERS.map(key => [key, 0]))};
+// (a page's session reads the counts as `deusExVerifyCounts.walkLoop`)
+(globalThis.deusExVerifyCounts ??= {}).walkLoop = counts;
 if (DIFFERENTIAL) process.on('exit', () => process.stderr.write(`walk loop differential: ${JSON.stringify(counts)}\n`));
+/** js_walk_scan's answer 0 (the JavaScript prelude runs), counted by reason under WALK_LOOP_DIFFERENTIAL. */
+const back = why => { if (DIFFERENTIAL) counts.scanBack[why] = (counts.scanBack[why] ?? 0) + 1; return 0; };
 const declined = (why, name) => {
   counts.declined++;
   if (DIFFERENTIAL) { const key = `${why} ${name ?? '?'}`; counts.declinedBy[key] = (counts.declinedBy[key] ?? 0) + 1; }
@@ -73,12 +89,14 @@ export const WALK_FIELDS = [
   ['ZoneFluidFriction', 'engine.zoneinfo.zonefluidfriction', 'float'],
   // calcVelocity scales a non-PlayerPawn's MaxSpeed by it (walk_loop.rs W_DESIRED_SPEED).
   ['DesiredSpeed', 'engine.pawn.desiredspeed', 'float'],
+  // The surface prelude's scan turns from its Yaw (walk_loop.rs W_ROTATION).
+  ['Rotation', 'engine.actor.rotation', 'rotator'],
 ];
 // walk_loop.rs W_ZONE_FLUID_FRICTION.
 const ZONE_FLUID_FRICTION = 22;
 const PAWN_FIELDS = 19;
 // The rows read from the pawn's own image: its first PAWN_FIELDS and DesiredSpeed (the last row).
-const PAWN_ROWS = [...Array(PAWN_FIELDS).keys(), 23];
+const PAWN_ROWS = [...Array(PAWN_FIELDS).keys(), 23, 24];
 
 /** WALK_LOOP_DIFFERENTIAL's counts for a walking call pawn_phys.rs makes
  * itself (pawn-physics-kernel.mjs), as `walk` keeps them: the Rust-side
@@ -106,6 +124,10 @@ export class WalkLoopHost {
     this.zoneClasses = new Map();
     this.instances = new WeakMap();
     this.contexts = [];
+    // js_walk_scan: per class and state node, whether the WalkTexture event reaches a bare return (scanFast).
+    this.noopWalkTexture = new WeakMap();
+    // walkingSurfacePrelude's scan inputs, made again in JavaScript for the verify mode, and the scan's own scratch arrays.
+    this.scratch = {start: [0, 0, 0], ends: [[0, 0], [0, 0], [0, 0], [0, 0]], position: [0, 0, 0], floorEnd: [0, 0, 0]};
   }
   attach(x) {
     this.x = x;
@@ -123,6 +145,9 @@ export class WalkLoopHost {
     this.classes.clear();
     this.zoneClasses.clear();
     this.instances = new WeakMap();
+    this.noopWalkTexture = new WeakMap();
+    // walk_loop.rs WL_STATE[8]: the surface prelude's mode (a switch read once the page's switches are set)
+    this.vm.arena.view.setUint32(this.stateAt + 32, walkPreludeMode() === 'js' ? 0 : 1, true);
     this.cells = WALK_FIELDS.map(([, key, kind]) => {
       const cell = fieldImageCell(key);
       return cellKind(cell) === kind ? cell : null;
@@ -164,6 +189,57 @@ export class WalkLoopHost {
     }
     return entry.ok;
   }
+  /** Whether the WalkTexture event `actor` sends reaches a function with nothing to run, from its class and current state. The class graph
+   * does not change after linking, so the answer is kept for the pair (the lookup is the one `dispatch` makes). */
+  walkTextureIsNoop(instance, actor) {
+    const runtime = this.runtime, cls = instance.cls, state = instance.state?.stateNode ?? null;
+    let byState = this.noopWalkTexture.get(cls);
+    if (!byState) this.noopWalkTexture.set(cls, byState = new Map());
+    let known = byState.get(state);
+    if (known === undefined) {
+      // (a missing function is no call: dispatch returns at once)
+      const record = runtime.lookup(actor, 'WalkTexture');
+      known = !record || (Boolean(record.function) && bareReturn(record.function));
+      byState.set(state, known);
+    }
+    return known;
+  }
+  /** js_walk_scan: the common outcome of walkingSurfacePrelude for the scan inputs Rust made. 1: the prelude would return false having
+   * changed nothing; 0: nothing done here, the JavaScript prelude runs. */
+  scanFast(c, sx, sy, sz, e0x, e0y, e1x, e1y, e2x, e2y, e3x, e3y, px, py, pz, fz) {
+    counts.scans++;
+    const pawn = c.pawn;
+    // O3 recording and the kernel differentials take the JavaScript prelude, as it does for itself (walking-surface.mjs)
+    if (o3.on || HASH_DIFFERENTIAL || TRACE_DIFFERENTIAL) return back('recording');
+    if (typeof pawn.surfaceScan !== 'function') return back('no scan');
+    if (!this.walkTextureIsNoop(c.instance, c.actor)) return back('event');
+    const t = this.scratch, start = t.start, ends = t.ends, position = t.position, floorEnd = t.floorEnd;
+    start[0] = sx; start[1] = sy; start[2] = sz;
+    ends[0][0] = e0x; ends[0][1] = e0y; ends[1][0] = e1x; ends[1][1] = e1y; ends[2][0] = e2x; ends[2][1] = e2y; ends[3][0] = e3x; ends[3][1] = e3y;
+    position[0] = px; position[1] = py; position[2] = pz;
+    floorEnd[0] = px; floorEnd[1] = py; floorEnd[2] = fz;
+    if (walkPreludeMode() === 'verify') this.verifyInputs(pawn, start, ends, position, floorEnd);
+    const scan = pawn.surfaceScan(start, ends, position, floorEnd);
+    if (!scan) return back('scan');
+    const selected = pawn.textureForHit(scan.selected);
+    if (selected?.outerName?.toLowerCase() === 'ladder') return back('ladder');
+    if (!scan.floor) return back('floor');
+    const texture = pawn.textureForHit(scan.floor);
+    if (pawn.physics === 1 && texture && texture.friction < 1) return back('friction');
+    counts.scanFast++;
+    return 1;
+  }
+  /** WALK_PRELUDE=verify: Rust's scan inputs against `fillScanInputs`'s, bit for bit. */
+  verifyInputs(pawn, start, ends, position, floorEnd) {
+    const expected = surfaceScanInputs(pawn), bits = v => { const b = new DataView(new ArrayBuffer(8)); b.setFloat64(0, v); return b.getBigUint64(0); };
+    const same = (name, a, b) => {
+      if (bits(a) !== bits(b)) throw new Error(`WALK_PRELUDE=verify: ${name} is ${a} in Rust and ${b} in JavaScript`);
+    };
+    for (let i = 0; i < 3; i++) { same(`start[${i}]`, start[i], expected.start[i]); same(`position[${i}]`, position[i], expected.position[i]); }
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 2; i++) same(`ends[${k}][${i}]`, ends[k][i], expected.ends[k][i]);
+    same('floorEnd[2]', floorEnd[2], expected.floorEnd[2]);
+    counts.verified++;
+  }
   /** `walking(pawn, seconds, iterations)` in Rust: true when it ran there,
    * false when the JavaScript body must run. `ops` are the move services
    * script-pawn-physics.mjs builds for this pawn. */
@@ -191,7 +267,7 @@ export class WalkLoopHost {
     // context at this depth, and this host's context sits at the same
     // index (a nested walk inside a move's callback gets a deeper one).
     const depth = pawnMover.contexts.length;
-    const context = {pawn, actor, ops};
+    const context = {pawn, actor, ops, instance};
     pawnMover.contexts.push({pawn, actor, ops: ops.move, hits: null, times: null});
     this.contexts[depth] = context;
     const x = this.x, stack = x.__stack_pointer.value;
@@ -236,6 +312,13 @@ export class WalkLoopHost {
       js_walk_prelude(depth, dt, iterations) {
         counts.prelude++;
         return context(depth).pawn.walkingPrelude(dt, iterations) ? 1 : 0;
+      },
+      js_walk_scan(depth, sx, sy, sz, e0x, e0y, e1x, e1y, e2x, e2y, e3x, e3y, px, py, pz, fz) {
+        const c = context(depth), fast = host.scanFast(c, sx, sy, sz, e0x, e0y, e1x, e1y, e2x, e2y, e3x, e3y, px, py, pz, fz);
+        // verify: the whole JavaScript prelude after the fast answer, which then has to be the no-op the answer says
+        if (fast && walkPreludeMode() === 'verify' && c.pawn.walkingPrelude(0.01, 0) !== false)
+          throw new Error('WALK_PRELUDE=verify: the JavaScript prelude does not end in a plain return');
+        return fast;
       },
       js_walk_line(depth, sx, sy, sz, ex, ey, ez, rx, ry, rz, flags) {
         counts.lines++;

@@ -1563,7 +1563,9 @@ export async function createScriptDoors({
     read: (target, name) => runtime.readNamed(target, name),
     write: (target, name, value) => runtime.storeNamed(target, name, value),
     physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
-    physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
+    // (the Rust rolling body asks for the same zone, actor-physics-kernel.mjs js_roll_zone)
+    rollingZone: actor=>zoneAt?.(actor.position)??{},
+    physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,actorPhysicsServices.rollingZone(actor)),
     physProjectile: (actor,delta)=>runActorProjectile(runtime,actor,delta),
     physPathing: (actor,delta)=>runActorPathing(runtime,actor,delta),
     physMovingBrush: (actor,delta)=>{

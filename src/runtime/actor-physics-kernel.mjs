@@ -32,10 +32,14 @@
  * ACTOR_PHYSICS_STATS=1 prints the counts at exit.
  */
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell, scalarCell} from './script-object-image.mjs';
+import {switchReader} from './switch-reader.mjs';
+import {o3Wants} from './o3-record.mjs';
+import {rolling} from './rolling.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {isMapMoveHost} from './map-actor-native.mjs';
 import {playerMove} from './player-move.mjs';
-import {processDecorationHitWall} from './walking-callbacks.mjs';
+import {processDecorationHitWall, setSupportBase} from './walking-callbacks.mjs';
+import {setActorPhysics, findActorBase} from './script-actor-collision.mjs';
 import {spawnedFallingAdapter, runSpawnedActorFalling} from './script-actor-physics.mjs';
 import {actorPhysicsTail, linkedActorPhysics} from './actor-physics.mjs';
 
@@ -45,11 +49,18 @@ const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const disabled = () => env.ACTOR_PHYSICS === 'js' || globalThis.DEUS_EX_ACTOR_PHYSICS === 'js';
 // ACTOR_PROJECTILE=js (`?projectilePhysics=js`) keeps PHYS_Projectile calls in JavaScript and leaves the falling body in Rust.
 const projectileOff = () => env.ACTOR_PROJECTILE === 'js' || globalThis.DEUS_EX_PROJECTILE_PHYSICS === 'js';
+/** 'rust' (default), 'js' or 'verify': ROLLING_PHYSICS / DEUS_EX_ROLLING_PHYSICS / `?rollingPhysics=`. PHYS_Rolling of a non-Pawn actor (a
+ * TrashPaper on a street: physRolling, rolling.mjs) in Rust (fall.rs `perform_rolling`); `js` keeps the callback's JavaScript body. `verify` runs
+ * the Rust body for real with the host recording every service call and the actor's fields around it, then runs rolling.mjs on a mock host
+ * made of the recorded start, answering each service from the record, and compares the calls (their arguments bit for bit), the fields at
+ * each call and at the end. */
+export const rollingMode = switchReader('ROLLING_PHYSICS', 'DEUS_EX_ROLLING_PHYSICS', 'rust');
 const STATS = env.ACTOR_PHYSICS_STATS === '1';
 // fall.rs FALL_COUNTS, in order.
 export const RUST_COUNTS = ['calls', 'substeps', 'water', 'bobbing', 'apex', 'blocked', 'bounces', 'landings', 'walls',
   'slides', 'twoWalls', 'terminal', 'deleted', 'tails', 'moveHandBacks', 'zoneFallbacks',
-  'projectiles', 'projectileIterations', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater'];
+  'projectiles', 'projectileIterations', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater',
+  'rolls', 'rollSubsteps', 'rollWalls', 'rollBounces', 'rollSlides', 'rollFalls', 'rollBases', 'rollMoves'];
 const stats = {declined: new Map(), rust: null};
 let statsHost = null;
 if (STATS) process.on('exit', () => {
@@ -65,7 +76,7 @@ const decline = why => {
 };
 // fall.rs's js_fall_error codes.
 const ERRORS = {1: 'physFalling requires the actor Region.Zone (actor+0xc8)',
-  2: "Non-Pawn physFalling in Rust: the actor's image changed during a script event"};
+  2: "Non-Pawn physFalling/physRolling in Rust: the actor's image changed during a script event"};
 
 // [spelling, key, kind]: the ABI with fall.rs (FF_*). Rows 10..14 are the
 // zone actor's fields, 15 Decoration's bBobbing, 16 Region (its Zone and
@@ -90,10 +101,14 @@ export const FALL_FIELDS = [
   ['Region', 'engine.actor.region', 'struct'],
   // physProjectile's clamp, for an engine.projectile only.
   ['MaxSpeed', 'engine.projectile.maxspeed', 'float'],
+  // physRolling's support test.
+  ['Base', 'engine.actor.base', 'pointer'],
 ];
-const ACTOR_ROWS = 10, BOBBING = 15, REGION = 16, MAX_SPEED = 17, ZONE_NUMBER = 18;
+const ACTOR_ROWS = 10, BOBBING = 15, REGION = 16, MAX_SPEED = 17, BASE = 18, ZONE_NUMBER = 19;
 // js_fall_begin's second argument: the actor's Physics.
-const PHYS_FALLING = 2, PHYS_PROJECTILE = 6;
+const PHYS_FALLING = 2, PHYS_PROJECTILE = 6, PHYS_ROLLING = 7;
+/** The mode of a Physics value: the tables per falling (0), projectile (1) and rolling (2) call. */
+const modeOf = physics => physics === PHYS_PROJECTILE ? 1 : physics === PHYS_ROLLING ? 2 : 0;
 
 export class ActorPhysicsHost {
   constructor(vm) {
@@ -103,8 +118,8 @@ export class ActorPhysicsHost {
     this.cells = null;
     this.valid = false;
     // Per physics mode (falling, projectile): the rows differ (Decoration's bBobbing, Projectile's MaxSpeed).
-    this.classes = [new Map(), new Map()];
-    this.instances = [new WeakMap(), new WeakMap()];
+    this.classes = [new Map(), new Map(), new Map()];
+    this.instances = [new WeakMap(), new WeakMap(), new WeakMap()];
     // One context per move depth (the pawn MoveActor host's index).
     this.contexts = [];
   }
@@ -121,7 +136,7 @@ export class ActorPhysicsHost {
     if (version === this.version) return;
     this.version = version;
     this.classes.forEach(map => map.clear());
-    this.instances = [new WeakMap(), new WeakMap()];
+    this.instances = [new WeakMap(), new WeakMap(), new WeakMap()];
     this.cells = FALL_FIELDS.map(([, key, kind]) => {
       const cell = fieldImageCell(key);
       return cellKind(cell) === kind ? cell : null;
@@ -148,7 +163,7 @@ export class ActorPhysicsHost {
    * from the table's cell. */
   eligible(instance, physics = PHYS_FALLING) {
     const {cls, cells, fieldTable: names} = instance;
-    const mode = physics === PHYS_PROJECTILE ? 1 : 0, classes = this.classes[mode];
+    const mode = modeOf(physics), classes = this.classes[mode];
     let info = classes.get(cls);
     if (!info || info.names !== names.size) {
       let decoration = false, projectile = false;
@@ -158,6 +173,7 @@ export class ActorPhysicsHost {
       }
       const actorRows = [...Array(ACTOR_ROWS).keys()];
       const rows = mode === 1 ? (projectile ? [...actorRows, MAX_SPEED] : actorRows)
+        : mode === 2 ? [...actorRows, BASE]
         : decoration ? [...actorRows, BOBBING] : actorRows;
       let ok = this.valid && (!rows.includes(MAX_SPEED) || this.cells[MAX_SPEED] !== null);
       for (const i of rows) {
@@ -185,6 +201,7 @@ export class ActorPhysicsHost {
   begin(c, physics) {
     if (!this.enabled) return decline('disabled');
     if (physics === PHYS_PROJECTILE && projectileOff()) return decline('projectile off');
+    if (physics === PHYS_ROLLING && rollingMode() === 'js') return decline('rolling off');
     if (c.log) return decline('tick differential');
     const runtime = this.runtime, actor = c.receiver, mover = this.vm.moveActor;
     if (Object.hasOwn(runtime, 'processActorPhysics')) return decline('replaced');
@@ -202,6 +219,8 @@ export class ActorPhysicsHost {
     } else if (isMapMoveHost(actor)) level = runtime.mapMoveLevel(actor, 'physFalling');
     else return decline('kind');
     if (!level?.hash) return decline('level');
+    // (runActorRolling records an O3 replay of its body through o3Body)
+    if (physics === PHYS_ROLLING && (o3Wants(actor) || typeof services.rollingZone !== 'function')) return decline('rolling services');
     mover.table(); this.table();
     const info = mover.eligible(instance) ? this.eligible(instance, physics) : null;
     if (!info) return decline('fields');
@@ -214,10 +233,17 @@ export class ActorPhysicsHost {
     view.setUint32(this.stateAt, info.decoration ? 1 : 0, true);
     view.setUint32(this.stateAt + 4, info.projectile ? 1 : 0, true);
     const world = target => target === level.hash.levelInfo ? level.actors[0] : target;
+    const rolls = physics === PHYS_ROLLING, verify = rolls && rollingMode() === 'verify';
+    if (rolls) {
+      // fall.rs rolling: whether the call is traced, and the handles `world()` maps between (a world hit's actor)
+      view.setUint32(this.stateAt + 8, verify ? 1 : 0, true);
+      view.setUint32(this.stateAt + 12, level.hash.levelInfo ? handleOf(level.hash.levelInfo) : 0, true);
+      view.setUint32(this.stateAt + 16, level.actors[0] ? handleOf(level.actors[0]) : 0, true);
+    }
     const ops = runtime.spawnedMoveServices(actor, level);
     const depth = this.vm.movePawn.contexts.length;
     this.vm.movePawn.contexts.push({pawn: actor, actor, ops, hits: null, times: null});
-    this.contexts[depth] = {actor, ops, world, services, adapter: null,
+    this.contexts[depth] = {actor, ops, world, services, adapter: null, level, rolls, trace: verify ? new RollTrace(this, actor, level, world) : null,
       dispatch: (target, event, args) => runtime.dispatchSpawnedEvent(world(target), event, args)};
     c.fallDepth = depth;
     return depth;
@@ -278,6 +304,23 @@ export class ActorPhysicsHost {
       js_fall_falling(depth, remaining, iterations) {
         runSpawnedActorFalling(runtime, context(depth).actor, remaining, iterations);
       },
+      // physRolling's zone: the reference's `zoneAt(actor.position) ?? {}` (script-doors.mjs `rollingZone`) with rolling.mjs's defaults.
+      js_roll_zone(depth, seconds) {
+        const c = context(depth), zone = c.services.rollingZone(c.actor), v = io();
+        const gravity = zone.ZoneGravity ?? [0, 0, -950], velocity = zone.ZoneVelocity ?? [0, 0, 0];
+        v[0] = gravity[0]; v[1] = gravity[1]; v[2] = gravity[2]; v[3] = velocity[0]; v[4] = velocity[1]; v[5] = velocity[2];
+        v[6] = zone.ZoneGroundFriction ?? 8; v[7] = zone.ZoneFluidFriction ?? .02;
+        if (c.trace) { c.trace.zone = zone; c.trace.seconds = seconds; }
+      },
+      // physRolling's services (runActorRolling): the Falling event, SetPhysics(next) and SetBase(target).
+      js_roll_service(depth, op, arg) {
+        const c = context(depth);
+        if (op === 0) c.dispatch(c.actor, 'Falling', []);
+        else if (op === 1) setActorPhysics(c.actor, arg, undefined, {dispatch: c.dispatch,
+          findBase: target => findActorBase(target, {lineCheck: (...args) => c.level.hash.lineCheck(...args), dispatch: c.dispatch})});
+        else setSupportBase(c.actor, c.world(actorOf(arg)), c.dispatch);
+      },
+      js_roll_trace(depth, kind, a, b, c, d, e) { context(depth).trace.record(kind, [a, b, c, d, e]); },
       js_fall_error(depth, code) { throw new Error(ERRORS[code] ?? `Non-Pawn physFalling error ${code}`); },
       js_fall_tail(depth, delta) {
         const c = context(depth);
@@ -285,9 +328,112 @@ export class ActorPhysicsHost {
       },
       js_fall_end(i) {
         const c = tick().contextAt(i);
+        // ROLLING_PHYSICS=verify: the recorded call against rolling.mjs (not after an import threw: `end` alone runs then)
+        const trace = c.fallDepth === undefined ? null : host.contexts[c.fallDepth]?.trace;
+        if (trace) trace.verify();
         host.end(c);
         tick().refresh(c);
       },
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ROLLING_PHYSICS=verify.
+
+// fall.rs T_*: js_roll_trace's services (`kind | phase << 8`, phase 0 before the service and 1 after it; T_END 7 once the body is done).
+const T_MOVE = 1, T_WALL = 2, T_FALLING_EVENT = 3, T_SET_PHYSICS = 4, T_SET_BASE = 5, T_PHYS_FALLING = 6, T_END = 7;
+const TRACED = ['Velocity', 'Acceleration', 'OldLocation', 'Location', 'Physics', 'bJustTeleported', 'bBounce', 'Base'];
+const sameValue = (a, b) => Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i])) : Object.is(a, b);
+const verifyCounts = {calls: 0, services: 0, states: 0};
+// (a page's session reads the counts as `deusExVerifyCounts.rolling`)
+(globalThis.deusExVerifyCounts ??= {}).rolling = verifyCounts;
+if (rollingMode() === 'verify' && typeof process !== 'undefined')
+  process.on('exit', () => process.stderr.write(`rolling verify: ${JSON.stringify(verifyCounts)}\n`));
+
+/** One verified call of fall.rs `perform_rolling`: the Rust body ran on the actor's image, and every service it used was recorded with the
+ * fields the reference's host exposes (TRACED) before and after it. `verify` runs rolling.mjs `rolling` on a mock host that starts where the
+ * call started and takes each service's answer and effect from the record, and compares: the services in the same order with the same
+ * arguments (bit for bit), the mock's fields at each service (before it) with the image's, and the final fields. */
+class RollTrace {
+  constructor(host, actor, level, world) {
+    this.runtime = host.runtime; this.actor = actor; this.level = level; this.world = world;
+    this.zone = null; this.seconds = NaN;
+    this.start = this.snapshot();
+    this.events = [];
+  }
+  snapshot() {
+    const state = {};
+    for (const name of TRACED) {
+      const value = this.runtime.readNamed(this.actor, name);
+      state[name] = Array.isArray(value) ? value.slice() : value;
+    }
+    return state;
+  }
+  record(kind, args) { this.events.push({kind, args, state: this.snapshot()}); }
+  verify() {
+    verifyCounts.calls++;
+    const where = this.actor.name ?? '?', events = this.events;
+    const fail = message => { throw new Error(`ROLLING_PHYSICS=verify ${where}: ${message}`); };
+    const clone = state => Object.fromEntries(Object.entries(state).map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value]));
+    let state = clone(this.start), at = 0;
+    const compare = (label, expected) => {
+      verifyCounts.states++;
+      for (const name of TRACED) if (!sameValue(state[name], expected[name]))
+        fail(`${label}: ${name} is ${JSON.stringify(state[name])} in the reference and ${JSON.stringify(expected[name])} in Rust`);
+    };
+    const take = (service, phase) => {
+      const event = events[at++];
+      if (!event || event.kind !== (service | phase << 8)) fail(`call ${at}: the reference makes service ${service}/${phase}, Rust recorded ${event?.kind}`);
+      return event;
+    };
+    const identity = handle => handle ? identityOfHandle(handle) : null;
+    const around = (service, check) => {
+      const before = take(service, 0);
+      if (check) check(before.args);
+      compare(`before service ${service} (call ${at})`, before.state);
+      const after = take(service, 1);
+      state = clone(after.state);
+      verifyCounts.services++;
+      return after;
+    };
+    const vector = (label, got, args) => {
+      for (let i = 0; i < 3; i++) if (!Object.is(got[i], args[i])) fail(`${label}[${i}] is ${got[i]} in the reference and ${args[i]} in Rust`);
+    };
+    const host = {};
+    const property = (key, name, read = value => value, write = value => value) =>
+      Object.defineProperty(host, key, {get: () => read(state[name]), set: value => { state[name] = write(value); }, enumerable: true});
+    const vec = value => Array.isArray(value) ? value.slice() : value;
+    const f32 = value => value.map(Math.fround);
+    property('position', 'Location', vec, f32); property('velocity', 'Velocity', vec, f32); property('acceleration', 'Acceleration', vec, f32);
+    property('oldLocation', 'OldLocation', vec, f32); property('physics', 'Physics', v => v, v => v);
+    property('justTeleported', 'bJustTeleported', v => v, Boolean); property('bBounce', 'bBounce', v => v, Boolean);
+    property('base', 'Base', v => v, v => v);
+    const services = {
+      zone: this.zone,
+      move: delta => {
+        const after = around(T_MOVE, args => vector('move delta', delta, args));
+        const [time, nx, ny, nz, handle] = after.args;
+        return {time, normal: [nx, ny, nz], actor: this.world(identity(handle))};
+      },
+      eventHitWall: (normal, wall) => {
+        around(T_WALL, args => {
+          vector('HitWall normal', normal, args);
+          if (wall !== this.world(identity(args[3]))) fail('HitWall actor differs');
+        });
+      },
+      eventFalling: () => { around(T_FALLING_EVENT); },
+      setPhysics: next => { around(T_SET_PHYSICS, args => { if (args[0] !== next) fail(`SetPhysics(${next}) is SetPhysics(${args[0]}) in Rust`); }); },
+      physFalling: (remaining, iterations) => {
+        around(T_PHYS_FALLING, args => {
+          if (!Object.is(args[0], remaining) || args[1] !== iterations) fail(`physFalling(${remaining}, ${iterations}) is (${args[0]}, ${args[1]}) in Rust`);
+        });
+      },
+      setBase: target => { around(T_SET_BASE, args => { if (target !== this.world(identity(args[0]))) fail('SetBase target differs'); }); },
+    };
+    rolling(host, this.seconds, services);
+    const end = events[at++];
+    if (!end || end.kind !== T_END || at !== events.length) fail(`the reference ends after ${at - 1} services, Rust recorded ${events.length - 1}`);
+    compare('at the end', end.state);
   }
 }

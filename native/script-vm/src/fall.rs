@@ -21,6 +21,10 @@
 //! uses script-vm.mjs's `x87*` (the water and bBobbing integrations, the
 //! apex subdivision, the time refund).
 //!
+//! `perform_rolling` is the same for PHYS_Rolling (physRolling, 0x103d4b80; the reference is rolling.mjs `rolling` over
+//! script-actor-physics.mjs `runActorRolling`): the zone values come from the host once (`js_roll_zone`: the reference's
+//! `zoneAt(actor.position)`), the events and SetPhysics/SetBase are the host's, and the falling it ends in is `js_fall_falling`'s.
+//!
 //! `perform_projectile` is the same for PHYS_Projectile (physProjectile,
 //! 0x103d4600; the reference is projectile.mjs `projectile` over
 //! script-actor-physics.mjs `runActorProjectile`): the host, the field table,
@@ -31,7 +35,7 @@ use crate::interp::{live, load32, load8, quiet, receiver_info, HOST};
 use crate::move_actor::{address, flag, store};
 use crate::move_pawn::{move_source, mp_io, MP_DONE};
 use crate::phys_refund_time;
-use crate::trace::{f, js_min};
+use crate::trace::{abs, f, js_max, js_min, sqrt};
 use crate::walk::{safe_normal, two_wall_adjust, V3};
 use crate::x87::Ext;
 
@@ -58,8 +62,10 @@ const FF_BOBBING: usize = 15;
 const FF_REGION_ZONE: usize = 16;
 // Projectile.MaxSpeed (physProjectile's clamp, for an engine.projectile only).
 const FF_MAX_SPEED: usize = 17;
-// Region.ZoneNumber (18) is the host's, read in js_fall_begin.
-const FF_COUNT: usize = 19;
+// Actor.Base (physRolling's support test).
+const FF_BASE: usize = 18;
+// Region.ZoneNumber (19) is the host's, read in js_fall_begin.
+const FF_COUNT: usize = 20;
 // The move table's rows (move-actor-kernel.mjs MOVE_FIELDS).
 const M_DELETE_ME: usize = 6;
 const M_LOCATION: usize = 9;
@@ -68,10 +74,12 @@ static mut FFIELDS: [[u32; 2]; FF_COUNT] = [[0; 2]; FF_COUNT];
 // FALL_IO: a handed-back move's answer [time, nx, ny, nz, actor handle],
 // or the zone fallback's [gravity 3, velocity 3, terminal, friction, water].
 static mut FALL_IO: [f64; 9] = [0.0; 9];
-// FALL_STATE: [0] the source is a Decoration, [1] an engine.projectile (js_fall_begin writes them).
-static mut FALL_STATE: [u32; 2] = [0; 2];
+// FALL_STATE: [0] the source is a Decoration, [1] an engine.projectile (js_fall_begin writes them), [2] the rolling call is
+// traced for ROLLING_PHYSICS=verify, [3] the handle of the hash's LevelInfo and [4] of Level.Actors[0] (a world hit's actor is the
+// second in the reference's `world()`).
+static mut FALL_STATE: [u32; 5] = [0; 5];
 // Counts for the differential (actor-physics-kernel.mjs RUST_COUNTS).
-static mut FALL_COUNTS: [u32; 24] = [0; 24];
+static mut FALL_COUNTS: [u32; 32] = [0; 32];
 const C_CALLS: usize = 0;
 const C_SUBSTEPS: usize = 1;
 const C_WATER: usize = 2;
@@ -95,6 +103,14 @@ const C_PROJ_FALLS: usize = 19;
 const C_PROJ_CLAMPS: usize = 20;
 const C_PROJ_BOUNCES: usize = 21;
 const C_PROJ_WATER: usize = 22;
+const C_ROLLS: usize = 23;
+const C_ROLL_SUBSTEPS: usize = 24;
+const C_ROLL_WALLS: usize = 25;
+const C_ROLL_BOUNCES: usize = 26;
+const C_ROLL_SLIDES: usize = 27;
+const C_ROLL_FALLS: usize = 28;
+const C_ROLL_BASES: usize = 29;
+const C_ROLL_MOVES: usize = 30;
 #[inline(always)]
 fn count(i: usize) {
     unsafe { let c = core::ptr::addr_of_mut!(FALL_COUNTS); (*c)[i] = (*c)[i].wrapping_add(1); }
@@ -130,6 +146,12 @@ extern "C" {
     fn js_fall_tail(depth: u32, dt: f64);
     fn js_fall_end(ctx: u32, depth: u32);
     fn js_fall_falling(depth: u32, remaining: f64, iterations: u32);
+    /// physRolling's host values (FALL_IO: gravity 3, zone velocity 3, ground friction, fluid friction).
+    fn js_roll_zone(depth: u32, seconds: f64);
+    /// physRolling's services: 0 the Falling event, 1 SetPhysics(arg), 2 SetBase(the actor whose handle is arg).
+    fn js_roll_service(depth: u32, op: u32, arg: u32);
+    /// ROLLING_PHYSICS=verify: the host records the call (kind, whether before the service, five numbers) with the actor's fields.
+    fn js_roll_trace(depth: u32, kind: u32, a: f64, b: f64, c: f64, d: f64, e: f64);
 }
 // js_fall_error codes (actor-physics-kernel.mjs ERRORS).
 const E_NO_ZONE: u32 = 1;
@@ -603,6 +625,218 @@ pub(crate) fn perform_projectile(ctx: u32, handle: u32, base: u32, dt: f64) -> b
     let maxspeed = unsafe { (*core::ptr::addr_of!(FALL_STATE))[1] } != 0;
     let p = Faller { depth, handle, base, decoration: false };
     projectile(&p, dt, maxspeed);
+    // performActorPhysics's tail, as the falling body's.
+    let tail = !same_image(handle, base) || {
+        let rate = at(base, FF_ROTATION_RATE);
+        (0..3).any(|i| load32(rate + 4 * i) & 0xffff != 0) || live(load32(at(base, FF_PENDING_TOUCH))) != 0
+    };
+    if tail {
+        count(C_TAILS);
+        unsafe { js_fall_tail(depth, dt) };
+    }
+    unsafe { js_fall_end(ctx, depth) };
+    true
+}
+
+// ---------------------------------------------------------------------------
+// PHYS_Rolling.
+
+const PHYS_FALLING: u32 = 2;
+const PHYS_ROLLING: u32 = 7;
+// js_roll_trace's services (the phase 0 call is made before the service, phase 1 after it: `kind | phase << 8`).
+const T_MOVE: u32 = 1;
+const T_WALL: u32 = 2;
+const T_FALLING_EVENT: u32 = 3;
+const T_SET_PHYSICS: u32 = 4;
+const T_SET_BASE: u32 = 5;
+const T_PHYS_FALLING: u32 = 6;
+const T_END: u32 = 7;
+
+#[inline(always)]
+fn state_word(i: usize) -> u32 { unsafe { (*core::ptr::addr_of!(FALL_STATE))[i] } }
+#[inline(always)]
+fn traced() -> bool { state_word(2) != 0 }
+fn trace(p: &Faller, service: u32, phase: u32, a: f64, b: f64, c: f64, d: f64, e: f64) {
+    unsafe { js_roll_trace(p.depth, service | phase << 8, a, b, c, d, e) };
+}
+
+impl Faller {
+    /// Actor.Base's handle (0 for none).
+    fn base_handle(&self) -> u32 { live(load32(at(self.base, FF_BASE))) }
+    /// `world()` of the reference's adapter on a hit's actor handle: the hash's LevelInfo is Level.Actors[0].
+    fn world_handle(&self, actor: u32) -> u32 {
+        let info = state_word(3);
+        if info != 0 && actor == info { state_word(4) } else { actor }
+    }
+    /// The reference's `move` for a rolling actor: `move_source`, or the JavaScript `playerMove` for an actor an event
+    /// destroyed in this call (the reference moves it all the same) and where the Rust body hands the call back.
+    fn roll_move(&self, delta: V3) -> FallHit {
+        count(C_ROLL_MOVES);
+        if traced() { trace(self, T_MOVE, 0, delta[0], delta[1], delta[2], 0.0, 0.0); }
+        let hit = if self.deleted() {
+            unsafe { js_fall_move(self.depth, delta[0], delta[1], delta[2]) };
+            FallHit { time: f(io(0)), normal: [io(1), io(2), io(3)], actor: io(4) as u32 }
+        } else {
+            self.move_by(delta)
+        };
+        if traced() { trace(self, T_MOVE, 1, hit.time, hit.normal[0], hit.normal[1], hit.normal[2], hit.actor as f64); }
+        hit
+    }
+    /// `eventHitWall(hit.normal, hit.actor)`: the HitWall event.
+    fn roll_wall(&self, hit: &FallHit) {
+        count(C_ROLL_WALLS);
+        if traced() { trace(self, T_WALL, 0, hit.normal[0], hit.normal[1], hit.normal[2], hit.actor as f64, 0.0); }
+        unsafe { js_fall_bounce(self.depth, hit.normal[0], hit.normal[1], hit.normal[2], hit.actor) };
+        self.check_image();
+        if traced() { trace(self, T_WALL, 1, 0.0, 0.0, 0.0, 0.0, 0.0); }
+    }
+    /// One of js_roll_service's services, with the trace around it.
+    fn roll_service(&self, op: u32, arg: u32) {
+        let kind = match op { 0 => T_FALLING_EVENT, 1 => T_SET_PHYSICS, _ => T_SET_BASE };
+        if traced() { trace(self, kind, 0, arg as f64, 0.0, 0.0, 0.0, 0.0); }
+        unsafe { js_roll_service(self.depth, op, arg) };
+        self.check_image();
+        if traced() { trace(self, kind, 1, 0.0, 0.0, 0.0, 0.0, 0.0); }
+    }
+}
+
+/// rolling.mjs `rolling(host, seconds, services)` (AActor::physRolling, 0x103d4b80) after the timestep test (the caller's).
+fn rolling(p: &Faller, seconds: f64) {
+    count(C_ROLLS);
+    let dt = f(seconds);
+    // `zone` of runActorRolling: the host's values, defaults applied, as the reference's `.map(f)` takes them.
+    unsafe { js_roll_zone(p.depth, seconds) };
+    let zone_gravity = [f(io(0)), f(io(1)), f(io(2))];
+    let zone_velocity = [f(io(3)), f(io(4)), f(io(5))];
+    let ground_friction = f(io(6));
+    let fluid_friction = f(io(7));
+    let mut velocity = p.velocity();
+    let acceleration = nums(p.acceleration_bits());
+    // The friction prelude (0x103d4bd7-0x103d4d52), in the reference's order of rounding.
+    let vel_dir = safe_normal(velocity);
+    let accel_dir = safe_normal(acceleration);
+    let vel_size = sqrt((velocity[0] * velocity[0] + velocity[1] * velocity[1]) + velocity[2] * velocity[2]);
+    let mut friction_velocity = [0.0f64; 3];
+    for axis in 0..3 {
+        let diff = f(vel_dir[axis] - accel_dir[axis]);
+        let product = if axis == 0 { (diff * vel_size) * dt * ground_friction } else { f(f(f(diff * vel_size) * dt) * ground_friction) };
+        friction_velocity[axis] = f(velocity[axis] - f(product));
+    }
+    let fluid_factor = 1.0 - fluid_friction * dt;
+    for axis in 0..3 {
+        velocity[axis] = if axis == 2 {
+            f(dt * acceleration[2] + f(friction_velocity[2] * fluid_factor))
+        } else {
+            f(f(friction_velocity[axis] * fluid_factor) + f(acceleration[axis] * dt))
+        };
+    }
+    p.set_velocity(velocity);
+    let desired_move = add(velocity, zone_velocity);
+    let old_location = p.position();
+    write3(at(p.base, FF_OLD_LOCATION), p.position_bits());
+    p.clear_just_teleported();
+    let down = [0.0, 0.0, if zone_gravity[2] > 0.0 { 16.0 } else { -16.0 }];
+    let mut remaining = dt;
+    let mut num_bounces = 0;
+    let mut iterations: u32 = 0;
+    while remaining > 0.0 && iterations < 8 {
+        iterations += 1;
+        count(C_ROLL_SUBSTEPS);
+        let time_tick = if remaining > 0.1 { f(js_min(0.1, f(remaining * 0.5))) } else { remaining };
+        remaining = f(remaining - time_tick);
+        let mut delta = scale(desired_move, time_tick);
+        let sub_move = delta;
+        let sub_loc = p.position();
+        let nearly_zero = abs(delta[0]) < 1e-4 && abs(delta[1]) < 1e-4 && abs(delta[2]) < 1e-4;
+        if !nearly_zero {
+            let mut hit = p.roll_move(delta);
+            if hit.time < 1.0 {
+                p.roll_wall(&hit);
+                if p.bouncing() {
+                    count(C_ROLL_BOUNCES);
+                    if num_bounces < 2 { remaining = f(remaining + (1.0 - hit.time) * time_tick); }
+                    num_bounces += 1;
+                } else {
+                    let original_delta = delta;
+                    let old_hit_normal = [f(hit.normal[0]), f(hit.normal[1]), f(hit.normal[2])];
+                    delta = scale(sub(delta, scale(hit.normal, dot(delta, hit.normal))), 1.0 - hit.time);
+                    if dot(delta, original_delta) >= 0.0 {
+                        count(C_ROLL_SLIDES);
+                        hit = p.roll_move(delta);
+                        if hit.time < 1.0 {
+                            p.roll_wall(&hit);
+                            delta = two_wall_adjust(safe_normal(desired_move), delta, hit.normal, old_hit_normal, hit.time);
+                            hit = p.roll_move(delta);
+                        }
+                    }
+                }
+            }
+        }
+        // Drop to floor 0x103d525d-0x103d54c2.
+        let mut hit = p.roll_move(down);
+        let drop_time = hit.time;
+        let mut drop_hit_z = hit.normal[2];
+        if drop_time < 1.0 && hit.normal[2] < 1.0 && f(hit.normal[2] * ground_friction) < 3.3 {
+            let inverse = 1.0 / (2.0 * js_max(0.5, ground_friction));
+            let slide = [f(f(f(dt * zone_gravity[0]) * inverse) * dt), f(f(f(dt * zone_gravity[1]) * inverse) * dt),
+                f(f(f(dt * zone_gravity[2]) * inverse) * dt)];
+            let slid = sub(slide, scale(hit.normal, dot(slide, hit.normal)));
+            if dot(slid, slide) >= 0.0 {
+                hit = p.roll_move(slid);
+                drop_hit_z = js_max(drop_hit_z, hit.normal[2]);
+            }
+        }
+        if drop_time == 1.0 || drop_hit_z < 0.7 {
+            // Falling transition 0x103d5500-0x103d57ad.
+            count(C_ROLL_FALLS);
+            p.roll_move(scale(down, -drop_time));
+            let desired_dist = f(sqrt((sub_move[0] * sub_move[0] + sub_move[1] * sub_move[1]) + sub_move[2] * sub_move[2]));
+            let moved = sub(p.position(), sub_loc);
+            let actual_dist = sqrt(moved[0] * moved[0] + moved[1] * moved[1]);
+            let travel = if desired_dist == 0.0 { 1.0 } else { js_min(1.0, actual_dist / desired_dist) };
+            let one_minus_travel = 1.0 - travel;
+            remaining = f(remaining + one_minus_travel * time_tick);
+            p.roll_service(0, 0);
+            if p.physics() == PHYS_ROLLING { p.roll_service(1, PHYS_FALLING); }
+            if p.physics() == PHYS_FALLING {
+                if !p.just_teleported() && dt > remaining {
+                    p.set_velocity(scale(sub(p.position(), old_location), f(1.0 / (dt - remaining))));
+                }
+                let current = p.velocity_bits();
+                p.set_velocity_bits([current[0], current[1], 0]);
+                if remaining > 0.005 {
+                    if traced() { trace(p, T_PHYS_FALLING, 0, remaining, iterations as f64, 0.0, 0.0, 0.0); }
+                    unsafe { js_fall_falling(p.depth, remaining, iterations) };
+                    p.check_image();
+                    if traced() { trace(p, T_PHYS_FALLING, 1, 0.0, 0.0, 0.0, 0.0, 0.0); }
+                }
+                return;
+            }
+            p.roll_move(scale(desired_move, remaining));
+        } else {
+            let actor = p.world_handle(hit.actor);
+            if actor != p.base_handle() {
+                count(C_ROLL_BASES);
+                p.roll_service(2, actor);
+            }
+        }
+    }
+    if !p.just_teleported() {
+        p.set_velocity(scale(sub(p.position(), old_location), 1.0 / dt));
+    }
+}
+
+/// The actor tick's physics call for a non-Pawn in PHYS_Rolling (whether it ran here; false: the callback runs the whole call,
+/// nothing done).
+pub(crate) fn perform_rolling(ctx: u32, handle: u32, base: u32, dt: f64) -> bool {
+    // The reference throws outside (0, 0.4]; that call stays the callback's.
+    if !(f(dt) > 0.0) || f(dt) > f(0.4) { return false; }
+    let depth = unsafe { js_fall_begin(ctx, PHYS_ROLLING) };
+    if depth < 0 { return false; }
+    let depth = depth as u32;
+    let p = Faller { depth, handle, base, decoration: false };
+    rolling(&p, dt);
+    if traced() { trace(&p, T_END, 0, 0.0, 0.0, 0.0, 0.0, 0.0); }
     // performActorPhysics's tail, as the falling body's.
     let tail = !same_image(handle, base) || {
         let rate = at(base, FF_ROTATION_RATE);

@@ -109,6 +109,26 @@ refund accumulation); each now retains the original precision (see the list abov
 The same body on the inputs Play produced (Training's crate pushed by the player, 312 calls) is replayed through the original by
 `scripts/validate-stage5-o3.mjs --scene crate-stack` ([the O3 proof](stage-5-exit-criteria.md#o3-the-originals-code-on-plays-inputs-2026-10-20)).
 
+## The Rust body (2026-11-07)
+
+`native/script-vm/src/fall.rs` `perform_rolling` runs `rolling.mjs` for a non-Pawn actor in PHYS_Rolling on the actor's image, as `perform` does
+for falling (`?rollingPhysics=js` keeps the callback's JavaScript body, `=verify` below). A TrashPaper on a street rolls for as long as it is
+near the player (about two a tick at the Battery Park rest spot): the reference cost 0.2 ms a Firefox frame there, 0.21 of it `playerMove`.
+
+* The order of operations, of rounding and of reads is `rolling.mjs`'s, statement for statement (f64 with `f` where the reference has
+  `Math.fround`, `js_min`/`js_max` for `Math.min`/`Math.max`, `walk.rs` `safe_normal` and `two_wall_adjust` for steps.mjs's). MoveActor is
+  `move_source` (the non-Pawn source of the falling body), or the JavaScript `playerMove` where it hands the call back and for an actor an
+  event destroyed in the call (the reference moves it all the same).
+* The zone is the reference's `zoneAt(actor.position) ?? {}` (a host value, not `Region.Zone`): one import at the start (`js_roll_zone`)
+  with the defaults `rolling.mjs` applies. HitWall is the falling body's `js_fall_bounce` (the same ProcessEvent), the Falling event, SetPhysics
+  and SetBase are `js_roll_service`, and the falling a rolling actor ends in is `js_fall_falling` (`runSpawnedActorFalling`). `Base` is a row of the
+  fall field table: SetBase is called when the (world-mapped) hit actor is not the image's Base, as `actor !== host.base` is.
+* **Exactness.** `ROLLING_PHYSICS=verify` (`?rollingPhysics=verify`) runs the Rust body for real with the host recording every service call
+  (kind, arguments as f64 bits) and the actor's Velocity, Acceleration, OldLocation, Location, Physics, bJustTeleported, bBounce and Base before and
+  after it; then `rolling.mjs` runs on a mock host that starts where the call started and takes each service's answer and effect from the
+  record. It compares the services (same order, same arguments), the mock's fields before each service with the image's, and the final fields:
+  any difference throws. `test/actor-physics-kernel.test.mjs` pins the field table, counters and imports against `fall.rs`.
+
 ## Boundaries
 
 - `bBounce` is re-read from the live actor after each HitWall ProcessEvent; the

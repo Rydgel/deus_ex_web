@@ -1,4 +1,4 @@
-/** A falling or projectile non-Pawn's AActor::performPhysics in Rust
+/** A falling, projectile or rolling non-Pawn's AActor::performPhysics in Rust
  * (native/script-vm/src/fall.rs, host actor-physics-kernel.mjs,
  * docs/rust-core.md B6c) against its JavaScript reference
  * (actor-physics.mjs `performActorPhysics`, script-actor-physics.mjs
@@ -26,6 +26,7 @@ const dir = mkdtempSync(join(tmpdir(), 'actor-physics-kernel-'));
 const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '30', '--digest-every', '25'];
 const SCENARIO = 'scripts/scenarios/fall-branches.mjs';
 const PROJECTILES = 'scripts/scenarios/projectile-branches.mjs';
+const ROLLING = 'scripts/scenarios/rolling-branches.mjs';
 const RUNS = [
   {map: '01_NYC_UNATCOIsland', name: 'as played', args: ['--ticks', '300']},
   {map: '01_NYC_UNATCOIsland', name: 'fall-branches', args: ['--ticks', '300', '--scenario', SCENARIO]},
@@ -35,10 +36,16 @@ const RUNS = [
   // and water, past MaxSpeed, bouncing, and handed to physFalling; and the Dockyard's poison gas, as played (it flies through water).
   {map: '01_NYC_UNATCOIsland', name: 'projectile-branches', args: ['--ticks', '300', '--scenario', PROJECTILES]},
   {map: '09_NYC_Dockyard', name: 'poison gas as played', args: ['--ticks', '300']},
+  // PHYS_Rolling (fall.rs perform_rolling): decorations and items set rolling at three speeds, with an Acceleration, bBounce or a RotationRate,
+  // thrown up and set rolling in the air (the falling transition); `verify` also runs them with ROLLING_PHYSICS=verify, which throws at
+  // the first difference between the Rust body and rolling.mjs fed the same service answers.
+  {map: '01_NYC_UNATCOIsland', name: 'rolling-branches', args: ['--ticks', '300', '--scenario', ROLLING], verify: true},
+  {map: '00_Training', name: 'rolling-branches', args: ['--ticks', '300', '--scenario', ROLLING], verify: true},
 ];
 // actor-physics-kernel.mjs RUST_COUNTS.
 const REQUIRED = ['water', 'bobbing', 'apex', 'blocked', 'bounces', 'landings', 'walls', 'slides', 'twoWalls', 'terminal', 'tails',
-  'projectiles', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater'];
+  'projectiles', 'projectileHits', 'projectileFalls', 'projectileClamps', 'projectileBounces', 'projectileWater',
+  'rolls', 'rollWalls', 'rollBounces', 'rollSlides', 'rollFalls', 'rollBases'];
 // FellOutOfWorld stays the reference's.
 const DECLINES = new Set(['zone 0']);
 const totals = {};
@@ -59,12 +66,17 @@ function run(map, args, tag, env) {
   });
 }
 try {
-  for (const [i, {map, name, args}] of RUNS.entries()) {
-    const [rust, js] = await Promise.all([
+  for (const [i, {map, name, args, verify}] of RUNS.entries()) {
+    const [rust, js, checked] = await Promise.all([
       run(map, args, `${i}-rust`, {ACTOR_PHYSICS_STATS: '1'}),
       run(map, args, `${i}-js`, {ACTOR_PHYSICS: 'js'}),
+      verify ? run(map, args, `${i}-verify`, {ROLLING_PHYSICS: 'verify'}) : null,
     ]);
     const label = `${map} ${name}`;
+    if (checked) {
+      assert.equal(checked.report.digest, rust.report.digest, `${label}: ROLLING_PHYSICS=verify changed the digest`);
+      assert.deepEqual(checked.report.errors ?? {}, rust.report.errors ?? {}, `${label}: ROLLING_PHYSICS=verify changed the boundaries reached`);
+    }
     assert.deepEqual(rust.report.errors ?? {}, js.report.errors ?? {}, `${label}: the boundaries reached differ`);
     assert.equal(rust.report.digest, js.report.digest, `${label}: final digest`);
     assert.deepEqual(rust.report.digests, js.report.digests, `${label}: checkpoint digests`);
