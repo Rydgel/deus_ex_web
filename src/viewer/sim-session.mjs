@@ -767,7 +767,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // (`childDynamics`); `own` holds each frame's candidates by visit index.
     const iterating = childFrames && iteratorFrames && live.iterators?.size && live.iteratorIndex;
     const own = new Map(), known = iterating ? iteratorSpritesByOrder(live.sprites) : null;
-    const root = iterating ? { entries, words: candidateWords(occlusion, entries.length) } : null;
+    const root = iterating ? { entries, words: candidateWords(occlusion, entries.length, 0) } : null;
     const frameDynamics = iterating ? frame => childDynamics(frame, args, own, known, root) : null;
     const probing = game.liveReplay?.setupProbe;
     if (probing && game.liveReplay.index >= probing.first && game.liveReplay.index <= probing.last)
@@ -937,7 +937,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         }
         if (rescanning) cameraItems = frameArgs.items;
         const entries = packDynamics(occlusion, { sprites, iterators: live.iterators, ...frameArgs });
-        const own = new Map(), root = rescanning ? { entries, words: candidateWords(occlusion, entries.length) } : null;
+        const own = new Map(), root = rescanning ? { entries, words: candidateWords(occlusion, entries.length, 1) } : null;
         const frameDynamics = childFrames && rescanning ? frame => childDynamics(frame, frameArgs, own, known, root) : null;
         seen = visibility(view, command.width, command.height, entries.length, { decals: true, movers: false, frameDynamics, detail: false });
         members = frameMembers(seen, entries, own);

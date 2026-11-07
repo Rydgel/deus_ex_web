@@ -11,6 +11,7 @@ import { lightGlobals } from '../runtime/light-globals.mjs';
 import { renderScanMode } from '../runtime/script-vm-render.mjs';
 import { ActorNames } from '../runtime/actor-names.mjs';
 import { switchReader } from '../runtime/switch-reader.mjs';
+import { actorTailMode } from './actor-tail.mjs';
 
 const actorNamesMode = switchReader('ACTOR_NAMES', 'DEUS_EX_ACTOR_NAMES', 'kept');
 const PROBE_DIFFERENTIAL = typeof process !== 'undefined' && process.env?.LINE_PROBE_DIFFERENTIAL === '1';
@@ -118,9 +119,12 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   };
   // The leaf's permeating static lights as handles, per frame (lightOf's
   // exports by name; MESH_LIGHT_MISSING where no live actor has the name).
-  const permeatingRun = iLeaf => {
-    let run = frame.runs.get(iLeaf);
-    if (run) return run;
+  // A leaf's run depends on the model's leaves and light table (fixed for the level), the export names, and the actor each name
+  // finds in Level.Actors (`frame.byName`, which changes only when actorsEpoch advances, the same bound levelMembership uses):
+  // the runs are kept across frames while the model, the name map and the epoch are the ones they were made for (ACTOR_TAIL=js
+  // makes them again in each frame, as before; `verify` makes them again at every use and compares).
+  const kept = { model: null, byName: null, epoch: -1, runs: new Map() };
+  const makeRun = iLeaf => {
     const leaves = frame.model.leaves, lights = frame.model.lights, refs = [], handles = [];
     const permeating = iLeaf >= 0 && iLeaf < leaves.length ? leaves.permeating(iLeaf) : -1;
     if (permeating >= 0)
@@ -128,7 +132,27 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         const name = exportName(lights[i]), light = name && frame.byName.get(name);
         refs.push(lights[i]); handles.push(light ? handleOf(light) : 0xffffffff);
       }
-    frame.runs.set(iLeaf, run = { refs, handles });
+    return { refs, handles };
+  };
+  const permeatingRun = iLeaf => {
+    let run = frame.runs.get(iLeaf);
+    if (run) return run;
+    const mode = actorTailMode();
+    if (mode === 'js') run = makeRun(iLeaf);
+    else {
+      const epoch = actorsEpoch();
+      if (kept.model !== frame.model || kept.byName !== frame.byName || kept.epoch !== epoch) {
+        kept.model = frame.model; kept.byName = frame.byName; kept.epoch = epoch; kept.runs = new Map();
+      }
+      run = kept.runs.get(iLeaf);
+      if (run === undefined) kept.runs.set(iLeaf, run = makeRun(iLeaf));
+      else if (mode === 'verify') {
+        const want = makeRun(iLeaf);
+        if (want.refs.length !== run.refs.length || want.refs.some((ref, i) => ref !== run.refs[i]) || want.handles.some((handle, i) => handle !== run.handles[i]))
+          throw new Error(`ACTOR_TAIL=verify: the kept permeating run of leaf ${iLeaf} differs from a fresh one`);
+      }
+    }
+    frame.runs.set(iLeaf, run);
     return run;
   };
   // A leaf's moving-light list as handles: the list is the frame's (leafListsFor memoizes it), so its handles are made once, not for each
