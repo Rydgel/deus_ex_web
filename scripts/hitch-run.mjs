@@ -10,7 +10,7 @@
 //       label?}; the harness visits each in turn through placeProbe, lets it settle for --place-settle ms and marks the --place-record ms after
 //       it; the marks are in the dump's `spots` as page performance.now() times, which scripts/spot-census.mjs turns into per-spot figures; the
 //       mode is then `places` and the run ends after the last spot, --seconds being only a cap)
-//     [--headed] [--no-hitchlog] [--worker-patch FILE]
+//     [--headed] [--no-hitchlog] [--worker-patch FILE] [--init-script FILE] (a script run in the page before its own)
 //     [--screenshot FILE] (a PNG of the page at the end of the run) [--eval EXPR] (a page expression read at the end, saved as `evaluated`)
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
@@ -24,6 +24,7 @@
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
+//     [--ff-prefs JSON] (more Firefox preferences, e.g. '{"javascript.options.wasm_lazy_tiering":false}')
 //     [--ff-asyncstack] (keep the async stack capture Playwright's driver turns on; off by default since 2026-11-04)
 // The browser's process tree RSS is sampled on Linux only (/proc). Moved from .work/hitch/run.mjs and run-ff.mjs (2026-10-28).
 import {chromium,firefox} from '@playwright/test';
@@ -62,12 +63,15 @@ const browser=isChromium
   // Firefox captures an async stack at every promise and await only for a page under a debugger, which Playwright's driver makes
   // every page (docs/load-time.md "Firefox under Playwright"): off, as in a player's Firefox, unless --ff-asyncstack keeps it.
   :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:{...(flag('gclog')?{'javascript.options.mem.log':true}:{}),
+    ...JSON.parse(option('ff-prefs','{}')),
     ...(flag('ff-asyncstack')?{}:{'javascript.options.asyncstack':false})},
     env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:'js,threads,markers',
       MOZ_PROFILER_STARTUP_FILTERS:'GeckoMain,DOM Worker',MOZ_PROFILER_STARTUP_ENTRIES:'40000000',MOZ_PROFILER_SHUTDOWN:profOut}:process.env});
 const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:dpr});
 // The page bars hidden (main.mjs setUiHidden), so the canvas is the whole --size, as in the validators; --show-ui keeps them.
 if(!flag('show-ui'))await context.addInitScript(()=>{try{localStorage.setItem('deusex.uiHidden','1');}catch{/* storage unavailable */}});
+// --init-script FILE: a script run in every page before its own (scripts/wasm-gap-page.js, a per-export wasm timer).
+if(option('init-script',null))await context.addInitScript({path:option('init-script',null)});
 const page=await context.newPage();
 const errors=[],gclog=[];page.on('pageerror',e=>errors.push(e.message));
 page.on('console',m=>{const t=m.text();if(m.type()==='error'&&!/vite|Failed to load resource/.test(t))errors.push('console: '+t);if(/^GC\(/.test(t))gclog.push(t);});
