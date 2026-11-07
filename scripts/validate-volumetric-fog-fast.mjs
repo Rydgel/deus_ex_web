@@ -105,6 +105,14 @@ if (!flag('bench')) {
         fastFallbacks += fog.fallbacks();
         assert.ok(fast && Buffer.from(fast).equals(Buffer.from(exact)), `${where}: fast-register fog map equals Exact's`);
         assert.equal(fog.miss(), exactMiss, `${where}: fast-register final flag`);
+        // The reference loop (one texel at a time per light) and the block loop's own check against it.
+        fog.setPath('reference'); fog.setMiss(miss);
+        const reference = fog.map(width, height, count);
+        assert.ok(reference && Buffer.from(reference).equals(Buffer.from(exact)), `${where}: reference-loop fog map equals Exact's`);
+        assert.equal(fog.miss(), exactMiss, `${where}: reference-loop final flag`);
+        fog.setPath('blocks'); fog.setMiss(miss);
+        assert.ok([0, 0x10000000].includes(fog.verify(width, height, count)), `${where}: fog.verify finds no byte or flag differing`);
+        fog.resetFallbacks();
         fog.setExact(true); fog.setMiss(miss);
         const ext = fog.map(width, height, count);
         assert.ok(Buffer.from(ext).equals(Buffer.from(exact)), `${where}: Exact-only fog map equals the checked loop's`);

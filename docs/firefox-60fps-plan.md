@@ -1223,6 +1223,7 @@ attributes and a texture write for each of the ~125 mover items, every frame) 1.
 800 `texSubImage2D` calls a frame for 0.7 MB (`gl.upload` 1.2 ms in Firefox, so not the cost). Reproduce: `node scripts/hitch-run.mjs --browser
 firefox --map 02_NYC_Underground --mode idle --god --seconds 20 --place '{"location":[-73,636,-361],"rotation":[0,49152,0]}' --profile FILE`,
 then `scripts/gecko-phase.mjs RUN FILE --entry 'fog-pass'`; `scripts/wasm-names.mjs` names `wasm-function[175]` on a non-stripped build.
+Done 2026-11-07: [Underground fog phase](#underground-fog-phase-2026-11-07) (`p.fog` 10.4-11.4 -> 3.2-3.5 ms at these spots).
 
 **Left open.** The Mac is not measured; these numbers are Linux headless. The tick-led views say little about place (they follow NPC state), so
 the census finds the *draw-side* costs of places, and those are few: the Underground fog above, the moving lights at the Mole People, the actors
@@ -1680,6 +1681,113 @@ the bindings' update 1.70 / 1.42 (the skipped hidden bindings).
 At the merge (f55eb1fd) the roster's fifth word, the binding's mesh record address in the occlusion kernel, is dropped whenever
 packFromRoster sees another occlusion model: a Player start LoadMap makes a new one (sim-host.mjs buildOcclusion) and frees the old
 blocks. Read from the code; no run reaches a binding that outlives that rebuild.
+
+### Underground fog phase (2026-11-07)
+
+The task: the census' Underground fog spots (`p.fog` 10 to 11 ms a frame in Firefox inline after the light-pack fix) are the largest cost left
+that is tied to a place; make the phase cheaper without changing one output bit. Result, all headless Linux (Ryzen 9 8945HS, Node 26, Firefox
+inline 1440x960, god mode, idle at the spot): **`p.fog` 10.4-11.4 -> 3.2-3.5 ms, the page frame mean 28.9-33.0 -> 19.2-23.4 ms** at the three 02
+spots (A/B below); the fog maps, the item meshes and the atlas pages are byte-identical to the previous bodies (below). The Mac is not measured.
+
+**Reproduction and the phase before.** `node scripts/hitch-run.mjs --browser firefox --map 02_NYC_Underground --mode idle --god --seconds 20
+--place '{"location":[-73,636,-361],"rotation":[0,49152,0]}' --out OUT --profile OUT.gecko.json`, then `node scripts/gecko-phase.mjs OUT.json
+OUT.gecko.json --entry 'fog-pass'` (master 61cc9524). The pass is 11.31 ms a frame (`p.fog` 11.90):
+
+| Part (ms a frame, Gecko, inclusive) | before | after |
+|---|---:|---:|
+| the whole fog pass | 11.31 | 3.41 |
+| Rust loop (wasm: `fog::walk` / `light_blocks` 1.79 + `fill_band` 0.16; named with `wasm-names.mjs` on non-stripped builds of each tree) | 7.85 | 2.00 |
+| JavaScript around it | 3.46 | 1.41 |
+| `fogMapKernel` for the 128 mover items / the 84 level surfaces (wasm included) | 5.17 / 3.45 | 1.33 / 0.93 |
+| `itemMesh` (+ `moverBasis`, `moverGrid`) | 1.28 (+ 0.23) | 0.14 (+ 0.01) |
+| `writeTile` | 0.33 | 0.05 |
+| the kernel's `.slice()` copy of each map | 0.17 | 0 |
+| `globalThis` switch reads at each of the 212 calls a frame (master: `lightsEachSurface`, 0.13; a first state of this branch had two more, 0.33 ms together, before they were read once per update) | 0.13 | 0 |
+| Minor + major GC samples under the pass | about 0.5 | not in the top 14 |
+
+**Ranking (measured before any change).** 1. the Rust loop, 69% of the pass: 1.33 million texel-lights a frame (66,462 texels, 20 lights) at about
+6 ns each; in the captured calls 33% of the texel-lights are `A` (the light is behind the ray), 62% are misses (only the flag is set) and 4.5% hits;
+skipping the hits' chord entirely changes the block loop's time by 1.4%, so the cost is the classification. 2. `itemMesh` and the basis it needs,
+for 128 mover items that are at rest: a new geometry with three new attributes and a texture write every frame (13%). 3. the wrapper, switches and
+copies (10%). 4. `writeTile`, GC (5%). The per-light, per-surface hoisting was the first candidate and is what the block loop does; a geometric cull of
+whole (surface, light) pairs is analysed below and not done.
+
+**What changed** (each old body is kept behind a switch; `?fogKernel=` and `?fogPass=` in the page, `FOG_KERNEL=` and `FOG_PASS=` in Node):
+* **The block loop** (`fog.rs walk_blocks`, [volumetric-fog](volumetric-fog.md) "Block loop"): the light-independent terms once per surface, four texels
+  at a time on wasm simd128, hits on the scalar tail, the reference body for anything outside `Single`'s bounds; bands for surfaces above 8192 texels.
+  `?fogKernel=reference` is the old loop, `?fogKernel=verify` runs both and counts the maps that differ.
+* **The pass' host side** (`fog-pass.mjs`, `volumetric-fog.mjs`): the kernel's own aligned buffer read through a view instead of `.slice()`
+  (valid until the next kernel call; every consumer reads it at once and the child frames' copies are made at the call); the atlas tile and
+  the item textures written a 32-bit word at a time (red and blue bytes exchanged); the switches read once per update instead of at every
+  call; the grid's nine words made in a scratch array. A mover item keeps its lightmap basis, lattice, geometry attributes and texture across frames
+  while the numbers they are functions of (the facet's twelve numbers, the fragments' points, the map's texels) are unchanged: a mover at rest keeps
+  all three while the camera moves, and a map equal to the last one written is not written or uploaded again (in the render phase too: `p.render`
+  4.1-4.6 -> 2.8-3.1 ms at the same spots). `?fogPass=reference` rebuilds everything every frame; `?fogPass=verify` rebuilds beside the kept ones and counts
+  differences (`deusExViewer.fog().stats.verify`).
+
+**Byte identity.**
+* *Kernel calls of real sessions, replayed* (`scripts/fog-capture-play.mjs` + `fog-replay.mjs`): headless Firefox inline, the loop on its reference
+  path, 240 views around each map's fog spots (movers, mover lattices and the real flag chain included; 244 to 1,470 light packs a map), every distinct
+  call's inputs and the hash of its answer kept. The hashes are master's: the export of 61cc9524 with its own wasm module (one loop) reproduces
+  all of them, 128,015 distinct calls with the 12-view test capture. Replayed through the block loop and, in the same run, the reference loop: all equal, bytes and final flag.
+  02_NYC_Underground 18,433 distinct calls (26,688 made, 362,892,112 texel-lights), 04_NYC_Underground 15,272, 08_NYC_Underground 17,951, 04_NYC_NSFHQ
+  12,749 (surfaces up to 65,536 texels: the bands), 02_NYC_BatteryPark 41,476, 03_NYC_AirfieldHeliBase 8,689, 02_NYC_Bar 10,157: **124,727 distinct calls,
+  422,331 made, 1.2 billion texel-lights, 0 differences**.
+* *In the page* (`?fogKernel=verify&fogPass=verify`, 240 views a map, the same seven maps): 444,000 maps compared block loop against reference loop
+  (0 differing; NSFHQ's above-8192-texel maps by two hash lanes), 431,000 atlas tiles word writer against byte writer (0), and where mover items exist
+  (the three Undergrounds and Battery Park) 12,300 kept lattices, 11,900 kept geometries and 13,100 skipped texture writes against fresh ones (0 differing).
+* `validate-volumetric-fog` (the Rust loop against the unchanged Render.dll at control word 0x007f, 1,620 surfaces), `validate-volumetric-fog-fast`
+  (Play's inputs on the Bar, WanChai Market, Ship and Battery Park, 447,910 surface maps: the block loop and the reference loop both equal `Exact`, and
+  `fog.verify` finds nothing), the new `validate-fog-blocks` (1,500 random surfaces of every shape the loop has a branch for; block loop = reference loop on
+  every byte and flag, and `Exact` on the 1,457 smaller ones) and `validate-volumetric-fog-play` (worker mode: the Bar's mover map and the Club's mirror
+  map equal to the unchanged loop, fog pages equal to their pixels on the GPU) pass.
+* *Sim digests* (`bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback`) unchanged: Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84,
+  03_NYC_Airfield 46ed0d32ae5b56af, 06_HongKong_WanChai_Market 80d27b37e0944d88, 15_Area51_Bunker 764a7bdffd2ebe59, 09_NYC_Dockyard e53f348673f1247b.
+
+**Node (V8) kernel replay, distinct calls of the captures, reference loop -> block loop** (ms, medians of 3; `fog-replay.mjs --bench`): 02_NYC_Underground
+1413 -> 314, 04_NYC_Underground 551 -> 132, 08_NYC_Underground 480 -> 119, 03_NYC_AirfieldHeliBase 304 -> 75, 04_NYC_NSFHQ 2386 -> 1408 (big surfaces, few lights),
+02_NYC_BatteryPark 134 -> 87 and 02_NYC_Bar 104 -> 91 (one light each: little to share).
+
+**A/B, Firefox inline, interleaved, three pairs a spot, master 61cc9524 (an export of it, its own wasm) against this branch** (`.work/ab-trees.mjs`,
+20 s sessions, 5 s skipped; page = the page's frame work `animate`; the slowest tenth is the mean of the slowest 10% of frames):
+
+| Spot (yaw) | arm | page mean | slowest tenth | p50 / p95 | `p.fog` | `p.render` |
+|---|---|---:|---:|---|---:|---:|
+| 02 (638, -191, -361) 32768 | master | 28.92 | 37.45 | 27.7 / 35.7 | 10.44 | 4.13 |
+| | this branch | 20.08 | 24.32 | 20.0 / 23.7 | 3.20 | 2.81 |
+| 02 (-73, 636, -361) 49152 | master | 32.95 | 41.81 | 32.0 / 39.7 | 11.35 | 4.43 |
+| | this branch | 23.42 | 29.68 | 23.0 / 29.0 | 3.47 | 3.10 |
+| 02 (234, 605, -361) 49152 | master | 29.43 | 37.52 | 28.3 / 35.7 | 10.55 | 4.55 |
+| | this branch | 19.17 | 24.54 | 18.7 / 23.7 | 3.21 | 2.95 |
+
+Every session of every pair has the same order: the page mean is 8.8 to 10.3 ms lower in the three spots' means, the slowest tenth 12.1 to 13.1 ms lower
+(ship bar: 0.3 and 0.5 ms).
+
+**The view moving.** The idle A/B lets a mover item skip its texture write and a level surface keep its tile; with the view changing every frame the writes and
+uploads come back, and what is saved is the loop and the host's copies and rebuilds. `hitch-run.mjs --spin DEG [--spin-sweep AMP]` (new) turns or sweeps the view
+through `placeProbe` every 16 ms (the same schedule in both arms). Sweeping 15 degrees either side at a peak of 60 degrees a second, the middle spot, three pairs:
+page mean 34.23 -> 26.33, slowest tenth 44.00 -> 35.31, p50 33.3 -> 25.3, `p.fog` 11.43 -> 5.06, `p.render` 4.89 -> 4.50 ms. Turning once round at 90 degrees a
+second, three pairs a spot (the view faces the fog surfaces for part of each turn only): page mean 18.53 -> 15.49, 18.68 -> 18.10, 17.45 -> 14.49; slowest tenth
+35.10 -> 25.89, 34.95 -> 29.85, 34.94 -> 25.79; `p.fog` 3.25 -> 1.67, 3.29 -> 1.70, 3.06 -> 1.64; `p.render` unchanged (1.6 to 1.8). Roaming
+(`--mode roam`, 40 s, three pairs from the middle spot) left the fog zone in most of its frames in both arms (`p.fog` 0 to 1.1 ms) and says nothing about the phase.
+
+**Chromium** (headless, sim worker, the middle spot, two pairs, the same master export): page mean 18.76 -> 7.72, slowest tenth 23.67 -> 9.31, p50 18.3 -> 7.7,
+`p.fog` 12.19 -> 2.94, `p.render` 3.68 -> 2.26 ms; the page frame there was above 16.7 ms and is under it now.
+
+**What is left, and what was not done.**
+* The fog phase is 3.2-3.5 ms (Gecko: 1.79 ms in `light_blocks`, 0.16 `fill_band`, 1.41 JavaScript). Classification dominates the loop (1.2 ns a texel-light in V8).
+* **A cull of whole (surface, light) pairs** was analysed offline and not built: the pairs it would skip (in the 240-view 02_NYC_Underground capture 94.7% of the
+  (surface, light) pairs have no hit at all, exactly) are decided by a geometric test whose margins need their own proof, and the gain is about 1 ms of 3.5 (under the 5%
+  bar for a frame of 20 ms). The prototype test (a bounding cap of the surface's texel directions, a light missed when the cap and the light's sphere are apart by a margin on its
+  angular radius, in doubles; `.work/exp-cull.mjs`, not kept) skipped 58% of the texel-lights of that capture (41.6% of its pairs) with no pair wrong; by raster chunks of
+  256 down to 32 texels, on 08_NYC_Underground's capture, 49% up to 66% of the texel-lights (the exact bound there: 90% to 95%). A tighter bound needs the pyramid of the
+  surface's side planes.
+* **A memo of a call's answer across frames** (the kernel is a pure function of the lights' words and tables, the nine grid words, the incoming flag and the size)
+  would remove the loop when the view does not change (a player standing still), and nothing when it does; the idle A/B would show it far larger than play
+  would, so it was not built. The spin A/B above (the view turning at 90 degrees a second) is the case with no reuse across frames.
+* The new module needs wasm simd128 (Chrome 91, Firefox 89, Safari 16.4) and carries 31 KB more code and 165 KB more statics (`__heap_base` 0x1b21b0 -> 0x1da9e0 of the
+  0x200000 reserve).
+* Not measured: the Mac, headed runs. The sim worker's Chromium path pays the same fog pass on the page (below).
 
 ## How each step is measured
 

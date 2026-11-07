@@ -5,7 +5,7 @@
 //   node scripts/hitch-run.mjs --map 01_NYC_UNATCOIsland --seconds 120 --mode roam [--browser chromium|firefox] [--out PREFIX]
 //     [--url http://127.0.0.1:5173] (else a dev server for this tree is started in process, as the validators do; --vite-port N gives it that port)
 //     [--via MAP] (opened first; MAP is then reached through the map list) [--settle 3000] [--size 1440x960] [--dpr 1]
-//     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--god] (the console's god mode before the settle)
+//     [--query k=v&k=v] [--place JSON] (placeProbe before the settle) [--god] (the console's god mode before the settle) [--spin DEG [--spin-sweep AMP]] (idle: the view turns DEG degrees a second from the --place yaw, or sweeps AMP degrees either side of it)
 //     [--places FILE] [--place-settle 500] [--place-record 750] (a list of spots: FILE is a JSON array of {location:[x,y,z], rotation:[0,yaw,0],
 //       label?}; the harness visits each in turn through placeProbe, lets it settle for --place-settle ms and marks the --place-record ms after
 //       it; the marks are in the dump's `spots` as page performance.now() times, which scripts/spot-census.mjs turns into per-spot figures; the
@@ -134,6 +134,12 @@ if(option('place',null))await page.evaluate(args=>window.deusExViewer.placeProbe
 // --god: the console's cheats (`set DeusEx.JCDentonMale bCheatsEnabled True`, then the toggle `god`, as session-hour.mjs gives them),
 // so that a hostile map cannot end the session in a death (which leads to DXOnly); the NPCs still see, shoot and chase the player
 if(flag('god'))await page.evaluate(exec=>window.deusExViewer.viewProbe({exec}),['set DeusEx.JCDentonMale bCheatsEnabled True','god']);
+// --spin DEG: the view turns DEG degrees a second from the --place yaw, set through placeProbe every 16 ms by a timer in the page (a camera that
+// changes every frame without moving through the map: fog maps, light atlas and the like cannot be reused from one frame to the next).
+// --spin-sweep AMP: the yaw sweeps AMP degrees either side of the --place yaw (a sine whose peak speed is DEG a second) instead of turning round.
+if(option('spin',null)){const yaw0=(JSON.parse(option('place','{}')).rotation??[0,0,0])[1];
+  await page.evaluate(([deg,yaw,sweep])=>{const t0=performance.now();setInterval(()=>{const t=(performance.now()-t0)/1000,turned=sweep?sweep*Math.sin(t*deg/sweep):t*deg;
+    window.deusExViewer.placeProbe({rotation:[0,(Math.round(yaw+turned*65536/360)%65536+65536)%65536,0]});},16);},[Number(option('spin')),yaw0,Number(option('spin-sweep',0))]);}
 await page.waitForTimeout(settle);
 await mkdir(dirname(out),{recursive:true});
 

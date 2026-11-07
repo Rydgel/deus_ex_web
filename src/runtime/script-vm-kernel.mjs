@@ -279,6 +279,10 @@ export function createScriptVmKernel(instance, memory) {
       grid: words => new Uint32Array(memory.buffer, x.fog_grid_ptr(), 9).set(words),
       map: (width, height, count) => x.fog_map(width >>> 0, height >>> 0, count >>> 0)
         ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice() : null,
+      // `map` without the copy: the kernel's own output buffer (16-byte aligned), valid until the next `map`, `view` or `verify` and until
+      // the memory grows; the fog pass reads it at once (fog-pass.mjs). null when the surface exceeds the buffers.
+      view: (width, height, count) => x.fog_map(width >>> 0, height >>> 0, count >>> 0)
+        ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4) : null,
       miss: () => x.fog_miss(),
       setMiss: value => x.fog_set_miss(value >>> 0),
       // The render pass's precision control 24 (fog.rs): f32 registers
@@ -295,6 +299,14 @@ export function createScriptVmKernel(instance, memory) {
       reruns: () => (x.fog_reruns ? x.fog_reruns() : 0) >>> 0,
       resetFallbacks: () => x.fog_reset_fallbacks(),
       check: (width, height, count) => x.fog_check(width >>> 0, height >>> 0, count >>> 0) >>> 0,
+      // Which loop answers `map` outside Exact: 'reference' (one texel at a time per light) or 'blocks' (four texels at a time with the
+      // light-independent terms made once per surface); both give the same bytes and flag. `verify` (validation only) runs both from the
+      // same incoming flag and returns the differing bytes (+1 for a differing flag; 0x10000000 when the block loop declined the surface);
+      // `blockStat(0..3)` counts surfaces answered, declined, blocks handed to the scalar body, blocks classified.
+      setPath: name => x.fog_set_path?.(name === 'reference' ? 0 : 1),
+      verify: (width, height, count) => x.fog_verify(width >>> 0, height >>> 0, count >>> 0) >>> 0,
+      blockStat: which => x.fog_block_stat(which) >>> 0,
+      resetBlockStats: () => x.fog_reset_block_stats(),
       texels: (width, height) => new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice(),
     }),
     // Fire.dll's procedural texture ticks (fire.rs, docs/fire-texture.md
