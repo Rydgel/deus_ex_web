@@ -323,7 +323,61 @@ fn sin_of(angle: i32) -> f64 {
 
 /// FCoords(FRotator) (script-pawn-locomotion.mjs fcoordsAxes): roll, pitch,
 /// then yaw passes over the unit coords, each field's components stored.
+///
+/// The result is a pure function of the rotation, the x87 precision control and the sine table (the same three words give the same
+/// fields bit for bit), and a tick asks for the same rotation many times: every receiver of the AI event manager asks AICanSee once
+/// per event, each with its own ViewRotation, and a glide asks for its Rotation's X axis. A direct-mapped table of the last results
+/// answers those without the 36 dot products (docs/firefox-60fps-plan.md "Combat tick"); `sine_ptr` empties it when the host loads
+/// the table. FCOORDS_CACHE=off in `fcoords_cache_enable(0)` (the host's `?fcoordsCache=off`) computes every call.
 pub(crate) fn fcoords_axes(rotation: [i32; 3]) -> [[f64; 3]; 4] {
+    unsafe {
+        if !FCOORDS_CACHE_ON {
+            return fcoords_axes_compute(rotation);
+        }
+        let precision = crate::x87::precision();
+        let h = ((rotation[0] as u32).wrapping_mul(0x9e37_79b1) ^ (rotation[1] as u32).wrapping_mul(0x85eb_ca6b)
+            ^ (rotation[2] as u32).wrapping_mul(0xc2b2_ae35)) as usize >> 27;
+        let slot = &mut (*core::ptr::addr_of_mut!(FCOORDS_CACHE))[h];
+        if slot.precision == precision && slot.key == rotation {
+            FCOORDS_STATS[0] += 1;
+            return slot.axes;
+        }
+        FCOORDS_STATS[1] += 1;
+        let axes = fcoords_axes_compute(rotation);
+        *slot = AxesSlot { precision, key: rotation, axes };
+        axes
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AxesSlot {
+    /// 0: empty.
+    precision: u32,
+    key: [i32; 3],
+    axes: [[f64; 3]; 4],
+}
+const EMPTY_SLOT: AxesSlot = AxesSlot { precision: 0, key: [0; 3], axes: [[0.0; 3]; 4] };
+static mut FCOORDS_CACHE: [AxesSlot; 32] = [EMPTY_SLOT; 32];
+static mut FCOORDS_CACHE_ON: bool = true;
+static mut FCOORDS_STATS: [u32; 2] = [0; 2];
+
+/// Empty the memo (the sine table it depends on is being replaced).
+pub(crate) fn fcoords_cache_clear() {
+    unsafe { *core::ptr::addr_of_mut!(FCOORDS_CACHE) = [EMPTY_SLOT; 32] };
+}
+/// The memo's hits (0) and misses (1) since the module was instantiated.
+#[no_mangle]
+pub extern "C" fn fcoords_cache_stat(which: u32) -> u32 {
+    unsafe { (*core::ptr::addr_of!(FCOORDS_STATS))[(which & 1) as usize] }
+}
+/// 0 computes every FCoords (the reference); anything else uses the memo (the default).
+#[no_mangle]
+pub extern "C" fn fcoords_cache_enable(on: u32) {
+    unsafe { FCOORDS_CACHE_ON = on != 0 };
+    fcoords_cache_clear();
+}
+
+fn fcoords_axes_compute(rotation: [i32; 3]) -> [[f64; 3]; 4] {
     let [pitch, yaw, roll] = rotation;
     let c = |a: i32| sin_of(a.wrapping_add(0x4000));
     let s = sin_of;

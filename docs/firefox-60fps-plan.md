@@ -1352,6 +1352,210 @@ units; none is a family.
   Even a free tick would leave 17. At this spot Firefox stays at half the rate; the Dockyard needs the tick and the actors layer both
   to lose a third.
 
+### Combat tick (2026-11-06)
+
+The task: the census found 1,609 of its 1,649 slow views led by the simulation tick, "mostly NPC state" (NPCs that have seen the player and
+fought him cost far more than the same spot freshly loaded); find the tick's families in combat and move the largest into the Rust core.
+Method as the Dockyard's: reproduce the state headless, rank by measurement, port exactly behind a switch with the old body as reference,
+interleaved A/B, bar 0.3 ms in the Firefox page mean or 0.5 ms in its slowest tenth. Everything below is headless Linux (Node 26, Firefox
+inline 1440x960, god mode); the Mac is not measured.
+
+**What was found, in short.**
+* **The census' slow views are not all one state.** Of the three places the task names (Underground, Battery Park, Market), two did not
+  repeat at all in a fresh Firefox run of the same list (below): they were one-offs of the census session. One repeats in Firefox but not in Node (Battery Park). The combat state
+  does exist and does repeat, in Node and in Firefox, on the Metro, Vandenberg, Warehouse and Cathedral maps.
+* **The largest family of the combat tick is the x87 emulation**: 1.22 ms of the replayed Metro tick's 9.23 (13%), and 0.92 of the 3.99 ms
+  that the fight adds over the same spot freshly loaded (23%). It was moved to u64 limb arithmetic (x87.rs) and the pure FCoords(FRotator)
+  made a memo; both are bit-exact to the u128 bodies they replace, which stay as the reference. Node tick -1.1 ms (-10.7%) on the Metro
+  fight, -0.4 ms (-4%) on Vandenberg's; Firefox below.
+* Everything else in the combat tick is flat (ranking below): no other named family reaches 1 ms of self time but the JavaScript
+  remainder (2.7 ms in rows under 0.1 ms each), and the biggest JavaScript hand-back is AttachDecal (0.9 ms, the shadows of 16 moving
+  pawns, already Rust inside).
+
+**Reproduction.** `scripts/scenarios/places-replay.mjs` replays the census' places in Node (PER 77 ticks a spot, the player in god mode, seed 1,
+dt 1/60); `bench-sim --idle` (new: no held W, the harness' idle mode) and `scripts/scenarios/combat-replay.mjs` (new: places-replay plus
+`REPORT=1`, one line per spot with the tick time and the pawns by state) make it comparable to the census:
+
+```
+PLACES=.cache/perf/spot-census/firefox-10_Paris_Metro.places.json PER=77 FROM=0 TO=55 \
+  node scripts/bench-sim.mjs --map 10_Paris_Metro --warm 4208 --ticks 300 --render-feedback --idle --seed 1 \
+  --scenario scripts/scenarios/places-replay.mjs
+```
+(`--warm` is 30 + 77 K + 20 for the last spot K; the same command with `FROM=K TO=K+1 --warm 48` places only spot K at load.) Node tick, mean /
+median, the same spot replayed against freshly loaded:
+
+| Map, spot (census index) | replayed | freshly placed | pawns Attacking at the spot |
+|---|---:|---:|---:|
+| 10_Paris_Metro 54 (2441, -2509, 167 yaw 32768) | 9.86 / 9.54 | 6.20 / 5.79 | 11 |
+| 12_Vandenberg_Cmd 98 (-128, 2772, -2025 yaw 32768) | 9.48 / 9.10 | 7.99 / 7.36 | 8 |
+| 02_NYC_Underground 104 (-3946, 1158, -1000 yaw 0) | 4.02 / 3.83 | 3.56 / 3.40 | 4 |
+
+The census' own spots and a fresh Firefox run of the same list (`hitch-run --places` cut at the slow spot, same settle and record times, so
+a sequence of the census' kind; tick phase `p.tick`, ms) against the Node replay of the same list (tick mean of the spot's second half;
+`corr` is the correlation, over all the spots of the list, of the run's tick with the census'):
+
+| Map | census slow spot | census | fresh Firefox run | Node replay | corr: Firefox / Node with the census |
+|---|---|---:|---:|---:|---|
+| 02_NYC_Underground | 104, yaw 0 | 26.8 | 4.8 (p50 11 ms) | 4.0 | 0.31 / 0.06 |
+| 06_HongKong_WanChai_Market | 27, yaw 49152 | 23.2 | 7.3 | 4.2 | 0.48 / 0.24 |
+| 02_NYC_BatteryPark | 110, 111 | 22.0, 22.9 | 13.1, 17.1 | 4.5, 5.3 | 0.78 / -0.01 |
+| 10_Paris_Metro | 38, 39 | 23.7, 20.2 | 14.2, 15.7 | 4.9, 5.1 | 0.93 / 0.20 |
+| 12_Vandenberg_Cmd | 63, 127 | 24.8, 23.3 | 17.4, 17.2 | 6.2, 9.5 | 0.63 / 0.39 |
+
+* **The Underground's 44 ms view and the Market's 35 ms view are not a state.** The Underground's neighbours at the same place (yaws 16384,
+  32768, 49152) read 6.4, 6.1 and 9.0 ms in the census itself; the fresh run of the same sequence read 4.8 ms at the slow view, and the
+  Node replay 4.0 (3.6 freshly placed): "the tick in Node well above the fresh-load tick" does not hold there. The same for the Market's
+  yaw 49152 view (8.3, 7.2, 7.3, then 23.2 in the census; 7.3 in the fresh run). The census ran with other sessions on the machine, which
+  the heavy lock does not exclude (the user's tabs, builds): a possible cause, not checked; nothing in the sequence repeats the spike.
+* **Battery Park's (-4634, 3480, -312) is a place, not a fight**: 13 to 17 ms in the fresh Firefox run (census 22), 4.5 to 5.3 ms in Node
+  with one pawn holding an Enemy; a single placement at load in Firefox reads 10.7 ms with a 20 ms slow tenth (profile below). What it holds that
+  Node's replay lacks is not known. Not ported.
+* **The fight is the Metro, Vandenberg, Warehouse and Cathedral spots**: in Node the heaviest spots of those lists are the ones with 8 to 11
+  pawns in Attacking (Cathedral 132 to 142: 9.0 to 9.7 ms against a map mean of 5.3; Warehouse 75: 9.7; the Metro's 54 and the
+  Vandenberg's 98 above), correlation with the census 0.60 and 0.52 on the first two. The fresh Firefox runs repeat the census at Metro
+  (0.93) and Vandenberg (0.63), a little lower in absolute terms (14 to 17 ms against 20 to 25).
+* The replay is a same-mode reproduction, not the original's: the NPCs' states depend on the order of the teleports, the tick length and the
+  seed, and `--render-feedback` stamps LastRenderTime by a 75-degree frustum without occlusion.
+
+**Ranking (Node, V8 CPU profile of 300 ticks, Metro spot 54 replayed against freshly placed; ms a tick of `tickStandaloneLevel`, self time
+by family; the profile inflates the tick by about a fifth).** Wasm functions are named from a non-stripped build
+(`scripts/wasm-names.mjs`):
+
+| Family | fresh | fight | fight - fresh |
+|---|---:|---:|---:|
+| **x87 arithmetic (`Ext` add/mul/div/sqrt/rounding, `u128_div_rem`, `__multi3`, FCoords dot products)** | 0.30 | **1.22** | **+0.92** |
+| collision traces and the hash (`trace::ray`, `hash::multi_line`, ...) | 0.55 | 0.90 | +0.35 |
+| script VM (interp, dispatch, iterators, natives) | 0.54 | 0.90 | +0.36 |
+| decals (`AttachDecal`: the pawns' shadows) | 0.41 | 0.58 | +0.17 |
+| AI event manager and perception (own code) | 0.19 | 0.51 | +0.31 |
+| pawn physics, walking, moving | 0.17 | 0.38 | +0.21 |
+| wasm to JS crossing, other wasm | 0.25 | 0.44 | +0.19 |
+| JavaScript: object model and lookups (`namedHandle`, `readInstanceField`, ...) | 0.64 | 0.95 | +0.31 |
+| JavaScript: move riders, tick glue, collision glue | 0.28 | 0.64 | +0.36 |
+| JavaScript: the rest (every row under 0.1) | 1.91 | 2.72 | +0.81 |
+| **level tick** | **5.24** | **9.23** | **+3.99** |
+
+By inclusive function the fight adds: `aievent::process` +1.33 (0.14 to 1.47: AIProcess and the AICanSee of every receiver for every event,
+`ai_can_see_body` +0.90 of it, half of the manager's time in x87 arithmetic and 0.27 in `fcoords_axes`), `pawn_phys::perform` +0.82,
+`walk_loop` +0.78, `move_source` +0.62, `js_eval` +0.79 (the hand-backs), `spawnActor`/AttachDecal and the rest below 0.5. The
+JavaScript hand-backs by the fallback census (`script-vm-fallback-census.mjs`, now with `BASE=` to run on a scenario; ms a tick, calls
+a tick; the slowest tenth is 14.5 ms against 9.7): `AttachDecal` 0.94 (15.9 calls, 59 us each; 1.02 in the tenth), `Spawn` (278) 0.09 rest
+and 0.65 in the tenth (0.43 and 3.3 calls: the fight's hit effects, shells and sparks), `Trace` (277) 0.13 (17 calls), `PlayerTick` 0.14,
+`native 518` 0.02 rest and 0.25 in the tenth (a path search, 0.23 calls of 1.1 ms), then rows under 0.2. Apart from AttachDecal no
+JavaScript row passes 0.2 ms a tick on the mean, the Dockyard's finding again.
+
+The Firefox profiles agree on the shape and weigh it differently (Gecko, inline): at Battery Park's single placement (10.7 ms rest, 20.0
+the slowest tenth of ticks) `js_tick_resume` is 5.6 against 1.7 and `js_tick_state` 2.4 against 0.3 ms a frame in the tenth, inclusive of
+the state code they run in Wasm; the leaves are the object-model rows (`describeEntry`, `copyScalar`, `readComposite`, `lookupMember`,
+`instance`, `namedHandle`: 1.7 ms a frame together) and `Ext::rounded` is 0.13 ms a frame. See "In Firefox" below for the Metro run.
+
+**In Firefox** (Gecko, inline, the Metro's census places up to spot 39 on the reference arithmetic; 2,951 drawn frames from 5 s after the
+map; `gecko-slow-ticks.mjs`): the tick is 6.56 ms in the rest and 15.25 in the slowest tenth (295 frames). What the slow frames add, ms a
+frame, by the Rust core's import: `js_eval` +1.99 (under its nodes: natives +1.43, script calls +0.98 and +0.87), `js_tick_resume`
++1.08, `js_tick_state` +0.76, `js_fall_bounce` +0.51, `js_move_riders` +0.46, Wasm itself +0.49, `js_anim_notify_event` +0.27. By named
+frame (inclusive): `spawnActor` +1.35, `moveActorRiders` +0.53 (its leaf `nextCandidate` +0.23), `destroyActor` +0.38 and `cleanupDestroyed`
++0.20, `execAttachDecal` +0.28, `execActorPlaySound` +0.27. The x87 functions hardly show (Ion inlines `Ext` into its callers; the named
+leaves are `Ext::rounded` 0.045 and `add` 0.026 ms a frame), so the profile understates that family, which the A/B below measures: the
+Firefox slowest tenth is the fight's spawns, riders, destroys and sounds in JavaScript with the x87 emulation a smaller part of it than
+in Node.
+
+**What moved.**
+1. **The x87 model on u64 limbs** (`x87.rs`; the reference bodies are `x87_ref.rs`, the exact u128 code the module shipped with). Same
+   operations, same roundings, same fields of the result; what changed is the machine code: `Ext::normalized`/`rounded` take the 128-bit
+   result as two words (leading zeros of the high word, one rounding step on the left-aligned remainder), the 64x64 product is four 32-bit
+   partial products instead of `__multi3`, the quotient comes from a 128/64 division (Hacker's Delight `divlu` on a normalized divisor,
+   the two extra bits and the sticky bit from three comparisons) instead of two `u128_div_rem`, the square root seeds Newton's iteration
+   from the high word's 32-bit root and typically needs two 128/64 divisions instead of the power-of-two seed's `u128` loop, add aligns the
+   smaller operand with word shifts and `store`/`store_double` round on one word. An `Ext` whose significand is not normalized (lipsync.rs builds those from
+   an 80-bit memory word) and the precision-control-24 rounding take the reference bodies.
+   *Evidence:* the arithmetic is a pure integer function with an exact reference, so the check is equality over the operands, not a
+   tolerance: `scripts/validate-x87-fast.mjs` builds the module with the `selftest` feature (not shipped) and compares every field of the
+   result of add, multiply, divide, square root, normalization, `store` and `store_double` against `x87_ref.rs` over generated operands
+   (random, all ones, one bit, halfway patterns, runs, zeros, infinities and NaNs of both signs and several payloads, exponents together
+   and far apart, unnormalized significands) at precision control 64 and 24: 28,000,000 comparisons per seed and precision control
+   (4,000,000 rounds of seven operations; seeds 1 to 3 at both), 0 mismatches. Mutations of each rule (the tie to even, the divide's
+   sticky bit, one partial product of the multiply, the square-root seed, the zero sign of a cancelling sum, the guard for a tiny
+   unnormalized significand) are each caught within 300,000 rounds, so the generator reaches them. `validate-script-vm-x87` (620,000
+   operand sets of 15 operators at both precision controls against the BigInt bodies that the native operator validators check against
+   Core.dll) passes on the new module. Micro-benchmark in the same module
+   (`--bench`, ns an operation, limbs / reference): add 9.3 / 18.5, multiply 7.4 / 14.7, divide 13.8 / 76.9, square root 56.8 / 248.6, a
+   multiply-add chain 15.4 / 37.4. The module is 14% smaller (1,207,828 to 1,038,722 bytes).
+   *Switch:* `?x87=ref` / `X87=ref` loads `script-vm-ref.wasm` (`node scripts/build-x87-ref.mjs`, feature `x87_ref`: every `Ext` operation runs
+   `x87_ref.rs`; git-ignored like the other `.wasm` files).
+2. **FCoords(FRotator) memo** (`percep.rs fcoords_axes`). The 36 dot products of the three rotation passes are a pure function of the
+   rotation, the precision control and the sine table; AICanSee asks for the viewer's ViewRotation once per event and receiver and a glide
+   for its Rotation's X axis. A direct-mapped table of 32 results answers the repeats (key: the three angles and the precision control;
+   `sine_ptr`, which the host calls to load the table, empties it). `?fcoordsCache=off` / `FCOORDS_CACHE=off` computes every call.
+   *Evidence:* `test/fcoords-cache.test.mjs` (the kernel's FCoords against `fcoordsAxesReference`, the BigInt body bit-compared with the
+   original constructor in Unicorn, for 400 rotations asked once, again, in three orders over a shared table, and at both precision
+   controls); the digests below with the cache on equal the runs with it off.
+
+**A/B.** Reference arm: `X87=ref FCOORDS_CACHE=off` (`?x87=ref&fcoordsCache=off`); new arm: defaults. Same commit, same inputs.
+* **Node** (five interleaved pairs, order alternating, one lock hold; tick ms of 300 ticks after the replay; the arms' digests are equal in
+  all ten runs of each map):
+
+| Replay | tick mean, new / reference | median | slowest tenth | pairs (mean, new - reference) |
+|---|---|---|---|---|
+| Metro 54 | 9.23 / 10.34 (-1.11, -10.7%) | 8.84 / 9.88 (-1.03) | 13.75 / 15.41 (-1.66) | -1.36 -0.97 -1.66 -1.05 -0.50 |
+| Vandenberg 98 | 8.87 / 9.26 (-0.39, -4.2%) | 8.45 / 8.82 (-0.37) | 14.07 / 14.33 (-0.26) | +0.03 -0.25 -0.83 -0.71 -0.19 |
+
+* **In Firefox** (inline, headless, the census' places of the Metro up to spot 60, 500 ms settle, 750 ms recorded, god mode; `hitch-ab.mjs
+  --guard ... -- --places`, drawn frames from 5 s after the map; ms; the arms' order alternating):
+
+| Set | tick, new / reference | tick, slowest tenth | page `animate` mean | page, slowest tenth |
+|---|---|---|---|---|
+| 1: four pairs, new first in the odd pairs | 6.73 / 6.94 (-0.21) | 11.86 / 12.77 (-0.91) | 14.70 / 14.92 (-0.22) | 23.07 / 24.08 (-1.01) |
+| 2: four pairs, reference first in the odd pairs | 6.82 / 7.19 (-0.37) | 12.59 / 13.55 (-0.96) | 14.83 / 15.40 (-0.57) | 24.00 / 25.25 (-1.25) |
+| **all eight pairs** | **6.77 / 7.07 (-0.29, se 0.07)** | **12.23 / 13.16 (-0.93, se 0.34)** | **14.76 / 15.16 (-0.40, se 0.12)** | **23.53 / 24.67 (-1.13, se 0.42)** |
+
+The pairs' differences (new - reference, pooled from the two `hitch-ab-table.mjs` outputs): tick -0.01 +0.03 -0.35
+-0.53 -0.39 -0.49 -0.34 -0.27 (better in 7 of 8), tick slowest tenth -0.05 +0.25 -1.55 -2.29 -1.60 -1.11 -1.33 +0.20, page mean +0.20 +0.07 -0.55
+-0.61 -0.60 -0.69 -0.50 -0.53 (6 of 8), page slowest tenth +0.59 +0.14 -2.44 -2.35 -2.08 -0.98 -1.69 -0.26. The first two pairs of set 1 show no
+effect at all and the spread between sessions of one arm is 0.2 to 0.3 ms of tick and 1 ms of its slowest tenth, so the single sets are
+noisy (set 1 alone misses the mean bar with -0.22); pooled, the mean of the page's frame is -0.40 ms (t = -3.4) and its slowest tenth -1.13
+ms. A one-profile-each Gecko run of the same list up to spot 39 (`--profile`, 1 ms interval, so for the shape and not the A/B) reads the
+level tick at 6.49 ms a frame on the reference and 6.24 on the new, the same direction and size.
+
+**Digests** (`bench-sim --warm 60 --ticks 300 --render-feedback`, before = after, also with `X87=ref FCOORDS_CACHE=off`): Island
+`5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`,
+Dockyard `e53f348673f1247b`. Combat replays (PER 77, seed 1, dt 1/60, `--idle --render-feedback`): Metro 54 replayed `09e2d44972cca30a`,
+freshly placed `a6011ede7236c1d2`; Vandenberg 98 replayed `ed184bd3eb533bc1`, freshly placed `1db79eb398240a97`; Underground 104 replayed
+`4dd5077404683fd4`.
+
+**Result: meets the bar, shipped.** Firefox page mean -0.40 ms (bar 0.3) and page slowest tenth -1.13 ms (bar 0.5), the tick -0.29 mean and
+-0.93 in its slowest tenth; Node -1.1 ms (-10.7%) on the Metro fight and -0.4 ms (-4%) on Vandenberg's, where the x87 arithmetic is 5.8% of
+the tick against the Metro's 13%. Not measured: Chromium (the worker; a Chromium pair would be the check that the limb arithmetic is
+not a Firefox-only gain), the Mac, a fresh placement's A/B (the x87 arithmetic is 0.30 of 5.24 ms in the Metro's profile there, so the
+gain is smaller), a Battery Park or Dockyard run. The A/B is of the places run, a mixture of fight and quiet spots, so its mean is below what
+a sustained fight would show; the Node figure is nearer to that.
+
+**Checks.** The six baseline digests and the three combat-replay pairs above are unchanged and equal with `X87=ref FCOORDS_CACHE=off`;
+`validate-x87-fast` (above), `validate-script-vm-x87`, `validate-event-manager` (98 scenarios, 3,362 operations), `validate-perception-kernel`
+(12,000 cases, 4,800 AICanSee: identical), `validate-ai-visibility`, `validate-pawn-tick-visibility`, `validate-pawn-alliance`,
+`validate-locomotion-kernel` (3,000 cases), `validate-decal-attach`, `validate-decal-fast` (4,000,000 cases) pass; `validate-pawn-perception`
+(the Wine one) skips on this host. `test/fcoords-cache.test.mjs` is new. `npm test`: 965 tests, 961 passed, 4 skipped, 0 failed. The Rust build is warning-free in the
+shipped, `selftest` and `x87_ref` configurations.
+
+**Tools added** (measurement only): `bench-sim --idle` and the slowest-tenth mean in its report; `scripts/scenarios/combat-replay.mjs`;
+`script-vm-fallback-census.mjs BASE=scenario`; `hitch-ab.mjs --guard` (each session through the heavy lock and the 8 GB scope; `--places`
+already passed through); `scripts/build-x87-ref.mjs`; `scripts/validate-x87-fast.mjs`. The V8-profile helpers used for the ranking (families
+by function name, differences between two profiles, callers) are scratch scripts, not committed.
+
+**What is left**, in the order of the Firefox slowest tenth (ms a frame, slow minus rest, from the Gecko profile of the Metro run above):
+1. `spawnActor` +1.35 inclusive (the fight's hit effects, shells, sparks and smoke: 3.3 spawns a tick in the Node fight's slowest tenth against
+   0.5 at rest, 175 us each); the [spawn analysis](#spawning-and-destroying-the-cost-is-the-invalidation-2026-11-06) found no piece over 0.13 ms in it.
+2. The mover rider scan: `moveActorRiders` +0.53, its leaf `nextCandidate` +0.23 (the JavaScript pass over the level's ~2,500 slots' Base
+   words after each `baseEpoch` advance, `move-riders.mjs`), the visits +0.2. A Rust `nextCandidate` over the level loop's per-slot
+   descriptors is the cut; alone it is under the 0.5 bar.
+3. `js_fall_bounce` +0.51 (the shells' and rockets' HitWall script events, which carry a vector parameter the CALL kind does not), `js_tick_resume`
+   +1.08 and `js_tick_state` +0.76 (state code resumed through JavaScript, inclusive of the Wasm it runs), `js_anim_notify_event` +0.27,
+   `destroyActor` +0.38 with `cleanupDestroyed` +0.20, `execActorPlaySound` +0.27.
+4. In Node the event manager still costs 0.88 ms a tick after the change (1.48 before): `Ext::add` 0.10, `mul` 0.08 (9 and 7 ns an operation),
+   `ai_can_see_body`'s own 0.05, `squared_distance` 0.10 inclusive. A second round of the limb arithmetic, or exact filters in front of
+   AICanSee's angle tests (the decal filters' method), are the cuts there.
+5. Not found, so not ported: Battery Park's (-4634, 3480, -312) views (Node does not reproduce them; a Firefox single placement is flat), and the
+   Underground's and the Market's census views, which did not repeat.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
