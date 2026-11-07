@@ -12,13 +12,16 @@
 //! lies inside the map and every buffer has the length indexed here):
 //! width, the union rectangle (minU, maxU, minV, maxV), the light count, the
 //! static bytes and texels addresses, then per light its rectangle, spatial
-//! bytes, colour tables (red, green, blue: 3·256 bytes) and modulation table
-//! (64 K bytes, or 0 for an unmodulated light) and the address of its
+//! bytes, colour tables (red, green, blue: 3·256 bytes) and modulation block
+//! (a moving.rs `MOD_BYTES` block whose entries are filled when first asked
+//! within a frame, or 0 for an unmodulated light) and the address of its
 //! spatial.rs parameter record (0 unless its effect is spatially dynamic:
 //! those bytes are recomputed for each new Level.TimeSeconds before the
 //! merge, as SetupForSurf reruns the spatial function on every per-frame
 //! rebuild). No statics: the interpreter instance shares this module's
 //! reserved region (build.rs).
+
+use crate::moving::{MOD_FACTORS, MOD_VALID, MOD_VALUE};
 
 const H_WIDTH: usize = 0;
 const H_MIN_U: usize = 1;
@@ -45,12 +48,13 @@ unsafe fn bytes<'a>(at: u32, len: usize) -> &'a mut [u8] {
 }
 
 /// One light's saturating merge over its rectangle: each spatial byte,
-/// through the modulation table at `(index & 0xff) << 8 | byte` when the
+/// through the modulation block's entry `(index & 0xff) << 8 | byte` when the
 /// light has one and the byte is not 0 (`index` counts every rectangle
-/// texel from 0), then, unless 0, each channel's colour-table entry added to
-/// the texel and held at 127.
+/// texel from 0; the entry is `modulation_entry` of the row's factor, made
+/// the first time it is asked this frame), then, unless 0, each channel's
+/// colour-table entry added to the texel and held at 127.
 #[inline(always)]
-fn merge_light(texels: &mut [u8], width: usize, l: &[u32], spatial: &[u8], tables: &[u8; 768], modulation: Option<&[u8; 65536]>) {
+unsafe fn merge_light(texels: &mut [u8], width: usize, l: &[u32], spatial: &[u8], tables: &[u8; 768], modulation: usize) {
     let (min_u, max_u) = (l[L_MIN_U] as usize, l[L_MAX_U] as usize);
     let (min_v, max_v) = (l[L_MIN_V] as usize, l[L_MAX_V] as usize);
     let rw = max_u - min_u;
@@ -64,10 +68,16 @@ fn merge_light(texels: &mut [u8], width: usize, l: &[u32], spatial: &[u8], table
         let row = &mut texels[(v * width + min_u) * 3..(v * width + max_u) * 3];
         for (texel, &spatial) in row.chunks_exact_mut(3).zip(source.iter()) {
             let mut byte = spatial as usize;
-            if let Some(table) = modulation {
-                if byte != 0 {
-                    byte = table[(index & 0xff) << 8 | byte] as usize;
+            if modulation != 0 && byte != 0 {
+                let at = (index & 0xff) << 8 | byte;
+                let valid = (modulation + MOD_VALID + at) as *mut u8;
+                let value = (modulation + MOD_VALUE + at) as *mut u8;
+                if *valid == 0 {
+                    let factor = *((modulation + MOD_FACTORS + (index & 0xff) * 8) as *const f64);
+                    *value = modulation_entry(factor, byte);
+                    *valid = 1;
                 }
+                byte = *value as usize;
             }
             index += 1;
             if byte == 0 {
@@ -123,8 +133,7 @@ pub extern "C" fn light_merge(header: u32, before: u32, time: u32) -> u32 {
             let area = (l[L_MAX_U] - l[L_MIN_U]) as usize * (l[L_MAX_V] - l[L_MIN_V]) as usize;
             let spatial = bytes(l[L_SPATIAL], area);
             let tables = &*(l[L_TABLES] as usize as *const [u8; 768]);
-            let modulation = if l[L_MODULATION] != 0 { Some(&*(l[L_MODULATION] as usize as *const [u8; 65536])) } else { None };
-            merge_light(texels, width, l, spatial, tables, modulation);
+            merge_light(texels, width, l, spatial, tables, l[L_MODULATION] as usize);
         }
         for (v, keep) in (min_v..max_v).zip(saved.chunks_exact(row_bytes)) {
             let row = (v * width + min_u) * 3;
@@ -134,6 +143,70 @@ pub extern "C" fn light_merge(header: u32, before: u32, time: u32) -> u32 {
         }
         0
     }
+}
+
+/// A light map's texel rectangle as the light atlas stores it (light-atlas.mjs
+/// `update` with a byte source): `texels` is the map's RGB bytes (`width` x
+/// `height`), the rectangle is the source columns `left..=right` and rows
+/// `top..=bottom`, where -1, `width` and `height` are the padding the atlas
+/// keeps around a tile (the edge texel repeated), and each texel becomes the
+/// word `r | g << 8 | b << 16 | 0xff << 24` (RGBA in memory order), rows
+/// and columns in order, at `out`. The host checks the rectangle.
+#[no_mangle]
+pub extern "C" fn light_pack(texels: u32, width: u32, height: u32, left: i32, right: i32, top: i32, bottom: i32, out: u32) {
+    let (width, height) = (width as i32, height as i32);
+    let source = unsafe { core::slice::from_raw_parts(texels as usize as *const u8, (width * height * 3) as usize) };
+    let columns = (right - left + 1) as usize;
+    let words = unsafe { core::slice::from_raw_parts_mut(out as usize as *mut u32, columns * (bottom - top + 1) as usize) };
+    let word = |at: usize| source[at] as u32 | (source[at + 1] as u32) << 8 | (source[at + 2] as u32) << 16 | 0xff00_0000;
+    for (row, line) in (top..=bottom).zip(words.chunks_exact_mut(columns)) {
+        let base = (row.clamp(0, height - 1) * width) as usize * 3;
+        let mut at = 0;
+        let mut column = left;
+        if column < 0 {
+            line[at] = word(base);
+            at += 1;
+            column = 0;
+        }
+        let last = right.min(width - 1);
+        if column <= last {
+            let run = (last - column + 1) as usize;
+            pack_run(&source[base + column as usize * 3..], &mut line[at..at + run]);
+            at += run;
+        }
+        if right >= width {
+            line[at] = word(base + (width - 1) as usize * 3);
+        }
+    }
+}
+
+/// RGB bytes to RGBA words, four texels at a time on wasm simd128 (a 16-byte load holds four texels and four bytes the next
+/// ones; the last texels of the map go one at a time).
+#[inline(always)]
+fn pack_run(source: &[u8], line: &mut [u32]) {
+    #[cfg(target_arch = "wasm32")]
+    let done = unsafe { pack_blocks(source, line) };
+    #[cfg(not(target_arch = "wasm32"))]
+    let done = 0;
+    for i in done..line.len() {
+        line[i] = source[i * 3] as u32 | (source[i * 3 + 1] as u32) << 8 | (source[i * 3 + 2] as u32) << 16 | 0xff00_0000;
+    }
+}
+
+/// The texels `pack_run` does four at a time; returns how many.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+unsafe fn pack_blocks(source: &[u8], line: &mut [u32]) -> usize {
+    use core::arch::wasm32::*;
+    let alpha = u8x16_splat(255);
+    let mut block = 0;
+    while block * 4 + 4 <= line.len() && block * 12 + 16 <= source.len() {
+        let bytes = v128_load(source.as_ptr().add(block * 12) as *const v128);
+        let rgba = i8x16_shuffle::<0, 1, 2, 16, 3, 4, 5, 16, 6, 7, 8, 16, 9, 10, 11, 16>(bytes, alpha);
+        v128_store(line.as_mut_ptr().add(block * 4) as *mut v128, rgba);
+        block += 1;
+    }
+    block * 4
 }
 
 /// createLightFrame's colour tables for one light (`constants.tables`):
@@ -151,27 +224,36 @@ pub extern "C" fn light_colour_tables(out: u32, red: i32, green: i32, blue: i32)
     }
 }
 
-const TWO_52: f64 = 4_503_599_627_370_496.0;
-const TWO_62: f64 = 4_611_686_018_427_387_904.0;
-
-/// createLightFrame's modulation table from one effect's 256 merge factors
-/// (doubles): entry `i << 8 | byte` is `fistp(f(factor[i]·byte) − 0.5) & 255`.
-/// The product is a double rounded once to float. dynamic-lighting.mjs
-/// `fistp` is floor, then up past a fraction of 0.5 and on an exact half to
-/// the even neighbour; a double of magnitude 2^52 or more is an integer (its
-/// own floor, fraction 0), and ±Infinity and NaN pass through. `& 255` is
-/// ToInt32's low byte: 0 for ±Infinity, NaN and every double of magnitude
-/// 2^62 or more (a multiple of 2^10).
+/// createLightFrame's modulation table of one effect, made on demand: the
+/// block (moving.rs `MOD_BYTES` layout) holds the effect's 256 merge factors
+/// (doubles) at `MOD_FACTORS`; entry `i << 8 | byte` is `fistp(f(factor[i]·byte)
+/// − 0.5) & 255` (`modulation_entry`), and a merge fills the ones it reads
+/// when first asked. `light_modulation_begin` marks every entry unfilled for
+/// the frame's factors, which the host has just written. A merge reads only
+/// the entries its texels ask for, where making all 3 x 65,536 each frame cost
+/// 0.15 ms of Battery Park's page frame in Firefox.
 #[no_mangle]
-pub extern "C" fn light_modulation(factors: u32, out: u32) {
-    let factors = unsafe { core::slice::from_raw_parts(factors as usize as *const f64, 256) };
-    let out = unsafe { bytes(out, 65536) };
-    for (row, &factor) in out.chunks_exact_mut(256).zip(factors.iter()) {
-        for (byte, entry) in row.iter_mut().enumerate() {
+pub extern "C" fn light_modulation_begin(block: u32) {
+    unsafe { bytes(block + MOD_VALID as u32, 65536) }.fill(0);
+}
+
+/// Every entry of the block's table made at once (the whole table of the
+/// reference: validation reads it).
+#[no_mangle]
+pub extern "C" fn light_modulation_fill(block: u32) {
+    let factors = unsafe { core::slice::from_raw_parts((block as usize + MOD_FACTORS) as *const f64, 256) };
+    let valid = unsafe { bytes(block + MOD_VALID as u32, 65536) };
+    let values = unsafe { bytes(block + MOD_VALUE as u32, 65536) };
+    for ((row, ok), &factor) in values.chunks_exact_mut(256).zip(valid.chunks_exact_mut(256)).zip(factors.iter()) {
+        for (byte, (entry, flag)) in row.iter_mut().zip(ok.iter_mut()).enumerate() {
             *entry = modulation_entry(factor, byte);
+            *flag = 1;
         }
     }
 }
+
+const TWO_52: f64 = 4_503_599_627_370_496.0;
+const TWO_62: f64 = 4_611_686_018_427_387_904.0;
 
 /// One entry of the modulation table: `fistp(f(factor·byte) − 0.5) & 255`
 /// (the body of `light_modulation`; moving.rs fills the same entries one at

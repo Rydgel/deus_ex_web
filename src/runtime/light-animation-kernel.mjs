@@ -24,7 +24,7 @@
  *
  * Moved: the colour tables (built from the steps in light.rs when they are
  * int32 integers, else the reference's lazy `tables` are copied), the
- * modulation tables (rebuilt by the reference's rule: a new frame object, or
+ * modulation tables (reset by the reference's rule: a new frame object, or
  * a new frameIndex for effects 1-2 or noise version for effect 3, from the
  * frame's factors at that first use), the union reset, the merge and the
  * comparison, and the spatially dynamic lights' bytes (spatial.rs, rerun
@@ -35,6 +35,13 @@
  * memory, all freed by `dispose`. validate-light-animation-rust compares the
  * two every frame. */
 import { animatedLightConstants } from './static-lighting.mjs';
+
+// An effect's modulation block (moving.rs): its 256 factors (doubles), a byte a table entry that says it is made this frame, and
+// the entries; the merge makes the entries it reads (light.rs). Offsets of the table's bytes within the block.
+const MOD_VALUE = 2048 + 65536, MOD_BYTES = 2048 + 2 * 65536;
+// ?lightModulation=table (LIGHT_MODULATION=table in Node) makes the whole table of an effect at once, as the reference does, where the
+// default makes the entries a merge reads (docs/static-lighting.md "Rust kernel"). Read when the frame's table is reset.
+const wholeTables = () => ((typeof process !== 'undefined' && process.env?.LIGHT_MODULATION) || globalThis.DEUS_EX_LIGHT_MODULATION) === 'table';
 
 const HEADER = 8, LIGHT_WORDS = 8, CHUNK = 1 << 20;
 // spatial.rs's per-texel cache (eight words a texel) for rectangles up to
@@ -68,10 +75,12 @@ export function createLightAnimationKernel(kernel) {
   // One colour-table slot (3·256 bytes) per light actor, with the constants
   // object whose tables it holds.
   const slots = new Map();
-  // Effects 1-3's modulation tables and the factors they are built from.
-  let modulation = 0, factors = 0;
+  // Effects 1-3's modulation blocks, one after the other.
+  let modulation = 0;
   const built = { 1: { frame: null, version: -1 }, 2: { frame: null, version: -1 }, 3: { frame: null, version: -1 } };
   let scratch = 0, scratchBytes = 0;
+  // The atlas words of `pack`: a block that grows, and a view of it.
+  let packAt = 0, packCapacity = 0, packView = null;
 
   function upload(slot, constants) {
     const { steps } = constants;
@@ -85,8 +94,10 @@ export function createLightAnimationKernel(kernel) {
     const version = effect === 3 ? frame.noise.version : frame.frameIndex, state = built[effect];
     if (state.frame === frame && state.version === version) return;
     sync();
-    f64.set(frame.factors[effect], factors >> 3);
-    light.modulation(factors, modulation + (effect - 1) * 65536);
+    const block = modulation + (effect - 1) * MOD_BYTES;
+    f64.set(frame.factors[effect], block >> 3);
+    light.modulationBegin(block);
+    if (wholeTables()) light.modulationFill(block);
     state.frame = frame; state.version = version;
   }
 
@@ -125,7 +136,7 @@ export function createLightAnimationKernel(kernel) {
       const unionBytes = (maxU - minU) * (maxV - minV) * 3;
       if (unionBytes > scratchBytes) { scratch = take(unionBytes); scratchBytes = unionBytes; }
       const effects = [...new Set(animated.map(({ effect }) => effect).filter(effect => effect >= 1 && effect <= 3))];
-      if (effects.length && !modulation) { modulation = take(3 * 65536); factors = take(256 * 8); }
+      if (effects.length && !modulation) modulation = take(3 * MOD_BYTES);
       const lights = animated.map(item => {
         let slot = slots.get(item.ref);
         if (!slot) slots.set(item.ref, slot = { at: take(768), constants: null });
@@ -139,7 +150,7 @@ export function createLightAnimationKernel(kernel) {
         const w = h + HEADER + i * LIGHT_WORDS;
         u32[w] = rect.minU; u32[w + 1] = rect.maxU; u32[w + 2] = rect.minV; u32[w + 3] = rect.maxV;
         u32[w + 4] = at + spatialAt[i]; u32[w + 5] = lights[i].slot.at;
-        u32[w + 6] = effect >= 1 && effect <= 3 ? modulation + (effect - 1) * 65536 : 0;
+        u32[w + 6] = effect >= 1 && effect <= 3 ? modulation + (effect - 1) * MOD_BYTES : 0;
         u32[w + 7] = 0;
         u8.set(bytes, at + spatialAt[i]);
         if (spatialDynamic) {
@@ -158,7 +169,7 @@ export function createLightAnimationKernel(kernel) {
       });
       u8.set(base, at + layout.base); u8.set(texels, at + layout.texels);
       const rowStart = (minV * width + minU) * 3, rowEnd = ((maxV - 1) * width + maxU) * 3;
-      return { at, bytes: capacity, base, width, animated, lights, effects, union: { minU, maxU, minV, maxV },
+      return { at, bytes: capacity, base, width, height, animated, lights, effects, union: { minU, maxU, minV, maxV },
         texelsAt: at + layout.texels, rowStart, rowEnd };
     },
 
@@ -193,6 +204,23 @@ export function createLightAnimationKernel(kernel) {
       return { minU, maxU, minV, maxV };
     },
 
+    /** A merged light map's texel rectangle (light-atlas.mjs `rectOf`: source columns and rows, -1 and the map's width or height being the
+     * atlas' padding) as the RGBA words `LightAtlas.update` would write for it from the record's texels, rows and columns in order:
+     * a view of the kernel's scratch, valid until the next call. The kernel's texels are the record's after `animate` (the union
+     * rows are copied back to it, the rest never changes between registrations). */
+    pack(handle, rect) {
+      if (disposed) throw new Error('The light animation kernel was disposed');
+      const count = (rect.right - rect.left + 1) * (rect.bottom - rect.top + 1);
+      if (count > packCapacity) {
+        if (packAt) light.free(packAt);
+        packCapacity = Math.max(count, 4096); packAt = light.alloc(packCapacity * 4);
+      }
+      light.pack(handle.texelsAt, handle.width, handle.height, rect.left, rect.right, rect.top, rect.bottom, packAt);
+      sync();
+      if (packView?.buffer !== buffer || packView.length < count) packView = new Uint32Array(buffer, packAt, packCapacity);
+      return packView.subarray(0, count);
+    },
+
     /** Validation: the colour tables the kernel holds for `ref` with the
      * constants they came from, and effect 1-3's modulation table with the
      * frame and version it was built for. */
@@ -206,13 +234,17 @@ export function createLightAnimationKernel(kernel) {
       const state = built[effect];
       if (!state.frame) return null;
       sync();
-      return { frame: state.frame, version: state.version, bytes: u8.slice(modulation + (effect - 1) * 65536, modulation + effect * 65536) };
+      const block = modulation + (effect - 1) * MOD_BYTES;
+      light.modulationFill(block);
+      return { frame: state.frame, version: state.version, bytes: u8.slice(block + MOD_VALUE, block + MOD_VALUE + 65536) };
     },
 
     /** Return every block to the kernel's allocator. */
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (packAt) light.free(packAt);
+      packAt = 0; packView = null;
       for (const at of blocks) light.free(at);
       blocks.length = 0; slots.clear();
     },

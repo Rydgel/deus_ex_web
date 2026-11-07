@@ -332,7 +332,12 @@ export function createScriptVmKernel(instance, memory) {
       free,
       merge: (header, before, time = 0) => x.light_merge(header >>> 0, before >>> 0, time >>> 0),
       colourTables: (out, red, green, blue) => x.light_colour_tables(out >>> 0, red | 0, green | 0, blue | 0),
-      modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
+      // One effect's modulation block (moving.rs MOD_BYTES layout): its factors written by the host, `modulationBegin` marks every entry
+      // unfilled, a merge fills the ones it reads, `modulationFill` makes the whole table (validation).
+      modulationBegin: block => x.light_modulation_begin(block >>> 0),
+      modulationFill: block => x.light_modulation_fill(block >>> 0),
+      // A light map's texel rectangle (padding included) as the atlas' RGBA words (light.rs light_pack).
+      pack: (texels, width, height, left, right, top, bottom, out) => x.light_pack(texels >>> 0, width >>> 0, height >>> 0, left | 0, right | 0, top | 0, bottom | 0, out >>> 0),
     }),
     // The moving (class 2) lights' composition and the light atlas conversion (moving.rs, moving-compose-kernel.mjs), over
     // blocks from the same allocator. null when the loaded core predates it.

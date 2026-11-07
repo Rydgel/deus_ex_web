@@ -71,7 +71,11 @@ if(scriptVmParam)globalThis.DEUS_EX_SCRIPT_VM=scriptVmParam;
 const fireKernelParam=new URLSearchParams(location.search).get('fireKernel');
 if(fireKernelParam)globalThis.DEUS_EX_FIRE_KERNEL=fireKernelParam;
 // The animated light-map merge runs in the Rust core (docs/static-lighting.md
-// "Rust kernel"); ?lightKernel=js keeps the JavaScript.
+// "Rust kernel"); ?lightKernel=js keeps the JavaScript. ?lightModulation=table makes an effect's whole modulation table each frame
+// (light-animation-kernel.mjs); the default makes the entries a merge reads. ?lightPack=js writes the merged regions into the light atlas
+// with LightAtlas.update's byte loop instead of the kernel's packed words (?lightPack=verify runs both). ?uploadBands=off sends every dirty
+// light atlas rectangle as its own texSubImage call (upload-bands.mjs). ?sceneWalk=full keeps the renderer's walk of the world root's
+// meshes (world.mjs).
 const lightKernelParam=new URLSearchParams(location.search).get('lightKernel');
 if(lightKernelParam)globalThis.DEUS_EX_LIGHT_KERNEL=lightKernelParam;
 // Moving lights recompose only the light maps a changed light reaches
@@ -184,7 +188,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?wordEq=ref loads script-vm-eq-ref.wasm (scripts/build-eq-ref.mjs), the core with core's memcmp-calling `==` on the word arrays that interp.rs
 // words_eq / ints_eq compare in line (docs/firefox-60fps-plan.md "Firefox wasm gap").
 for(const [param,global] of [['x87','DEUS_EX_X87'],['wordEq','DEUS_EX_WORD_EQ'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
-  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['sceneWalk','DEUS_EX_SCENE_WALK'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['sceneWalk','DEUS_EX_SCENE_WALK'],['lightModulation','DEUS_EX_LIGHT_MODULATION'],['lightPack','DEUS_EX_LIGHT_PACK'],['uploadBands','DEUS_EX_UPLOAD_BANDS'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['projectilePhysics','DEUS_EX_PROJECTILE_PHYSICS'],['rollingPhysics','DEUS_EX_ROLLING_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
   ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['walkPrelude','DEUS_EX_WALK_PRELUDE'],['showSelf','DEUS_EX_SHOW_SELF'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['outStruct','DEUS_EX_OUT_STRUCT'],['structArrays','DEUS_EX_STRUCT_ARRAYS'],['setRotation','DEUS_EX_SET_ROTATION'],['cleanupScan','DEUS_EX_CLEANUP_SCAN'],['foreachStart','DEUS_EX_FOREACH_START'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS'],['switchCache','DEUS_EX_SWITCH_CACHE'],['actorNames','DEUS_EX_ACTOR_NAMES'],['hasScan','DEUS_EX_HAS_SCAN'],['imageCheck','DEUS_EX_IMAGE_CHECK'],['hudDraw','DEUS_EX_HUD_DRAW'],['stringFrames','DEUS_EX_STRING_FRAMES'],['actorTail','DEUS_EX_ACTOR_TAIL']]) {
@@ -2418,6 +2422,8 @@ movingLights() { return world ? world.movingLightStats() : null; },
 sceneWalk() { return world ? world.sceneWalkStats() : null; },
 /** The HUD tile draw's counters (hud.mjs stats): runs and tiles drawn, and under ?hudDraw=verify the segments and pixels compared. */
 hudDraw() { return hudRenderer ? { mode: hudDrawMode(), ...hudRenderer.stats() } : null; },
+/** The class 1 light animation's last frame (animated, merged and changed light maps, ms) and the packed atlas writes' counters (?lightPack=). */
+lightAnimation() { return world ? world.lightAnimation() : null; },
 // Each fog page's GPU texture read back against its pixels (fog-pass.mjs pagesMatch): the texels that differ.
 fogPages() { return world?.fog ? world.fog.pagesMatch(renderer) : null; },
 /** Validation only: the 3D view's projection from the pass frame (on, the

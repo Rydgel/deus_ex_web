@@ -119,7 +119,7 @@ if (has('stats')) {
 if (has('anim')) {
   const mean = key => +(animStats.reduce((s, x) => s + x[key], 0) / animStats.length).toFixed(2);
   Object.assign(report, { animMs: +(animTimes.reduce((s, x) => s + x, 0) / animTimes.length).toFixed(3), animRecords: animStats[0].records,
-    animMerged: mean('merged'), animChanged: mean('changed'), animChangedSpatial: mean('changedSpatial') });
+    animMerged: mean('merged'), animChanged: mean('changed'), animChangedSpatial: mean('changedSpatial'), animPack: animStats.at(-1).pack });
 }
 if (world.movingLightStats) Object.assign(report, { compose: world.movingLightStats().compose, composeStats: world.movingLightStats().stats });
 if (globalThis.__dbgChanged) { const c = new Map(); for (const x of globalThis.__dbgChanged) c.set(x, (c.get(x) ?? 0) + 1); console.error([...c].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${v} ${k}`).join('\n')); }
