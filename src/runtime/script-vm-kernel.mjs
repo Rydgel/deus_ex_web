@@ -330,6 +330,16 @@ export function createScriptVmKernel(instance, memory) {
       colourTables: (out, red, green, blue) => x.light_colour_tables(out >>> 0, red | 0, green | 0, blue | 0),
       modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
     }),
+    // The moving (class 2) lights' composition and the light atlas conversion (moving.rs, moving-compose-kernel.mjs), over
+    // blocks from the same allocator. null when the loaded core predates it.
+    moving: typeof x.moving_compose !== 'function' ? null : Object.freeze({
+      memory,
+      alloc,
+      free,
+      colours: (out, steps, count) => x.moving_colours(out >>> 0, steps >>> 0, count >>> 0),
+      compose: (jobs, count, amounts, mods, colours) => x.moving_compose(jobs >>> 0, count >>> 0, amounts >>> 0, mods >>> 0, colours >>> 0),
+      convert: (input, count, out) => x.moving_convert(input >>> 0, count >>> 0, out >>> 0),
+    }),
     // Render.dll's time-varying spatial light functions and Shell
     // (spatial.rs, docs/static-lighting.md "Spatially dynamic effects"):
     // `tables` uploads the light manager's square-root and normal tables

@@ -104,6 +104,36 @@ export class LightAtlas {
     else this.dirtyPage(page);
     return tile;
   }
+  /** The tile rectangle `update` writes for `region`, as source columns and rows of the light map (-1 and the map's width or height are
+   * the padding); null when the light map has no tile of its size here. */
+  rectOf(lightmap, region) {
+    const tile = this.tiles.get(lightmap);
+    if (!tile || lightmap.width !== tile.width || lightmap.height !== tile.height) return null;
+    const { width, height } = lightmap;
+    return { left: region.minU ? region.minU : -1, right: region.maxU < width ? region.maxU - 1 : width,
+      top: region.minV ? region.minV : -1, bottom: region.maxV < height ? region.maxV - 1 : height };
+  }
+  /** `update` for texels converted elsewhere (moving-compose-kernel.mjs): `packed` holds from word `offset` the RGBA texels of `rect` (rectOf), rows
+   * and columns in order, as 32-bit little-endian words; the page receives the same bytes `update` would write, and the same upload
+   * bookkeeping follows. */
+  writePacked(lightmap, rect, packed, offset = 0, source = null) {
+    const tile = this.tiles.get(lightmap), { page, x, y } = tile, size = this.size, width = rect.right - rect.left + 1;
+    let words = page.pixels32;
+    if (!words || words.buffer !== page.pixels.buffer || words.byteOffset !== page.pixels.byteOffset)
+      words = page.pixels32 = new Uint32Array(page.pixels.buffer, page.pixels.byteOffset, page.pixels.length >> 2);
+    for (let row = 0, rows = rect.bottom - rect.top + 1; row < rows; row++) {
+      let dst = (y + rect.top + row) * size + x + rect.left, src = offset + row * width;
+      for (let end = src + width; src < end; src++, dst++) words[dst] = packed[src];
+    }
+    // The deferred rectangle keeps the packed texels it was made from, as `source` (an object with a `generation` that changes when
+    // those texels are overwritten) still has them at flush(): the upload then takes them as they are, where the page's rows would be
+    // copied into a packed scratch first.
+    if (page.uploaded || this.arrayUploaded) {
+      const entry = [x + rect.left, y + rect.top, width, rect.bottom - rect.top + 1];
+      if (source) entry.push(packed, offset, source, source.generation);
+      page.dirty.push(entry);
+    } else this.dirtyPage(page);
+  }
   /** Send deferred tile rectangles; without a renderer the pages re-upload.
    * Array layers take one texSubImage3D per rectangle under one pixel-store
    * setup per flush (the same texels copyTextureToTexture sends, without its
@@ -131,9 +161,13 @@ export class LightAtlas {
       array ??= this.beginArrayUpload(renderer);
       if (!array) { this.dirtyPage(page); continue; }
       const { gl } = array;
-      for (const [x, y, width, height] of rects)
-        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE,
-          this.rectangle(page.pixels, x, y, width, height));
+      for (const rect of rects) {
+        const [x, y, width, height] = rect;
+        // (The packed texels of a deferred rectangle, while they are intact and their memory has not been detached: writePacked.)
+        const packed = rect.length > 4 && rect[6].generation === rect[7] && rect[4].buffer.byteLength > 0
+          ? new Uint8Array(rect[4].buffer, rect[4].byteOffset + rect[5] * 4, width * height * 4) : this.rectangle(page.pixels, x, y, width, height);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, packed);
+      }
     }
   }
   /** A rectangle's texels as one tightly packed view: full-width rows are

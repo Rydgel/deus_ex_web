@@ -1029,6 +1029,15 @@ Each is a lowered kind with the JavaScript path as its reference and `js` / `ver
   that cannot be Rust's (a run JavaScript enters again after each statement, an out argument the image cannot address) is an
   S_YIELD and the JavaScript iterator stack keeps that loop (`iter.active` says which owns it).
 
+### November 7: moving-light composition and the light atlas conversion in Rust (implemented)
+
+`moving.rs` (`moving_colours`, `moving_compose`, `moving_convert`; `src/runtime/moving-compose-kernel.mjs`) composes the light maps a frame's moving
+(class 2) lights reach, and converts their atlas rectangles, in one call for the frame ([dynamic lighting](dynamic-lighting.md#rust-composition-and-the-atlas-conversion-2026-11-07),
+[Firefox 60 fps plan](firefox-60fps-plan.md#moving-lights-2026-11-07)). JavaScript keeps the light list, the reach, the spatial bytes, the colours and the
+light atlas pages; the kernel keeps, per light map, a block with its contributions' words and spatial bytes while its list of contributions is the same
+(lists that live a frame come from the batch's scratch). No statics (the reserved region is nearly full); everything is in `alloc` blocks.
+`?movingCompose=js|verify` and `MOVING_COMPOSE=` keep the JavaScript bodies as the reference.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

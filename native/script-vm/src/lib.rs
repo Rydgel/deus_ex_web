@@ -28,6 +28,7 @@ mod fall;
 mod fly;
 mod laser;
 mod light;
+mod moving;
 mod spatial;
 mod fog;
 mod galaxy;

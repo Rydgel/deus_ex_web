@@ -396,6 +396,40 @@ frames, a seeded stand-in for the frustum test on even ones): every drawn
 light map equals the full mode's (25,133, 89,774 and 113,739 map-frames on
 Training, Island and the Airfield).
 
+### Rust composition and the atlas conversion (2026-11-07)
+
+The per-texel work of the incremental mode runs in the Rust core (`native/script-vm/src/moving.rs`, driven by
+`src/runtime/moving-compose-kernel.mjs`; measured in [Firefox 60 fps plan](firefox-60fps-plan.md#moving-lights-2026-11-07)):
+`addDirect`'s saturating add onto the float texels and `light-atlas.mjs update`'s float to byte conversion, with the atlas rectangle's
+one-texel padding, for every light map recomposed in a frame in one call. Both JavaScript bodies stay as the references
+(`?movingCompose=js`, `MOVING_COMPOSE=js`); `?movingCompose=verify` runs both and compares every float (as bits), every count of texels
+written and every atlas byte (`deusExViewer.movingLights().stats.verify`, `hitch-run.mjs --eval`).
+
+* A texel channel is a float32 that the reference reads as a double, adds the colour's amount to (`Math.min(127, (b·step) >> 16) / 255`, a
+  double) and stores as `Math.min(127/255, sum)` rounded to float32. Rust: `((p as f64) + amount).min(MAX) as f32`; the amounts are made
+  in Rust from the int32 steps (`(b·step) as i64 as i32 >> 16`, the product being an exact double and `>>` an int32 shift), a colour with
+  a step outside int32 composes in JavaScript.
+* A modulated light (TorchWaver, FireWaver, WateryShimmer) maps each nonzero spatial byte through the frame's table at
+  `(index & 255) << 8 | byte` (`index` counting every texel of the contribution's rectangle from 0). The entries are filled when a texel
+  first asks, by light.rs `modulation_entry`, the function the class 1 kernel's `light_modulation` fills its table with; the table of an
+  effect is cleared when its noise input (frame index, or the noise version for WateryShimmer) changes, as the reference's `modulator` does.
+* The atlas byte of a float32 sample `s` is `Math.round(Math.max(0, Math.min(1, s)) * 255)` stored through a Uint8Array. Rust computes
+  `floor(v * 255 + 0.5)` on the clamped double (a float32 times 255 has at most 32 significant bits, so the sum with 0.5 is exact), four
+  texels at a time on wasm simd128 with the same operations. `scripts/validate-moving-convert.mjs` compares the core with the reference
+  for **all 2^32 float32 bit patterns** (16,777,214 NaNs, stored as 0, included).
+* What the bytes are: a static texel is `fround(k / 255)` for a byte `k`, a contribution adds `e / 255` with an integer `e` in 0..127, and
+  the sum is held at `127 / 255`. Each step moves the float by about 1e-7 against the 2e-3 that separates two bytes, so the atlas byte of
+  any chain of contributions is the integer chain `min(127, k + e1 + e2 ...)`; `validate-moving-convert` checks every static byte against
+  every amount the colour tables produce (14.6 million steps, chains up to four contributions deep). This is the reason the light maps' own
+  floats are still produced by the float arithmetic above (they are what `lighting.mjs` and the validators read): the integer reading is
+  evidence for the bytes, not a substitute for the floats.
+* Contributions whose spatial bytes are all 0 ("dead": a light behind the surface, a rectangle the light cannot reach) write no texel in any
+  frame, since the loop skips a 0 byte before and after the modulation; they are left out of the job, and a light map with nothing else
+  to recompose is not recomposed (the reference recomposes it unchanged every frame).
+* A turning spotlight (`LE_StaticSpot`, `LE_Spotlight`: only the Rotation of the light's fields changes) keeps the surfaces it reaches,
+  their rectangles, incidence and grids (none depends on the axis) and makes its spatial bytes again. `?movingCompose=verify` makes the
+  reach in full beside it and compares.
+
 ### Cost
 
 Browser, default worker mode, Linux host (Ryzen 9 8945HS), 1920×1080,
