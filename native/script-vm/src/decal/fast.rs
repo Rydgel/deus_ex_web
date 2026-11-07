@@ -220,7 +220,7 @@ fn make(key: [u32; 9]) -> Entry {
 unsafe fn edge(cur: V, prev: V, n: V, index: u32) -> &'static Entry {
     let key = [cur[0], cur[1], cur[2], prev[0], prev[1], prev[2], n[0], n[1], n[2]];
     let e = slot(index);
-    if e.valid && e.key == key {
+    if e.valid && crate::interp::words_eq(&e.key, &key) {
         stat(0);
         if mode() == MODE_VERIFY {
             let fresh = make(key);

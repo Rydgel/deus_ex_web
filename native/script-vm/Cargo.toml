@@ -12,6 +12,8 @@ crate-type = ["cdylib"]
 selftest = []
 # every Ext operation runs x87_ref.rs, the u128 bodies x87.rs replaced (the A/B build: ?x87=ref); not in the shipped module.
 x87_ref = []
+# every word-array equality in the hot paths is core's `==` (a memcmp call) again, as before 2026-11-07 (interp.rs words_eq); the A/B build; not in the shipped module.
+eq_ref = []
 
 [profile.release]
 opt-level = 3

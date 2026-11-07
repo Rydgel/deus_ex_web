@@ -203,7 +203,7 @@ fn tail(handle: u32, base: u32, depth: u32, dt: f64) {
     let rotation = rotator(address(base, M_ROTATION));
     let desired = rotator(p_at(base, P_DESIRED_ROTATION));
     let rate = rotator(p_at(base, P_ROTATION_RATE));
-    if physics != 0xa && (rotation != desired || rate[2] > 0) {
+    if physics != 0xa && (!crate::interp::ints_eq(&rotation, &desired) || rate[2] > 0) {
         // physicsRotation: `motionFlags = (motionFlags & ~0x20) | 0x40`; the
         // host proved both bools are bits of the one motion word.
         count(0);

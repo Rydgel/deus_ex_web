@@ -33,11 +33,15 @@ let compiled = null;
  * bodies of x87_ref.rs, the arithmetic x87.rs ran until 2026-11-06), for A/B runs of the limb arithmetic. */
 export const x87Reference = () => (typeof process !== 'undefined' && process.env?.X87 === 'ref') || globalThis.DEUS_EX_X87 === 'ref';
 
+/** WORD_EQ=ref (`?wordEq=ref`) loads script-vm-eq-ref.wasm instead (scripts/build-eq-ref.mjs: the same core with core's `==` on word arrays, a
+ * memcmp call, where interp.rs words_eq / ints_eq compare the words in line), for A/B runs (docs/firefox-60fps-plan.md "Firefox wasm gap"). */
+export const wordEqReference = () => (typeof process !== 'undefined' && process.env?.WORD_EQ === 'ref') || globalThis.DEUS_EX_WORD_EQ === 'ref';
+
 /** The compiled module, fetched and compiled once for every instance (the
  * trace kernel, trace-kernel.mjs, instantiates it too). */
 export function compileScriptVm() {
   return compiled ??= (async () => {
-    const url = new URL(x87Reference() ? './script-vm-ref.wasm' : './script-vm.wasm', import.meta.url);
+    const url = new URL(x87Reference() ? './script-vm-ref.wasm' : wordEqReference() ? './script-vm-eq-ref.wasm' : './script-vm.wasm', import.meta.url);
     let bytes;
     if (url.protocol === 'file:') {
       const module = 'node:fs/promises';

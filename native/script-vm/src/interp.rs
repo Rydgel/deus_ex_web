@@ -632,6 +632,44 @@ pub extern "C" fn vm_frame_push(size: u32) -> u32 {
     }
 }
 
+/// `a == b` for word arrays: every word's difference ORed, no call. Core's `==` on `[u32; N]` and `[i32; N]` is a `memcmp` call, and
+/// compiler-builtins' memcmp is a byte loop: the 36-byte compare of a decal edge's table entry took 29 ns in Firefox's wasm against 8 ns
+/// in V8's (docs/firefox-60fps-plan.md "Firefox wasm gap"). `--features eq_ref` builds the `==` it replaces (the A/B arm `?wordEq=ref`).
+#[cfg(not(feature = "eq_ref"))]
+#[inline(always)]
+pub(crate) fn words_eq<const N: usize>(a: &[u32; N], b: &[u32; N]) -> bool {
+    let mut diff = 0u32;
+    let mut i = 0;
+    while i < N {
+        diff |= a[i] ^ b[i];
+        i += 1;
+    }
+    diff == 0
+}
+#[cfg(feature = "eq_ref")]
+#[inline(always)]
+pub(crate) fn words_eq<const N: usize>(a: &[u32; N], b: &[u32; N]) -> bool {
+    a == b
+}
+/// `words_eq` for `[i32; N]`.
+#[inline(always)]
+pub(crate) fn ints_eq<const N: usize>(a: &[i32; N], b: &[i32; N]) -> bool {
+    #[cfg(not(feature = "eq_ref"))]
+    {
+        let mut diff = 0u32;
+        let mut i = 0;
+        while i < N {
+            diff |= (a[i] ^ b[i]) as u32;
+            i += 1;
+        }
+        diff == 0
+    }
+    #[cfg(feature = "eq_ref")]
+    {
+        a == b
+    }
+}
+
 #[inline(always)]
 pub(crate) fn load32(addr: u32) -> u32 {
     unsafe { read_unaligned(addr as usize as *const u32) }
@@ -1842,7 +1880,7 @@ impl Run {
         // 0 left alone (static or immovable), 1 unchanged, 2 riders or a Brush (JavaScript), 3 stored
         let decision = if load32(stat) & s_mask != 0 || load32(movable) & m_mask == 0 {
             0
-        } else if load_rotator(rotation) == want {
+        } else if ints_eq(&load_rotator(rotation), &want) {
             1
         } else if live(load32(brush)) != 0 || load8(standing) != 0 {
             2
@@ -2718,7 +2756,7 @@ impl Run {
                 self.skip(2);
                 let a = self.rotator(SELF);
                 let b = self.rotator(SELF);
-                let v = (a == b) == (kind == ROTATOR_EQ);
+                let v = ints_eq(&a, &b) == (kind == ROTATOR_EQ);
                 self.verify_op(node, r, ints3(a), ints3(b), [v as i32 as f64, 0.0, 0.0]);
                 v
             }

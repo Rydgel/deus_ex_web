@@ -338,7 +338,7 @@ pub(crate) fn fcoords_axes(rotation: [i32; 3]) -> [[f64; 3]; 4] {
         let h = ((rotation[0] as u32).wrapping_mul(0x9e37_79b1) ^ (rotation[1] as u32).wrapping_mul(0x85eb_ca6b)
             ^ (rotation[2] as u32).wrapping_mul(0xc2b2_ae35)) as usize >> 27;
         let slot = &mut (*core::ptr::addr_of_mut!(FCOORDS_CACHE))[h];
-        if slot.precision == precision && slot.key == rotation {
+        if slot.precision == precision && crate::interp::ints_eq(&slot.key, &rotation) {
             FCOORDS_STATS[0] += 1;
             return slot.axes;
         }

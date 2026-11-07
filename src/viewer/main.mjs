@@ -179,7 +179,9 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
-for(const [param,global] of [['x87','DEUS_EX_X87'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
+// ?wordEq=ref loads script-vm-eq-ref.wasm (scripts/build-eq-ref.mjs), the core with core's memcmp-calling `==` on the word arrays that interp.rs
+// words_eq / ints_eq compare in line (docs/firefox-60fps-plan.md "Firefox wasm gap").
+for(const [param,global] of [['x87','DEUS_EX_X87'],['wordEq','DEUS_EX_WORD_EQ'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['projectilePhysics','DEUS_EX_PROJECTILE_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],

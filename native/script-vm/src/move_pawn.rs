@@ -249,7 +249,7 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
     let query_time = time;
     let query_position = [f(start[0] + displacement[0]), f(start[1] + displacement[1]), f(start[2] + displacement[2])];
     // playerMove after the query.
-    let same_rotation = rotation == source_rotation;
+    let same_rotation = crate::interp::ints_eq(&rotation, &source_rotation);
     if tiny && (same_rotation || standing_count(base) == 0) {
         store_rotator(rotation_at, rotation);
         return finish(query_time, hit, query_time > 0.0, query_delta, query_position, &records, true);
