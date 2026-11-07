@@ -2418,6 +2418,189 @@ Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84, 03_NYC_Airfield 46ed0d32a
   texture with the palette on the GPU would send a quarter of it, but changes the shader of every animated texture.
 * The Mac and headed runs are not measured.
 
+### Firefox wasm gap (2026-11-07)
+
+The task: the previous step measured the Rust decal attach (`decal_attach`) at 0.34 ms a call in Firefox against 0.10 ms in Node, flat over the
+session, and asked whether SpiderMonkey runs our module slower in general (tiering, codegen constructs, build profile), which would slow every
+Rust path in Firefox. **Answer: no general slowdown exists. Replaying the same recorded calls against the same `.wasm`, Firefox runs 0.9 to 1.3
+times V8's time on every export measured except one, and that one was a `memcmp` call in the decal edge table, now compared in line (0.51 times
+its old time in Firefox, 0.69 in V8, and the A/B below).** The 3.4 times of the previous step compared a Firefox page with a Node process; V8 inside
+a page is as far from Node as Firefox is (below). Master dbc3c047 (the Dockyard spawns step merged), headless Linux (Ryzen 9 8945HS, Firefox 155,
+Chromium 153, Node 26), the Mac is not measured.
+
+**Tools** (all measurement only; the snapshots are in `.work/`, outside Git):
+* `scripts/wasm-gap-hook.mjs` (`node --import`): wraps every instance's exports in a real Node run. `GAP_STATS=FILE` writes calls and inclusive ms of
+  each export with the ordinals of the calls at the 50th, 75th, 90th and 99th percentile of their duration; `GAP_SNAP=DIR GAP_SNAPS=name:n,...`
+  keeps, at the n-th call of an export, the whole linear memory before it, the arguments, the shadow stack pointer, the imports the call made (name,
+  arguments, result) and the memory's hash after it; `GAP_SMAPS=FILE` the big anonymous mappings' size, resident set and transparent huge pages.
+* `scripts/wasm-gap-replay.mjs` (+ `wasm-gap-core.mjs`): loads a snapshot into a fresh memory after instantiating the module (its data segments
+  rewrite the statics at instantiation), checks that one replayed call gives the recorded result and memory hash, finds the pages the call changes
+  and restores only them before each timed call, then times the call for some seconds, in Node, Firefox or Chromium (a static server, `page.evaluate`)
+  against any `.wasm` (`--wasm`), with Firefox preferences (`--prefs`), a cache-cold mode (`--cold MIB` reads that much other memory before each
+  call) and a Gecko profile (`--profile`). Firefox's clock steps by 20 us even with `privacy.reduceTimerPrecision` off, so a call shorter than
+  that is timed in batches (the difference of K calls with their restores and K restores).
+* `scripts/wasm-gap-page.js` with `hitch-run.mjs --init-script FILE --ff-prefs JSON --eval 'window.__gapStats()'` (both new): the same inclusive
+  per-export timer in a live page, counted from 6 s after the HUD shows 100 health.
+* The cases: the Dockyard spot (2623, 6205, 20) yaw 32768 in `bench-sim` (`PLACES=one-spot file PER=100000 ... --scenario places-replay.mjs`, digest
+  `eba45015fec39e3f`, unchanged by the hook), 12 calls at the 50th to 90th percentile of their durations, and 3 `fog_map` calls of a
+  `fog-capture-play.mjs` capture of 02_NYC_Underground (2,616 distinct calls) replayed through `fog-replay.mjs`.
+
+**Identical inputs, each export replayed in a loop** (mean us per call; `replay exact` = the call gave the recorded memory hash; ratio = Firefox over
+Node):
+
+| Case (HEAD module) | Node (V8) | Chromium (V8) | Firefox | Firefox / V8 |
+|---|---:|---:|---:|---:|
+| `decal_attach` (1,633 edge-table hits, 8 misses) | 61.1 | 61.1 | 86.6 | **1.42** |
+| `decal_attach` (another decal) | 58.6 | 58.2 | 83.6 | **1.43** |
+| `area_scan` | 12.9 | 12.4 | 15.5 | 1.20 |
+| `destroy_scan` (two calls) | 9.9, 16.8 | 9.5, 16.6 | 9.6, 17.1 | 0.97, 1.02 |
+| `lc_scan` / `lc_line` | 12.5 / 0.64 | 12.8 / - | 13.4 / 0.62 | 1.08 / 0.97 |
+| `level_distance` / `level_settled` / `level_desc_carry` | 40.9 / 11.4 / 6.8 | 40.0 / 11.5 / 7.0 | 39.1 / 12.1 / 6.2 | 0.96 / 1.07 / 0.91 |
+| `nav_scout` | 19.2 | 19.1 | 18.5 | 0.96 |
+| `ai_tick`, with the 253 and 265 imports of its recorded call stubbed (their results and memory writes replayed) | 184.3, 215.5 | 185.5, 227.8 | 200.8, 233.7 | 1.09, 1.08 |
+| `move_pawn` (8 imports) | 10.8 | 14.8 | 13.7 | 1.27 |
+| `fog_map`, the simd128 block loop (three calls of 8, 63, 73 us) | 7.4, 62.5, 73.4 | 7.3, 61.4, 72.5 | 8.5, 71.1, 83.5 | 1.15, 1.14, 1.14 |
+
+On master 2534cbfb, before `Obj::has` walked the set bits (the previous step's change), `destroy_scan` was 27.6 (Node) against 49.1 us (Firefox) and
+`area_scan` 22.9 against 36.9: the 51-position loop was the other Firefox-specific cost, and it is gone. The interpreter's `vm_run` calls recorded here are
+nanoseconds (a script that returns at once) and `vm_statement` calls an import that runs the module again (the hook marks such a case `nested` and
+the replayer skips it), so **the interpreter's own match functions are not covered by a replay: open** (below).
+
+**The same exports live** (Dockyard spot, 25 s, us per call, inclusive; the call mixes differ a little between runs):
+
+| Export | Node `bench-sim` | Chromium inline page | Firefox inline page (two runs) | Firefox / Chromium |
+|---|---:|---:|---:|---:|
+| `decal_attach` | 82 | 133 | 169, 183 | 1.32 |
+| `destroy_scan` | 62 | 55 | 71, 76 | 1.33 |
+| `level_distance` | 109 | 268 | 318, 274 | 1.10 |
+| `area_scan` | 12.8 | 15.8 | 19.7, 19.2 | 1.23 |
+| `lc_scan` / `lc_line` | 12.4 / 1.7 | 16.2 / 3.0 | 17.9, 16.3 / 3.9, 3.5 | 1.06 / 1.21 |
+| `render_scan` | - | 8.3 | 10.4, 9.7 | 1.21 |
+
+Both browsers' pages run these exports 1.2 to 2.5 times slower than Node does, `level_distance` most (109 us in Node, 268 in Chromium, 274 to
+318 in Firefox, while a replayed loop takes 41 in all three): the surroundings of the call in a page (the software GL threads of this host share
+the cores and the caches, the rest of the frame evicts the actors the scan walks), not the engine, which is why comparing a Firefox page with a Node
+process measured an engine gap that Chromium shows too. The Firefox pages ran at 1.0 to 1.4 times Chromium's on the wasm-only exports. The wasm
+function bodies are about a tenth of the main thread in a Firefox profile of the spot (6.5 s of 58.7 s sampled, with the collector's lines in it): a
+uniform 1.4 times on all of them would be 1.5 ms of a 30 ms frame, and nothing like it exists.
+
+**Function by function in situ** (the Dockyard spot, one name-section build of HEAD; V8: the simulation worker's profile in Chromium, 2,634 frames;
+Gecko: the Firefox page, 1,206 frames; self time in us a frame; V8 inlines wasm callees into their callers, so self time moves between functions
+and only the order of magnitude means anything):
+
+| Function | V8 | Gecko | ratio |
+|---|---:|---:|---:|
+| `decal::fast::edge` | 24 | 107 | **4.55** |
+| `render::Obj::of` | 59 | 128 | 2.15 |
+| `destroy_scan` | 95 | 163 | 1.72 |
+| `render_scan` (the page's thread in Chromium's worker mode; compare with care) | 215 | 294 | 1.37 |
+| `level_distance` | 87 | 127 | 1.46 |
+| `hash::multi_line` | 104 | 149 | 1.44 |
+| `trace::ray` | 67 | 105 | 1.57 |
+| the interpreter's `Run::statements`, `boolean`, `object`, `call`, `effect`, `int`, `float` (together) | 333 | 597 | 1.79 |
+
+`edge` is the outlier by far, and the cause below is its. The interpreter's match functions come out 1.8 times, which no replay confirms (its
+recorded calls are either nanoseconds or nested, above) and which may be the two profilers' attribution: **open**.
+
+**Ruled out** (Firefox replay of six cases on the 2534cbfb module, mean us per call, 2.5 s each, flat in time from the first second; the live
+runs under the same preferences differ by less than the 15 percent spread between sessions):
+
+| Case | default | baseline only | Ion only | lazy tiering off | unroll loops | no AVX | inlining level 4 | no huge memory |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `area_scan` | 37.1 | 45.8 | 26.7 | 37.3 | 37.3 | 36.8 | 36.9 | 42.1 |
+| `decal_attach` | 88.6 | 147.3 | 71.7 | 71.6 | 87.6 | 86.7 | 87.0 | 99.9 |
+| `destroy_scan` | 43.7 | 63.8 | 44.0 | 44.5 | 49.6 | 40.9 | 49.4 | 48.5 |
+| `lc_scan` | 13.8 | 30.0 | 13.8 | 13.8 | 13.6 | 14.0 | 14.2 | 14.8 |
+| `level_distance` | 95.0 | 135.9 | 82.7 | 82.2 | 94.9 | 82.6 | 95.4 | 87.6 |
+| `nav_scout` | 34.8 | 88.7 | 41.7 | 41.4 | 34.7 | 35.1 | 34.8 | 37.9 |
+
+* *Tier-up lag*: the default is lazy tiering on Ion, flat from the first second (Ion code, not baseline: baseline only is 1.2 to 2.5 times slower); Ion
+  only or no lazy tiering are 0 to 28 percent faster on three cases and 20 percent slower on `nav_scout`, which the live runs under each preference
+  (`hitch-run --ff-prefs`, 5 to 9 percent either way, inside the sessions' spread) do not show. Nothing a page can set; a warm-up has nothing to tier.
+* *Bounds checks*: disabling huge memory (explicit bounds checks) costs 5 to 15 percent, so the module runs with guard pages.
+* *Transparent huge pages*: the big anonymous mappings are mostly huge pages in Node (26 to 54 of 36 to 77 MiB) and in Firefox's content process
+  (6 to 28 of 9 to 32 MiB); a fresh 50 MiB memory is 100 percent huge in Node and 96 in Firefox.
+* *Module shape*: 623 functions, the largest 40 KB, no function Ion could decline; no i128 (the x87 limbs are u64: `Ext` add and multiply are
+  6 and 3 percent of `decal_attach`, 4.1 and 2.0 us in Firefox against 3.8 and 1.8 in V8); `lto`, `codegen-units = 1`, `opt-level = 3`, `panic = abort`
+  already. LLVM inline thresholds of 1,000 and 5,000 change the statics' layout (every snapshot of the module fails its hash), so they would need
+  new snapshots; not pursued after the cause below.
+* *Timer*: Playwright's Firefox rounds `performance.now` to 1 ms; with `privacy.reduceTimerPrecision` off it steps by 20 us.
+
+**The cause: a `memcmp` call.** Gecko and V8 profiles of the replayed `decal_attach` on 2534cbfb, self time per call (us): V8 `gather_nodes` 22.5,
+`edge` 13.6, `find_surface` 11.0; Firefox `edge` **47.2**, `gather_nodes` 17.3, `find_surface` 14.3. `edge` (`decal/fast.rs`) looks up the edge table
+and compares the 36-byte key with `e.key == key`, and Rust's `==` on `[u32; 9]` is a call to `memcmp`, which `compiler_builtins` implements as a
+byte loop. A decal attach makes 1,633 such calls (`decal_fast_stats`: 1,633 hits, 8 misses): 29 ns each in Firefox, 8 ns in V8. The wasm asm
+(`cargo rustc ... -- --emit asm`) has eleven `call memcmp` sites: this one, the FCoords cache's key compare (`percep.rs`, 12 bytes), the
+rotator `==` and `!=` of the interpreter (`Run::boolean`, `Run::effect`), `move_source` and `pawn_phys::perform` (12 bytes), the verify-mode
+compare of `gather` and `light_merge`'s texel rows.
+
+**The change** (`interp.rs` `words_eq`, `ints_eq`): the XOR of all words ORed, one inlined branch-free test, at `decal/fast.rs edge`, `percep.rs
+fcoords_axes`, `move_pawn.rs`, `pawn_phys.rs perform` and the interpreter's rotator `==`/`!=`; `light_merge` (a texel row, tens of bytes, 35 calls a tick,
+0.007 ms) and the verify-mode compare keep `memcmp`. Equality of the same words, so every result is the same bits. The old `==` is the cargo
+feature `eq_ref` (not in the shipped module), loaded in a page by `?wordEq=ref` (`WORD_EQ=ref` in Node) from `script-vm-eq-ref.wasm`
+(`node scripts/build-eq-ref.mjs`, git-ignored), like `?x87=ref`.
+
+**Replay after the change** (HEAD module, `head` = shipped before, `eqref` = the old `==` rebuilt, `eqfix` = the change; mean us per call; the
+`*` is the hash of the whole memory, which differs in the shadow stack's frames; below, the same call run by `head` and `eqfix` leaves every byte
+outside the first MiB equal, and the same result):
+
+| Case | Node head | eqref | eqfix | Firefox head | eqref | eqfix |
+|---|---:|---:|---:|---:|---:|---:|
+| `decal_attach` | 62.7 | 61.0 | **43.0*** | 86.9 | 86.6 | **44.0*** |
+| `decal_attach` (another) | 58.8 | 58.6 | **41.0*** | 84.0 | 84.3 | **41.5*** |
+| every other case (10) | | | within 2 % | | | within 3 % |
+
+Firefox over Node on `decal_attach`: 1.42 before, 1.02 after.
+
+**A/B.** Firefox inline, headless, interleaved pairs (the arms' order alternating, each pair's two sessions under one hold of the heavy lock,
+pinned to CPUs 4-7,12-15, 25 s sessions counted from 5 s after the map, god mode, idle), new = the change, old = `?wordEq=ref` of the same tree
+(the pairs 1 to 3 at the Dockyard ran through `hitch-ab.mjs --guard --cpus`, the rest through a script holding the lock for a pair); ms, pair
+differences new - old with the standard error of their mean and the pairs better:
+
+| 8 pairs | new | old | new - old | se | pairs better |
+|---|---:|---:|---:|---:|---:|
+| **Dockyard** (2623, 6205, 20) yaw 32768: page `animate` mean | 27.28 | 28.11 | **-0.83** | 0.84 | 7 of 8 |
+| page slowest tenth | 36.81 | 38.31 | **-1.50** | 1.35 | 6 of 8 |
+| tick `p.tick` mean | 13.68 | 14.21 | -0.53 | 0.44 | 6 of 8 |
+| tick slowest tenth | 21.03 | 22.10 | -1.07 | 0.84 | 6 of 8 |
+| `p.render` (not touched: the control) | 2.89 | 3.00 | -0.11 | 0.13 | 5 of 8 |
+| **Island** (the start, idle): page mean | 16.26 | 16.84 | **-0.58** | 0.32 | 5 of 8 |
+| page slowest tenth | 19.39 | 20.36 | **-0.98** | 0.79 | 6 of 8 |
+| tick mean | 6.76 | 7.07 | -0.31 | 0.15 | 5 of 8 |
+| tick slowest tenth | 9.01 | 9.47 | -0.45 | 0.32 | 6 of 8 |
+| `p.render` (control) | 2.32 | 2.38 | -0.06 | 0.06 | 4 of 8 |
+
+Page-mean differences by pair: Dockyard -2.5 -0.5 -0.2 -0.5 -2.5 -2.3 -2.6 +4.4 (the last pair is a slow session of the new arm; the sessions'
+spread is +-1.5 ms, as in the previous steps); Island -1.8 -1.1 +0.4 +0.2 +0.3 -0.2 -0.8 -1.7. Both spots meet the bar (0.3 ms of the page mean or
+0.5 of its slowest tenth) on their point estimates, with standard errors as large as the effects: **shipped on that evidence, not as a
+measured significance**. The export timer in three sessions of each arm at the Dockyard (2,408 and 2,320 ticks) puts the identified part at
+`decal_attach` 126 against 177 us a call (0.275 against 0.359 ms a tick), `ai_tick` 275 against 291 us (the FCoords cache's compare) and
+`level_tick_batch` 10.30 against 11.00 ms a tick; the other exports within 5 percent. The decal and AI parts are about 0.1 ms a tick; the rest of
+the 0.5 to 0.8 ms of tick the pairs show is not attributable to a timed export (the sessions' spread covers it).
+
+**Checks** (on the final source; `.work/gap/` scripts under the heavy lock):
+* `npm run build:wasm` and `node scripts/build-eq-ref.mjs`: no warnings. `npm test`: 980 tests, 976 passed, 4 skipped, 0 failed.
+* The six sim digests unchanged: Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84, 03_NYC_Airfield 46ed0d32ae5b56af, 06_HongKong_WanChai_Market
+  80d27b37e0944d88, 15_Area51_Bunker 764a7bdffd2ebe59, 09_NYC_Dockyard e53f348673f1247b; the `WORD_EQ=ref` build gives the Island's (and, in an earlier
+  build of the same change, the Dockyard's); the one-spot Dockyard run of the study (`eba45015fec39e3f`) is the same with the hook, before and after.
+* Validators (`run-validators.mjs --filter`): the seven decal ones (`decal-fast`, `decals-play`, `decal-attach`, `decal-vertices-play`, `decal-render`,
+  `decal-startup`, `decal-order`), `perception-kernel`, `pawn-move-kernel`, `pawn-physics-kernel`, `locomotion-kernel`, `ai-visibility` and its runtime one,
+  `scripted-pawn-tick`, `script-vm-interp`, `native-pawn-rotation`, `native-actor-rotation`, `native-mover-move` and `native-set-rotation-riders`
+  (which reads the mover-move report, absent in a fresh worktree): all pass; the runner skips `pawn-perception` and `pawn-locomotion` as before.
+* The recorded `decal_attach` (two), `level_distance`, `destroy_scan` and `area_scan` calls run by the module before and the module after the change from
+  the same snapshot: the same result and the same bytes everywhere outside the shadow stack (the first MiB), 0 bytes differing.
+
+
+**Open.**
+* The interpreter's match functions (above): 1.8 times in the profiles, no replay. A replay of `vm_statement` needs the imports that run the module
+  again (`nested` in the hook) to be replayed too.
+* Why a page is 1.2 to 2.5 times slower than Node on the same exports in both browsers (`level_distance` 41 us hot, 109 live in Node, 270 to 320 in
+  the pages). My guess, not tested: the host's software GL threads and the frame's other work share the cores and evict the actors the scans walk.
+  `hitch-run --size` 800x500 and 360x240 never made the map current (300 s timeout) on this tree, so the check with a small canvas was not made.
+* `light_merge`'s texel-row compare (35 calls a tick, 0.007 ms) and `gather`'s verify-mode compare still call `memcmp`; the 184 `memory.fill` and
+  `memory.copy` sites are builtin calls in SpiderMonkey (0.4 us of a `decal_attach`'s 96 in its profile); no replay case was slow because of them.
+* The Mac (Apple M2 Pro, Safari and Firefox there) is not measured.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

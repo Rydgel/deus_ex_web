@@ -27,3 +27,4 @@ reports/
 /Reference/
 embed/**/out/
 src/runtime/script-vm-ref.wasm
+src/runtime/script-vm-eq-ref.wasm
