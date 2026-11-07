@@ -2703,6 +2703,135 @@ Ship bar (0.3 ms off the page mean or 0.5 off the slowest tenth on one of the tw
   and swaps `runtime.native` each frame, which binding once would change for every other Canvas native call.
 * **DrawText with a string argument** (14 a frame: `js effect 0x19(... native 1282(..., string))`) and the window width and height reads (35 a frame) are JavaScript nodes of 1 to 3 us each.
 
+### Tick slowest tenth (2026-11-07)
+
+The task: cut the slowest tenth of the simulation tick in Firefox inline on the four maps still over budget (master 4951bc30, headless Linux,
+page p95 / tick mean: Island 19 ms / 5.94, Battery Park 19 / 5.73, Area 51 bunker 18 / 4.97, Airfield 17 / 4.95). **Result: three families
+were found in Gecko profiles, ported to Rust exactly and verified; none reaches the ship bar. In the interleaved A/B the tick mean moves by
++0.07 ms (Battery Park rest spot) and -0.11 ms (Island scan route), the tick's slowest tenth by +0.03 and -0.29 ms, the page mean by +0.26 and
+-0.02 ms. The code is on the branch `tick-tail-unshipped` (commit d8d74a4e); this branch carries these notes only.** The profiles over-promised: they
+put the three families at 0.4 to 0.6 ms a frame at both places, the A/B finds at most 0.1 ms of the tick mean (below).
+
+**Reproduction.** Profiles: `hitch-run.mjs --browser firefox --map 01_NYC_UNATCOIsland --mode scan --god --seconds 60 --profile FILE` and `--map
+02_NYC_BatteryPark --mode idle --god --seconds 40 --place '{"location":[2025,-3396,263],"rotation":[0,32768,0]}' --profile FILE`, read with
+`gecko-slow-ticks.mjs`, `gecko-under.mjs` and `gecko-phase.mjs` (all pinned to CPUs 4-7,12-15 under the heavy lock). The Node census of the events
+the Island sends through `ProcessEvent` is a bench-sim scenario that wraps `runtime.processEvent` (300 ticks, `.work`, not kept).
+
+**Ranking** (Gecko profile, ms a drawn frame by the Rust core's import: rest frames / slowest tenth of ticks; the Island run 3,549 drawn
+frames with a tick of 6.17 ms in the rest and 9.59 in the tenth, the Battery Park run 1,892 with 5.85 and 8.74):
+
+| Family | Island rest / tenth | Battery Park rest / tenth | note |
+|---|---:|---:|---|
+| `js_eval` (flat: natives, field assignments, calls the Rust VM does not lower) | 0.79 / 1.26 | 0.73 / 0.94 | no family above 0.15 |
+| `js_walk_prelude` (the walking pawns' surface prelude) | **0.39 / 0.64** | 0.28 / 0.35 | the scan 0.17 (Rust 0.08), the WalkTexture event 0.14 |
+| the player's ShowSelf (`tickStandaloneActor` > `showSelf`) | **0.20 / 0.22** | 0.16 / 0.21 | a JavaScript walk over about 75 pawns, two generic reads each |
+| `js_tick_physics`: PHYS_Rolling of two TrashPapers | 0 | **0.21 / 0.33** | `playerMove` 0.18; PHYS_Interpolating 0.10 / 0.13 |
+| `js_bool` (AttachDecal's glue, shadows reattaching) | 0.16 / 0.43 | 0.16 / 0.22 | the decal families of earlier steps |
+| `js_move_riders`, `js_move_hash`, `js_move_hits` | 0.17, 0.16, 0.07 | 0.13, 0.11 | the collision hash and rider scans stay JavaScript |
+| `js_anim_notify_event`, `js_object`, `js_tick_resume` | 0.06, 0.07, 0.02 / 0.19, 0.15, 0.08 | 0.07, 0.10, 0.02 / 0.25, 0.27, 0.15 | NPC state changes (the tenth) |
+| `js_tick_refresh` (the host's refresh after hand-backs) | 0.18 / 0.19 | | proportional to the number of hand-backs |
+| in Wasm (the Rust core itself) | 0.98 / 1.41 | 1.06 / 1.56 | at the Battery Park spot +0.4 of the tenth is the event manager's perception |
+| JavaScript with no Wasm under it | 1.10 / 1.43 | 0.97 / 1.21 | the player's Tick script 0.56 (Island), `tickActor` 1.08 in all |
+
+The Island's tick structure (`tickStandaloneLevel`): the actor batch 3.36 ms, the player's own tick 1.10 (its Tick event script 0.58, ShowSelf 0.20,
+physics 0.13, input 0.07), the event manager 0.16, player distances 0.14. At the Battery Park spot: batch 2.83, the player 1.07, **event manager
+0.50**. Two items of the task's list were looked at and are not hand-back families: the AI event manager's growth in the slow ticks (0.46 to 0.87 ms) is
+Rust time (`percep` under `ai_tick`: 0.22 to 0.62 ms in Wasm); its JavaScript imports total 0.12 to 0.17 ms (`js_ai_in_stasis` 0.05 / 0.08, `js_ai_owner`
+0.01 / 0.03, `js_ai_float` 0.02). The interpreter's `Run::*` match functions were not taken: no replay covers them (the previous step's open item), so
+there is nothing to measure a change against.
+
+**The families built** (each: original behavior first, a switch `?name=js|verify` with an environment variable in Node, wired through main.mjs's
+switch list and `switch-reader.mjs`; the JavaScript bodies stay the references).
+
+1. **The walking prelude up to the scan** (`WALK_PRELUDE` / `?walkPrelude=`; walk_loop.rs `scan_fast`, walk-loop-kernel.mjs `scanFast`,
+   script-empty-body.mjs). *Original:* physWalking calls the surface prelude (Engine.dll 0x103cc450) every tick: the scanner 0x103ccc40, the
+   Ladder test, the floor query 0x103ccb70, then ProcessEvent of WalkTexture (0x103cc81d, [walking.md](walking.md#surface-prelude-boundary)).
+   `Pawn.WalkTexture` is `event WalkTexture(...);` in Engine.u, bytecode `return _` (`scripts/dump-script-function.mjs Engine Pawn.WalkTexture`;
+   `04 0b`, flags 0x800), and no function of that name exists in Engine, Extension or DeusEx, in a class or a state (`'*WalkTexture*'`). The Island
+   sends it 59.3 times a tick, the fourth most frequent ProcessEvent of the census (after the AI score callbacks and the weapon and decoration
+   Ticks). ProcessEvent of a bare return builds a frame, copies three parameters and returns; the runaway counter is Jump's, so nothing outlives it.
+   *Built:* Rust makes `fillScanInputs`'s inputs over the pawn's image (the scan's four segments turn from Rotation.Yaw by the sine table) and calls
+   `js_walk_scan`; the host answers 1 when the prelude would return false having changed nothing (no Ladder on the last hit, a floor the walk may
+   stand on, WalkTexture reaching a bare return, cached by class and state node) and 0 otherwise, when the JavaScript prelude runs the whole call.
+   `=verify` compares the Rust inputs with `fillScanInputs`'s bit for bit and runs the JavaScript prelude after every fast answer, which must
+   return false.
+2. **PHYS_Rolling of a non-Pawn in Rust** (`ROLLING_PHYSICS` / `?rollingPhysics=`; fall.rs `perform_rolling`, actor-physics-kernel.mjs; the
+   pattern of the falling port; docs/rolling.md "The Rust body (2026-11-07)", on the branch). rolling.mjs statement for statement on the image
+   (`move_source` for MoveActor, the zone from the host once, the events and SetPhysics/SetBase as imports, `Base` a new row of the fall field
+   table). `=verify` runs the Rust body for real with every service call and the actor's fields around it recorded, then runs `rolling.mjs` on a mock
+   host answering from the record, and compares the services, the fields before each and the end state.
+3. **The player's ShowSelf pawn-list walk** (`SHOW_SELF` / `?showSelf=`; showself.rs `showself_scan`, show-self-kernel.mjs, script-pawn-perception.mjs
+   `showPawnSelf`). *Original:* APawn::ShowSelf (0x103c0410, [script-pawn-tick-visibility.md](script-pawn-tick-visibility.md)) walks PawnList for the
+   player each tick and looks at a pawn only when its SightCounter is below zero (or NaN) and it is probing SeePlayer. Rust reads SightCounter and
+   NextPawn from the images and returns the first pawn the body must look at, or one whose cells it cannot read (host bindings of those keys, no image);
+   the body, the SeePlayer probe and the LOS worker stay JavaScript. `=verify` walks the pawns in JavaScript from the same place after each answer and
+   throws on a skipped pawn that the body would have looked at.
+4. *Built and dropped:* `lc_scan` tracing only the last of the prelude's 36 scan segments where no surface can stop the scan. Exact where no node of
+   the model has a Ladder texture, but the Island's model has 251 such nodes and Battery Park's 104 (the texture lists hold the Ladder group on every
+   map), so it never applied where it was to be measured; a spatial test of the ladder nodes would be needed.
+
+**Exactness evidence.**
+* The six sim digests (`bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback`) unchanged: Island `5adb254a07b1ed6f`, 00_Training
+  `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`; also with
+  all three switches at `verify` on the Island, Wan Chai and the bunker (same digests).
+* Walk prelude: 20,133 (Island), 10,190 (Wan Chai) and 22,254 (Battery Park) prelude calls, all answered fast, every input compared bit for bit with
+  `fillScanInputs`, the JavaScript prelude returning false after each; `WALK_PRELUDE=js` gives the same digests. ShowSelf: 2,469 (Island), 1,663 (Wan Chai),
+  680 (bunker) and 4,941 (Battery Park) scans verified against a JavaScript walk (27,201, 15,291, 5,453 and 39,937 pawns skipped; none unreadable).
+* Rolling: at the Battery Park spot (two papers, 900 ticks) 2,040 calls, 6,398 services and 8,438 state comparisons; with `scripts/scenarios/rolling-branches.mjs`
+  (every movable decoration and item set rolling at three speeds with an Acceleration, bBounce or a RotationRate, thrown up and set rolling in the air)
+  on the Island 32,134 calls (4,076 HitWall events, 1,206 bBounce refunds, 2,596 slides, 2,045 falling transitions, 243 SetBase calls; 77,174 services and
+  109,308 states compared) and in Training 6,088 calls (941, 271, 623, 281, 69): digests equal between the default, `verify` and `ACTOR_PHYSICS=js`
+  (Island `34491fc786a07d0b`, Training `d0bfa32ee03790d7`). `validate-actor-physics-kernel` now runs those two scenarios on three paths and requires the
+  rolling branches to be reached. The reference's own evidence is unchanged: `validate-native-rolling` (Unicorn oracle of Engine.dll 0x103d4b80) passes.
+* Firefox inline (`?walkPrelude=verify&rollingPhysics=verify&showSelf=verify`, `deusExVerifyCounts` read from the page) and a Chromium worker session: the Island scan route (35,441 preludes, 62,284 ShowSelf scans, 136,635 pawns skipped) and the Battery Park rest spot (19,004 preludes, 31,100 scans, 67,566 pawns skipped) ran 40 s each with no difference and no page error; the Chromium worker session lists all three switches in the simulation realm (`--probe-switches`) and ran 2,061 drawn frames with no error. **No rolling call ran in the Firefox session at the spot (0 of 0 verified; Node's run has 2,040)**: the papers' state depends on the session's timing, so the 0.21 ms of rolling in the old-code profile is not there in every session, and the A/B at the spot measures the rolling port only where the papers roll.
+* Validators that pass: `actor-physics-kernel`, `native-rolling`, `walk-loop-kernel`, `walk-loop-branches`, `pawn-physics-kernel`, `native-walking-surface`,
+  `native-walking-callbacks`, `plant-push` (and the swimming ones that use the same prelude: `native-swimming`, `pawn-swimming-reach`, and `pawn-tick-visibility` for ShowSelf); `test/actor-physics-kernel.test.mjs` (field table,
+  counters, imports and `bareReturn`) and `test/show-self-kernel.test.mjs` are new. `npm test`: 987 tests, 983 passed, 4 skipped, 0 failed. `npm run build:wasm` is warning-free.
+
+**A/B.** Firefox inline, headless, 25 s idle sessions at the spot and 60 s scan sessions on the Island, frames from 5 s after the map, god mode, six
+interleaved pairs each (`hitch-ab.mjs --guard --cpus 4-7,12-15`, the arms alternating), new = the defaults, old =
+`walkPrelude=js&rollingPhysics=js&showSelf=js` on the same tree; ms, pair differences new - old with the standard error of their mean:
+
+| Island scan route (6 pairs) | new | old | new - old | se | pairs lower |
+|---|---:|---:|---:|---:|---:|
+| page `animate` mean | 12.66 | 12.70 | -0.04 | 0.11 | 3 of 6 |
+| page `animate`, slowest tenth | 18.43 | 18.62 | -0.19 | 0.34 | 4 of 6 |
+| tick `p.tick` mean | 5.57 | 5.68 | -0.11 | 0.05 | 5 of 6 |
+| tick, slowest tenth | 8.23 | 8.52 | -0.29 | 0.15 | 5 of 6 |
+| `p.render` (untouched: the control) | 1.63 | 1.60 | +0.03 | 0.02 | 1 of 6 |
+
+| Battery Park rest spot (6 pairs) | new | old | new - old | se | pairs lower |
+|---|---:|---:|---:|---:|---:|
+| page `animate` mean | 17.20 | 16.94 | +0.26 | 0.43 | 2 of 6 |
+| page `animate`, slowest tenth | 20.56 | 20.09 | +0.47 | 0.28 | 2 of 6 |
+| tick `p.tick` mean | 5.23 | 5.16 | +0.07 | 0.07 | 2 of 6 |
+| tick, slowest tenth | 7.29 | 7.26 | +0.03 | 0.14 | 4 of 6 |
+| `p.render` (untouched: the control) | 3.06 | 2.86 | +0.20 | 0.11 | 1 of 6 |
+
+Pair differences new - old, in the order of the pairs (the order of the arms alternates). Island: page mean 0.2 0.2 -0.4 0.2 -0.4 -0.1 ms; tick mean: -0.01 -0.03 -0.29 0.02 -0.24 -0.15 ms; tick's slowest tenth: -0.67 -0.39 -0.50 0.31 -0.49 -0.00 ms. Battery Park: page mean 0.1 1.6 0.9 -1.4 0.7 -0.2 ms; tick mean: 0.03 0.40 0.11 -0.13 -0.05 0.04 ms; tick's slowest tenth: -0.44 -0.13 -0.03 0.18 -0.00 0.58 ms.
+
+Ship bar (0.3 ms of the page mean or 0.5 of its slowest tenth on one of the two, no regression on the other): **not met**. The Island's tick improves
+(mean -0.11, slowest tenth -0.29; 5 of 6 pairs lower on both) but the page does not follow (the sessions' spread is 0.7 ms either way, `p.render`, which no
+family touches, moves by up to 0.2); the Battery Park rest spot shows nothing in the tick and +0.26 in the page mean, which is the spread.
+
+**What is left in the new code** (a Gecko profile of the defaults, ms a frame, rest / tenth; "was" is the old code's figure of the ranking): Island `js_walk_scan` 0.25 /
+0.37 (was `js_walk_prelude` 0.39 / 0.64; the Rust scan is 0.13 of it, the scan's JavaScript glue `start` / `describeQuery` / `surfaceScan` about 0.09), ShowSelf 0.12 (was
+0.20: the six or so pawns a tick with SightCounter below zero, each a SeePlayer probe and the LOS worker); Battery Park `js_walk_scan` 0.20 / 0.25 (was 0.28 /
+0.35), ShowSelf 0.14 (was 0.16). The sampled tick of those sessions fell from 6.17 / 9.59 to 5.73 / 9.20 ms on the Island, which is not the A/B's -0.11 / -0.29:
+two different sessions, and a profile that charges frames.
+
+**Why the profiles over-promised.** A sampling profile charges the cost of every JavaScript frame it walks to the code under it. The families here are
+short JavaScript hand-backs called a hundred times a tick (59 WalkTexture events, 75 pawns of ShowSelf, two papers): their sampled share grows with
+the number of calls and frames, where a call's real cost in an unprofiled page is a fraction of it. The previous steps' families were single heavy
+bodies (a spawn, a cleanup pass, a decal attach), and their A/B matched their profiles. For hand-backs of this kind the A/B has to come first, on the
+switches, before a port is built. Node says the same: the Battery Park spot's tick mean is 5.41 ms with the switches on and 5.47 with them off.
+
+**Open.** The same ranking, with its caveat: the player's Tick script (0.56 ms a frame on the Island, run by the Rust VM with `js_eval` field
+assignments and calls under it), the collision hash maintenance around every pawn move (`js_move_hash` 0.16, `js_move_riders` 0.17: the hash is a
+JavaScript structure, the port is a Rust owner of the registrations), the event manager's perception in Rust at the Battery Park spot (+0.4 ms in the
+slow ticks), NPC state changes in the tenth (`js_anim_notify_event`, `js_object`, `js_tick_resume`), and the decals of the Island's slow ticks
+(`js_bool` +0.27). PHYS_Interpolating at the Battery Park spot (0.10 ms, `physPathing` through `playerMove`) is the next of the rolling kind.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
