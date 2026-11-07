@@ -11,7 +11,7 @@
  *    changes did not re-upload the whole array and GL reports no error.
  *
  *   node scripts/validate-light-atlas-upload.mjs [--url http://127.0.0.1:5173] [--map 00_Training]
- *     [--browser chromium|firefox] [--place JSON] [--packed]
+ *     [--browser chromium|firefox] [--place JSON] [--packed] [--query k=v&k=v] (page switches, e.g. uploadBands=off)
  *   (default: its own dev server of this checkout, Chromium). Firefox copies
  *   each upload's whole source view, so its uploads take another shape
  *   (light-atlas.mjs flush); --browser firefox checks them there.
@@ -51,7 +51,7 @@ try{
     await route.fulfill({response,body:body.replace(from,
       'flushLighting(renderer) { lightAtlas.flush(renderer); globalThis.__atlasProbe?.(lightAtlas, renderer); },')});
   });
-  await page.goto(debugUrl(url));
+  await page.goto(debugUrl(url + (option('query', null) ? (url.includes('?') ? '&' : '?') + option('query', null) : '')));
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:180000});
 
   // 1. Sampling equivalence on this GPU.
@@ -127,7 +127,7 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
           (globalThis.__layers??=[]).push(layer);
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER,previous);gl.deleteFramebuffer(fb);
-        resolve({packedUploads:atlas.packedUploads,pages:atlas.pages.length,sealed:Boolean(texture),arrayUploaded:atlas.arrayUploaded,
+        resolve({packedUploads:atlas.packedUploads,rectUploads:atlas.rectUploads,callUploads:atlas.callUploads,pages:atlas.pages.length,sealed:Boolean(texture),arrayUploaded:atlas.arrayUploaded,
           pageUploads:atlas.pages.filter(p=>p.uploaded).length,differing,before,pending,fullUploads:globalThis.__fullUploads,layers:globalThis.__layers,diffs:globalThis.__diffs,error:gl.getError()});
       };
       setTimeout(()=>resolve({timeout:true}),60000);
@@ -148,5 +148,5 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
   assert.equal(status.runtimeError??null,null,'Play paused');
   assert.deepEqual(errors,[]);
   console.log(`Light-map atlas (${engine}): 2D-array layer sampling equals 2D sampling on ${sampling.pixels} pixels (${sampling.distinct} distinct values); `+
-    `on ${map} after 240 flushes, ${play.pages} GPU array layers equal the CPU pages, no page texture was uploaded and ${play.fullUploads} whole-array uploads were owed (${play.packedUploads} rectangle uploads from the core's packed texels).`);
+    `on ${map} after 240 flushes, ${play.pages} GPU array layers equal the CPU pages, no page texture was uploaded and ${play.fullUploads} whole-array uploads were owed (${play.packedUploads} rectangle uploads from the core's packed texels; ${play.rectUploads} dirty rectangles went up in ${play.callUploads} calls).`);
 }finally{await browser.close();await server?.close();}

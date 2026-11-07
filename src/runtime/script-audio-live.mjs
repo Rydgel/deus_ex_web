@@ -1,4 +1,4 @@
-import {createGalaxyAudio} from './galaxy-audio.mjs';
+import {createGalaxyAudio, ambientInRange} from './galaxy-audio.mjs';
 import {createGalaxyMusic} from './galaxy-music.mjs';
 import {createMirrorMusicLibrary} from './galaxy-music-library.mjs';
 import { createMusicObjects } from './galaxy-music-objects.mjs';
@@ -12,7 +12,7 @@ import {LIGHT_TYPE_UNSUPPORTED} from './mesh-lighting.mjs';
 import {lightTypeBrightness} from './static-lighting.mjs';
 import {lightGlobals} from './light-globals.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
-import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
+import {RENDER_AMBIENT, RENDER_SHIFT, ambientScanMode} from './script-vm-render.mjs';
 import {mp3Channels, mp3Frames, mp3SampleRate} from './galaxy-lipsync-channels.mjs';
 
 /** Galaxy's channel logic (galaxy-audio.mjs) over the live level: ambient
@@ -220,7 +220,30 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured or modeled global index`); } catch {}
     return null;
   };
-  const ambientList = [];
+  const ambientList = [], nearActors = [], nearDecided = [], near = {actors: nearActors, decided: nearDecided};
+  const nearStats = {scans: 0, entries: 0, decided: 0, verified: 0};
+  // (a page's session reads the counts as `deusExVerifyCounts.ambientScan`)
+  (globalThis.deusExVerifyCounts ??= {}).ambientScan = nearStats;
+  // AMBIENT_SCAN=verify: the scan's list is what the actors of every live AmbientSound that the host's own reads and range test take in
+  // (galaxy-audio.mjs updateLockedKernel's first scan), in order, and an entry marked decided passes those tests.
+  const verifyNear = (listener, entries) => {
+    const full = runtime.scriptVm.render.scan(level.actors, {kinds: RENDER_AMBIENT}), want = [];
+    for (let i = 0; i < full.length; i++) {
+      const index = full[i] >>> RENDER_SHIFT, actor = level.actors[index];
+      if (!(full[i] & RENDER_AMBIENT)) { want.push(index); continue; }
+      if (read(actor, 'AmbientSound') && ambientInRange(read(actor, 'Location'), listener, read(actor, 'SoundRadius'))) want.push(index);
+    }
+    const got = Array.from(entries, entry => entry >>> RENDER_SHIFT);
+    if (got.length !== want.length || got.some((index, i) => index !== want[i]))
+      throw new Error(`AMBIENT_SCAN=verify: Rust keeps Level.Actors ${got.join(',')}, the reads and range test keep ${want.join(',')}`);
+    for (const entry of entries) {
+      if (!(entry & RENDER_AMBIENT)) continue;
+      const actor = level.actors[entry >>> RENDER_SHIFT];
+      if (!read(actor, 'AmbientSound') || !ambientInRange(read(actor, 'Location'), listener, read(actor, 'SoundRadius')))
+        throw new Error(`AMBIENT_SCAN=verify: ${actor.name} is decided in reach and is not by readNamed`);
+    }
+    nearStats.verified += entries.length;
+  };
   const galaxy = createGalaxyAudio(galaxyConfig, {
     library, music,
     listener: () => ({actor: player(), viewTarget: player() ? read(player(), 'ViewTarget') : null}),
@@ -238,6 +261,24 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       actors.length = entries.length;
       for (let i = 0; i < entries.length; i++) actors[i] = measured(level.actors[entries[i] >>> RENDER_SHIFT]);
       return actors;
+    },
+    // Update's ambient scan with its range test done in Rust (render.rs ambient_scan, AMBIENT_SCAN=js keeps ambientActors' scan and the
+    // per-actor reads of galaxy-audio.mjs): the actors with a live AmbientSound that ambientInRange takes in for `listener`, in array order
+    // (`decided[i]`), and those the image cannot answer for (the host reads and tests them as before). null: the scan cannot run here.
+    ambientNear: listener => {
+      const mode = ambientScanMode();
+      if (mode === 'js') return null;
+      const entries = runtime.scriptVm?.render?.ambientScan(level.actors, listener);
+      if (!entries) return null;
+      const actors = nearActors, decided = nearDecided;
+      actors.length = decided.length = entries.length;
+      for (let i = 0; i < entries.length; i++) {
+        actors[i] = measured(level.actors[entries[i] >>> RENDER_SHIFT]);
+        if (decided[i] = (entries[i] & RENDER_AMBIENT) !== 0) nearStats.decided++;
+      }
+      nearStats.scans++; nearStats.entries += entries.length;
+      if (mode === 'verify') verifyNear(listener, entries);
+      return near;
     },
     fastLineCheck: (end, start) => fastLineCheck(level.model, end, start),
     globalLighting: (realtime, actor, volume) => {
@@ -420,7 +461,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     if (music.state.current !== null) music.unregisterMusic(music.state.current);
   }
   return {galaxy, music, volumes, library, galaxyConfig, musicLog, update, reset, dispose, notes, voices, galaxyVoices, modeledIds, noteModeledId,
-    samples, hostSamples, speech, attachDecoded,
+    samples, hostSamples, speech, attachDecoded, nearStats,
     setLipSync: analysis => { lipSync = analysis; },
     get lipSync() { return lipSync; },
     setDigitalVolume: value => { digital = value & 127; }};

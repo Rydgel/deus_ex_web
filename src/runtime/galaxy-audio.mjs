@@ -198,16 +198,28 @@ export function createGalaxyAudio(config, services, options = {}) {
     let ambientActive = false;
     if ((read(viewActor, 'ShowFlags') & 0x4800) && read(read(source, 'Level'), 'Pauser') === '') {
       ambientActive = true;
-      const actors = services.ambientActors?.() ?? services.actors();
+      // `ambientNear` (AMBIENT_SCAN, render.rs ambient_scan) has the AmbientSound test and the range test done for the actors it marks
+      // `decided`: their reads wait until an actor needs a channel (they are made once, as the others' are: Update changes nothing).
+      const near = services.ambientNear?.(listener) ?? null;
+      const actors = near ? near.actors : services.ambientActors?.() ?? services.actors();
       scan: for (let index = 0; index < actors.length; index++) {
         const actor = actors[index];
         if (!actor) continue;
-        const ambient = read(actor, 'AmbientSound');
-        if (!ambient) continue;
-        const location = read(actor, 'Location'), soundRadius = read(actor, 'SoundRadius');
-        if (!ambientInRange(location, listener, soundRadius, kernel)) continue;
+        let ambient, location, soundRadius;
+        const decided = near !== null && near.decided[index];
+        if (!decided) {
+          ambient = read(actor, 'AmbientSound');
+          if (!ambient) continue;
+          location = read(actor, 'Location'); soundRadius = read(actor, 'SoundRadius');
+          if (!ambientInRange(location, listener, soundRadius, kernel)) continue;
+        }
         const id = ((services.index(actor) << 4) + 8) | 0;
         for (let c = 0; c < channelCount; c++) if (channels[c].id === id) continue scan;
+        if (decided) {
+          ambient = read(actor, 'AmbientSound');
+          if (!ambient) continue;
+          location = read(actor, 'Location'); soundRadius = read(actor, 'SoundRadius');
+        }
         kernel.ambient(soundRadius, read(actor, 'SoundVolume'), read(actor, 'SoundPitch'), 0);
         // services.listener()'s viewport Actor is viewActor and listenerLocation() is `listener`: PlaySound, steps 3 to 5.
         takeChannel(kernel, actor, id, ambient, location, listener, kernel.ambientVolume(), kernel.ambientRadius(), kernel.ambientPitch());

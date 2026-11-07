@@ -26,6 +26,7 @@ mod level;
 mod level_loop;
 mod fire;
 mod fall;
+mod showself;
 mod fly;
 mod laser;
 mod light;

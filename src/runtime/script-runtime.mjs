@@ -2284,7 +2284,7 @@ export class ScriptRuntime {
     return services;
   }
   showPawnSelf(receiver,options={}) {
-    return showPawnSelf(receiver,this.pawnTickVisibilityServices(receiver,options));
+    return showPawnSelf(receiver,this.pawnTickVisibilityServices(receiver,options),this.scriptVm?.showSelf?.scanner.bind(this.scriptVm.showSelf));
   }
   checkPawnEnemyVisible(receiver,options={}) {
     return checkPawnEnemyVisible(receiver,this.pawnTickVisibilityServices(receiver,options));

@@ -142,13 +142,16 @@ for(let i=0;i<20000;i++){
   const expected=ambientInRangeExact(location,listener,radiusByte);
   assert.equal(kernel.inRangeExact(location,listener,radiusByte),expected,`inRangeExact ${JSON.stringify({location,listener,radiusByte})}`);
   assert.equal(ambientInRange(location,listener,radiusByte,kernel),ambientInRange(location,listener,radiusByte,null),'ambientInRange');
+  // the core's own decision (render.rs ambient_scan), doubles screen included
+  assert.equal(kernel.inRange(location,listener,radiusByte),expected,`inRange ${JSON.stringify({location,listener,radiusByte})}`);
   rangeChecks++;rangeInside+=expected?1:0;
 }
 // A radius sphere's exact points: 3-4-5 triples on the sphere (inside by equality), and the non-finite distances.
 for(const [dx,dy,dz,byte] of [[3,4,0,0],[0,0,25,0],[0,0,26,0],[75,100,0,4],[1e30,0,0,255],[Infinity,0,0,3],[NaN,0,0,3],[0,-Infinity,0,0]]){
   const loc=[f(dx),f(dy),f(dz)],origin=[0,0,0];
   let expected;try{expected=ambientInRangeExact(loc,origin,byte);}catch{continue;}
-  assert.equal(kernel.inRangeExact(loc,origin,byte),expected,`inRangeExact ${[dx,dy,dz,byte]}`);rangeChecks++;
+  assert.equal(kernel.inRangeExact(loc,origin,byte),expected,`inRangeExact ${[dx,dy,dz,byte]}`);
+  assert.equal(kernel.inRange(loc,origin,byte),expected,`inRange ${[dx,dy,dz,byte]}`);rangeChecks++;
 }
 
 console.log(JSON.stringify({...stats,reverbZones,reverbSet,rangeChecks,rangeInside}));

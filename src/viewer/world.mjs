@@ -73,6 +73,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         if (elements.some((value, i) => !Object.is(value, object.matrixWorld.elements[i]))) walkStats.differing++;
     };
   }
+  // The class 1 merge's atlas writes (updateTextureAnimation): ?lightPack=js (LIGHT_PACK=js in Node) the byte loop, verify both.
+  const lightPackMode = (typeof process !== 'undefined' && process.env?.LIGHT_PACK) || globalThis.DEUS_EX_LIGHT_PACK || 'rust';
+  const packStats = { mode: lightPackMode, packed: 0, texels: 0, verified: 0, differing: 0 };
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   // The page's procedural textures this world's surfaces hold (procedural-textures.mjs): released with the world.
   const proceduralLeases = [];
@@ -685,8 +688,20 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         // region): its whole tile is resent, not the whole atlas. Otherwise
         // lighting.animate has just set the region's samples to texels/255,
         // so the page takes the merged bytes themselves.
-        for (const { lightmap, region } of changed)
-          lightAtlas.update(lightmap, region ? { partial: true, region, bytes: lightmap.texels } : { partial: true });
+        for (const { lightmap, region } of changed) {
+          // The merged region's atlas words come from the kernel (light.rs light_pack) and go in a row at a time; the byte loop of
+          // LightAtlas.update is the reference (?lightPack=js), and ?lightPack=verify runs it and compares the words.
+          const kernel = region && lightPackMode !== 'js' && lightmap.lightKernel ? lighting.animationKernel : null;
+          const rect = kernel?.pack ? lightAtlas.rectOf(lightmap, region) : null;
+          if (!rect) { lightAtlas.update(lightmap, region ? { partial: true, region, bytes: lightmap.texels } : { partial: true }); continue; }
+          const packed = kernel.pack(lightmap.lightKernel, rect);
+          packStats.packed++; packStats.texels += packed.length;
+          if (lightPackMode === 'verify') {
+            lightAtlas.update(lightmap, { partial: true, region, bytes: lightmap.texels });
+            packStats.verified++;
+            if (lightAtlas.differs(lightmap, rect, packed)) packStats.differing++;
+          } else lightAtlas.writePacked(lightmap, rect, packed, 0);
+        }
         lightAnimation.changed = changed.length; lightAnimation.ms = performance.now() - start;
         lightAnimation.merged = merged;
         lightAnimation.changedSpatial = changed.filter(({ lightmap }) => lightmap.animated.some(light => light.spatialDynamic)).length;
@@ -747,7 +762,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     lightAnimation: () => ({ records: lighting.animatedRecords().length, changed: lightAnimation.changed,
       merged: lightAnimation.merged, changedSpatial: lightAnimation.changedSpatial,
       spatialRecords: lighting.animatedRecords().filter(record => record.animated.some(light => light.spatialDynamic)).length,
-      ms: lightAnimation.ms, mergeMs: lightAnimation.mergeMs,
+      ms: lightAnimation.ms, mergeMs: lightAnimation.mergeMs, pack: { ...packStats },
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();

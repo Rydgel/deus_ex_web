@@ -610,6 +610,36 @@ Park and 1.0 on Everett (`play-frame-cost.md`).
   (~0.1 ms when the noise steps) and ~0.1 ms of JavaScript (constants,
   memo, copy-back). Browser frames were not measured here.
 
+### On-demand modulation entries and the atlas words (2026-11-07)
+
+Two more parts of a changed light map's frame left JavaScript or the per-frame full cost (Battery Park at its rest spot, Firefox inline,
+[firefox-60fps-plan.md](firefox-60fps-plan.md#battery-park-at-rest-2026-11-07)); neither changes a byte.
+
+* **The modulation tables are made when a merge reads them.** The kernel rebuilt all three effects' tables (3 x 65,536 entries) on the
+  first merge of every frame, 0.15 to 0.17 ms in Firefox, where a frame's merges read only the entries their texels ask for (`index & 0xff`
+  and the spatial byte). A table is now a moving.rs `MOD_BYTES` block (the 256 factors, a byte a table entry that says it is made this
+  frame, the entries): `light_modulation_begin` clears the flags after the host has written the frame's factors, and `merge_light` makes
+  an entry with `modulation_entry` (the same function the whole table used, and moving.rs uses) the first time it is asked.
+  `light_modulation_fill` makes the whole table, which `animationKernel.modulation(effect)` (validation) calls first.
+  `?lightModulation=table` (`LIGHT_MODULATION=table`) makes the whole table each frame, as before. `validate-light-animation-rust`
+  (7,200 map frames over 12 maps, 2.2 million merges, 10,265 modulation tables compared with the reference's) passes with on-demand
+  entries, and `moving-lights-bench.mjs` hashes at the Battery Park spot are equal in both modes.
+* **The changed region's atlas words come from the kernel.** `lighting.animate` returns the light maps whose bytes changed with their
+  union rectangle; `LightAtlas.update(..., { bytes })` then wrote each texel and the padding around the tile as a word in a JavaScript
+  loop (a clamped column index, three byte loads: 2.46 ns a texel in Firefox, 0.40 ms a frame at Battery Park, where 35 light maps
+  change a frame). `light_pack` (light.rs) writes the same words (`r | g << 8 | b << 16 | 0xff << 24`, the edge texel repeated for
+  the padding) four texels at a time on wasm simd128 from the kernel's own texel block, and `writePacked` copies them into the page a
+  row at a time (`words.set`, 0.19 ns a texel on 66-texel rows). `?lightPack=js` (`LIGHT_PACK=js`) keeps `update`'s byte loop;
+  `?lightPack=verify` runs it and compares the page's words with the kernel's (`deusExViewer.lightAnimation().pack`). The kernel's texels
+  equal the record's after `animate` (the union rows are copied back to the record, nothing else ever changes between registrations),
+  which verify mode checks on every region.
+* **Rectangles side by side go up as one.** `LightAtlas.flush` sent each deferred tile rectangle as its own `texSubImage3D` call (78 a frame at
+  Battery Park's rest spot, 2 to 5 KB each, a call costing Firefox about as much as 15 KB of copying). `coalesceRects` (upload-bands.mjs) joins a
+  rectangle to the band before it when they share rows and the union adds no more than a call's worth of bytes; the gap holds texels the GPU
+  page already has (the page's pixels are current), so the layer is the same. `?uploadBands=off` (`UPLOAD_BANDS=off`) sends each rectangle alone.
+  `validate-light-atlas-upload` (GPU layers equal the CPU pages after 240 flushes) covers it. The fog tiles took the same helper in the source
+  branch and were left out (`p.fog` +0.08 ms there).
+
 ## Spatially dynamic effects
 
 Stage 4, 2026-10-06. These are the effect-table rows with

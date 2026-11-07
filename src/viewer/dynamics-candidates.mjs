@@ -18,6 +18,7 @@
  * LaserIterator and the bHighDetail rule are the sprite scan's. */
 import { SETUP, SETUP_ROOT_EXCLUDED, SETUP_TEXTURE_SIZED, SETUP_TEXTURE_UNKNOWN, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
 import {switchReader} from '../runtime/switch-reader.mjs';
+import {actorTailMode} from './actor-tail.mjs';
 
 /** ACTOR_OCCLUSION=frustum (Node) or ?actorOcclusion=frustum keeps the
  * frustum-tested drawn set (drawn-set.mjs) for the main frame's actors. */
@@ -255,10 +256,22 @@ function packSprite({ u32, f32, i32 }, at, key, sprite) {
 }
 
 /** The root frame's packed candidates (what packDynamics last put in
- * `occlusion`'s candidate block), copied for patchDynamics. */
-export function candidateWords(occlusion, count) {
-  const views = occlusion.setupCandidates(count);
-  return views.u32.slice(views.at, views.at + SETUP.WORDS * count);
+ * `occlusion`'s candidate block), copied for patchDynamics. The copy is made in a scratch kept for `slot` (the main frame's
+ * occlusion run, a viewport window's planning): the words are read by that run's child frames and by nothing after it, so the 25 to
+ * 30 KB typed array a `.slice()` made at every run is not made (ACTOR_TAIL=js keeps it). */
+const wordScratch = [];
+export function candidateWords(occlusion, count, slot = 0) {
+  const views = occlusion.setupCandidates(count), mode = actorTailMode(), n = SETUP.WORDS * count;
+  if (mode === 'js') return views.u32.slice(views.at, views.at + n);
+  let scratch = wordScratch[slot];
+  if (!scratch || scratch.length < n) wordScratch[slot] = scratch = new Uint32Array(Math.max(n, 4096, 2 * (scratch?.length ?? 0)));
+  scratch.set(views.u32.subarray(views.at, views.at + n));
+  const words = scratch.subarray(0, n);
+  if (mode === 'verify') {
+    const want = views.u32.slice(views.at, views.at + n);
+    if (want.length !== words.length || want.some((word, i) => word !== words[i])) throw new Error('ACTOR_TAIL=verify: the kept candidate words differ from the slice');
+  }
+  return words;
 }
 
 /** A child frame's candidates when its own SetupDynamics (the iterators run

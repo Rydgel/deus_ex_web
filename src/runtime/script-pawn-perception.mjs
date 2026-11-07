@@ -384,11 +384,15 @@ function nearPath(viewer, other, oLoc, eye, distSq, scaledOrDist,
  * worker before checked SeePlayer dispatch. The caller owns bIsPlayer/hidden
  * admission; this helper neither adds filters nor resets SightCounter.
  * Evidence: docs/script-pawn-tick-visibility.md. */
-export function showPawnSelf(pawn,services) {
+export function showPawnSelf(pawn,services,scanner=null) {
   const level=services.level(pawn),info=services.levelInfo(level);
   if(!info||!services.isA(info,'LevelInfo'))throw new Error('ShowSelf requires the original LevelInfo');
+  // `scan(listener, pawn)`: the first pawn from `listener` on that the body below has to look at (show-self-kernel.mjs: the pawns before it
+  // are ones it skips without an effect, which Rust finds from the images), null at the end of the list
+  const scan=scanner?scanner(listener=>rd(services,listener,'SightCounter'),services.nextPawn):null;
   let listener=services.pawnList(level);
   while(listener) {
+    if(scan&&!(listener=scan(listener,pawn)))break;
     if(listener!==pawn) {
       const counter=rd(services,listener,'SightCounter');
       if((counter<0||Number.isNaN(counter))&&services.isProbing(listener,'SeePlayer')&&

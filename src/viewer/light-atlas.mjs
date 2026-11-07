@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { REENCODE_GLSL } from './original-sampling.mjs';
+import { coalesceRects, uploadBandsOn } from './upload-bands.mjs';
 
 /** `?lightDebug=` (validation only, docs/visual-acceptance.md "The darkest pixels"): captures of what the world shader multiplies. `base` leaves the
  * base texel unmodulated, `light32` writes the light-map sample times 32 (white where a surface has no light map, and saturated above 8 bytes), `world`
@@ -13,7 +14,9 @@ const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 const wordWrites = () => LITTLE_ENDIAN && ((typeof process !== 'undefined' && process.env?.MOVING_COMPOSE) || globalThis.DEUS_EX_MOVING_COMPOSE) !== 'js';
 export class LightAtlas {
   constructor(size = 1024, { words = wordWrites() } = {}) {
-    this.wordWrites = words; this.packedUploads = 0;
+    this.wordWrites = words; this.packedUploads = 0; this.rectUploads = 0; this.callUploads = 0;
+    // writePacked copies a row at a time, unless ?movingCompose=js (MOVING_COMPOSE=js) keeps the texel loop.
+    this.rowCopies = words;
     this.size = size; this.pages = []; this.tiles = new WeakMap();
     this.arrayUniform = { value: null }; this.arrayUploaded = false; this.scratch = new Uint8Array(0); this.addPage();
   }
@@ -144,7 +147,9 @@ export class LightAtlas {
     const words = this.pageWords(page);
     for (let row = 0, rows = rect.bottom - rect.top + 1; row < rows; row++) {
       let dst = (y + rect.top + row) * size + x + rect.left, src = offset + row * width;
-      for (let end = src + width; src < end; src++, dst++) words[dst] = packed[src];
+      // A row of a dozen texels or more as one copy (0.19 ns a texel in Firefox, against 0.95 for the loop on 66-texel rows).
+      if (width >= 12 && this.rowCopies) words.set(packed.subarray(src, src + width), dst);
+      else for (let end = src + width; src < end; src++, dst++) words[dst] = packed[src];
     }
     // The deferred rectangle keeps the packed texels it was made from, as `source` (an object with a `generation` that changes when
     // those texels are overwritten) still has them at flush(): the upload then takes them as they are, where the page's rows would be
@@ -154,6 +159,15 @@ export class LightAtlas {
       if (source) entry.push(packed, offset, source, source.generation);
       page.dirty.push(entry);
     } else this.dirtyPage(page);
+  }
+  /** Validation: whether the page's words in the tile rectangle `rect` (rectOf) differ from `packed` (from `offset`, rows in order). */
+  differs(lightmap, rect, packed, offset = 0) {
+    const tile = this.tiles.get(lightmap), { page, x, y } = tile, size = this.size, width = rect.right - rect.left + 1;
+    const words = this.pageWords(page);
+    for (let row = 0, rows = rect.bottom - rect.top + 1; row < rows; row++)
+      for (let col = 0, dst = (y + rect.top + row) * size + x + rect.left, src = offset + row * width; col < width; col++)
+        if (words[dst + col] !== packed[src + col]) return true;
+    return false;
   }
   /** Send deferred tile rectangles; without a renderer the pages re-upload.
    * Array layers take one texSubImage3D per rectangle under one pixel-store
@@ -182,7 +196,10 @@ export class LightAtlas {
       array ??= this.beginArrayUpload(renderer);
       if (!array) { this.dirtyPage(page); continue; }
       const { gl } = array;
-      for (const rect of rects) {
+      // Rectangles that lie side by side go up as one (upload-bands.mjs); ?uploadBands=off sends each as it is.
+      const sends = whole || !uploadBandsOn() ? rects : coalesceRects(rects);
+      this.rectUploads += rects.length; this.callUploads += sends.length;
+      for (const rect of sends) {
         const [x, y, width, height] = rect;
         // (The packed texels of a deferred rectangle, while they are intact and their memory has not been detached: writePacked.)
         const direct = rect.length > 4 && rect[6].generation === rect[7] && rect[4].buffer.byteLength > 0;

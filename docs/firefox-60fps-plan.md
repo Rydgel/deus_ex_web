@@ -3050,6 +3050,155 @@ The code is therefore not on this branch: `actors-phase-unshipped` carries `acto
   (`get` 0.03 to 0.05) and `lodMeshCameraMatrix` 0.02 to 0.04.
 * **`planGpu`** 0.04 to 0.09 (`planLodMeshFrame`, `frameContext` 0.03) and the page's `uploadDirty` (texSubImage2D 0.07).
 
+### Unshipped bundle (2026-11-07)
+
+The task: the Island, Battery Park and the bunker sit at a Firefox inline page p95 of 17.0, 16.6 and 17.3 ms on a 20 us clock ([Firefox p95
+frames](#firefox-p95-frames-2026-11-07)); five branches held exact, verified families that each measured under the ship bar alone. Combine them on
+master ff493674, add two small items, and measure the bundle as a whole (headless Linux, Ryzen 9 8945HS, Firefox 155 inline 1440x960, god mode,
+`taskset -c 4-7,12-15`, one heavy job at a time under the lock; the Mac and headed runs are not measured). **Result: the bundle meets the ship bar and is on this branch.** Against the same tree with every switch at its old behavior (6 pairs a map, interleaved) the Island's page mean is **-0.62 ms** and
+its slowest tenth **-0.79 ms** (every pair lower), the bunker's page mean -0.52 and Battery Park's -0.40; no map is worse beyond its noise. Against the master snapshot the net gains are smaller (Island -0.34, bunker -0.10,
+Battery Park -0.51 ms of page mean, each with an error of 0.2 in 4 pairs). **The Island's true p95 stays at 17.0 ms, 0.3 ms over 16.7**; the bunker's (16.6) is at the bound and Battery Park's (15.3) under it. Two of the five
+branches had nothing left to take (`bunker-cuts-unshipped` and `import-cuts-unshipped` are on master already), and the fog tile bands were left out. Two small items were built: the BSP selector's index regions and Galaxy's ambient scan
+in Rust. One finding of the exactness pass was fixed: the walking prelude's fast answer moved host handle numbers (below).
+
+**What went in** (each default on, with its old behavior one switch away and a verify mode where the family had one; the page's `?name=` reaches the
+simulation through the switch list in main.mjs, `NAME=` in Node):
+
+| Switch (`?flag=`, env) | Family | Old behavior | Source |
+|---|---|---|---|
+| `walkPrelude` `js` `verify` | the walking surface prelude up to the scan (Rust makes the scan inputs; the host answers 1 when the prelude would return false having changed nothing) | every prelude in JavaScript | `tick-tail-unshipped` d8d74a4e |
+| `rollingPhysics` `js` `verify` | PHYS_Rolling of a non-Pawn on the image (fall.rs `perform_rolling`) | `rolling.mjs` | same |
+| `showSelf` `js` `verify` | the player's ShowSelf pawn-list walk (showself.rs) | JavaScript walk | same |
+| `actorTail` `js` `verify` | the root frame's candidate words in a kept scratch; permeating light runs kept across frames | `.slice()` / rebuilt per frame | `actors-phase-unshipped` ad271713 |
+| `lightModulation` `table` | class 1 light modulation entries made when a merge reads them | the whole 3 x 65,536 tables each frame | `batterypark-unshipped` 1df307a3 |
+| `lightPack` `js` `verify` | the changed region's atlas words made by `light_pack` (simd128) and copied a row at a time | `LightAtlas.update`'s byte loop | same |
+| `uploadBands` `off` | the light atlas' rectangles side by side sent as one (`upload-bands.mjs`) | one `texSubImage3D` per rectangle | same |
+| `indexRegions` `single` `verify` | **new**: one index buffer per world mesh with a region per node set the BSP selector has drawn lately | the one region, rebuilt when the set differs from the previous select's | this step |
+| `ambientScan` `js` `verify` | **new**: Galaxy Update's ambient scan with its range test in Rust (render.rs `ambient_scan`) | `ambientActors` and the per-actor reads and `ambientInRange` | this step |
+
+**What was dropped, and why.**
+* **The fog tile bands** of 1df307a3 (`fog-pass.mjs`, `docs/volumetric-fog.md`'s paragraph): `p.fog` +0.08 ms, 0 of 9 pairs lower in its own A/B (90 sparse tiles pay for
+  the gap bytes). `upload-bands.mjs` is the helper of the light atlas alone here.
+* **The same commit's world-root matrix walk (`sceneWalk`) and the mover shortcut in `world-visibility.mjs`**: both are on master already (the cherry-pick's conflicts
+  in `world.mjs` and `main.mjs` were that text; the master text was kept).
+* **`bunker-cuts-unshipped` (377a1dd3, 30f851fa) and `import-cuts-unshipped` (b1f7e186): every item is on master already, nothing was taken.** `git cherry master` lists
+  377a1dd3 and 30f851fa as present; the merged [bunker bundle](#the-bunker-bundle-2026-11-06) (c73abe2d) carries `RIDER_TABLE` (base-epoch.mjs `cellEpoch`,
+  `moveBaseSlot`, `cutBaseSlots`), `COMPACT_SCAN` (level.rs `level_flagged`), `SOUND_READ` (script-runtime.mjs `reflectedField`), `DECAL_FOLLOW` (decal-kernel.mjs),
+  `CONFIG_FIND`, `INPUT_FIELDS`, and `PLAYER_PAWN` as the Rust cell (`rust` default, `direct` the old `js_object` answer b1f7e186 added), each with its switch in
+  main.mjs. b1f7e186 is the older form of the same rider table and `GetPlayerPawn` shortcut.
+* The families' own notes came with their commits: `docs/rolling.md`, `docs/walking.md` and `docs/static-lighting.md` (the last two gained a paragraph each in this step: the bands, and the handle numbering).
+
+**The two new items.**
+* **`indexRegions` (world-visibility.mjs).** The main pass and the root sky pass select different node sets, and a mesh's one index buffer was rebuilt whenever
+  a select's set differed from the previous select's: two rebuilds and their index uploads every frame (the [Battery Park section](#battery-park-at-rest-2026-11-07)'s
+  "What is open": 2 rebuilds, 18 uploads at rest). Each world mesh now holds three regions (`REGIONS`) in one `BufferAttribute`; the selector keeps the node set each was
+  built for, and a select whose set a region holds draws that region through `drawRange.start` and rebuilds and uploads nothing; a new set takes a free region or the one
+  drawn longest ago. One index object per mesh, not one per pass (a second object would make three.js set up the vertex array object twice a frame). A rebuilt region's
+  range is *added* to the attribute's pending update ranges (one per region start, replaced in place): three.js uploads an attribute only when a mesh is drawn and clears
+  the ranges then, so clearing them at the next rebuild, as the one-region code did, would leave a region built while its mesh was culled stale on the GPU for the pass that
+  hits it later (`test/world-visibility.test.mjs` builds a GPU copy from the pending ranges and fails with `clearUpdateRanges` back in). Exactness (host drawing, no original
+  behavior): a region holds the indices a rebuild writes, `3t, 3t+1, 3t+2` for the mesh's triangles in order whose node is in the set; `?indexRegions=verify` rebuilds the
+  indices of every select's set aside and compares each mesh's drawn range value by value (Firefox: 370,904 mesh ranges on the Island, 378,140 at the bunker, 393,236 at
+  Battery Park, no difference; the three sessions made 9, 60 and 25 rebuilds in about 5,300 selects). `validate-sim-split --draw-state --pixels --query-b indexRegions=single`
+  passes in worker mode and inline (Island, 240 frames, same pixels).
+* **`ambientScan` (render.rs `ambient_scan`, script-audio-live.mjs `ambientNear`, galaxy-audio.mjs).** Galaxy Update's ambient scan took every actor with a live
+  AmbientSound from the render scan (`ambientActors`: 107, 108 and 65 actors on the Island, the bunker and Battery Park, `measured()` on each), then read `AmbientSound`, `Location` and `SoundRadius` of each
+  through `readNamed` and decided `ambientInRange` (the doubles screen with the extended fallback), and only a handful pass (3,233 in reach in 360 Island scans: 9 a scan; 8 at the bunker, 9 at Battery Park).
+  `ambient_scan` does the same in one walk in Rust, from the image: the AmbientSound pointer, then Location and `SoundRadius` (a new render field, 51) and
+  `galaxy::ambient_in_range`, the transcription of `ambientInRange` (the same operations on the same float32-as-double values in the same order; its fallback is the body
+  `galaxy_in_range_exact` already had), writing only the actors in reach, in array order; an actor whose fields the image does not answer is written as `RENDER_JS` and the host
+  reads and tests it as before. The update loop skips the three reads and the test for a decided actor and reads them only when it needs a channel for it (the same reads, made once;
+  Update changes nothing in the world). Only the host's `notes` differ: an actor out of reach without a measured index is no longer noted. `?ambientScan=js` keeps `ambientActors` and the
+  per-actor reads; `=verify` runs the full scan beside the Rust one and compares the lists and the decisions. Exactness: `scripts/audio-channel-digest.mjs` (new: the channel table's
+  id, sound, volume, radius, pitch, priority, time, occlusion and location with exact bits after each frame of a fixed roam) is identical in `js`, `rust` and `verify` on the Island
+  (`d097f0fb1d8d8a60`), the bunker (`7516d16de5345b06`), Battery Park (`5416b07d39ea50ed`), the Paris metro (`968983062887e4d8`), the Wan Chai market (`4042b7f8a6a7afbf`) and
+  Training (`bf476008ddc7e57e`), 300 to 400 frames each, `verify` compared 3,233, 3,707, 4,140, 644, 3,283 and 0 decided actors; `validate-galaxy-audio-kernel` now also compares the
+  core's decision (`galaxy_in_range`, exported for it) with `ambientInRangeExact` over its 20,008 range cases (values at, around and far from the radius, within 1e-12 of it, non-finite).
+  Not reached by any of the roams: an actor handed back as `RENDER_JS`, and a decided actor whose AmbientSound reads falsy (the loop keeps the old test for both).
+
+**A finding of the exactness pass: the walking prelude's fast answer moved the handle numbers.** `frame-alloc-meter.mjs` digests (every field of the posted frame snapshot) were
+the master tree's on the bunker, Battery Park, the Airfield and the Dockyard and not on the Island (`2416e922a1f9ef7e` against `5e021f24dcd1a8ed`); `WALK_PRELUDE=js` alone restored
+it, and the new `--keys` and `--dump` options of the meter found the difference in `events` (the posted `mesh-create` records, 20 of 300 frames), in one field: an actor's
+`handle` (Fish0: 13177 against 13178). The skipped WalkTexture dispatch used to be where a floor texture got its object handle (`handleOf` allocates at first use), so every handle made
+after it was one lower. Handles are host identifiers (no original meaning; `bench-sim` digests carry none), but the digests are the harness' evidence, so `scanFast` now asks
+for the texture's handle when it answers 1 ([walking.md](walking.md#the-surface-prelude-in-rust-up-to-the-scan-2026-11-07)); all five meter digests are then the master tree's.
+The A/B below was run again on the final tree after that change (the first, on the tree before it, is in the second table of each map).
+
+**A/B** (Firefox inline, headless, `hitch-ab.mjs --guard --cpus 4-7,12-15 --arms "new:,old:<every switch above at its old behavior>" --pairs 6`, the arms alternating, the frame-time set's
+session shape `--mode scan --seconds 60 --god` with `--ff-prefs '{"privacy.reduceTimerPrecision":false}'` (the 20 us clock), frames from 5 s after the map; "new" is the defaults on the final
+tree, "old" is `walkPrelude=js&rollingPhysics=js&showSelf=js&actorTail=js&lightModulation=table&lightPack=js&uploadBands=off&indexRegions=single&ambientScan=js`; `.work/ab-agg.mjs`
+for the paired figures, ms; "true p95" is the 95th percentile of the 20 us page frame; the `/` is new / old; the second line of a map is the difference with the standard error of the
+pair differences and the pairs where new was lower):
+
+| Map (6 pairs) | | page mean | slowest tenth | p50 | true p95 | frames over 16.7 | `p.tick` | `p.render` | `p.audio` | `p.lightAnimation` + `p.lightUpload` |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Island, scan route | new / old | 11.88 / 12.50 | 17.60 / 18.39 | 11.08 / 11.63 | 17.01 / 17.90 | 247 / 450 | 5.60 / 5.81 | 1.49 / 1.66 | 0.24 / 0.42 | 0.16 / 0.16 |
+| | difference | **-0.62** (0.14; 6 of 6) | **-0.79** (0.24; 6 of 6) | -0.54 (0.11; 6) | -0.89 (0.25; 6) | -204 (61; 6) | -0.20 (0.06; 6) | -0.17 (0.03; 6) | -0.17 (0.00; 6) | 0.00 |
+| Area 51 bunker, scan route | new / old | 11.03 / 11.55 | 18.38 / 18.80 | 10.12 / 10.59 | 16.61 / 16.70 | 177 / 187 | 4.61 / 4.73 | 1.17 / 1.29 | 0.24 / 0.40 | 0.46 / 0.55 |
+| | difference | **-0.52** (0.13; 6 of 6) | -0.42 (0.51; 4) | -0.47 (0.14; 6) | -0.09 (0.32; 3) | -11 (18; 3) | -0.11 (0.09; 4) | -0.13 (0.02; 6) | -0.16 (0.00; 6) | -0.09 (light animation -0.10 in 6 of 6, upload +0.01 in 0 of 6) |
+| Battery Park, scan route | new / old | 12.32 / 12.72 | 16.49 / 17.29 | 12.06 / 12.32 | 15.33 / 16.31 | 90 / 145 | 4.92 / 4.97 | 1.85 / 1.95 | 0.32 / 0.42 | 0.73 / 0.90 |
+| | difference | -0.40 (0.17; 5 of 6) | -0.79 (0.42; 4) | -0.26 (0.13; 5) | -0.98 (0.33; 5) | -55 (24; 5) | -0.05 (0.04; 5) | -0.10 (0.06; 5) | -0.09 (0.01; 6) | -0.17 (-0.13 and -0.04, 6 of 6 each) |
+
+Pair differences (new - old), page mean: Island -0.32 -0.68 -0.38 -0.68 -1.27 -0.40; bunker -0.11 -0.36 -0.75 -0.93 -0.24 -0.73; Battery Park -0.51 -0.41 -0.49 -0.80 +0.38 -0.57. Slowest tenth: Island -0.57 -0.95
+-0.44 -0.42 -1.94 -0.42; bunker +0.35 +1.75 -0.81 -0.86 -1.40 -1.55; Battery Park -0.85 +0.09 -1.41 -2.23 +0.65 -1.00.
+
+The same A/B on the tree before the handle change (first run; same arms, same shape, 6 pairs, the Island's fifth old session lost to a Firefox content-process crash at load, 5 pairs): page mean
+Island **-0.60** (0.14; 5 of 5), bunker -0.53 (0.12; 6 of 6), Battery Park -0.60 (0.16; 6 of 6); slowest tenth -1.10 (0.26; 5), -0.16 (0.64; 5 of 6), -1.18 (0.32; 5 of 6); true p95 17.07 / 18.04, 16.60 / 17.03,
+14.75 / 15.97; frames over 16.7 264 / 486, 172 / 205, 62 / 132. The two runs agree within their errors on every map, and the tick, render and audio phases move as above in both.
+
+**Against the master snapshot** (the tree of ff493674 extracted beside this one, four interleaved pairs per map, the same session shape; `.work/ab-master.sh`; ms; new / master): Island page mean
+12.06 / 12.39 (**-0.34**, 0.22; 3 of 4), slowest tenth 18.00 / 18.26 (-0.26, 0.53), true p95 17.28 / 17.88 (-0.60, 0.32; 4 of 4), frames over 16.7 292 / 441; bunker 11.27 / 11.38 (-0.10, 0.24; 3 of 4),
+18.42 / 18.76 (-0.34, 0.89), 16.69 / 16.81 (-0.12, 0.44), 180 / 196 (its tick +0.19, 0.14, 1 of 4 lower: the bunker's tick sessions differ by 0.2 ms from one another); Battery Park 12.31 / 12.81 (**-0.51**, 0.17;
+3 of 4), 16.38 / 17.57 (-1.19, 0.22; 4 of 4), 15.37 / 16.19 (-0.83, 0.58), 90 / 143. These sit inside the new-against-old figures' errors but are smaller on the Island and the bunker, and four pairs carry
+an error of 0.2 ms: the bundle's net gain over master is about 0.3 to 0.5 ms of page mean on the Island and Battery Park and not distinguishable from 0 on the bunker. A single session differs by about 0.5 ms from another in its p95 (the master snapshot's true p95 reads 17.88, 16.81 and 16.19 here, and 17.00, 17.28 and 16.60
+in [Firefox p95 frames](#firefox-p95-frames-2026-11-07) for the Island, the bunker and Battery Park), so the absolute p95 figures belong to the session they were taken in.
+
+**Ship bar** (page mean -0.3 ms or slowest tenth -0.5 ms on one of the maps, no map worse beyond its noise): **met** on the Island (-0.62 and -0.79 against the same tree's old behaviors, every pair lower) and,
+on the page mean, on the bunker (-0.52) and Battery Park (-0.40); nothing is worse beyond its noise (the bunker's and Battery Park's p99 and `p.lightUpload` +0.01 at the bunker are inside it). The bundle is therefore on this branch.
+**The Island is not under the bound**: its true p95 is 17.0 ms (0.3 ms over 16.7) and 247 of 3,650 frames are over 16.7 where 182 are allowed; the bunker's true p95 is 16.6 (at the bound, 177 of 3,600 frames over where 180 are
+allowed); Battery Park's is 15.3. By phase, what moved (new - old on the Island, `p.` columns of the hitch log): the tick -0.20 (the walking prelude, ShowSelf and
+rolling), the three.js passes -0.17 (the index regions; -0.13 and -0.10 at the bunker and Battery Park), Galaxy's Update -0.17 (the ambient scan: 0.42 to 0.24 ms a frame; 0.40 to 0.24 at the bunker, 0.42 to 0.32 at
+Battery Park), the actors layer -0.06 (`actorTail`), and at the bunker and Battery Park the class 1 light maps -0.09 and -0.17 (`p.lightAnimation` -0.10 and -0.13, `p.lightUpload` +0.01 and -0.04). The Gecko
+profiles of the earlier sections charged these families 0.4 to 0.6 ms (the trio) and 0.3 (the audio scan); the A/B finds -0.20 for the whole trio and -0.17 for the audio scan, the same order for the
+audio and a third for the trio.
+
+**Exactness evidence** (the final tree, `8606187b` and the commit of this section on top; every run under the heavy lock, each family also in its own section above):
+* The six `bench-sim.mjs --map NAME --warm 60 --ticks 300 --render-feedback` digests are the expected ones, with no tick error: Island `5adb254a07b1ed6f`, 00_Training `07816ec472f29b84`, 03_NYC_Airfield
+  `46ed0d32ae5b56af`, 06_HongKong_WanChai_Market `80d27b37e0944d88`, 15_Area51_Bunker `764a7bdffd2ebe59`, 09_NYC_Dockyard `e53f348673f1247b`; also with `WALK_PRELUDE=verify ROLLING_PHYSICS=verify SHOW_SELF=verify` on the
+  Island, Wan Chai and the bunker. **Battery Park** (`--scenario scripts/scenarios/idle-spot.mjs`, same options): `a465f2c1fa7b58e8`, with the bundle, with the three tick switches at `verify`, and on the unmodified master
+  snapshot ff493674; the brief's `ec87274562d24df6` does not come out of master with these options (with `--idle` it is `8bfe45203405e675`), so it belongs to another configuration, and the
+  comparison that counts, bundle against master, is equal.
+* The four combat replays (`PER=77 ... --ticks 300 --render-feedback --idle --seed 1 --scenario scripts/scenarios/combat-replay.mjs`, `PLACES=.cache/perf/spot-census/firefox-10_Paris_Metro.places.json` on `10_Paris_Metro`,
+  `firefox-12_Vandenberg_Cmd.places.json` on `12_Vandenberg_Cmd`): FROM=0 TO=55 `--warm 4208` `09e2d44972cca30a`, FROM=54 TO=55 `--warm 48` `a6011ede7236c1d2`; FROM=0 TO=99 `--warm 7596` `ed184bd3eb533bc1`,
+  FROM=98 TO=99 `--warm 48` `1db79eb398240a97`.
+* `frame-alloc-meter.mjs` (every field of the posted frame snapshot with its numbers' exact bits, 300 frames, warm-up 60): the bundle's digest equals the master snapshot's on all five maps (Island `5e021f24dcd1a8ed`,
+  bunker `e79f8ee485bbfd2a`, Battery Park `2619df1a6eed0e52`, Airfield `a04d154da0b6a1a0`, Dockyard `35a4f60ce160360e`), and `ACTOR_TAIL=js` (written) against the defaults and `ACTOR_TAIL=verify` (compared) are identical on each. The
+  Island's first bundle run was `2416e922a1f9ef7e`; see the handle finding above.
+* `moving-lights-bench.mjs --map 02_NYC_BatteryPark --place 2025,-3396,263 --yaw 32768 --frames 240 --hash --anim`: the moving light maps' floats (`a6228e218c1f5a65`) and the atlas pages (`38dc1b9caa96cfc4`) are equal in
+  `LIGHT_MODULATION=table LIGHT_PACK=js`, `LIGHT_MODULATION=lazy LIGHT_PACK=rust` and `LIGHT_PACK=verify`.
+* Firefox inline sessions with every verify switch on (`hitch-run.mjs --browser firefox --mode scan --god --seconds 40 --probe-switches --query 'walkPrelude=verify&rollingPhysics=verify&showSelf=verify&actorTail=verify&lightPack=verify&indexRegions=verify&ambientScan=verify'`,
+  the counters read with `--eval` from `deusExVerifyCounts` and `deusExViewer`): the Island 2,586 drawn frames, the bunker 2,675 and Battery Park 2,631, **no page error and no `verify` throw**. Compared: walking preludes 34,543 (Island), 8,442 (bunker), 17,351
+  (Battery Park), ShowSelf scans 50,225, 14,306, 35,891 (148,303, 31,630 and 78,379 pawns skipped), ambient decisions 15,672, 14,354, 23,913, index ranges 370,904, 378,140, 393,236, light atlas regions at the two light maps 13,402 (bunker) and 53,421 (Battery Park), 0 differing. No rolling call
+  ran in these sessions (0 of 0; the papers' timing, as in the tick section), so rolling is covered by Node: `validate-actor-physics-kernel` with `scripts/scenarios/rolling-branches.mjs` and `validate-native-rolling`. A Chromium **worker** session with the same switches (40 s each, the Island 2,658 drawn frames and the bunker 2,660): `processProbe().switches` lists
+  all seven in the simulation realm and neither page logs an error.
+* Validators, one at a time (`run-validators.mjs --jobs 1 --filter`: 51 validator runs passed, 0 skipped, 0 failed, with the filters matching more than one script and 10 of them repeated after the handle change): the tick families' `actor-physics-kernel` (also again after the handle change), `native-rolling`, `walk-loop-kernel`,
+  `walk-loop-branches` (again after it), `pawn-physics-kernel`, `native-walking-surface`, `native-walking-callbacks`, `plant-push`, `native-swimming`, `pawn-swimming-reach`, `pawn-tick-visibility`; the lighting families'
+  `light-animation-rust`, `light-atlas-upload` (Chromium at Training and Battery Park, Firefox at Battery Park: 17,451 dirty rectangles in 1,069 calls and 20,320 in 1,431, GPU layers equal the CPU pages), `mesh-lighting`, `mesh-light-types`,
+  `leaf-lights`; the actor layer's `actor-mesh-scene`, `gpu-mesh`, `bsp-occlusion`, `spawn-mesh-binding`, `npc-mesh-preview`, `umesh-play`, `sprite-setup`, `play-frame`, `first-draw-pose`, `lodmesh-lod-play`, `dynamic-light-mover`,
+  `brush-tracker`, `world-batches`, `page-movers-play`; the audio's `galaxy-audio-kernel` (20,008 range cases), `native-galaxy-audio`, `galaxy-effects` (the filter matches three), `galaxy-volumes`, `galaxy-reverb`, `native-client-hear-sound`;
+  and `script-vm-interp` (the render field table grew to 52 fields). Beside them: `validate-sim-split.mjs --draw-state --pixels --query-b indexRegions=single` in worker mode and inline, and with `--query-b` set to
+  *every* bundle switch at its old behavior: PASS each (Island, 240 frames, 4 digests, same pixels); `validate-mesh-path-frames.mjs --frames 90 --query '&indexRegions=verify&actorTail=verify' --plumbing`: PASS (the bar and restroom mirrors, 1280x720 identical).
+* New or extended tests: `test/world-visibility.test.mjs` (4: the drawn triples of each mode over a run of passes, the rebuild counts, replacement of the oldest region, and a GPU copy built from the pending ranges
+  with meshes culled in some passes, which fails with `clearUpdateRanges` back in), `test/upload-bands.test.mjs`, `test/actor-physics-kernel.test.mjs`, `test/show-self-kernel.test.mjs`. `npm test`: 998 tests, 994 passed, 4 skipped, 0 failed. `npm run build:wasm` is warning-free.
+
+**What is open.**
+* **The Island's true p95 is 17.0 ms**: 0.3 ms over the bound and 65 frames over the allowance. The early window is still where it is (the tick leads in the slow frames, [Firefox p95 frames](#firefox-p95-frames-2026-11-07)); of the flat list, the
+  audio scan's reads for the 9 or so actors in reach (`measured()`'s index lookups, the channel scan, `kernel.ambient` per actor every frame: kept across frames while the epoch and the listener's cell stand would be the next cut, about
+  0.05 to 0.1), texture animation 0.38, the sky and main passes' own 0.8 each and the player's Tick script 0.56 remain.
+* **The selector's mover loop** still visits every mover at each select (about 65 empty ones at Battery Park: 345,000 `moverRebuilds` in 5,300 selects in the verify session); a mover with no drawn polygon in two selects running could be skipped (about 0.02 to 0.05 ms).
+* **`scanFast` pays `handleOf` per fast answer** (a `Map` lookup after the first): measured inside the final-tree A/B, not apart; cheaper would be one kept texture per pawn and floor node.
+* **Not measured**: the Mac, headed runs, Chromium's frame times (a Chromium worker session ran the switches at `verify` only), a rolling call in a Firefox page (Node covers it), and an `ambient_scan` entry marked `RENDER_JS` (no roam met one; the host's old path takes it).
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

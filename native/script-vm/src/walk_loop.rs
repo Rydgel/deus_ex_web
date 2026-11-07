@@ -58,7 +58,9 @@ const W_ZONE_FLUID_FRICTION: usize = 22;
 // Pawn.DesiredSpeed: a non-PlayerPawn's calcVelocity scales MaxSpeed by it (appended: the pawn fields' own
 // range ends at W_MOTION; walk-loop-kernel.mjs PAWN_ROWS names this row too).
 const W_DESIRED_SPEED: usize = 23;
-const W_COUNT: usize = 24;
+// Actor.Rotation: the surface prelude's scan turns its segments from its Yaw (walking-surface.mjs fillScanInputs).
+const W_ROTATION: usize = 24;
+const W_COUNT: usize = 25;
 
 static mut WFIELDS: [[u32; 2]; W_COUNT] = [[0; 2]; W_COUNT];
 // WL_IO: a line check's answer [time, nx, ny, nz, actor handle], and the
@@ -68,8 +70,10 @@ static mut WL_IO: [f64; 8] = [0.0; 8];
 // handle, then running counts the host differences around a call
 // (walk-loop-kernel.mjs COUNTERS): [2] MoveActor bodies entered directly,
 // [3] the sloped-wall re-probe, [4] the floor nudge (distance < 1.9), [5]
-// the friction slide, [6] the bCanJump=false retreat, [7] stepUp entries.
-static mut WL_STATE: [u32; 8] = [0; 8];
+// the friction slide, [6] the bCanJump=false retreat, [7] stepUp entries,
+// [8] the surface prelude's mode (walk-loop-kernel.mjs WALK_PRELUDE): 0 keeps the whole prelude in
+// JavaScript, else `scan_fast` asks the host for the scan first.
+static mut WL_STATE: [u32; 9] = [0; 9];
 #[inline(always)]
 fn count(i: usize) {
     unsafe { let s = core::ptr::addr_of_mut!(WL_STATE); (*s)[i] = (*s)[i].wrapping_add(1); }
@@ -91,6 +95,8 @@ pub extern "C" fn walk_loop_state_ptr() -> *mut u32 {
 #[link(wasm_import_module = "env")]
 extern "C" {
     fn js_walk_prelude(depth: u32, dt: f64, iterations: i32) -> u32;
+    fn js_walk_scan(depth: u32, sx: f64, sy: f64, sz: f64, e0x: f64, e0y: f64, e1x: f64, e1y: f64, e2x: f64, e2y: f64,
+                    e3x: f64, e3y: f64, px: f64, py: f64, pz: f64, fz: f64) -> u32;
     fn js_walk_line(depth: u32, sx: f64, sy: f64, sz: f64, ex: f64, ey: f64, ez: f64,
                     rx: f64, ry: f64, rz: f64, flags: u32);
     fn js_walk_move(depth: u32, dx: f64, dy: f64, dz: f64);
@@ -138,6 +144,9 @@ fn set_vec(base: u32, i: usize, v: V3) {
 }
 #[inline(always)]
 fn io(i: usize) -> f64 { unsafe { (*core::ptr::addr_of!(WL_IO))[i] } }
+/// `rotatorSin(angle)`: the sine table's float32 entry.
+#[inline(always)]
+fn sine(angle: i32) -> f64 { f32::from_bits(crate::rotator_sin(angle)) as f64 }
 #[inline(always)]
 fn state(i: usize) -> u32 { unsafe { (*core::ptr::addr_of!(WL_STATE))[i] } }
 /// The level's zone model (zone.rs), or 0 without one.
@@ -189,7 +198,34 @@ impl ImagePawn {
     pub(crate) fn step_budget_error(&self) { unsafe { js_walk_error(self.depth, E_STEP_BUDGET) }; }
     pub(crate) fn physics(&self) -> i32 { load8(at(self.base, W_PHYSICS)) as i32 }
     /// `pawn.walkingPrelude(dt, iterations)`: true when it ended the call.
-    pub(crate) fn prelude(&self, dt: f64, iterations: i32) -> bool { unsafe { js_walk_prelude(self.depth, dt, iterations) != 0 } }
+    pub(crate) fn prelude(&self, dt: f64, iterations: i32) -> bool {
+        if state(8) != 0 && self.scan_fast() { return false; }
+        unsafe { js_walk_prelude(self.depth, dt, iterations) != 0 }
+    }
+    /// walking-surface.mjs `walkingSurfacePrelude`'s common case, in Rust up to the scan: `fillScanInputs` over the image (the
+    /// segments' starts and ends turn from Rotation.Yaw by the sine table), then one import runs the scan (the kernel's
+    /// `surfaceScan`) and decides whether the rest of the prelude is a no-op: no ladder, a floor texture the walk may stand on,
+    /// and a WalkTexture event whose function is a bare return. True: the prelude would have returned false having changed
+    /// nothing. False (nothing done): the JavaScript prelude runs the whole call (a ladder, a script event, an error).
+    fn scan_fast(&self) -> bool {
+        let b = self.base;
+        let position = self.position();
+        let radius = f(float(b, W_RADIUS));
+        let height = f(float(b, W_HEIGHT));
+        let yaw = load32(at(b, W_ROTATION) + 4) as i32;
+        let start = [position[0], position[1], f(position[2] - f(height * f(0.95)))];
+        let mut ends = [[0.0f64; 2]; 4];
+        for (k, offset) in [0i32, -16384, 16384, 32768].iter().enumerate() {
+            let angle = yaw.wrapping_add(*offset);
+            ends[k][0] = f(start[0] + f(2.0 * radius * sine(angle.wrapping_add(16384))));
+            ends[k][1] = f(start[1] + f(2.0 * radius * sine(angle)));
+        }
+        let floor_z = f(position[2] - f(height + 2.0 * radius));
+        unsafe {
+            js_walk_scan(self.depth, start[0], start[1], start[2], ends[0][0], ends[0][1], ends[1][0], ends[1][1], ends[2][0],
+                ends[2][1], ends[3][0], ends[3][1], position[0], position[1], position[2], floor_z) != 0
+        }
+    }
     /// `pawn.setPhysics(next)`.
     pub(crate) fn set_physics(&self, next: u32) { unsafe { js_walk_set_physics(self.depth, next) }; }
     /// `pawn.falling(remaining, iterations)`.
@@ -294,7 +330,7 @@ pub extern "C" fn walk_loop(depth: u32, base: u32, seconds: f32, mut iterations:
     let dt = f(seconds as f64);
     // `if(!(dt>0)||dt>f(.4))throw Error('Walking requires timestep in (0,0.4]')`
     if !(dt > 0.0) || dt > f(0.4) { return HANDBACK; }
-    if unsafe { js_walk_prelude(depth, dt, iterations) } != 0 { return DONE; }
+    if pawn.prelude(dt, iterations) { return DONE; }
     // `pawn.velocity=pawn.velocity.map(f);pawn.acceleration=...;pawn.position=...`:
     // float32 cells written back unchanged.
     let velocity = pawn.velocity();

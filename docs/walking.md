@@ -237,6 +237,25 @@ If physics remains Walking, a texture exists, and its float at+70 is less than1,
 ordinary surface adapter performs the scanner/query explicitly and rejects
 unsupported Ladder or Friction<1, so callers need no unconditional no-op.
 
+### The surface prelude in Rust up to the scan (2026-11-07)
+
+`walk_loop.rs` `scan_fast` (`ImagePawn::prelude`, for the walking loop and physSwimming) makes `walking-surface.mjs` `fillScanInputs`'s inputs over the
+pawn's image (the scan segments turn from `Rotation.Yaw` by the sine table, `f` where the reference has `Math.fround`) and asks the host
+(`js_walk_scan`, walk-loop-kernel.mjs `scanFast`) for the kernel scan and the outcome in one import. The host answers 1 when `walkingSurfacePrelude`
+would return false having changed nothing: no Ladder texture on the last scan hit, a floor hit the walk may stand on (`Texture.Friction >= 1` or
+not walking), and a WalkTexture event whose function has nothing to run. Pawn.WalkTexture is `event WalkTexture(...);` in Engine.u, bytecode
+`return _` (`scripts/dump-script-function.mjs Engine Pawn.WalkTexture`), and no Engine, Extension or DeusEx class or state declares another
+(`'*WalkTexture*'` over the three packages), so ProcessEvent of it builds a frame, copies three parameters and returns: nothing outlives it
+(script-empty-body.mjs `bareReturn`; the answer is cached per class and state node). Every other case answers 0 and the JavaScript prelude
+runs the whole call as before (the scan is a query: running it twice changes nothing). `?walkPrelude=js` keeps every prelude in JavaScript;
+`=verify` compares the Rust inputs with `fillScanInputs`'s bit for bit and runs the JavaScript prelude after each fast answer, which must return false.
+
+*Handle numbering.* The event's first parameter is the floor texture, and the host allocates an identity's object handle at its first use
+(script-object-handles.mjs `handleOf`), so the dispatch a fast answer skips used to be where a texture got its handle: every handle made after it
+(the actors' ones in the posted `mesh-create` records, for one) was lower by one with the fast answer on, in `frame-alloc-meter.mjs` digests of the
+Island (`events` of 20 of 300 frames; `bench-sim` digests do not carry handles). `scanFast` asks for the texture's handle when it answers 1, so the
+numbering is the dispatch's (the Island's meter digest is then `5e021f24dcd1a8ed` with `?walkPrelude=js` and without it).
+
 
 ## Original comparison
 

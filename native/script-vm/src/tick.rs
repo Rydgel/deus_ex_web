@@ -732,6 +732,7 @@ fn tick_body(
             } else {
                 (physics == 2.0 && crate::fall::perform(ctx, a.handle, a.base, delta))
                     || (physics == 6.0 && crate::fall::perform_projectile(ctx, a.handle, a.base, delta))
+                    || (physics == 7.0 && crate::fall::perform_rolling(ctx, a.handle, a.base, delta))
             };
             if !done {
                 unsafe { js_tick_physics(ctx, delta) };
