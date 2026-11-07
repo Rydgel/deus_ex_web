@@ -2295,6 +2295,129 @@ unmoved); shipped on this branch. The Metro run does not move. The page mean at 
 * The rider table's `fillSlot` (0.33 ms in the slowest tenth, `riderBaseInstance` for each slot after every base-epoch change) and
   `checkEncroachment`'s per-candidate reads stay as the previous step left them.
 
+### Battery Park at rest (2026-11-07)
+
+The task: Battery Park (`02_NYC_BatteryPark`) at rest in Firefox inline, 60 fps. Result, all headless Linux (Ryzen 9 8945HS, Node 26, Firefox
+inline 1440x960, god mode, master 2534cbfb; the Mac and headed runs are not measured): **one family reached the ship bar and is merged: the
+world root no longer takes part in the renderer's per-render matrix walk (`p.render` 3.40 -> 2.83 ms at the rest spot, 8 pairs of 8 lower;
+page mean 18.13 -> 17.72 ms there).** Three more families (class 1 light animation, the light atlas' rectangles, the fog tiles' rectangles) were built
+and are exact, but are 0.13 ms or less each and are on the branch `batterypark-unshipped` (commit 1df307a3), described below with their A/B.
+**Battery Park at rest is still over 16.7 ms at its heavy spot (page p95 20 ms)**: its profile is flat and nothing left reaches 0.5 ms alone. The
+four-heading frame-time route is under 16.7 ms at p95 already, and the map start is 0.8 ms over (p95 17.5 before, 16.75 with the bundle below).
+
+**Reproduction.**
+* `node scripts/frame-time-set.mjs --browser firefox --maps 02_NYC_BatteryPark` on the quiet machine: 3,665 drawn frames, page mean 12.81 ms, p50 13, p95 16
+  (the slowest tenth 16.80). The route passes 16.7 ms at p95 today; the "p95 about 19" of the earlier sets was taken before the actors, HUD,
+  moving-light and light-pack merges, and with other sessions on the machine.
+* The two idle places that are over: the map start (`hitch-run.mjs --browser firefox --map 02_NYC_BatteryPark --mode idle --god --seconds 25
+  --profile FILE`: page mean 14.5 ms and p95 17.5 unprofiled in the A/B, 15.6 and 19 with the Gecko profiler on) and the rest spot of the earlier notes, (2025, -3396, 263) yaw 32768
+  (`--place '{"location":[2025,-3396,263],"rotation":[0,32768,0]}'`: mean 19.1 ms profiled, 18.1 unprofiled in the A/B, p95 20 to 22). The spot is 3
+  to 4 ms dearer than the start: HUD 1.9 against 0.9 ms (cause not found), fog 1.7 against 1.0, `p.lightAnimation` 1.5 against 0.8, and two
+  PHYS_Rolling TrashPapers near the player (below).
+* Node could not run this map's census as it stood (every tick stops at "UViewport SizeX/SizeY are unknown before the first frame");
+  `scripts/scenarios/idle-spot.mjs` gives the viewport its size, stands the god-mode player at the spot and can list the actors by Physics.
+
+**Ranking (Gecko profile of the idle session at the spot, ms a frame; in brackets the slowest tenth minus the rest, from the hitch log's phases).**
+
+| Family | Spot | Map start | What is in it |
+|---|---:|---:|---|
+| Level tick (`p.tick`) | 6.2 (+1.4) | 5.8 (+2.0) | Rust batch 2.9 inclusive; the hand-backs: `js_eval` 0.84 (spread over natives), `js_tick_physics` 0.48 (+0.18; 0.27 of it two TrashPapers in `physRolling`, whose cost is `playerMove`), the AI event manager 0.44 (+0.32; perception's `lineCheck` 0.06 -> 0.20), walking prelude 0.29 (+0.14), minor GC +0.16 |
+| three.js passes (`p.render`) | 3.4 (+0.4) | 3.0 (+0.6) | main pass 1.58, the sky pass 1.29, the HUD overlay 0.51; `updateMatrixWorld` 0.49 of the first two, `setProgram` 0.19, `projectObject` 0.14; 190 draw calls |
+| Actors layer (`p.actors`) | 2.2 (+0.3) | 2.0 (+0.3) | `occludeMain` 0.94 (Rust), `updateBindings` 0.54 |
+| HUD (`p.hud`) | 1.9 (+0.4) | 0.9 (+0.3) | script windows' draw 1.0 (Rust `drawTree`, `js_eval` 0.2 under it), tick 0.5, the overlay's 144 `bufferSubData` calls (48 tile batches x 3 attributes) |
+| Fog (`p.fog`) | 1.7 (+0.1) | 1.0 (+0.2) | `levelMaps` 0.89 (the Rust loop 0.38), 90 tile uploads 0.3 |
+| Class 1 light animation + atlas (`p.lightAnimation`, `p.lightUpload`) | 1.5 + 0.4 (0) | 0.8 + 0.2 | `lighting.animate` 0.46 (the modulation tables 0.15, `inView` 0.10), the atlas writes 0.40, `syncMovingLights` 0.42, the atlas flush 0.40 (35 light maps change a frame) |
+| Audio, textures | 0.4 + 0.4 | 0.5 + 0.4 | lip sync 0.13, ambient scan 0.13; fire and water ticks 0.26 |
+
+By source file the page frame's self time at the spot is three.js 2.35 ms, `script-runtime.mjs` (the object model behind the Rust VM's imports) 1.62,
+`fog-pass.mjs` 0.73, `script-vm.mjs` 0.61, the `texSubImage2D`/`3D` natives 0.52 + 0.25, `light-atlas.mjs` 0.50, with a tail of rows under 0.35. The slowest
+tenth is the tick (about 40% of its extra), then the render and the HUD; collections are 0.16 ms of it. The GL uploads of a frame at the spot (one
+run with a wrapper on the upload calls): 340 calls and 1.0 MB: 144 `bufferSubData` of the HUD's tile batches (555 bytes each), 90 fog tiles
+(328 KB), 70 atlas rectangles (239 KB), 23 three.js texture updates (the fire and water textures, 352 KB), 17 world index buffers.
+
+**Shipped: the world root's matrix walk** (`world.mjs`; `?sceneWalk=full` keeps the old behavior, `?sceneWalk=verify` checks it).
+`renderer.render` calls `scene.updateMatrixWorld()` for each pass (the sky frame, then the main frame). main.mjs already keeps the scene and the
+world root at identity without auto-update, and the actor layer's root already skips the walk; the world root still walks its 2,721 objects
+twice a frame to find nothing to do. A hot walk of the whole scene takes 63 us in an isolated loop, but `updateMatrixWorld` took 0.17 + 0.34 ms
+inside the frame (cold caches): the largest single self time in the page frame, 0.49 to 0.52 ms at both places. Nothing under the world root is
+ever flagged for an update: its meshes are world-space with identity local matrices and `matrixAutoUpdate` false, a mover's group and meshes are
+updated at once (`syncMovers`, the load), and the fog, markers and batching add no auto-updating object. So the root's `updateMatrixWorld` now returns at
+once unless it is forced; a forced cascade still walks everything.
+* *Exactness* (host drawing only, no original behavior is involved): `validate-scene-matrices` snapshots every object's `matrixWorld` after the
+  renderer's update and compares it with a forced full cascade, bit for bit, on every update: it passes on the Island, Smug (movers moved and
+  rotated, a mirror on a mover), Training and, added, Battery Park (915 updates, 1,660 objects each). `?sceneWalk=verify` does the same in the page,
+  after every skipped walk (the walk is skipped, a forced cascade runs beside it and each object's `matrixWorld` is compared as bits): Firefox inline sessions of
+  40 s at the rest spot (3,914 walks, 10.6 million objects), roaming Battery Park (4,334 walks, 11.8 million) and roaming the Island (4,964 walks, 0.66 million) found
+  0 objects differing and no page error.
+* *A mover shortcut* (`world-visibility.mjs`): `select` made a `Set` and looped a mover's faces for each of the 65 movers in each of its two calls a
+  frame (130 empty sets a frame at Battery Park) when no polygon of the mover was drawn; it skips that, with the same result (count 0).
+  `stats` also counts selects, index rebuilds and uploads: the main and the sky pass each rebuild all the world meshes' index buffers every
+  frame (2 rebuilds and 18 index uploads a frame at rest), because their node sets alternate.
+
+**A/B, Firefox inline, interleaved, the final tree, `?sceneWalk=full` (the old walk) against the default** (sessions of 25 s idle, the frames from 5 s after
+the map, four pairs to a hold of the heavy lock and an 8 GB scope, pinned to CPUs 8-11, `hitch-ab.mjs` with the guard moved around the holds so that a pair's
+sessions run back to back; `.work/bp/agg.mjs`; the slowest tenth is the mean of the slowest 10% of frames; "lower" counts the pairs where the default was lower):
+
+| Case | pairs | arm | page mean | slowest tenth | p50 / p95 | `p.render` | pairs lower (page / render) |
+|---|---:|---|---:|---:|---|---:|---|
+| Battery Park (2025, -3396, 263) yaw 32768, idle | 8 | `sceneWalk=full` | 18.13 | 20.94 | 18.25 / 20.5 | 3.40 | |
+| | | default | 17.72 | 20.98 | 17.63 / 20.0 | 2.83 | 6 of 8 / 8 of 8 |
+| the same, the view turning 45 degrees a second (`--spin 45`) | 3 | `sceneWalk=full` | 14.41 | 19.53 | 14.0 / 19.0 | 2.24 | |
+| | | default | 13.90 | 18.99 | 13.0 / 19.0 | 1.74 | 3 of 3 / 3 of 3 |
+| 01_NYC_UNATCOIsland, map start, idle (control) | 8 | `sceneWalk=full` | 16.64 | 19.71 | 16.9 / 19.4 | 2.25 | |
+| | | default | 16.58 | 19.52 | 16.6 / 19.4 | 2.22 | 4 of 8 / 4 of 8 |
+| 03_NYC_Airfield, map start, idle | 4 | `sceneWalk=full` | 13.60 | 17.17 | 13.3 / 16.3 | 1.14 | |
+| | | default | 13.60 | 17.22 | 13.5 / 16.8 | 1.12 | 2 of 4 / 2 of 4 |
+
+Ship bar (page mean -0.3 ms or slowest tenth -0.5 ms, the Island not worse): passed at the spot on the mean (-0.41 ms, median of the pairs -0.34;
+`p.render` -0.56 ms in every pair) and with the view turning (-0.51 mean and -0.53 tenth, 3 of 3); the Island and the Airfield do not move (their worlds have few
+meshes to walk: `p.render` -0.03 and -0.02). The slowest tenth at the spot is not shorter (+0.04, median of the pairs -0.31): the sessions' spread is
+about 0.7 ms in either direction, so the mean carries the result.
+
+**Built, exact and not shipped** (the bundle, 9 pairs at the spot, 4 at the map start and 3 turning, `sceneWalk=full&lightModulation=table&lightPack=js&uploadBands=off`
+against the defaults; commit 1df307a3 on `batterypark-unshipped`, with their own notes in `docs/static-lighting.md` and `docs/volumetric-fog.md`
+there). The bundle as a whole read: spot page mean 18.13 -> 17.44 (-0.63, 9 of 9 pairs lower), slowest tenth 20.96 -> 20.27 (-0.61), map start 14.51 -> 13.68
+(-0.83, 4 of 4), 15.62 -> 14.11 turning (-1.51, 3 of 3); the Island +0.10 (noise). By phase, which tells the families apart:
+
+| Family | what it does | phase, spot | phase, map start | phase, turning |
+|---|---|---|---|---|
+| the world root's matrix walk (shipped) | above | `p.render` -0.49 (9 of 9) | -0.60 (4 of 4) | -1.01 (3 of 3) |
+| class 1 light animation | the modulation tables of the three noise effects made when a merge reads an entry (they were rebuilt whole, 3 x 65,536 entries, on every frame's first merge: 0.15 ms); the changed region's atlas words made by `light_pack` in Rust (simd128) and copied into the page a row at a time, in place of the clamped three-byte-load loop of `LightAtlas.update` (2.46 ns a texel; 35 light maps change a frame) | `p.lightAnimation` -0.13 (9 of 9) | -0.12 (4 of 4) | -0.22 (3 of 3) |
+| the light atlas' rectangles | the flush sends rectangles that lie side by side on a page's shelf as one (`upload-bands.mjs`: 78 rectangles in 8 calls a frame at the spot), the bytes between them being the page's own | `p.lightUpload` -0.08 (9 of 9) | -0.03 | -0.07 |
+| the fog tiles' rectangles | the same for the 90 tiles a frame | `p.fog` +0.08 (0 of 9: worse) | +0.01 | -0.16 |
+
+The two light families are under the bar (0.13 and 0.08 ms; 0.21 together) and the fog bands lose. Upload calls fell by 150 a frame (345 -> 207) while `gl.upload` stayed
+at 1.0 ms: in Firefox the bytes cost what the calls cost, so a band that sends the gap between two tiles pays as much as it saves, and the fog's sparse tiles pay
+more (`rectangle()` copies a wider view, `p.fog` 1.64 -> 1.72). Exactness of the bundle: `validate-light-animation-rust` (7,200 map frames of 12 maps, 2.2 million
+merges, 10,265 modulation tables compared with the reference's, four script brightness changes a map) passes with the entries made on demand; the
+`moving-lights-bench.mjs` hashes (floats and atlas pages after 240 frames) are equal in `LIGHT_MODULATION=table|lazy` and `LIGHT_PACK=js|rust|verify` at the Battery Park spot,
+and equal to the Mole People, Vandenberg and Island figures of "Moving lights" (master's); 22,719 regions (5.7 M texels) of the Node run and 32,410 (3.9 M) of a Firefox
+inline `?lightPack=verify` session were compared word for word with `LightAtlas.update`'s, 0 differing; `validate-light-atlas-upload` (GPU array layers equal the CPU
+pages after 240 flushes with the bands on) passes in Chromium and Firefox at the Mole People (39,821 dirty rectangles in 10,932 calls), Battery Park (18,682 in 2,017) and
+Training; the four fog pages of a Firefox inline session read back equal (`deusExViewer.fogPages()`); `validate-volumetric-fog-play` passes.
+
+**Checks of the merged change** (the final tree, under the heavy lock): the six sim digests (`bench-sim.mjs --warm 60 --ticks 300 --render-feedback`) unchanged:
+Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84, 03_NYC_Airfield 46ed0d32ae5b56af, 06_HongKong_WanChai_Market 80d27b37e0944d88, 15_Area51_Bunker
+764a7bdffd2ebe59, 09_NYC_Dockyard e53f348673f1247b (the change is in the page's world, not in the simulation, and no Rust changed; the bundle's run held them too);
+`validate-scene-matrices` (Island, Smug, Training, Battery Park: every `matrixWorld` equals the forced cascade on every update), `validate-page-movers-play` and
+`validate-mover-vertices-play` pass; the three Firefox `?sceneWalk=verify` sessions above; `npm run build:wasm` is warning-free; `npm test`: 969 tests, 965 pass, 4 skipped,
+0 fail.
+
+**What is open.**
+* **The slowest tenth** is the tick: +1.4 ms at the spot, +2.0 at the map start, spread over the Rust batch's hand-backs, the event manager (perception's
+  line checks come back to JavaScript, `lineCheck` 0.06 -> 0.20) and the walking prelude; no family is above 0.35 ms.
+* **TrashPaper's PHYS_Rolling** (`rolling.mjs`, Engine.dll 0x103d4b80, Unicorn oracle `validate-native-rolling`): two papers rolling near the player cost 0.27 ms a frame
+  at the spot (0.01 at the map start), 0.21 of it `playerMove`, the generic JavaScript MoveActor. `fall.rs` runs falling and projectiles on `move_source`; a rolling body
+  there is the next port of this kind, and the street maps have papers. Not started.
+* **The HUD overlay** uploads 144 tiny buffers a frame (48 draw batches x position, uv and tint): one interleaved buffer for the frame's tiles would be one call
+  (about 0.15 ms of `projectObject` + `bufferSubData` at the spot). The batches keep the window order, so the draw order would not change. Not started.
+* **The BSP selector** rebuilds every world mesh's index buffer for the sky pass and again for the main pass, each frame (2 rebuilds, 18 uploads at rest): one
+  index buffer with a region per pass (`drawRange.start`) would keep both; a second index object per mesh would make three.js set up each vertex-array
+  object twice a frame, so it is the region, not the object. About 0.1 to 0.2 ms; moving, the sky's region stays. Not started.
+* **Bytes, not calls, are the upload cost in Firefox** (above): the fire and water textures (23 updates, 352 KB a frame, RGBA) are the largest source; an 8-bit index
+  texture with the palette on the GPU would send a quarter of it, but changes the shader of every animated texture.
+* The Mac and headed runs are not measured.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
@@ -2306,5 +2429,6 @@ unmoved); shipped on this branch. The Metro run does not move. The page mean at 
 
 * Whether Battery Park can reach 16 ms inline. Steps 1 to 4 as estimated take its p50 from 26 to 13 to 19 ms. That is not enough
   unless its slow tenth falls by more than half as well. Its tail is mostly perception's light level, half of it the JavaScript line
-  checks.
+  checks. (2026-11-07, [Battery Park at rest](#battery-park-at-rest-2026-11-07): the four-heading route is under 16.7 ms at p95 today, the
+  map start is at 17.5 ms p95 (16.75 with the unshipped bundle) and the rest spot at 20 ms (17.7 ms mean) with the matrix-walk family; the profile there is flat.)
 * The Mac: its tick was about 1.35 times this host's in Chrome. Firefox there is unmeasured since October.

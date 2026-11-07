@@ -9,7 +9,8 @@
 // involved.
 //
 // Browser cases, each standing then walking forward: UNATCO Island at Player
-// start, 02_NYC_Smug, whose mirror sits on a mover (DeusExMover7), and
+// start, 02_NYC_BatteryPark (2,700 world meshes, 36 movers: the world root skips the
+// non-forced walk, world.mjs), 02_NYC_Smug, whose mirror sits on a mover (DeusExMover7), and
 // 00_Training. None of their movers moves by itself, so a Node pass first
 // drives world.syncMovers on 02_NYC_Smug's world with scripted offsets and a
 // rotating key, calls a mover mesh's updateWorldMatrix(true, false) as the
@@ -81,7 +82,7 @@ if (!url) {
   await server.listen();
   url = server.resolvedUrls.local[0].replace(/\/$/, '');
 }
-const CASES = option('maps', '01_NYC_UNATCOIsland,02_NYC_Smug,00_Training').split(',');
+const CASES = option('maps', '01_NYC_UNATCOIsland,02_NYC_Smug,00_Training,02_NYC_BatteryPark').split(',');
 const angle = option('angle', process.platform === 'darwin' ? 'metal' : 'gl');
 const browser = await chromium.launch({args: [`--use-angle=${angle}`]});
 const results = [];
