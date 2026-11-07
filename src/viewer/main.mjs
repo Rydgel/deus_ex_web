@@ -78,6 +78,8 @@ if(lightKernelParam)globalThis.DEUS_EX_LIGHT_KERNEL=lightKernelParam;
 // (moving-lights.mjs); ?movingLights=full keeps the whole-frame recompute. ?movingCompose=js composes them in the JavaScript bodies
 // (addDirect, light-atlas.mjs update) instead of the Rust core (moving.rs); ?movingCompose=verify runs both and compares every float
 // and byte (deusExViewer.movingLights().stats.verify).
+// ?sceneWalk=full keeps the renderer's walk of the world root's meshes (world.mjs); ?sceneWalk=verify skips it and compares every
+// matrixWorld with a forced cascade's (deusExViewer.sceneWalk()).
 const movingLightsParam=new URLSearchParams(location.search).get('movingLights');
 if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // Measurement only: ?moverRelight=off keeps every mover's light maps as the
@@ -170,7 +172,7 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['x87','DEUS_EX_X87'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
-  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogKernel','DEUS_EX_FOG_KERNEL'],['fogPass','DEUS_EX_FOG_PASS'],['movingCompose','DEUS_EX_MOVING_COMPOSE'],['sceneWalk','DEUS_EX_SCENE_WALK'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['projectilePhysics','DEUS_EX_PROJECTILE_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
   ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['trackedCollision','DEUS_EX_TRACKED_COLLISION'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES'],['workerBusy','DEUS_EX_WORKER_BUSY'],['leafLists','DEUS_EX_LEAF_LISTS'],['detailTextures','DEUS_EX_DETAIL_TEXTURES'],['navSearch','DEUS_EX_NAV_SEARCH'],['collisionHost','DEUS_EX_COLLISION_HOST'],['globalCalls','DEUS_EX_GLOBAL_CALLS'],['actorPlumbing','DEUS_EX_ACTOR_PLUMBING'],['windowDraw','DEUS_EX_WINDOW_DRAW'],['tickReads','DEUS_EX_TICK_READS'],['epochScope','DEUS_EX_EPOCH_SCOPE'],['handleMirror','DEUS_EX_HANDLE_MIRROR'],['decalFast','DEUS_EX_DECAL_FAST'],['decalFastTable','DEUS_EX_DECAL_FAST_TABLE'],['playerPawn','DEUS_EX_PLAYER_PAWN'],['outStruct','DEUS_EX_OUT_STRUCT'],['structArrays','DEUS_EX_STRUCT_ARRAYS'],['setRotation','DEUS_EX_SET_ROTATION'],['cleanupScan','DEUS_EX_CLEANUP_SCAN'],['foreachStart','DEUS_EX_FOREACH_START'],['riderTable','DEUS_EX_RIDER_TABLE'],['compactScan','DEUS_EX_COMPACT_SCAN'],['soundRead','DEUS_EX_SOUND_READ'],['decalFollow','DEUS_EX_DECAL_FOLLOW'],['configFind','DEUS_EX_CONFIG_FIND'],['inputFields','DEUS_EX_INPUT_FIELDS']]) {
@@ -2401,6 +2403,7 @@ fog() {
 },
 /** The moving lights' composition (moving-lights.mjs): the body that composes (rust, js or verify) and its counters. */
 movingLights() { return world ? world.movingLightStats() : null; },
+sceneWalk() { return world ? world.sceneWalkStats() : null; },
 // Each fog page's GPU texture read back against its pixels (fog-pass.mjs pagesMatch): the texels that differ.
 fogPages() { return world?.fog ? world.fog.pagesMatch(renderer) : null; },
 /** Validation only: the 3D view's projection from the pass frame (on, the

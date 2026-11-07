@@ -37,7 +37,7 @@ export function createWorldVisibility(root, nodeCount) {
   });
   const visible = new Uint8Array(nodeCount);
   let shown = null, selected = false;
-  const stats = { meshes: meshes.length, triangles: 0, drawnTriangles: 0, nodes: 0 };
+  const stats = { meshes: meshes.length, triangles: 0, drawnTriangles: 0, nodes: 0, selects: 0, rebuilds: 0, uploads: 0, moverRebuilds: 0, moverUploads: 0 };
   for (const entry of meshes) stats.triangles += entry.nodes.length;
   return {
     stats,
@@ -46,22 +46,28 @@ export function createWorldVisibility(root, nodeCount) {
      * nodes keep whole meshes. */
     select(nodes, moverPolys = null) {
       if (!nodes) { this.all(); return; }
+      stats.selects++;
       for (const entry of movers) {
         const polys = moverPolys?.[entry.name];
         entry.selected = Boolean(moverPolys);
         if (!entry.selected) continue;
-        const drawn = new Set(polys ?? []), out = entry.index.array;
         let count = 0;
-        for (let t = 0; t < entry.faces.length; t++)
-          if (drawn.has(entry.faces[t])) { out[count++] = 3 * t; out[count++] = 3 * t + 1; out[count++] = 3 * t + 2; }
+        // A mover with no drawn polygon (most of them, most frames: 130 empty sets a frame at Battery Park) has no triangle to find.
+        if ((polys?.length ?? polys?.size ?? 0) > 0) {
+          const drawn = new Set(polys), out = entry.index.array;
+          for (let t = 0; t < entry.faces.length; t++)
+            if (drawn.has(entry.faces[t])) { out[count++] = 3 * t; out[count++] = 3 * t + 1; out[count++] = 3 * t + 2; }
+        }
         entry.count = count;
-        if (count) { entry.index.clearUpdateRanges(); entry.index.addUpdateRange(0, count); entry.index.needsUpdate = true; }
+        stats.moverRebuilds++;
+        if (count) { entry.index.clearUpdateRanges(); entry.index.addUpdateRange(0, count); entry.index.needsUpdate = true; stats.moverUploads++; }
         entry.visible = entry.mesh.visible;
         entry.mesh.visible = entry.visible && count > 0;
         entry.geometry.setIndex(entry.index);
         entry.geometry.setDrawRange(0, count);
       }
       if (!sameNodes(shown, nodes)) {
+        stats.rebuilds++;
         visible.fill(0);
         for (const node of nodes) visible[node] = 1;
         stats.drawnTriangles = 0;
@@ -71,7 +77,7 @@ export function createWorldVisibility(root, nodeCount) {
           for (let t = 0; t < nodesOf.length; t++)
             if (visible[nodesOf[t]]) { out[count++] = 3 * t; out[count++] = 3 * t + 1; out[count++] = 3 * t + 2; }
           entry.count = count;
-          if (count) { entry.index.clearUpdateRanges(); entry.index.addUpdateRange(0, count); entry.index.needsUpdate = true; }
+          if (count) { entry.index.clearUpdateRanges(); entry.index.addUpdateRange(0, count); entry.index.needsUpdate = true; stats.uploads++; }
           stats.drawnTriangles += count / 3;
         }
         shown = nodes.slice();

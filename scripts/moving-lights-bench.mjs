@@ -8,7 +8,8 @@
  *
  *   node scripts/moving-lights-bench.mjs --map 03_NYC_MolePeople --place 2469,-179,23 --yaw 32768 [--frames 240] [--warm 60]
  *     [--hash] [--stats] [--lights] [--cpu-profile FILE] [--auglight] (00_Training: F12, the AugLight) [--turn N] (MouseX N each frame)
- *     [--all] (no view: every light map is drawn)
+ *     [--all] (no view: every light map is drawn) [--anim] (also time world.updateTextureAnimation, the class 1 light animation among it, and
+ *     report its animated light maps, those merged and those changed a frame)
  *
  * MOVING_COMPOSE=js|rust|verify (the switches of moving-lights.mjs) are read from the environment.
  * --hash prints sha1 digests of the pixels (`texels`: the moving light maps' floats, `atlas`: the pages' bytes), each updated per frame.
@@ -59,7 +60,7 @@ const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().
 const lightNoise = createLightNoise(createNativeRng(0x1badf00d).frand);
 const texelHash = createHash('sha1'), atlasHash = createHash('sha1');
 const bytes = array => Buffer.from(array.buffer, array.byteOffset, array.byteLength);
-const times = [], stats = [];
+const times = [], stats = [], animTimes = [], animStats = [];
 const movers = () => game.collision.movers.map(mover => ({ name: mover.name, values: mover.values, rotation: mover.rotation ? [...mover.rotation] : null,
   offset: [...mover.collider.offset], position: mover.values.Location.map((v, i) => Math.fround(v + mover.collider.offset[i])) }));
 let profile = null;
@@ -85,9 +86,12 @@ function frame(index, timed) {
   const start = performance.now();
   const result = world.syncMovingLights(lights, has('all') ? {} : { frustum });
   const ms = performance.now() - start;
+  const animStart = performance.now();
   world.updateTextureAnimation(index / 60, has('all') ? { timeSeconds } : { timeSeconds, frustum });
+  const animMs = performance.now() - animStart;
   if (!timed) return;
   times.push(ms);
+  if (has('anim')) { animTimes.push(animMs); animStats.push(world.lightAnimation()); }
   if (has('stats') || has('hash')) {
     const records = world.movingLightRecords();
     if (has('stats')) stats.push({ lights: lights.length, records: records.length, changed: result.lightmaps,
@@ -111,6 +115,11 @@ if (has('stats')) {
   const sum = key => stats.reduce((s, x) => s + x[key], 0) / stats.length;
   Object.assign(report, { lights: +sum('lights').toFixed(1), movingRecords: +sum('records').toFixed(1), changedPerFrame: +sum('changed').toFixed(2),
     movingTexels: +sum('texels').toFixed(0) });
+}
+if (has('anim')) {
+  const mean = key => +(animStats.reduce((s, x) => s + x[key], 0) / animStats.length).toFixed(2);
+  Object.assign(report, { animMs: +(animTimes.reduce((s, x) => s + x, 0) / animTimes.length).toFixed(3), animRecords: animStats[0].records,
+    animMerged: mean('merged'), animChanged: mean('changed'), animChangedSpatial: mean('changedSpatial') });
 }
 if (world.movingLightStats) Object.assign(report, { compose: world.movingLightStats().compose, composeStats: world.movingLightStats().stats });
 if (globalThis.__dbgChanged) { const c = new Map(); for (const x of globalThis.__dbgChanged) c.set(x, (c.get(x) ?? 0) + 1); console.error([...c].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${v} ${k}`).join('\n')); }

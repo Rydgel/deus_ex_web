@@ -50,6 +50,29 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   // Identity, never moved: no auto-update cascade (main.mjs, the scene).
   root.matrixAutoUpdate = false;
+  // Nothing under the root is flagged for a world-matrix update between frames: its meshes are world-space with identity local
+  // matrices, a mover's group updates itself and its meshes at once (syncMovers, the load), and no descendant auto-updates. The
+  // renderer's own non-forced Scene.updateMatrixWorld (twice a frame, sky and main pass) therefore need not walk the root's
+  // ~2,700 meshes, which cost 0.3-0.5 ms a frame in Firefox on cold caches (docs/firefox-60fps-plan.md "Battery Park at rest"); a
+  // forced cascade still does, and validate-scene-matrices compares the two on every update. ?sceneWalk=full (DEUS_EX_SCENE_WALK)
+  // keeps the walk; ?sceneWalk=verify skips it and compares every descendant's matrixWorld with a forced cascade's after each
+  // skipped update (deusExViewer.sceneWalk()).
+  const sceneWalk = globalThis.DEUS_EX_SCENE_WALK;
+  const walkStats = { mode: sceneWalk === 'full' ? 'full' : sceneWalk === 'verify' ? 'verify' : 'skip', skipped: 0, objects: 0, differing: 0 };
+  if (sceneWalk !== 'full') {
+    const cascade = THREE.Object3D.prototype.updateMatrixWorld;
+    root.updateMatrixWorld = function (force) {
+      if (force) { cascade.call(this, force); return; }
+      walkStats.skipped++;
+      if (sceneWalk !== 'verify') return;
+      const objects = [];
+      this.traverse(object => objects.push([object, object.matrixWorld.elements.slice()]));
+      cascade.call(this, true);
+      walkStats.objects += objects.length;
+      for (const [object, elements] of objects)
+        if (elements.some((value, i) => !Object.is(value, object.matrixWorld.elements[i]))) walkStats.differing++;
+    };
+  }
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   // The page's procedural textures this world's surfaces hold (procedural-textures.mjs): released with the world.
   const proceduralLeases = [];
@@ -718,6 +741,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       A: Array.from(lightFrame.noise.A), W: Array.from(lightFrame.noise.W), strobe: { ...lightFrame.strobe } }),
     /** The light atlas pages' bytes (validators compare them). */
     lightAtlasPages: () => lightAtlas.pages.map(page => page.pixels),
+    /** The world root's matrix walk (?sceneWalk=): its mode, the non-forced updates skipped, and in verify mode the objects compared and
+     * those whose matrixWorld a forced cascade changed. */
+    sceneWalkStats: () => ({ ...walkStats }),
     lightAnimation: () => ({ records: lighting.animatedRecords().length, changed: lightAnimation.changed,
       merged: lightAnimation.merged, changedSpatial: lightAnimation.changedSpatial,
       spatialRecords: lighting.animatedRecords().filter(record => record.animated.some(light => light.spatialDynamic)).length,
