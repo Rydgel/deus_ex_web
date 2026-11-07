@@ -222,6 +222,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   };
   const ambientList = [], nearActors = [], nearDecided = [], near = {actors: nearActors, decided: nearDecided};
   const nearStats = {scans: 0, entries: 0, decided: 0, verified: 0};
+  // (a page's session reads the counts as `deusExVerifyCounts.ambientScan`)
+  (globalThis.deusExVerifyCounts ??= {}).ambientScan = nearStats;
   // AMBIENT_SCAN=verify: the scan's list is what the actors of every live AmbientSound that the host's own reads and range test take in
   // (galaxy-audio.mjs updateLockedKernel's first scan), in order, and an entry marked decided passes those tests.
   const verifyNear = (listener, entries) => {

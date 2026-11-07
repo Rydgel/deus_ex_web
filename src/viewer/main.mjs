@@ -2420,6 +2420,8 @@ fog() {
 /** The moving lights' composition (moving-lights.mjs): the body that composes (rust, js or verify) and its counters. */
 movingLights() { return world ? world.movingLightStats() : null; },
 sceneWalk() { return world ? world.sceneWalkStats() : null; },
+/** The BSP selector's counters (world-visibility.mjs): selects, rebuilds, region hits, uploads and, under ?indexRegions=verify, the meshes compared. */
+visibilityStats() { return world?.visibility ? { ...world.visibility.stats } : null; },
 /** The HUD tile draw's counters (hud.mjs stats): runs and tiles drawn, and under ?hudDraw=verify the segments and pixels compared. */
 hudDraw() { return hudRenderer ? { mode: hudDrawMode(), ...hudRenderer.stats() } : null; },
 /** The class 1 light animation's last frame (animated, merged and changed light maps, ms) and the packed atlas writes' counters (?lightPack=). */
