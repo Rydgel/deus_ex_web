@@ -47,7 +47,7 @@ setInterval(()=>{
   if(weaponDraw&&!weaponDraw.__counted){const original=weaponDraw.hudActor.bind(weaponDraw);weaponDraw.__counted=true;
     weaponDraw.hudActor=(...args)=>window.__deusHud.off?0:(window.__deusHud.draws+=original(...args));}
   if(hudRenderer&&!hudRenderer.__counted){const render=hudRenderer.render;hudRenderer.__counted=true;
-    hudRenderer.render=(r,w,h,commands,...rest)=>{for(const c of commands){const k=c.kind??'tile';window.__deusHud.kinds[k]=(window.__deusHud.kinds[k]??0)+1;}return render(r,w,h,commands,...rest);};}
+    hudRenderer.render=(r,w,h,commands,...rest)=>{const list=Array.isArray(commands)?commands:Array.from({length:commands.count},(_,i)=>commands.words[i*12]===0?{}:commands.others[commands.words[i*12+1]]);for(const c of list){const k=c.kind??'tile';window.__deusHud.kinds[k]=(window.__deusHud.kinds[k]??0)+1;}return render(r,w,h,commands,...rest);};}
 },50);
 `});
   });

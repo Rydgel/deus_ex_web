@@ -23,8 +23,8 @@
  */
 import {identityOfHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount} from './script-vm.mjs';
-import {frameLayout} from './script-frame-locals.mjs';
-import {functionSignature, callSignature, fieldKeyId} from './script-vm-lower.mjs';
+import {frameLayout, FrameLocals} from './script-frame-locals.mjs';
+import {functionSignature, callSignature, fieldKeyId, stringFramesMode} from './script-vm-lower.mjs';
 import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-object-image.mjs';
 import {probeNames, probeIndex} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
@@ -55,7 +55,8 @@ const PROBES_DISABLED = typeof process !== 'undefined' && process.env?.RUST_PROB
  * latent actions are polled in Rust; the tick's IsProbing('Tick') and
  * IsProbing('EnemyNotVisible') read the state table's probe words. */
 export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2, TICK_POLL_BIT = 4, TICK_PROBE_BIT = 8;
-const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
+// K_RUN_D is K_RUN for a function with locals that need destruction (STRING_FRAMES): its body ends with `runEnd`.
+const K_JS = 1, K_NOCALL = 2, K_RUN = 3, K_RUN_D = 4;
 export const MAX_RUNS = 256;
 /** The window events Rust runs (dispatch.rs dispatch_window_event): their cache slots' `which` is WINDOW_EVENT_BASE plus the index. */
 export const WINDOW_EVENT_BASE = 16;
@@ -83,6 +84,8 @@ export class EventHost {
     this.templates = [null];
     this.templateIds = new WeakMap();
     this.deleteMe = null;
+    // js_run_end's counts: bodies with locals to destroy that returned, of them frames a JavaScript step had made, and (verify) the others checked.
+    this.runEnds = 0; this.runEndsMade = 0; this.runEndsVerified = 0; this.runEndsBy = new Map();
     // This host's entry in `hosts` (attach), until dispose.
     this.ref = null;
   }
@@ -265,11 +268,11 @@ export class EventHost {
     if (!fn || fn.parameters.length !== 1) return js;
     if ((fn.script.nativeIndex & 0xffff) !== 0) return {...js, kind: K_NOCALL};
     if (fn.script.functionFlags & 0x420 || fn.result) return js;
-    const signature = functionSignature(fn, loader);
+    const signature = functionSignature(fn, loader, true);
     if (!signature || signature.params[0].kind !== 'object') return js;
     const layout = frameLayout(fn, loader), lowered = layout && vm.loweringFor(fn.compiled, layout, runtime.services, receiver);
     if (!lowered) return js;
-    return {kind: K_RUN, code: lowered.code, size: layout.size, param: signature.params[0].offset + 1,
+    return {kind: signature.destroys ? K_RUN_D : K_RUN, code: lowered.code, size: layout.size, param: signature.params[0].offset + 1,
       template: this.template(fn, lowered, layout)};
   }
   decide(receiver, which) {
@@ -313,7 +316,7 @@ export class EventHost {
     let id = this.templateIds.get(lowered);
     if (id === undefined) {
       id = this.templates.length;
-      this.templates.push({compiled: fn.compiled, lowered, layout, services, resultField: fn.result ?? null});
+      this.templates.push({compiled: fn.compiled, lowered, layout, services, resultField: fn.result ?? null, fn});
       this.templateIds.set(lowered, id);
     }
     return id;
@@ -347,9 +350,42 @@ export class EventHost {
     if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
       fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
       (receiver?.kind === 'Class' && !runtime.instances.has(receiver))) return js;
-    if (callSignature(fn, runtime.classLoader)?.id !== sig) return js;
+    const signature = callSignature(fn, runtime.classLoader);
+    if (signature?.id !== sig) return js;
     const layout = frameLayout(fn, runtime.classLoader), lowered = vm.loweringFor(fn.compiled, layout, services, receiver);
     if (!lowered) return js;
-    return {kind: K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services), probe: probeIndex(record)};
+    return {kind: signature.destroys ? K_RUN_D : K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services),
+      probe: probeIndex(record)};
+  }
+  /** js_run_end: a body Rust began (a window event, or a call from the cache or from js_call_begin) with locals that need destruction
+   * has returned. callFunction and processEvent end with destroyFunctionLocals on the frame; a frame no JavaScript step ever made
+   * (`Run.frameObject` is built on first use) holds only the zero locals Rust zeroed it with, and DestroyValue of a zero string
+   * only writes the empty string back into a frame about to be popped (which the next push zeroes), so only a made frame runs the
+   * loop. STRING_FRAMES=verify runs it for the others too, on a frame over the same block, and checks that the block is unchanged
+   * and nothing is thrown. */
+  runEnd(id, template) {
+    const vm = this.vm, view = vm.arena.view, at = this.runsAt + 16 * id;
+    const serial = id < MAX_RUNS ? view.getUint32(at + 12, true) : 0, run = vm.frames[id];
+    const entry = this.templates[template], fn = entry.fn, made = run !== undefined && run.serial === serial && run.frameObject !== null;
+    this.runEnds++;
+    if (stringFramesMode() === 'verify') {
+      const row = this.runEndsBy.get(fn.record?.key ?? fn.name) ?? {made: 0, unmade: 0};
+      row[made ? 'made' : 'unmade']++;
+      this.runEndsBy.set(fn.record?.key ?? fn.name, row);
+    }
+    if (made) {
+      vm.runtime.destroyFunctionLocals(fn, run.frameObject.locals, {parameters: false});
+      this.runEndsMade++;
+      return;
+    }
+    if (stringFramesMode() !== 'verify') return;
+    // (a Rust-begun body's block: RUNS[id] = [template, SELF, locals, serial]; a body js_call_begin began: its Run's base)
+    const base = run !== undefined && run.serial === serial ? run.base : view.getUint32(at + 8, true), size = entry.layout.size;
+    const before = new Uint8Array(vm.arena.memory.buffer, base, size).slice();
+    vm.runtime.destroyFunctionLocals(fn, new FrameLocals(entry.layout, vm.arena, base, null), {parameters: false});
+    const after = new Uint8Array(vm.arena.memory.buffer, base, size);
+    if (before.some((byte, i) => byte !== after[i]))
+      throw new Error(`STRING_FRAMES=verify: DestroyValue changed the unmade frame block of ${fn.record?.key ?? fn.name}`);
+    this.runEndsVerified++;
   }
 }

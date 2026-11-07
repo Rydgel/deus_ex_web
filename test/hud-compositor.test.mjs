@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {createHudRenderer} from '../src/viewer/hud.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodePixels} from '../src/unreal/textures.mjs';
+import {HudCommandStream} from '../src/runtime/script-window-command-stream.mjs';
 
 // Previous compositor's one-tile geometry, retained at this representation
 // boundary. Native GC/Window behavior is covered by validate-play-hud.mjs.
@@ -42,7 +43,66 @@ function texturePackage(name,textures){
       ...decodePixels({width,height,data:Uint8Array.from(pixels)},0,Uint8Array.from(palette),'point')}))};
 }
 
-test('HUD batches consecutive materials without changing the ordered tile stream',async()=>{
+// The draws the compositor submits, whichever way it builds them: the reference ('js') makes one mesh with three attribute buffers per run
+// of one material, drawn by renderOrder; 'single' (the default) makes one mesh with an interleaved buffer, a material array and one group
+// per run, drawn in group order. Both are read here as the same list of runs.
+function runsOf(scene,mode){
+  const runs=[];
+  const meshes=scene.children.filter(mesh=>mesh.visible);
+  if(mode==='js'){
+    for(const mesh of meshes.sort((a,b)=>a.renderOrder-b.renderOrder)){
+      const {geometry,material}=mesh,count=geometry.drawRange.count;
+      assert.equal(geometry.drawRange.start,0);
+      const attributes={};
+      for(const name of ['position','uv','tint']){
+        const attr=geometry.getAttribute(name);assert.ok(attr.version>0);
+        assert.deepEqual(attr.updateRanges,[{start:0,count:count*attr.itemSize}]);
+        attributes[name]=(from,to)=>attr.array.slice(from*attr.itemSize,to*attr.itemSize);
+      }
+      runs.push({material,from:0,count,attributes});
+    }
+    return runs;
+  }
+  if(!meshes.length)return runs;
+  assert.equal(meshes.length,1,'one mesh draws the whole segment');
+  const [mesh]=meshes,{geometry}=mesh,total=geometry.drawRange.count;
+  assert.equal(geometry.drawRange.start,0);assert.ok(Array.isArray(mesh.material));
+  const names=['position','uv','tint'],buffer=geometry.getAttribute('position').data;
+  for(const name of names)assert.equal(geometry.getAttribute(name).data,buffer,'one interleaved buffer for all three attributes');
+  assert.equal(buffer.stride,8);assert.ok(buffer.version>0);
+  assert.deepEqual(buffer.updateRanges,[{start:0,count:total*8}]);
+  const attributes={};
+  for(const name of names){
+    const attr=geometry.getAttribute(name);
+    attributes[name]=(from,to)=>{
+      const out=new Float32Array((to-from)*attr.itemSize);
+      for(let k=from;k<to;k++)for(let c=0;c<attr.itemSize;c++)out[(k-from)*attr.itemSize+c]=buffer.array[k*8+attr.offset+c];
+      return out;
+    };
+  }
+  let covered=0;
+  for(const group of geometry.groups){
+    assert.equal(group.start,covered);covered+=group.count;
+    runs.push({material:mesh.material[group.materialIndex],from:group.start,count:group.count,attributes});
+  }
+  assert.equal(covered,total);
+  return runs;
+}
+
+// The command stream the simulation makes (script-window-command-stream.mjs) for the same list; a command it cannot hold (a clip) is
+// one of its other commands, drawn through the object path.
+function streamOf(commands){
+  const stream=new HudCommandStream();
+  for(const c of commands){
+    if(c.clip!==undefined||c.kind)stream.other(c);
+    else stream.tile(c.texture,c.x,c.y,c.width,c.height,c.u??0,c.v??0,c.ul??c.width,c.vl??c.height,c.color??[255,255,255],c.style??2);
+  }
+  return stream.finish();
+}
+
+for(const [mode,asStream] of [['js',false],['single',false],['single',true],['js',true]])
+test(`HUD batches consecutive materials without changing the ordered tile stream (hudDraw=${mode}${asStream?', from the stream':''})`,async()=>{
+  const was=process.env.HUD_DRAW;process.env.HUD_DRAW=mode;
   const pkg=texturePackage('HudTest',[
     {path:'font',width:128,height:64,pixels:Array.from({length:128*64},(_,i)=>i%3)},
     {path:'portrait',width:64,height:128,pixels:Array.from({length:64*128},(_,i)=>1+i%2)}]);
@@ -53,10 +113,10 @@ test('HUD batches consecutive materials without changing the ordered tile stream
   const compositor=await createHudRenderer({assets,preload:pkg.images.map(image=>image.ref)});loaded=true;
   const renderer={clearDepth(){},render(scene){
     actual=[];drawCalls=0;
-    for(const mesh of scene.children.filter(mesh=>mesh.visible).sort((a,b)=>a.renderOrder-b.renderOrder)){
+    for(const run of runsOf(scene,mode)){
       drawCalls++;
-      const {geometry,material}=mesh,count=geometry.drawRange.count;
-      assert.equal(geometry.drawRange.start,0);assert.equal(count%6,0);
+      const {material,from,count,attributes}=run;
+      assert.equal(count%6,0);
       assert.equal(material.depthWrite,false);assert.equal(material.depthTest,false);assert.equal(material.transparent,true);
       assert.equal(material.forceSinglePass,true);
       const map=material.uniforms.map.value.image;
@@ -67,13 +127,9 @@ test('HUD batches consecutive materials without changing the ordered tile stream
       assert.equal(material.blendDst,style===4?THREE.SrcColorFactor:THREE.OneMinusSrcColorFactor);
       // A modulated tile is alpha-tested as a masked one (DrawTile's PolyFlags 0x42, SetBlending's ALPHATESTENABLE)
       assert.equal(material.fragmentShader.includes('discard'),style===2||style===4);
-      for(let i=0;i<count;i+=6){
+      for(let i=from;i<from+count;i+=6){
         const entry={image:image.key,style};
-        for(const name of ['position','uv','tint']){
-          const attr=geometry.getAttribute(name);assert.ok(attr.version>0);
-          assert.deepEqual(attr.updateRanges,[{start:0,count:count*attr.itemSize}]);
-          entry[name]=attr.array.slice(i*attr.itemSize,(i+6)*attr.itemSize);
-        }
+        for(const name of ['position','uv','tint'])entry[name]=attributes[name](i,i+6);
         actual.push(entry);
       }
     }
@@ -81,7 +137,7 @@ test('HUD batches consecutive materials without changing the ordered tile stream
   const command=(image='font',style=2,extra={})=>({texture:ref(image),x:1.25,y:2.5,width:7,height:11,u:3,v:5,style,...extra});
   try{
     const verify=()=>{
-      compositor.render(renderer,1440,960,commands);
+      compositor.render(renderer,1440,960,asStream?streamOf(commands):commands);
       const expected=commands.map(command=>tile(command,images.get(command.texture.key))).filter(Boolean);
       assert.deepEqual(actual,expected,'Float32 tile attributes, material and triangle order match the former compositor');
       const runs=expected.reduce((count,t,i)=>count+Number(!i||t.image!==expected[i-1].image||t.style!==expected[i-1].style),0);
@@ -102,5 +158,7 @@ test('HUD batches consecutive materials without changing the ordered tile stream
     commands=[command('font',2)];verify();
     commands=[];verify();
     commands=Array.from({length:130},()=>command('font',2));verify();assert.equal(drawCalls,1);
-  }finally{compositor.dispose();}
+    // The same material again after a segment of others: the runs and the buffer are per frame, nothing carries over
+    commands=[command('font',2),command('portrait',1),command('font',2)];verify();assert.equal(drawCalls,3);
+  }finally{compositor.dispose();if(was===undefined)delete process.env.HUD_DRAW;else process.env.HUD_DRAW=was;}
 });

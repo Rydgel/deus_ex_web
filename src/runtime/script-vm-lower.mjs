@@ -203,22 +203,46 @@ const paramCell = cell => {
   return vector && {...vector, mask: 0};
 };
 
+/** 'rust' (default), 'js' or 'verify': STRING_FRAMES / DEUS_EX_STRING_FRAMES / `?stringFrames=`. A script function whose locals need
+ * destruction (CPF_NeedCtorLink: a string local; DrawTargetAugmentation, the window events ActorDisplayWindow.DrawWindow,
+ * DamageHUDDisplay.DrawWindow, HUDMultiSkills.DrawWindow, FrobDisplayWindow.DrawWindow, the console's PostRender call) is begun in Rust
+ * where 'rust' and its frame's DestroyValue loop (callFunction's / processEvent's destroyFunctionLocals) runs when the body returns, if a
+ * JavaScript step ever made the frame (script-vm-events.mjs `runEnd`); 'js' sends such a function to the JavaScript path whole, as
+ * before the switch; 'verify' also runs the loop on the frames no JavaScript step made and checks that it changes nothing. */
+export const stringFramesMode = switchReader('STRING_FRAMES', 'DEUS_EX_STRING_FRAMES', 'rust');
+/** What the end of a call to `fn` must destroy: 'none' (no local needs destruction), 'locals' (a local does; Rust frames may run it,
+ * its destruction is the JavaScript loop's), or null (a parameter or the result does, or STRING_FRAMES=js: the call keeps the
+ * JavaScript path). */
+function frameDestruction(fn) {
+  let locals = false;
+  for (const field of fn.fields) {
+    const metadata = field.metadata;
+    if (!(metadata?.flags & 0x00400000)) continue;
+    if (metadata.parameter || metadata.return || field === fn.result || stringFramesMode() === 'js') return null;
+    locals = true;
+  }
+  return locals ? 'locals' : 'none';
+}
+
 // Signatures by shape, shared by every runtime: a call site is lowered for one
 // shape and runs in Rust only when the resolved function has it.
 const signatureIds = new Map();
 const signatures = new WeakMap();
+const destroyingSignatures = new WeakMap();
 /** A prepared function's call signature for Rust calls — {id, rkind,
- * params: [{kind, offset, mask}]} — or null when a call to it keeps the
- * JavaScript path: out parameters, a value without a scalar cell, locals
- * that need destruction (CPF_NeedCtorLink), a frame without a block. */
-export function functionSignature(fn, loader) {
-  const cached = signatures.get(fn);
+ * params: [{kind, offset, mask}], destroys} — or null when a call to it keeps the
+ * JavaScript path: out parameters, a value without a scalar cell, a parameter or result that
+ * needs destruction (CPF_NeedCtorLink), a frame without a block. A function with locals that need destruction has a signature
+ * only with `destroying` (its `destroys` set): the caller then runs the destruction when the body returns. */
+export function functionSignature(fn, loader, destroying = false) {
+  const table = destroying ? destroyingSignatures : signatures;
+  const cached = table.get(fn);
   if (cached && cached.source === fn.fields) return cached.signature;
   let signature = null;
   const layout = loader ? frameLayout(fn, loader) : null;
   const resultType = fn.result ? RESULT_TYPE[fn.result.metadata?.type] : 'void';
-  if (layout && !layout.slotFields && resultType &&
-    !fn.fields.some(field => field.metadata?.flags & 0x00400000) &&
+  const destruction = frameDestruction(fn);
+  if (layout && !layout.slotFields && resultType && (destruction === 'none' || (destroying && destruction === 'locals')) &&
     fn.parameters.every(field => !field.metadata?.out)) {
     const params = fn.parameters.map((field, index) => paramCell(layout.parameterCells[index]));
     if (params.every(param => param && (CALL_PARAM_KINDS.has(param.kind) || VECTOR_PARAM_KINDS.has(param.kind)))) {
@@ -226,10 +250,10 @@ export function functionSignature(fn, loader) {
       const shape = `${rkind}|${params.map(param => `${param.kind}:${param.offset}:${param.mask}`).join(',')}`;
       let id = signatureIds.get(shape);
       if (id === undefined) signatureIds.set(shape, id = signatureIds.size + 1);
-      signature = {id, rkind, params};
+      signature = {id, rkind, params, destroys: destruction === 'locals'};
     }
   }
-  signatures.set(fn, {source: fn.fields, signature});
+  table.set(fn, {source: fn.fields, signature});
   return signature;
 }
 
@@ -262,14 +286,15 @@ const outSignatures = new WeakMap();
  * `out BodyPart`) one whose params include {kind: 'struct', offset, mask: 0, struct: {offset, members}} for each: the call copies the
  * struct in and back (iter.rs). The same id space; null where neither applies (or OUT_STRUCT=js). */
 export function callSignature(fn, loader) {
-  const plain = functionSignature(fn, loader);
+  const plain = functionSignature(fn, loader, true);
   if (plain || outStructMode() === 'js') return plain;
   const cached = outSignatures.get(fn);
   if (cached && cached.source === fn.fields) return cached.signature;
   let signature = null;
   const layout = loader ? frameLayout(fn, loader) : null;
   const resultType = fn.result ? RESULT_TYPE[fn.result.metadata?.type] : 'void';
-  if (layout && !layout.slotFields && resultType && !fn.fields.some(field => field.metadata?.flags & 0x00400000)) {
+  const destruction = frameDestruction(fn);
+  if (layout && !layout.slotFields && resultType && destruction !== null) {
     const params = [];
     let outs = 0;
     for (let index = 0; index < fn.parameters.length; index++) {
@@ -293,7 +318,7 @@ export function callSignature(fn, loader) {
         : `${param.kind}:${param.offset}:${param.mask}`).join(',')}`;
       let id = signatureIds.get(shape);
       if (id === undefined) signatureIds.set(shape, id = signatureIds.size + 1);
-      signature = {id, rkind, params};
+      signature = {id, rkind, params, destroys: destruction === 'locals'};
     }
   }
   outSignatures.set(fn, {source: fn.fields, signature});

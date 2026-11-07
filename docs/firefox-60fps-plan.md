@@ -441,6 +441,10 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
+* **2026-11-07, the HUD remainder: `p.hud` down 0.48 ms on the Island and 0.42 ms on the bunker, page mean down 0.61 and 0.50 ms** ([below](#hud-remainder-2026-11-07)):
+  the page's draw of the tile stream from one interleaved buffer (`?hudDraw=js|verify`, -0.40 and -0.36 ms) and Rust-begun script calls and window events with string locals
+  (`?stringFrames=js|verify`, -0.09 and -0.06 ms of `w.hud`). Pixel-verified in Firefox and Chromium; digests, validators and `npm test` hold. `TraceLOS`, the three bodies
+  that still make a frame, the console's PostRender and the per-run `renderScene` cost are left (0.1 to 0.2 ms each).
 ### Import cuts: not merged (2026-11-06)
 
 Host measurement, then one exact change that did not reach the 0.5 ms bar. Master 15a7903c, headless Firefox 155 inline, the scan
@@ -2600,6 +2604,84 @@ the 0.5 to 0.8 ms of tick the pairs show is not attributable to a timed export (
 * `light_merge`'s texel-row compare (35 calls a tick, 0.007 ms) and `gather`'s verify-mode compare still call `memcmp`; the 184 `memory.fill` and
   `memory.copy` sites are builtin calls in SpiderMonkey (0.4 us of a `decal_attach`'s 96 in its profile); no replay case was slow because of them.
 * The Mac (Apple M2 Pro, Safari and Firefox there) is not measured.
+
+### HUD remainder (2026-11-07)
+
+The task: the HUD phase (`p.hud`, 1.2 to 2.0 ms a frame on the four maps still over 16.7 ms at p95) after [the HUD bundle](#the-hud-bundle-2026-11-06),
+whose open list named four items under 0.5 ms each. Result, headless Linux (Ryzen 9 8945HS, Node 26, Firefox 155 inline 1440x960, scan route, god mode, tree
+cdd8b459; the Mac and headed runs are not measured): **two families shipped, both behind `=js` switches: the page's draw of the tile stream
+(`?hudDraw=js|verify`, `p.hud` -0.40 ms) and Rust-begun script calls and window events with string locals (`?stringFrames=js|verify`, `w.hud` -0.09 ms).
+Island, six interleaved pairs: `p.hud` 1.86 -> 1.37 ms, page mean 13.13 -> 12.52 ms (-0.61, se 0.11, lower in 6 of 6), slowest tenth 18.86 -> 18.36 ms (-0.49,
+5 of 6).** Area 51 bunker, six pairs: `p.hud` 2.00 -> 1.58 ms, page mean 12.37 -> 11.87 ms (-0.50, se 0.14, lower in 6 of 6). The sim digests, the HUD command streams, the validators and `npm test` hold. Design and checks:
+[the page's tile draw and string-local frames](script-play-hud.md#the-pages-tile-draw-and-string-local-frames-2026-11-07).
+
+**Ranking** (Gecko profile, `hitch-run.mjs --mode scan --god --seconds 60 --profile`, joined to the hitch log by `gecko-phase.mjs` and `gecko-hud-categories.mjs`; ms a
+drawn frame from 5 s after the map, profiled, so about 1.2 times the unprofiled figures; `.cache/perf/hud/`). The rows overlap by under 0.05 ms:
+
+| Part | Island | Bunker | What it is |
+|---|---:|---:|---|
+| the page's draw of the tile stream (`hudRenderer.render`, hud.mjs) | 0.53 | 0.53 | about 73 tiles in 50 runs of one material a frame on the Island (130 in 56 on the bunker: terminal text); three.js `renderScene` 0.18, `projectObject` 0.14 (a mesh and three attribute buffers per run: 144 `bufferSubData` calls), `updateMatrixWorld` 0.05, the command objects and `draw` 0.08 |
+| window events with string locals (`processEvent` under the hud step) | 0.39 | 0.38 | `ActorDisplayWindow`, `DamageHUDDisplay`, `HUDMultiSkills`, `FrobDisplayWindow` DrawWindow: 0.28 the Rust bodies, 0.06 `destroyFunctionLocals`, the rest the JavaScript dispatch |
+| script functions Rust hands to JavaScript (`callFunction` under the hud step) | 0.37 | 0.34 | `DrawTargetAugmentation` (a final call every frame), `TraceLOS` and small calls (`SetCrosshairColor`, `GetBarColor`, `PlayerIsClient`) |
+| the console's PostRender | 0.23 | 0.20 | 0.18 in `withCanvasNatives`, of it 0.13 in a `callFunction` from a Rust body |
+| `p.hud` / `w.hud` (unprofiled, the run's hitch log) | 1.98 / 1.31 | 2.17 / 1.43 | |
+
+The page's draw was the largest and the one with a plain remedy; the second row, and `DrawTargetAugmentation` in the third, share one cause (a function with a string
+local was sent to the JavaScript path whole, for `destroyFunctionLocals`).
+
+**Shipped 1: one interleaved buffer for the tile runs** (`hud.mjs`; `?hudDraw=js` keeps a mesh and three attribute buffers per run and the command objects,
+`?hudDraw=verify` draws like the default after checking each segment against them). A frame's tiles are written as the same float32 vertices ([x, y, 0, u, v, r, g, b], six
+a tile, in the reference's order) into one `InterleavedBuffer`; a run of one material is a group of the one geometry, the material list a mesh's array; the
+render list's sort is stable and the groups share an object id, so the runs draw in the order they were added, as the reference's meshes drew by `renderOrder`. The
+simulation's command stream (`script-window-command-stream.mjs`) is read directly: no `expandHudStream` objects, no `{...command, image}` copy and no template string
+per tile for the material key (the image keeps its styles' materials). The Island's page part of `p.hud` went 0.64 -> 0.23 ms (six pairs, each 0.37 to 0.42 lower).
+
+**Shipped 2: Rust-begun bodies with locals to destroy** (`?stringFrames=js|verify`; script-vm-lower.mjs `frameDestruction`, script-vm-events.mjs `runEnd`, interp.rs
+`call`, dispatch.rs `dispatch_window_event`). `functionSignature` and `callSignature` refused any function with a CPF_NeedCtorLink field. They now refuse one with such
+a parameter or result and admit one with such locals (`signature.destroys`); the event and call caches mark it K_RUN_D (js_call_begin's CALL_BLOCK a destroy word)
+and Rust calls `js_run_end(run, template)` when the body returns, where callFunction / processEvent ended with `destroyFunctionLocals` (after the out copy-back, before the
+frame stack is put back). The JavaScript run a Rust body needs for a JavaScript step is built on first use (`Run.frame`); `runEnd` runs the destruction only for a frame so made.
+A frame no step made holds the locals Rust zeroed it with, and DestroyValue of a zero string only writes the empty string back to a frame about to be popped (the next push zeroes the
+block): nothing observable. That is checked, not assumed: `STRING_FRAMES=verify` runs the loop on the unmade frames too, over the same block, and compares the block. On the
+Island a frame has five such bodies; `ActorDisplayWindow` and `FrobDisplayWindow` run whole in Rust (unmade), `DrawTargetAugmentation`, `DamageHUDDisplay` and
+`HUDMultiSkills` make a frame (they store strings through JavaScript steps) and still run the loop. In Node (V8) the family is worth little: the paint 1.37 -> 1.28 and
+0.99 -> 1.01 ms on the Island (two pairs), 1.21 -> 1.14 and 1.18 -> 1.14 on the bunker; in Firefox, `w.hud` -0.09 ms in all six Island pairs.
+
+**Exactness.**
+* `hud-stream-digest.mjs` (600-frame roams, the HUD command stream per frame, with the switches at their defaults and `STRING_FRAMES=verify`): Island df48c15010687dd1,
+  bunker 4cd8392aff85151c and 00_Training 702be5968d3bcafb, each equal to the previous tree's, frame by frame.
+* The six sim digests (`bench-sim.mjs --warm 60 --ticks 300 --render-feedback`): Island 5adb254a07b1ed6f, 00_Training 07816ec472f29b84, 03_NYC_Airfield 46ed0d32ae5b56af,
+  06_HongKong_WanChai_Market 80d27b37e0944d88, 15_Area51_Bunker 764a7bdffd2ebe59, 09_NYC_Dockyard e53f348673f1247b: unchanged.
+* The page draw in a browser, `?hudDraw=verify` (every segment's vertices bit for bit and the two scenes drawn into render targets over one ground and read back, every byte
+  equal): Firefox inline, Island 960 segments (70,384 tiles, 47,630 runs, 1.3 G pixels), bunker 911 (118,001 tiles, 51,142 runs, 1.26 G pixels, with `stringFrames=verify`);
+  Chromium worker mode, Island 1,844 segments (140,660 tiles, 92,688 runs, 2.55 G pixels, with `stringFrames=verify`); no difference, no runtime error.
+* `validate-script-vm-interp` (542,442 checks; new cases for the destroy word: one `js_run_end` per begun callee that has it, with its run id and template, while its block is on the
+  stack), `validate-play-hud`, `validate-console-play`, `validate-viewport-console`, `validate-gc-draw-actor-play` (the wrapper counts a stream's kinds) and
+  `validate-scope-view-play` pass; `test/hud-compositor.test.mjs` runs the former compositor's expected tiles through `js`, `single` and the stream (four forms); `npm run build:wasm`
+  is warning-free; `npm test`: 983 tests, 979 pass, 4 skipped, 0 fail.
+* `STRING_FRAMES=verify` in Node (`hud-census.mjs --time-only`, 360 frames): 1,804 bodies, 1,084 with a frame a JavaScript step made, 720 unmade frames checked, none changed.
+
+**Interleaved A/B** (`hitch-ab.mjs --guard --cpus 4-7,12-15`, from a frozen copy of the tree, order alternating, 60 s scan route, Firefox inline), `new:` (defaults) against
+`js:hudDraw=js&stringFrames=js`; per-session means over the drawn frames from 5 s after the map (ms), paired differences new minus js:
+
+| Map (pairs) | p.hud new / js | of it page part | of it `w.hud` | page mean | page p95 | slowest tenth |
+|---|---:|---:|---:|---:|---:|---:|
+| Island (6) | 1.37 / 1.86 (-0.48, 6 of 6) | 0.23 / 0.63 (-0.40) | 1.14 / 1.23 (-0.09) | 12.52 / 13.13 (-0.61, se 0.11, 6 of 6) | 17.83 / 18.17 (-0.33) | 18.36 / 18.86 (-0.49, 5 of 6) |
+| Area 51 bunker (6) | 1.58 / 2.00 (-0.42, 6 of 6) | 0.31 / 0.67 (-0.36) | 1.27 / 1.33 (-0.06) | 11.87 / 12.37 (-0.50, se 0.14, 6 of 6) | 18.00 / 18.33 (-0.33) | 19.71 / 20.07 (-0.36, 4 of 6) |
+
+Ship bar (0.3 ms off the page mean or 0.5 off the slowest tenth on one of the two maps, no regression on the other): **met** on both maps: the page mean is 0.61 ms lower on the Island and 0.50 ms on the bunker (every pair of both), the slowest tenth 0.49 ms lower on the Island (5 of 6 pairs; the bunker's 0.36 is 4 of 6, its first pair 0.51 higher and its fourth 0.09); no column's mean is higher on either map, and `p.tick`, which the change does not touch, is within the sessions' spread (-0.07 and -0.05). The page p50 and p95 are whole milliseconds (the hitch log's resolution), so their pair differences are 0 or -1.
+
+**What is still open** (ms a frame, Firefox, profiled, Island after the change; the HUD is `p.hud` 1.37):
+* **The page's draw of the runs**: 0.21, of it three.js `renderScene` 0.13 (about 50 runs, each a `setProgram`, uniforms and a texture bind). Fewer runs would need a texture
+  atlas or a direct GL submit, which has to keep the draw order and the blend state; a single run draws the same pixels, so it is the number of material changes, not tiles.
+* **`TraceLOS`** (0.09 ms in Node): `DrawTargetAugmentation`'s call has an `out vector` parameter and a `foreach Player.TraceActors`; Rust runs neither (its iterators are
+  `CycleActors`, the actor scans and the like). `js value 0x1b TraceLOS` stays a JavaScript call.
+* **Three bodies a frame still make a frame** (`DrawTargetAugmentation`, `DamageHUDDisplay.DrawWindow`, `HUDMultiSkills.DrawWindow`): their statements that store strings
+  (`targetplayerhealthstring = ""`, text fields) are JavaScript steps, so the frame and its destruction loop remain. Lowering string literals to string fields needs the object
+  image's string cells in Rust.
+* **The console's PostRender** is unchanged (0.20): the Rust body's call goes to JavaScript (a callee that is still not eligible, not named here); `withCanvasNatives` binds three natives
+  and swaps `runtime.native` each frame, which binding once would change for every other Canvas native call.
+* **DrawText with a string argument** (14 a frame: `js effect 0x19(... native 1282(..., string))`) and the window width and height reads (35 a frame) are JavaScript nodes of 1 to 3 us each.
 
 ## How each step is measured
 

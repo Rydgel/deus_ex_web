@@ -98,7 +98,7 @@ and writes are disabled for every HUD material, and the ordered triangles use
 the same blend factors. A material change ends the run, including a return to
 an earlier texture after an intervening command. No window script or GC command
 is skipped or cached. This is a host submission change, not a change to native
-window behavior or evidence of original rasterizer pixel identity.
+window behavior or evidence of original rasterizer pixel identity. (Since 2026-11-07 the default submission is one interleaved buffer with a group per run, [below](#the-pages-tile-draw-and-string-local-frames-2026-11-07); the per-run meshes this section describes are `?hudDraw=js`, the reference.)
 
 `node --test test/hud-compositor.test.mjs` compares the emitted Float32
 positions, UVs and tints and ordered styles against the previous individual
@@ -218,6 +218,40 @@ image, the GC stack's nodes, the realize cache or the DrawTile commands (a call 
 **Not established.** Equivalence to the original is that of the JavaScript references (their own validators run against the DLL bodies);
 these checks show the Rust bodies equal the references on the paths above, not on every input: the random test covers DrawText, the
 digests cover the windows the roams draw, and a family or an event the cache sends to JavaScript runs the reference.
+
+## The page's tile draw and string-local frames (2026-11-07)
+
+Two host changes after the draw tree moved to Rust; neither changes what a window script or a GC native does, and each keeps its previous body as the reference.
+The measurements are in [the plan](firefox-60fps-plan.md#hud-remainder-2026-11-07).
+
+* **The page's draw of the command stream** (`src/viewer/hud.mjs`, `?hudDraw=js|verify`, `HUD_DRAW=` in Node). The [compositor batching](#compositor-batching-boundary)
+  above is unchanged as a contract: the same float32 positions, UVs and tints, one run per consecutive tile of one material, the runs drawn in order. What changed is the
+  representation. A frame used one mesh and three attribute buffers per run (about 50 runs and 144 `bufferSubData` calls on the Island); it now uses one
+  `THREE.InterleavedBuffer` ([x, y, 0, u, v, r, g, b] a vertex, six a tile; the z word is never written) and one geometry whose `groups` are the runs, with the frame's
+  materials as the mesh's array. `renderer.render` sorts its transparent list stably and the groups share the mesh's id, so the runs draw in the order they were added, as the
+  meshes drew by `renderOrder`. `render(renderer, w, h, commands)` takes the plain command list or the simulation's command stream
+  (`script-window-command-stream.mjs`) and reads the stream's `Float64Array` itself, so main.mjs no longer builds the command objects (`?hudDraw=js` does). A tile object
+  with a `clip`, or any command the stream keeps as an object, goes through `draw`'s defaults and clip in `emitCommand`. An image keeps the materials of its styles
+  (`image.styleMaterials`), which the dynamic images' disposal (new image objects) leaves behind with the old image.
+  `?hudDraw=verify` fills both and, for each segment between the viewport, actor and ClearZ commands, compares the single buffer's vertices with the reference batches'
+  attributes bit for bit (run by run, material by material), then draws both scenes into two render targets over a fixed ground and compares every byte read back, then draws as the
+  default does. `deusExViewer.hudDraw()` returns the counters.
+* **Locals that need destruction in Rust frames** (`?stringFrames=js|verify`, `STRING_FRAMES=` in Node; script-vm-lower.mjs `frameDestruction`, script-vm-events.mjs
+  `runEnd`, interp.rs `call`, dispatch.rs `dispatch_window_event`). A function with a CPF_NeedCtorLink local (a string) had no call signature, so the Rust interpreter handed every
+  call of it to JavaScript (`callFunction`), and `decideWindow` every DrawWindow of such a window to `processEvent`; both end with `destroyFunctionLocals`. The signature now admits such
+  locals (a parameter or result with the flag still has none) and marks the function `destroys`; the event cache and the call cache hold K_RUN_D for it, `js_call_begin`'s
+  CALL_BLOCK a template word, and Rust calls `js_run_end(run id, template)` after the body (for a call, after the struct out copy-back; the frame block is still on the stack). The
+  host runs `destroyFunctionLocals(fn, locals, {parameters: false})` when a JavaScript step made the run's frame (`Run.frame` is built on first use, and holds the string values);
+  otherwise the block is what Rust zeroed it with, and the loop would only write empty strings back. `?stringFrames=verify` runs it there too and compares the block.
+  Every other event and call (the tick events, the AI events) keeps `functionSignature(fn, loader)` without locals to destroy.
+
+**Checked** (numbers in the plan): the three HUD stream digests (Island, bunker, 00_Training) unchanged with the defaults, and the Island's with `STRING_FRAMES=verify`; the six sim digests unchanged; `?hudDraw=verify` in Firefox
+(inline) and Chromium (worker) over thousands of segments and billions of pixels; `validate-script-vm-interp` with new destroy-word cases; `validate-play-hud`, `-console-play`,
+`-viewport-console`, `-gc-draw-actor-play`, `-scope-view-play`; `test/hud-compositor.test.mjs` in the `js` and `single` forms and from a stream.
+
+**Not established.** The Rust-begun bodies equal the JavaScript path on the paths the HUD roams and the six benchmark maps run; a function the cache newly admits elsewhere (any script
+call with a string local, on any map) runs under the same rule but is covered by the digests and `STRING_FRAMES=verify` only where those maps reach it. The page draw is
+pixel-identical to the per-run meshes on the verified frames (one ground, one browser engine at a time); it makes no claim about the original rasterizer.
 
 ## What a paint costs (2026-11-05)
 

@@ -58,6 +58,8 @@ const SLOT: u32 = 48;
 const K_JS: u32 = 1;
 const K_NOCALL: u32 = 2;
 const K_RUN: u32 = 3;
+/// K_RUN for a function with locals that need destruction: js_run_end follows the body (STRING_FRAMES).
+const K_RUN_D: u32 = 4;
 
 #[no_mangle]
 pub extern "C" fn vm_events_ptr() -> *mut u32 {
@@ -469,9 +471,10 @@ pub(crate) fn dispatch_window_event(handle: u32, which: u32, gc: u32) -> i32 {
         store32(slot.wrapping_add(8), which);
         store32(slot.wrapping_add(12), events()[2]);
     }
-    match load32(slot.wrapping_add(16)) {
+    let kind = load32(slot.wrapping_add(16));
+    match kind {
         K_NOCALL => return 0,
-        K_RUN => {}
+        K_RUN | K_RUN_D => {}
         _ => return -1,
     }
     let saved = frames_save();
@@ -495,6 +498,10 @@ pub(crate) fn dispatch_window_event(handle: u32, which: u32, gc: u32) -> i32 {
     let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true, iter: crate::iter::NO_ITER };
     run.statements(0);
     unsafe { BUDGET = outer_budget };
+    // processEvent ends with destroyFunctionLocals (the block is still live).
+    if kind == K_RUN_D {
+        unsafe { crate::interp::js_run_end(id, template) };
+    }
     frames_restore(saved);
     1
 }
@@ -545,6 +552,8 @@ pub(crate) struct Callee {
     pub(crate) code: u32,
     /// The callee's probe index (0x12c..0x16b) or PROBE_NONE: ProcessInternal's ProbeMask gate.
     pub(crate) probe: u32,
+    /// The template js_run_end destroys the frame's locals by after the body, or 0 for a callee with none.
+    pub(crate) destroy: u32,
 }
 
 /// beginCall from the cache, or None when the caller must ask js_call_begin
@@ -578,7 +587,8 @@ pub(crate) fn begin_call(frame: u32, caller: u32, node: u32, handle: u32, sig: u
         store32(slot.wrapping_add(12), state);
         store32(slot.wrapping_add(16), events()[2]);
     }
-    if load32(slot.wrapping_add(20)) != K_RUN {
+    let kind = load32(slot.wrapping_add(20));
+    if kind != K_RUN && kind != K_RUN_D {
         return None;
     }
     let runs = unsafe { (*addr_of!(FRAMES))[3] };
@@ -593,7 +603,7 @@ pub(crate) fn begin_call(frame: u32, caller: u32, node: u32, handle: u32, sig: u
         (*addr_of_mut!(RUNS))[runs as usize] = [template, handle, locals, serial];
         (*addr_of_mut!(FRAMES))[3] = runs + 1;
     }
-    Some(Callee { id: runs, locals, code, probe: load32(slot.wrapping_add(36)) })
+    Some(Callee { id: runs, locals, code, probe: load32(slot.wrapping_add(36)), destroy: if kind == K_RUN_D { template } else { 0 } })
 }
 
 /// dispatch_event for validators (validate-script-vm-interp).
