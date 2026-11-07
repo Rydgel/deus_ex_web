@@ -97,6 +97,8 @@ export const RENDER_FIELDS = Object.freeze([
   ['CollisionRadius', 'engine.actor.collisionradius', 'float'],
   ['CollisionHeight', 'engine.actor.collisionheight', 'float'],
   ['bProjTarget', 'engine.actor.bprojtarget', 'bool'],
+  // Galaxy Update's ambient scan's range test (render.rs ambient_scan).
+  ['SoundRadius', 'engine.actor.soundradius', 'byte'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]` / `pointer[4]`, a fixed array of four contiguous
@@ -124,6 +126,9 @@ export const renderScanMode = switchReader('RENDER_SCAN', 'DEUS_EX_RENDER_SCAN',
  * 'js', 'verify', or 'nofit' (the core as it was before it answered FindSpot's point check: a move that needs FindSpot runs in
  * JavaScript; the A/B baseline). */
 export const farMoveMode = switchReader('FAR_MOVE', 'DEUS_EX_FAR_MOVE', 'rust');
+/** Galaxy Update's ambient scan with its range test in Rust (render.rs ambient_scan): 'rust' (default), 'js' (the scan of live AmbientSound
+ * actors and the per-actor reads and range test of galaxy-audio.mjs, as before) or 'verify' (both; throws on a difference). */
+export const ambientScanMode = switchReader('AMBIENT_SCAN', 'DEUS_EX_AMBIENT_SCAN', 'rust');
 /** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
 export const levelScanMode = switchReader('LEVEL_SCAN', 'DEUS_EX_LEVEL_SCAN', 'rust');
 /** compactScriptActors' scan for the slots to read (level.rs level_flagged): 'rust' (default), 'js' (every actor's bDeleteMe is read,
@@ -255,6 +260,31 @@ export class RenderScanHost {
       ?? this.walk(actors, start, kinds, viewer, viewTarget, firstPerson);
     if (mode === 'verify') this.verify(actors, entries, {start, kinds, viewer, viewTarget, firstPerson});
     return entries;
+  }
+  /** Galaxy Update's ambient scan up to its range test (render.rs ambient_scan): the entries (`index << RENDER_SHIFT | kind`) of the actors of
+   * `actors` with a live AmbientSound that `ambientInRange` takes in for the float32 listener Location `listener` (RENDER_AMBIENT), and
+   * those whose reads the image cannot answer (RENDER_JS: the host evaluates them). A view of a buffer the host keeps, valid until the next
+   * scan; null when the scan cannot run here (the mode is js, the table is not complete, the core predates it). */
+  ambientScan(actors, listener) {
+    if (renderScanMode() === 'js' || typeof this.x.ambient_scan !== 'function') return null;
+    this.table();
+    if (!this.complete) return null;
+    const list = this.listFor(actors), count = actors.length;
+    if (count + 1 > this.outCapacity) {
+      if (this.out) this.vm.arena.release(this.out, 4 * this.outCapacity);
+      this.outCapacity = Math.max(1024, 2 * (count + 1));
+      this.out = this.vm.arena.alloc(4 * this.outCapacity);
+    }
+    this.ambientAt ??= this.vm.arena.alloc(16);
+    const at = this.ambientAt, set = this.vm.arena.view;
+    set.setFloat32(at, listener[0], true);
+    set.setFloat32(at + 4, listener[1], true);
+    set.setFloat32(at + 8, listener[2], true);
+    const written = this.x.ambient_scan(list, at, this.out);
+    // (copied out: the caller's next reads may grow the memory and detach the arena's buffer)
+    if (!this.ambientEntries || this.ambientEntries.length < written) this.ambientEntries = new Uint32Array(Math.max(256, 2 * written));
+    this.ambientEntries.set(new Uint32Array(this.vm.arena.memory.buffer, this.out, written));
+    return this.ambientEntries.subarray(0, written);
   }
   walk(actors, start, kinds, viewer, viewTarget, firstPerson) {
     const list = this.listFor(actors), count = actors.length;

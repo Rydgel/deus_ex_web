@@ -193,9 +193,41 @@ fn clamp_word(v: i32) -> i32 {
 /// 0x10609510; `ambientInRangeExact`). Location at P_LOC, listener at P_LISTENER.
 #[no_mangle]
 pub extern "C" fn galaxy_in_range_exact(sound_radius: u32) -> u32 {
+    u32::from(in_range_exact(triple(P_LOC), triple(P_LISTENER), sound_radius))
+}
+
+/// `ambient_in_range` (the doubles screen, then the extended compare) for the Location at P_LOC and the listener at P_LISTENER: the
+/// decision render.rs `ambient_scan` makes, exported so that validate-galaxy-audio-kernel compares it with `ambientInRange`.
+#[no_mangle]
+pub extern "C" fn galaxy_in_range(sound_radius: u32) -> u32 {
+    u32::from(ambient_in_range(triple(P_LOC), triple(P_LISTENER), sound_radius))
+}
+
+/// `galaxy_in_range_exact` over a Location and a listener given as float32 bits.
+fn in_range_exact(location: [u32; 3], listener: [u32; 3], sound_radius: u32) -> bool {
     let radius = Ext::load_i32(((sound_radius & 0xff) + 1) as i32).mul(c64(25.0));
-    let squared = distance_squared(triple(P_LOC), triple(P_LISTENER));
-    u32::from(!below(cmp(radius.mul(radius), squared)))
+    let squared = distance_squared(location, listener);
+    !below(cmp(radius.mul(radius), squared))
+}
+
+/// `ambientInRange` (galaxy-audio.mjs) for the ambient scan in render.rs: the answer the JavaScript decides in doubles when the squared
+/// distance is not within 1e-9 (relative) of the squared radius (its operations, in its order: float32 differences and their squares
+/// are the doubles the host computes), and `in_range_exact` otherwise or for a NaN. The Location and the listener are float32 bits.
+pub(crate) fn ambient_in_range(location: [u32; 3], listener: [u32; 3], sound_radius: u32) -> bool {
+    let reach = ((sound_radius & 0xff) + 1) as f64 * 25.0;
+    let reach2 = reach * reach;
+    let d = |i: usize| f32::from_bits(location[i]) as f64 - f32::from_bits(listener[i]) as f64;
+    let (dx, dy, dz) = (d(0), d(1), d(2));
+    let d2 = dx * dx + dy * dy + dz * dz;
+    let gap = d2 - reach2;
+    let margin = (reach2 + d2) * 1e-9;
+    if gap > margin {
+        return false;
+    }
+    if -gap > margin {
+        return true;
+    }
+    in_range_exact(location, listener, sound_radius)
 }
 
 /// An ambient actor's values (`ambientVolume`, `ambientRadius` and the pitch

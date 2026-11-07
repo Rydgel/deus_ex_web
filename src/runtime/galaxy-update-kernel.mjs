@@ -66,6 +66,12 @@ export function createGalaxyUpdateKernel(x, memory) {
       put3(P_LOC, location); put3(P_LISTENER, listener);
       return x.galaxy_in_range_exact(soundRadius) !== 0;
     },
+    /** `ambientInRange`'s decision made in the core (render.rs ambient_scan's: the doubles screen, then the extended compare). */
+    inRange(location, listener, soundRadius) {
+      sync();
+      put3(P_LOC, location); put3(P_LISTENER, listener);
+      return x.galaxy_in_range(soundRadius) !== 0;
+    },
     /** An ambient actor's values (read with the getters below): Volume, the
      * refresh's doubled volume, its light-scaled value (`brightness` is
      * LightBrightness), Radius and Pitch. */

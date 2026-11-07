@@ -15,7 +15,8 @@
 //!   index with the viewer's fields read again.
 //! * MESH: a live Mesh pointer, npc-mesh-preview.mjs admission's first test.
 //! * AMBIENT: a live AmbientSound pointer, the first test of Galaxy Update's
-//!   ambient scan (galaxy-audio.mjs `update`).
+//!   ambient scan (galaxy-audio.mjs `update`). `ambient_scan` adds that scan's
+//!   range test (Location, SoundRadius, the listener) and returns only the actors in reach.
 //!
 //! `mesh_reads` is the actor mesh scene's per-actor read pass
 //! (npc-mesh-preview.mjs `update`): drawnInWorld, the cull sphere's fields,
@@ -94,7 +95,9 @@ const R_TOUCHING: usize = 47;
 pub(crate) const R_COLLISIONRADIUS: usize = 48;
 pub(crate) const R_COLLISIONHEIGHT: usize = 49;
 pub(crate) const R_BPROJTARGET: usize = 50;
-const FIELD_COUNT: usize = 51;
+// Galaxy Update's ambient scan's range test (`ambient_scan`).
+const R_SOUNDRADIUS: usize = 51;
+const FIELD_COUNT: usize = 52;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -132,6 +135,7 @@ const SPRITE_FIELDS: u64 = 1 << R_BHIDDEN
     | 1 << R_DRAWTYPE;
 const MESH_FIELDS: u64 = 1 << R_MESH;
 const AMBIENT_FIELDS: u64 = 1 << R_AMBIENTSOUND;
+const AMBIENT_REACH_FIELDS: u64 = 1 << R_LOCATION | 1 << R_SOUNDRADIUS;
 /// Owners followed before an actor is handed to JavaScript.
 const OWNER_WALK: u32 = 64;
 
@@ -438,6 +442,58 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
                     return written;
                 }
             }
+        }
+        index += n as u32;
+    }
+    written
+}
+
+/// Galaxy Update's ambient scan up to its range test (galaxy-audio.mjs `updateLockedKernel`: the live AmbientSound, then
+/// `ambientInRange(Location, listener, SoundRadius)`), in Level.Actors order over `list`. Writes `index << 6 | kind` for each actor
+/// the scan has to go on with: K_AMBIENT for one whose AmbientSound pointer is live and whose reach (the doubles test with the extended
+/// fallback: `galaxy::ambient_in_range`) takes in the listener, whose Location is the three float32 words at `listener`; K_JS for one
+/// whose fields the image does not answer, which the host evaluates itself (every field it reads is in the image for the others, so
+/// the answer is the one `readNamed` gives). An actor with no AmbientSound, or out of reach, is not written. Returns the count.
+#[no_mangle]
+pub extern "C" fn ambient_scan(list: u32, listener: u32, out: u32) -> u32 {
+    let count = load32(list);
+    let at = [load32(listener), load32(listener.wrapping_add(4)), load32(listener.wrapping_add(8))];
+    let mut written = 0u32;
+    let mut handles = [0u32; BATCH];
+    let mut objs = [Obj::NONE; BATCH];
+    let mut index = 0;
+    while index < count {
+        let n = (count - index).min(BATCH as u32) as usize;
+        for k in 0..n {
+            let h = live(load32(list.wrapping_add(4).wrapping_add((index + k as u32).wrapping_mul(4))));
+            handles[k] = h;
+            objs[k] = if h == 0 { Obj::NONE } else { Obj::of(h) };
+        }
+        for a in &objs[..n] {
+            a.touch(AMBIENT_FIELDS);
+        }
+        for k in 0..n {
+            if handles[k] == 0 {
+                continue;
+            }
+            let (a, i) = (&objs[k], index + k as u32);
+            let kind = if !a.has(AMBIENT_FIELDS) {
+                K_JS
+            } else if a.pointer(R_AMBIENTSOUND) == 0 {
+                continue;
+            } else if !a.has(AMBIENT_REACH_FIELDS) {
+                K_JS
+            } else if crate::galaxy::ambient_in_range(
+                [a.word(R_LOCATION, 0), a.word(R_LOCATION, 1), a.word(R_LOCATION, 2)],
+                at,
+                a.byte(R_SOUNDRADIUS),
+            ) {
+                K_AMBIENT
+            } else {
+                continue;
+            };
+            crate::interp::store32(out.wrapping_add(written.wrapping_mul(4)), i << 6 | kind);
+            written += 1;
         }
         index += n as u32;
     }
