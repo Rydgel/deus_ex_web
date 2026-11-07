@@ -88,6 +88,13 @@ function packFromRoster(occlusion, roster, { sprites = [], iterators = null, bin
   const n = order.n, entries = pool.list, arena = render.vm.arena;
   if (recordAt.length < n) recordAt = new Uint32Array(2 * n);
   const records = recordAt, stride = roster.ROW_WORDS;
+  // The rows' fifth word keeps the address of the binding's mesh record in `occlusion`'s memory. A Player start LoadMap makes a new
+  // occlusion model (sim-host.mjs buildOcclusion) and frees the old one's blocks: the addresses kept for another model are dropped.
+  if (roster.recordsFor !== occlusion) {
+    const u = roster.u32();
+    for (let k = 0; k < roster.count; k++) u[stride * k + 4] = 0;
+    roster.recordsFor = occlusion;
+  }
   nonBinding.length = 0;
   let count = 0;
   {

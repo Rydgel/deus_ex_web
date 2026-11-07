@@ -1528,6 +1528,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // (what packDynamics reads of the roster: the positions in the rows' fourth word and, for its Rust form, the rows themselves)
   const levelPositions={bindings:actors,u32:()=>rowsView().subarray(rows>>2,(rows>>2)+ROW_WORDS*rowCount),NO_POS,ROW_WORDS,
     get count(){return rowCount;},get rows(){return rows;},map:bindings,verify:plumbing.verify,
+    // (the occlusion model whose mesh record addresses the rows' fifth words hold: dynamics-candidates.mjs packFromRoster)
+    recordsFor:null,
     render:()=>plumbing.pack&&reads_ok()?runtime.scriptVm.render:null,
     hostFresh,hostRows,
     // (the Map's own interface, for what asks one actor: a binding's from its row, any other actor's from the JavaScript path's map)
