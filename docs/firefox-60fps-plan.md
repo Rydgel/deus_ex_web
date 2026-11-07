@@ -458,6 +458,37 @@ then re-entered Rust through `vm.resume`. The callee's body was already Rust, so
   Firefox's page clock reads whole milliseconds, so a p95 of 17 is just over the bound and 16 would be under it. The Airfield is under now;
   the Island, Battery Park and the bunker are at 17, one millisecond step over. The tick (4.8 to 5.8 ms) is still the largest phase on all
   three, then the actors layer (1.5 to 1.8) and, at Battery Park, the render (2.1).
+* **The frame-time set on the 20 us clock, 2026-11-07 evening** (master e9ea7a5e: since 1d1f5758, the [unshipped bundle](#unshipped-bundle-2026-11-07)
+  shipped; `frame-time-set.mjs --browser firefox --ff-prefs '{"privacy.reduceTimerPrecision":false}'`, so the page clock steps by 20 us and the
+  figures are true milliseconds, not whole ones; runs in `.cache/perf/frame-time-set/ff-e9ea7a5e-fine`, read with
+  `hitch-slow-frames.mjs --over 16.7`; no worker or other job ran on the host). **Every map's drawn-frame p95 is under 16.7 ms.** Page frame p95 (p50), ms:
+
+  | Map | page p95 (p50) | frames over 16.7 (allowed) | tick | HUD | actors | render | fog |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | Training | 9.88 (6.56) | 10 (193) | | | | | |
+  | Island | 14.04 (10.16) | 20 (185) | 5.05 | 1.21 | 1.61 | 1.31 | 0 |
+  | Bar | 9.38 (6.50) | 7 (177) | | | | | |
+  | Battery Park | 13.32 (11.00) | 43 (183) | 4.47 | 0.81 | 1.34 | 1.60 | 0.89 |
+  | Airfield | 14.38 (11.26) | 59 (183) | 4.48 | 1.23 | 1.62 | 0.78 | 0 |
+  | Wan Chai market | 12.28 (8.92) | 16 (178) | | | | | |
+  | Ship | 10.26 (7.60) | 3 (178) | | | | | |
+  | Chateau | 9.82 (7.74) | 4 (176) | | | | | |
+  | Everett | 8.58 (6.50) | 4 (177) | | | | | |
+  | Area 51 bunker | 14.30 (9.34) | 107 (182) | 4.17 | 1.38 | 1.52 | 1.02 | 0 |
+
+  One session a map is one draw: the Island's 14.04 is a fast one. A control right after it on the same quiet host (`ff-e9ea7a5e-control`, the same
+  session shape, the bundle's defaults against every bundle switch at its old body in one query, alternating, two pairs a map):
+
+  | Map | arm | page p95 (p50), two sessions | frames over 16.7 | tick | render | audio |
+  |---|---|---|---:|---:|---:|---:|
+  | Island | bundle | 16.32 (10.92), 16.52 (10.88) | 110, 148 | 5.41, 5.49 | 1.45, 1.41 | 0.24 |
+  | | old bodies | 17.14 (11.40), 18.30 (11.72) | 283, 519 | 5.62, 5.89 | 1.58, 1.69 | 0.41 |
+  | bunker | bundle | 15.42 (10.06), 15.60 (10.16) | 123, 126 | 4.51, 4.60 | 1.13, 1.14 | 0.24 |
+  | | old bodies | 17.32 (10.86), 15.84 (10.64) | 235, 141 | 4.80, 4.60 | 1.40, 1.30 | 0.40 |
+
+  So the Island sits at about 16.4 ms, 0.2 to 0.4 under the bound, and over it in both sessions without the bundle; the early window (the
+  first 20 s after the map) holds 11 to 15% of its frames over 16.7 against 30 to 55% before. The bunker is about 1 ms under. Not measured:
+  the Mac, headed runs (row 7.2.2's own condition; the user asked for none during this work), more than two sessions a map.
 * **Sessions late in a pair run slower.** In both bunker A/Bs, each session ran slower than the one before it in its pair, by about
   0.4 ms of tick: compare the arm that ran third with the same arm run first. An A/B that always runs its arms in the same order
   carries that drift into the difference. `hitch-ab.mjs` now alternates the order from pair to pair.
