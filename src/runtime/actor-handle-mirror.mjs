@@ -10,9 +10,10 @@
  * DEUS_EX_HANDLE_MIRROR) rebuilds every slot with `handleOf` as before, and =verify does both and throws on a difference.
  */
 import {handleOf, releaseCount} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 /** 'mirror' (default), 'js' or 'verify'. */
-export const handleMirrorMode = () => (typeof process !== 'undefined' && process.env?.HANDLE_MIRROR) || globalThis.DEUS_EX_HANDLE_MIRROR || 'mirror';
+export const handleMirrorMode = switchReader('HANDLE_MIRROR', 'DEUS_EX_HANDLE_MIRROR', 'mirror');
 
 export class HandleMirror {
   constructor() {

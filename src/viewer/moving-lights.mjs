@@ -3,6 +3,7 @@ import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLight
 import { lightTypeBrightness, spotLightSpatial } from '../runtime/static-lighting.mjs';
 import { fcoordsAxes } from '../runtime/script-pawn-locomotion.mjs';
 import { createMovingComposeKernel } from '../runtime/moving-compose-kernel.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 const MAX = 127 / 255, TWO_52 = 4503599627370496, f = Math.fround;
 // The effect table at 0x10b2a0f0 (docs/static-lighting.md): the normal body
@@ -25,8 +26,7 @@ const union = rects => rects.length ? {
 /** 'incremental' (default) recomposes only the light maps a changed light or
  * mover reaches; MOVING_LIGHTS=full in Node or ?movingLights=full in the
  * viewer keeps the whole-frame recompute as the reference. */
-const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.MOVING_LIGHTS)
-  || globalThis.DEUS_EX_MOVING_LIGHTS || 'incremental';
+const movingLightsMode = switchReader('MOVING_LIGHTS', 'DEUS_EX_MOVING_LIGHTS', 'incremental');
 
 /** Where the incremental mode composes the light maps it recomposes: 'rust' (default) in the Rust core with the light atlas bytes
  * (moving-compose-kernel.mjs, moving.rs), 'js' the JavaScript bodies below (the references: addDirect, and light-atlas.mjs update), 'verify'

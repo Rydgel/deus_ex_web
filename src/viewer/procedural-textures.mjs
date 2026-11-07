@@ -6,12 +6,12 @@ import {get as textureFrame} from '../runtime/texture-animation.mjs';
 import {createNativeRng} from '../runtime/rng.mjs';
 import {scriptVmKernel} from '../runtime/script-vm-kernel.mjs';
 import {createFireKernel} from '../runtime/fire-texture-kernel.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 /** The ticks run in the Rust core (fire-texture-kernel.mjs) when the
  * script-VM kernel is loaded at the first acquisition; FIRE_KERNEL=js in
  * Node or ?fireKernel=js in the viewer keeps fire-texture.mjs's bodies. */
-const fireKernelMode = () => (typeof process !== 'undefined' && process.env?.FIRE_KERNEL)
-  || globalThis.DEUS_EX_FIRE_KERNEL || 'rust';
+const fireKernelMode = switchReader('FIRE_KERNEL', 'DEUS_EX_FIRE_KERNEL', 'rust');
 
 /** Procedural textures in the viewer (docs/fire-texture.md "Play"): one
  * record per FireTexture or WetTexture object with its load state

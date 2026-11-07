@@ -2093,6 +2093,186 @@ the two light phases together at the Mole People (3.2 ms against 2.5): the tick 
 * The Mac and headed runs are not measured. Master's `outdated` recomposes a light map whose contributions are all dead each frame; here it is not
   (`record.movingFrame` is not refreshed for those, a validation field only).
 
+### Dockyard spawns and js_eval (2026-11-07)
+
+The task: at the Dockyard spot (2623, 6205, 20) yaw 32768 the Firefox inline page is about 31 ms a frame. The previous step left
+`spawnActor` (1.22 ms a rest frame, "1.6 ms each in Firefox against 170 us in Node", the largest JavaScript item), `checkEncroachment`,
+`processEvent`, `destroyActor` and AttachDecal's host side in `js_eval`'s flat 3.8 ms, and asked for the Firefox-only traps first (a tenfold
+engine gap suggests a SpiderMonkey slow path), then exact ports where a measurement says they pay. Master 617bad22, headless Linux (Firefox 155
+inline, Chromium not run, 1440x960, god mode, idle at the spot, 25 s sessions measured from 5 s after the map); the Mac is not measured.
+Bar: 0.3 ms in the Firefox page mean or 0.5 ms in its slowest tenth.
+
+**Reproduction.**
+* Profile: `hitch-run.mjs --browser firefox --map 09_NYC_Dockyard --mode idle --god --seconds 25 --place '{"location":[2623,6205,20],"rotation":[0,32768,0]}'
+  --out RUN --profile PROFILE` (give `--out` and `--profile` different names: the profile is written at shutdown to the path it is given and
+  replaces a dump of the same name), read with `gecko-slow-ticks.mjs`, `gecko-phase.mjs --entry REGEX`, `gecko-under.mjs --anchor REGEX`.
+  Wasm frames are `wasm-function[N]`: `CARGO_PROFILE_RELEASE_STRIP=none cargo build --release --target wasm32-unknown-unknown --target-dir
+  .cache/wasm-names` gives a module with the same indices and a name section (551 is `destroy_scan`, 682 `render_scan`, 617 `level_distance`,
+  537 `decal_attach`).
+* Node, the same place: a one-spot places file, `PLACES=FILE PER=100000 FROM=0 TO=1 bench-sim --map 09_NYC_Dockyard --warm 100 --ticks 900
+  --render-feedback --idle --seed 1 --scenario scripts/scenarios/places-replay.mjs` (digest `eba45015fec39e3f`, as before), with
+  `--cpu-profile` for a V8 profile.
+* Spawn timing by part: a temporary patch (not committed) of `ScriptRuntime.spawnActor` with exclusive-time accounting by part (a stack of
+  timers: the construction, the zone, the collision view, each of the six events, AttachDecal's native; counters on `instance`,
+  `readInstanceField`, `namedHandle` and `processEvent`), printed every 10 s through `console.error`, which `hitch-run` keeps in the dump's
+  `errors`; the same in Node with `globalThis.__realNow` (bench-sim's `performance.now` is a virtual clock).
+* Single constructs in Firefox and in Node from one source file: a loop with n doubled to 40 ms in `page.evaluate`.
+
+**Why a spawn looked ten times dearer in Firefox: it is not; the two figures were not the same quantity.**
+* "1.6 ms each in Firefox" is `spawnActor`'s inclusive time (1.22 ms a frame) divided by 0.77 spawns a tick. Counted in the page, a Firefox
+  frame holds **3.15 spawns** (2.60 outermost) at the spot, 97 a second (blood drops, bloodsplats, shell casings, tracers and gas puffs of
+  the fights going on there); inclusive time 1.38 ms a frame, **0.53 ms a spawn** (a 10 s window: 974 spawns, 802 outermost, 427 ms).
+  A Node tick holds 1.9 spawns.
+* "170 us in Node" is the fallback census' self time of the Spawn node, which leaves out the six events (their Rust bodies are other rows),
+  AttachDecal and everything nested. Like for like, the V8 profile has `spawnActor` inclusive at 0.53 ms a tick (0.28 ms a spawn), and the
+  timed run 0.42 to 0.47 ms a spawn (its 1,444 outermost spawns include the 130 of the map's start). Firefox 0.53 against Node 0.42 to 0.47:
+  a ratio of 1.1 to 1.3, where the whole tick's ratio at the spot is 1.7 (15.3 ms against 8.4 to 9).
+* The parts (exclusive, ms a spawn; Firefox over 10 s of the page, Node over its 1,000 ticks):
+
+| Part | Firefox | Node |
+|---|---:|---:|
+| `construct` (name, image copy, `initProperties`, header bindings, registry) | 0.079 | 0.085 |
+| `setActorZone` | 0.043 | 0.032 |
+| the body of `spawnActor` and the collision hash | 0.039 | 0.034 |
+| `installCollisionView` | 0.025 | 0.026 |
+| `initExecution`, `setRegion`, `setOwner` | 0.013, 0.007, 0.002 | 0.005, 0.006, 0.002 |
+| the six events (Rust bodies, their natives excluded) | 0.116 | 0.096 |
+| AttachDecal's native (`decal_attach` in Rust), per call (555 calls in 974 spawns) | **0.341** | 0.101 |
+
+  So no SpiderMonkey slow path is in the spawn's host code: the construction (`Object.defineProperties` of the collision view's 36 members,
+  the `FinalizationRegistry`, the symbol link, object spreads) costs the same in both engines (single constructs: the collision view's shape
+  6.5 us in Firefox, 7.0 in Node; `FinalizationRegistry.register` 0.35 to 0.5 us against 0.19; a spread of 40 members 0.45 us against 4.3). What
+  is Firefox-only in a spawn is the Rust attach of a decal (bloodsplats, bullet holes): 3.4 times slower in Firefox's wasm, at a constant
+  rate over the session (16.5 ms a second of the first 6 s, 15.7 of all 25: not a tier-up lag). It calls `decal::fast::edge` (the x87 model's
+  `make` on a table miss) and `gather_nodes`; why Firefox's wasm is slower on them I did not find, and did not change them.
+
+**What is Firefox-only, and the ranking.** Rest = the 728 frames outside the slowest tenth by `p.tick` (81 frames) of one profile of master
+(p.tick 15.3 / 25.3 sampled; 809 drawn frames from 5 s). Self times against the same function's self time in the V8 profile ("ratio"):
+
+| Item (ms a frame in Firefox) | rest | slow | all | ratio to V8 | verdict |
+|---|---:|---:|---:|---:|---|
+| the switch readers: 17 functions, `farMoveMode` 0.19, `renderScanMode` 0.09, `laserMode` 0.04, `cleanupScanMode` 0.04 (**0.40 in the slowest tenth**), `particleItemsMode`, `levelScanMode`, `tickReadsMode`, `meshLightMode` 0.03 each, ... | | | 0.57 | 6 | Firefox trap |
+| `surfacePan` self: the zone-name map rebuilt from 2,000 actors | | | 0.37 | (viewer) | invalidation |
+| `levelMembership` self: the mesh lighting's name map and set | | | 0.24 | (viewer) | invalidation |
+| `spawnActor`, inclusive | 1.19 | 2.69 | 1.34 | 1.1 a spawn | not Firefox-specific; the host is 0.21 ms a spawn, 0.67 a frame |
+| `destroyActor` | 0.50 | 1.31 | 0.58 | 2.6 | `destroy_scan` (Rust) 0.29 of it: `Obj::has` looped 51 positions a slot |
+| `checkEncroachment` (the hash query's JavaScript, per candidate) | 0.60 | 0.80 | 0.62 | 1.7 | flat |
+| `execAttachDecal` | 0.48 | 0.59 | 0.49 | 1.4 (JS), 3.4 (Rust attach) | 0.34 is the Rust attach |
+| `processEvent`, all (the scripts' own work included) | | | 3.5 | 2.9 | content |
+| `instance()` self (10,700 calls a frame) | 0.31 | 0.74 | 0.76 | 3.1 | 70 ns a call in the page against 12 to 15 ns in a loop |
+| `sameDefaults` (a walk over the class's defaults at each construction) | 0.054 | 0.06 | 0.05 | 5.5 | exact cut |
+| `cleanupDestroyed` (the passes) | 0.17 | 2.07 | | | `cleanupScanMode` called twice for each of 17,000 actors |
+| `render_scan` / `destroy_scan` / `level_distance` in Rust | | | 0.45 / 0.29 / 0.23 | | `Obj::has` |
+
+**What changed** (each behind a switch with the old body as the reference; defaults first, `js` the old body, `verify` both):
+1. **Switch readers** (`switch-reader.mjs`, `?switchCache=js|verify`, `SWITCH_CACHE`). The 36 readers `() => (typeof process !== 'undefined' &&
+   process.env?.X) || globalThis.DEUS_EX_X || 'rust'` were called on hot paths (`farMoveMode` up to three times a far move,
+   `cleanupScanMode` twice for each of 17,000 actors in a pass, `epochScopeMode` for each binding of a spawned actor). In Firefox `typeof process`
+   of an undeclared global costs 150 ns and a missing property of the global 200 ns, 400 ns for the pair (V8: 8 and 4 ns; 165 ns in Node
+   for the whole, with `process.env`). A browser realm's switches are set once, before the runtime loads (main.mjs for the page,
+   sim-worker.mjs for the simulation worker): it now reads each at its first call and keeps it. Node keeps the full read at every call
+   (validators set the environment between runs of one process); `SWITCH_CACHE=on` makes Node cache too and `=verify` checks every call
+   (`test/switch-reader.test.mjs`).
+2. **The name maps kept across spawns and destroys** (`actor-names.mjs`, `?actorNames=js|verify`). `surfacePan` (the texture pans' zone
+   names) rebuilt a map from all of Level.Actors, reading 2,000 actors' names, whenever the actors epoch advanced; `levelMembership`
+   (the mesh lighting) did so for every destroy. A first form compared the slots by index and followed appends and nulled entries: it
+   changed nothing at the Dockyard (the profile put the cost in `rebuild`), because **84 percent of the epoch's advances are
+   compactions** (596 advances in 1,000 ticks: 93 appends, 244 shorter arrays, 257 shifted slots, none a bare null), and a compaction
+   shifts every slot. The map depends only on the sequence of the non-null entries, which a compaction keeps: `update` walks the array
+   against the sequence it saw last, finds what left it and what joined it at the end, and applies both (a name's holder that shares it
+   with another, a reordering, an entry seen again: a rebuild, as before). Over 1,000 real ticks at the spot: 1 rebuild (the first), 595
+   updates (1,766 appended, 975 removed), at `verify` (compared with a fresh build at each) without a difference. `js` is each user's old
+   code (a rebuild at every advance for `surfacePan`; the append-only rule for the mesh lighting).
+3. **`Obj::has` walks the set bits** (render.rs, loco.rs; `?hasScan=js|verify`, exported as `vm_has_mode`). Every actor is BOUND
+   (its header fields are bound), so each slot of every scan asked the binding set about its field mask by a loop over all 51 positions
+   (22 in loco.rs); a question has two to seven bits. `js` is the position loop; `verify` runs both and traps on a difference.
+4. **The class image's currency by version** (`defaults-map.mjs`, `?imageCheck=js|verify`). A class's `defaults` is a `DefaultsMap`
+   counting its `set`, `delete` and `clear`; `classImage` took the image as current by walking every default of the class (hundreds for
+   an Actor class) at each construction. An image made at the version the class has now is current without the walk; after a change the
+   walk decides as before and the version is taken again. A class whose defaults are a plain Map (fixtures) keeps the walk.
+
+**Profile after** (one Gecko profile of the code before the roster rewrite, so the maps' cost is still in `rebuild`; mean of 709 frames,
+p.tick 18.4 sampled with the profiler on): all the switch readers 0.57 -> 0; `surfacePan` 0.37 -> 0 (its cost moved into `rebuild`,
+0.34, which the rewrite then removed); `sameDefaults` 0.05 -> 0; `render_scan` 0.45 -> 0.35, `level_distance` 0.23 -> 0.11,
+`destroy_scan` 0.29 -> 0.24.
+
+**A/B.** Firefox inline, headless, `hitch-ab.mjs --guard --cpus 4-7,12-15` (sessions pinned, the arms' order alternating from pair to
+pair), the new arm the defaults, the old arm `switchCache=js&actorNames=js&hasScan=js&imageCheck=js` of the same tree (the old arm's
+readers pay `typeof process` as before the change; `js` of the maps is each user's old rule), 25 s sessions from 5 s after the map; ms.
+Pair differences new - old, with the standard error of their mean and the pairs better.
+
+| Dockyard | new | old | new - old | se | pairs better |
+|---|---:|---:|---:|---:|---:|
+| **Final code, 8 pairs** page `animate` mean | 29.93 | 31.27 | **-1.33** | 1.12 | 6 of 8 |
+| page slowest tenth | 40.81 | 42.71 | **-1.89** | 1.74 | 4 of 8 |
+| tick `p.tick` mean | 15.03 | 15.98 | -0.95 | 0.57 | 6 of 8 |
+| tick slowest tenth | 23.33 | 24.81 | -1.48 | 0.88 | 6 of 8 |
+| `p.render` (not touched: the control) | 3.28 | 3.13 | +0.15 | 0.17 | |
+| **Before the roster rewrite (readers, `has`, image check), 12 pairs** page mean | 29.06 | 30.90 | **-1.84** | 0.65 | 10 of 12 |
+| page slowest tenth | 39.19 | 42.22 | **-3.03** | 1.13 | 9 of 12 |
+| tick mean | 14.64 | 15.83 | -1.19 | 0.34 | 10 of 12 |
+| tick slowest tenth | 22.46 | 24.73 | -2.26 | 0.79 | 9 of 12 |
+| `p.render` (control) | 3.02 | 3.06 | -0.04 | 0.09 | |
+| Both sets, 20 pairs: page mean / its slowest tenth / tick | | | -1.64 / -2.58 / -1.09 | 0.58 / 0.95 / 0.29 | 16 / 13 / 16 of 20 |
+
+The pairs of the final set, page mean new - old: -0.3 -5.0 -3.6 -0.2 -4.6 +1.3 +4.2 -2.5 (the sessions' spread is +-1.5 ms, as the previous
+step found; the slowest tenth of the page is the noisier figure); the 12 of the earlier set: +1.9 +0.5 -3.9 -1.4 0.0 -1.3 -2.7 -3.6 -1.9
+-0.2 -6.3 -3.3. The control, which nothing here touches, moves by +-0.15. The profile-based expectation (readers 0.57, maps 0.6 less what
+a rebuild still costs, `has` 0.3, image 0.05) is about 1.2 to 1.5 ms, which the three sets bracket; the sets differ in a code change
+(the roster) that the final one has and the earlier one lacked, and their results do not separate it.
+
+| Firefox inline, Metro places run (spots 0 to 60, 4 pairs) | new | old | new - old | se |
+|---|---:|---:|---:|---:|
+| tick mean | 6.65 | 6.74 | -0.09 | 0.24 |
+| tick slowest tenth | 12.17 | 11.90 | +0.27 | 0.72 |
+| page mean / slowest tenth | 14.06 / 22.67 | 14.20 / 22.36 | -0.14 / +0.31 | 0.43 / 1.07 |
+
+No effect at the Metro (as the previous step's: its places run is mostly quiet spots). **Node**, one pair at the placed spot (900 ticks
+after 100 warm; the pair was meant to be five and the others were not run): tick mean 8.37 new, 8.47 old (a second old run 8.73), slowest
+tenth 13.59 against 14.24 (14.60); the digests all `eba45015fec39e3f`. Not an A/B.
+
+**Result: meets the bar at the Dockyard** (page mean -1.3 to -1.8 ms against 0.3, its slowest tenth -1.9 to -3.0 against 0.5; the control
+unmoved); shipped on this branch. The Metro run does not move. The page mean at the spot stays near 29 ms: this is a 4 to 6 percent step.
+
+**Checks.**
+* `bench-sim --map NAME --warm 60 --ticks 300 --render-feedback`: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield
+  `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker `764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`: unchanged, by default and
+  with `SWITCH_CACHE=verify HAS_SCAN=verify IMAGE_CHECK=verify ACTOR_NAMES=verify` (Node cached with every read checked; the Rust scans at
+  `verify`, which traps on a difference). Combat replays (`PER=77`): Metro 54 replayed `09e2d44972cca30a`, freshly placed
+  `a6011ede7236c1d2`; Vandenberg 98 replayed `ed184bd3eb533bc1`, freshly placed `1db79eb398240a97`: unchanged (the two replays also with
+  the verify set). The 900-tick placed Dockyard run `eba45015fec39e3f` by default and with the verify set. The six-map and
+  combat runs were made on a frozen copy of the tree before two later edits (the `js` reference of the readers made whole, the
+  `reference` option of the maps); the verify set on the Dockyard and the Island, the default Dockyard and the placed run were made again
+  on a copy that has them, with the same digests. The sequence-based roster is the viewer's and no digest reaches it: its evidence is the
+  unit test, the 1,000-tick check against a fresh build above, and the Firefox runs at `verify` below.
+* Validators (`run-validators.mjs --jobs 1 --filter`, `NATIVE_PROBE_PYTHON` set): spawn 7, destroy 4, cleanup 4, loadmap 2, decal 6 and
+  `validate-decal-fast` (0 mismatches in 12 million cases; it builds the selftest module from `native/`, which the snapshot lacked, so it
+  ran in the full tree), encroach 3: all passed. `npm test`: 977 tests, 973 passed, 4 skipped, 0 failed (11 new: `actor-names`, a random walk of spawns,
+  destroys, compactions in place, duplicate names and array swaps against a fresh build, 30 seeds each for the two kinds of map, and the
+  compaction, reordering and reference cases; `switch-reader`, the Node, browser, `js`, `verify` and `on` behaviors in child processes);
+  the Rust build is warning-free.
+* Firefox inline with every new switch at `verify` (`hitch-run.mjs --query 'switchCache=verify&actorNames=verify&hasScan=verify&imageCheck=verify'`):
+  the Dockyard 1,204 drawn frames and the Metro places run 4,859, final code, no page error; the earlier tree 1,282 and 4,896.
+
+**Tried and not shipped, and what is left.**
+* **A Rust owner for the spawned instance** (the previous step's next cut): not started. The host's own work is 0.21 ms a spawn, 0.67 ms a
+  frame at 3.15 spawns (2 percent of the page), the same in V8 per spawn; a port has to take the construction, the bindings, the zone, the
+  collision view and the six events together (they share the instance's bindings and the epochs), and would at best remove half of it. The
+  measurement does not show it clearing the bar by a margin that pays for the risk.
+* **AttachDecal's Rust attach** is 3.4 times slower in Firefox's wasm than in V8 (0.34 against 0.10 ms a call, 1.8 calls a frame, 0.6 ms a
+  frame): the one place where a spawn is Firefox-specific. Cause not found; a tier-up lag is excluded (flat rate).
+* `destroy_scan` is still one pass over every slot for each destroy (Owner and the four Touching words, a cache miss per actor); only the
+  per-slot `has` got cheaper. The Base children scan of `destroyScriptActor` (when `StandingCount` is not zero) is a JavaScript loop of
+  `readNamed` over every actor, 0.21 ms in the slowest tenth only.
+* `invokeNative` is one function of 1,000 lines with 137 `if` statements in a row (Spawn, SetRotation, Destroy are 85 to 130 deep): its
+  self time is 0.27 ms a frame in Firefox against 0.08 in V8. A dispatch on the index needs a proof that no earlier branch matches; not done.
+* `instance()` (0.76 ms self, 10,700 calls a frame), `handleOf` (0.35: a `Map` keyed by object; on 20,000 cold objects `Map.get` is 25 ns
+  and `WeakMap.get` 12.5 ns in Firefox, 52 and 56 in Node), `readInstanceField`, `namedHandle`: the JavaScript host's per-access cost.
+  Fewer accesses, not faster ones, is the cut: each hot reader (sprite scan, laser state, galaxy audio's object index, `physMovingBrush`)
+  is its own step.
+* The rider table's `fillSlot` (0.33 ms in the slowest tenth, `riderBaseInstance` for each slot after every base-epoch change) and
+  `checkEncroachment`'s per-candidate reads stay as the previous step left them.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

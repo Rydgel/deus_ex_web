@@ -29,6 +29,7 @@ import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {actorsEpoch} from './base-epoch.mjs';
 import {receiverEpoch} from './receiver-epoch.mjs';
 import {HandleMirror} from './actor-handle-mirror.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 /** The fields render.rs reads (R_*), in index order: [spelling, key, kind]. */
 export const RENDER_FIELDS = Object.freeze([
@@ -118,20 +119,19 @@ const SHARED_KINDS = RENDER_LIGHT | RENDER_SPRITE | RENDER_ITERATOR | RENDER_MES
 const COMPUTED = 0x80000000;
 
 /** 'rust' (default), 'js' or 'verify'. */
-export const renderScanMode = () => (typeof process !== 'undefined' && process.env?.RENDER_SCAN)
-  || globalThis.DEUS_EX_RENDER_SCAN || 'rust';
+export const renderScanMode = switchReader('RENDER_SCAN', 'DEUS_EX_RENDER_SCAN', 'rust');
 /** The noncolliding FarMoveActor (render.rs far_move): 'rust' (default),
  * 'js', 'verify', or 'nofit' (the core as it was before it answered FindSpot's point check: a move that needs FindSpot runs in
  * JavaScript; the A/B baseline). */
-export const farMoveMode = () => (typeof process !== 'undefined' && process.env?.FAR_MOVE)
-  || globalThis.DEUS_EX_FAR_MOVE || 'rust';
+export const farMoveMode = switchReader('FAR_MOVE', 'DEUS_EX_FAR_MOVE', 'rust');
 /** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
-export const levelScanMode = () => (typeof process !== 'undefined' && process.env?.LEVEL_SCAN)
-  || globalThis.DEUS_EX_LEVEL_SCAN || 'rust';
+export const levelScanMode = switchReader('LEVEL_SCAN', 'DEUS_EX_LEVEL_SCAN', 'rust');
 /** compactScriptActors' scan for the slots to read (level.rs level_flagged): 'rust' (default), 'js' (every actor's bDeleteMe is read,
  * as before) or 'verify'. */
-export const compactScanMode = () => (typeof process !== 'undefined' && process.env?.COMPACT_SCAN)
-  || globalThis.DEUS_EX_COMPACT_SCAN || 'rust';
+export const compactScanMode = switchReader('COMPACT_SCAN', 'DEUS_EX_COMPACT_SCAN', 'rust');
+/** How the scans ask a bound receiver's binding set about the fields of a question (render.rs and loco.rs `Obj::has`, `vm_has_mode`): 'rust'
+ * (default) walks the set bits, 'js' every position of the field table (the reference), 'verify' both, trapping on a difference. */
+export const hasScanMode = switchReader('HAS_SCAN', 'DEUS_EX_HAS_SCAN', 'rust');
 const f32Bits = new DataView(new ArrayBuffer(4));
 const bitsOf = value => { f32Bits.setFloat32(0, value, true); return f32Bits.getUint32(0, true); };
 
@@ -154,6 +154,7 @@ export class RenderScanHost {
   attach(exports) {
     this.x = exports;
     this.fieldsAt = exports.render_fields_ptr();
+    exports.vm_has_mode({js: 1, verify: 2}[hasScanMode()] ?? 0);
   }
   /** The row's first render word address: after its names, the two
    * perception words and the locomotion word; the second follows it. */

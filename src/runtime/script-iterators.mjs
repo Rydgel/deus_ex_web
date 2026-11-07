@@ -7,6 +7,7 @@
  */
 import { fastLineCheck } from './fast-line-check.mjs';
 import { NodeAccess } from '../unreal/bsp-model.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const isReference = value => Boolean(value?.reference && typeof value.set === 'function');
 export const refValue = value => value?.reference ? value.get() : value;
@@ -34,7 +35,7 @@ function isNoneName(value) {
  * tests in the Rust core (script-vm-render.mjs cycleScan, render.rs cycle_scan over the image's class rows, the same chain
  * classIsA walks): started at `start` with the actors left as its bound it never wraps, and it returns each class match, or an
  * actor it has no class row for, which `isA` tests here. `accept` (the tag, the distance) reads only, so both loops may run. */
-export const actorScanMode = () => (typeof process !== 'undefined' && process.env?.ACTOR_SCAN) || globalThis.DEUS_EX_ACTOR_SCAN || 'rust';
+export const actorScanMode = switchReader('ACTOR_SCAN', 'DEUS_EX_ACTOR_SCAN', 'rust');
 /** ACTOR_AREA_SCAN=js (`?areaScan=js`) keeps RadiusActors' and VisibleActors' loops in JavaScript (scanArea), leaving AllActors' class scan in Rust. */
 export const areaScanOff = () => (typeof process !== 'undefined' && process.env?.ACTOR_AREA_SCAN === 'js') || globalThis.DEUS_EX_AREA_SCAN === 'js';
 function scanActors(array, start, baseClass, isA, accept, scan) {
@@ -551,7 +552,7 @@ export function createCycleActorsIterator({
     },
   };
 }
-export const cycleScanMode = () => (typeof process !== 'undefined' && process.env?.CYCLE_SCAN) || globalThis.DEUS_EX_CYCLE_SCAN || 'rust';
+export const cycleScanMode = switchReader('CYCLE_SCAN', 'DEUS_EX_CYCLE_SCAN', 'rust');
 
 /** Original execBasedActors 0x103e4800 (native index 306). The exec evaluates
  * BaseClass and the out Actor expression, defaults a null BaseClass to

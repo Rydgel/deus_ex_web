@@ -49,13 +49,14 @@ import {receiverEpoch} from './receiver-epoch.mjs';
 import {HandleMirror} from './actor-handle-mirror.mjs';
 import {actorsEpoch, onActorsEpoch} from './base-epoch.mjs';
 import {tickReadsMode} from './script-vm-events.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.ACTOR_TICK_KERNEL === 'js' || globalThis.DEUS_EX_ACTOR_TICK_KERNEL === 'js';
 const DIFFERENTIAL = env.ACTOR_TICK_DIFFERENTIAL === '1';
 const STATS = DIFFERENTIAL || env.ACTOR_TICK_STATS === '1';
 /** The level loop (level_loop.rs): 'rust' (default), 'js' or 'verify'. */
-export const levelLoopMode = () => env.LEVEL_LOOP || globalThis.DEUS_EX_LEVEL_LOOP || 'rust';
+export const levelLoopMode = switchReader('LEVEL_LOOP', 'DEUS_EX_LEVEL_LOOP', 'rust');
 
 // LEVEL_IO (level_loop.rs): two doubles, then these words, then the deferred slots.
 const L_LIST = 0, L_DESC = 1, L_START = 2, L_ROWS = 3, L_VERSION = 4, L_TICK_TYPE = 5, L_TICK_TAG = 6, L_EVENTS = 7,

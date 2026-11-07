@@ -1,3 +1,4 @@
+import {switchReader} from './switch-reader.mjs';
 /** The host side of native/script-vm/src/laser.rs: ULaserIterator::CurrentItem on the Rust x87 model at precision control 24
  * (docs/lasers.md), called from script-laser.mjs laserIteratorItems in place of laserCurrentItem once the script VM kernel is
  * loaded. laserCurrentItem stays the reference: LASER=js (Node) or ?laser=js keeps it, LASER=verify runs both on the same state and
@@ -10,7 +11,7 @@ const BEAMS = 8, BEAM_WORDS = 9, L_INDEX = 72, L_MAXITEMS = 73, L_PREVLOC = 74, 
 const DONE = 0, MOVE_LOCATION = 1;
 
 /** 'rust' (default), 'js' or 'verify'. */
-export const laserMode = () => (typeof process !== 'undefined' && process.env?.LASER) || globalThis.DEUS_EX_LASER || 'rust';
+export const laserMode = switchReader('LASER', 'DEUS_EX_LASER', 'rust');
 
 // The appFrand stream of the item in flight.
 let frand = null;

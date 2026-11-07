@@ -6,13 +6,13 @@ import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static
 import { fgetHsv, squareRootTable, normalLightTable } from '../runtime/dynamic-lighting.mjs';
 import { scriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createLightAnimationKernel } from '../runtime/light-animation-kernel.mjs';
+import {switchReader} from '../runtime/switch-reader.mjs';
 
 /** The animated light-map merge runs in the Rust core (light-animation-kernel.mjs)
  * when the script-VM kernel is loaded as the lighting is created;
  * LIGHT_KERNEL=js in Node or ?lightKernel=js in the viewer keeps
  * animateLightMap. */
-const lightKernelMode = () => (typeof process !== 'undefined' && process.env?.LIGHT_KERNEL)
-  || globalThis.DEUS_EX_LIGHT_KERNEL || 'rust';
+const lightKernelMode = switchReader('LIGHT_KERNEL', 'DEUS_EX_LIGHT_KERNEL', 'rust');
 
 const normalize = v => { const d = Math.hypot(...v); if (!d) throw new Error('Zero lighting normal'); return v.map(n => n / d); };
 

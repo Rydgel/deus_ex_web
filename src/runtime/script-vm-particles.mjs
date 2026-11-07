@@ -11,15 +11,14 @@
  */
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell} from './script-object-image.mjs';
 import {handleOf} from './script-object-handles.mjs';
+import {switchReader} from './switch-reader.mjs';
 
-export const particlesMode = () => (typeof process !== 'undefined' && process.env?.PARTICLES)
-  || globalThis.DEUS_EX_PARTICLES || 'rust';
+export const particlesMode = switchReader('PARTICLES', 'DEUS_EX_PARTICLES', 'rust');
 /** The render-iterator protocol's CurrentItem loop (particles.rs `particle_items`, script-particles.mjs
  * `particleIteratorItems`): 'rust' (default), 'js' (the reference loop, with FarMoveActor as the caller gives it) or
  * 'verify' (every Rust run is repeated by the JavaScript loop from the same state, with the recovered relocation
  * body as FarMoveActor, and every written field and item compared). */
-export const particleItemsMode = () => (typeof process !== 'undefined' && process.env?.PARTICLE_ITEMS)
-  || globalThis.DEUS_EX_PARTICLE_ITEMS || 'rust';
+export const particleItemsMode = switchReader('PARTICLE_ITEMS', 'DEUS_EX_PARTICLE_ITEMS', 'rust');
 /** What the loop did, for the browser runs (viewer/process-probe.mjs): iterators run in Rust, steps they ran, particles moved,
  * deleted by a move FindSpot refused, steps handed to JavaScript (a move `far_plan` declines), iterators the JavaScript loop ran
  * (no iterator image, no world model), and the verify mode's comparisons, steps compared, and sprite records compared with the

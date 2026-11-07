@@ -10,6 +10,7 @@
  * LoadMap loads the model fresh, so a Player-start reload starts empty. */
 import { traceModelLayout } from './trace-kernel.mjs';
 import { setDecalHost } from './script-vm-kernel.mjs';
+import {switchReader} from './switch-reader.mjs';
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 export const f32Bits = v => (f32[0] = v, u32[0]);
@@ -27,7 +28,7 @@ export const DECAL_FAULTS = Object.freeze({1: 'model index out of range', 2: 'tr
 /** 'on' (default), 'off' or 'verify': DECAL_FAST / DEUS_EX_DECAL_FAST (?decalFast=). 'off' runs FindSurface and GatherNodes as
  * the reference x87 expressions, 'on' with the per-edge table and the decided-sign filter (decal/fast.rs), 'verify' both on every
  * call, a difference a DecalKernelFault 8. IO word 16 of the kernel: 0 on, 1 off, 2 verify. */
-export const decalFastMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FAST) || globalThis.DEUS_EX_DECAL_FAST || 'on';
+export const decalFastMode = switchReader('DECAL_FAST', 'DEUS_EX_DECAL_FAST', 'on');
 const DECAL_FAST_WORDS = Object.freeze({on: 0, off: 1, verify: 2});
 const IO_MODE = 16;
 /** Entries of the surface finder's edge table (a power of two; DECAL_FAST_TABLE / DEUS_EX_DECAL_FAST_TABLE): one per polygon vertex
@@ -114,7 +115,7 @@ function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => f
  * Rotation words at each AttachDecal (followDecalTracker), as before; 'kept' writes a mover's surfaces only when its rotation is not the
  * one the last call wrote for it (nothing else writes those words after the upload: decal.rs `decal_model_sync` leaves them); 'verify'
  * skips the same writes and checks that the words in memory are the ones the call would write. */
-export const decalFollowMode = () => (typeof process !== 'undefined' && process.env?.DECAL_FOLLOW) || globalThis.DEUS_EX_DECAL_FOLLOW || 'kept';
+export const decalFollowMode = switchReader('DECAL_FOLLOW', 'DEUS_EX_DECAL_FOLLOW', 'kept');
 
 /** The uploaded model's handle: it holds only the kernel, the block's address, the point capacity and the surface records' word. */
 function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {

@@ -9,6 +9,10 @@ import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs
 import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { renderScanMode } from '../runtime/script-vm-render.mjs';
+import { ActorNames } from '../runtime/actor-names.mjs';
+import { switchReader } from '../runtime/switch-reader.mjs';
+
+const actorNamesMode = switchReader('ACTOR_NAMES', 'DEUS_EX_ACTOR_NAMES', 'kept');
 const PROBE_DIFFERENTIAL = typeof process !== 'undefined' && process.env?.LINE_PROBE_DIFFERENTIAL === '1';
 
 const f = Math.fround;
@@ -53,36 +57,11 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     return (tracked ? traceRayFast(tracked, from, to) : traceRay(frame.model, from, to)) === null;
   };
   let frame = null, frameCount = 0, lastTime = null, meshLightContext = null;
-  // Level.Actors' name map and membership set change only when actorsEpoch
-  // advances (base-epoch.mjs). Most advances do not change the slots (a Base
-  // binding, an appended spawn): `members` is the last slots seen, and when
-  // they are all still the same the tail is added to the map and the set,
-  // which are kept (a rebuild made 300 KB of Map and Set for each advance,
-  // about one in 140 frames on the Island, all of it promoted). A slot that
-  // changed (a destroyed actor) rebuilds them, as before.
-  let membership = null;
-  const levelMembership = level => {
-    const epoch = actorsEpoch(), actors = level.actors;
-    if (membership?.level === level && membership.actors === actors) {
-      if (membership.epoch === epoch) return membership;
-      const members = membership.members, length = members.length;
-      let same = length <= actors.length;
-      for (let i = 0; same && i < length; i++) if (members[i] !== actors[i]) same = false;
-      if (same) {
-        const { byName, live } = membership;
-        for (let i = length; i < actors.length; i++) {
-          const actor = actors[i];
-          members.push(actor); live.add(actor);
-          if (actor) byName.set(actor.name, actor);
-        }
-        membership.epoch = epoch;
-        return membership;
-      }
-    }
-    const byName = new Map();
-    for (const actor of actors) if (actor) byName.set(actor.name, actor);
-    return membership = { level, actors, epoch, byName, live: new Set(actors), members: actors.slice() };
-  };
+  // Level.Actors' name map (the last entry of each name) and membership set change only when actorsEpoch advances (base-epoch.mjs). Most
+  // advances append a spawn or null a destroyed actor's slot: the maps are kept across them and rebuilt only for a change they do not
+  // follow (actor-names.mjs; ACTOR_NAMES / ?actorNames=js rebuilds at every advance, as before, =verify compares).
+  const membership = new ActorNames({ last: true, live: true, reference: 'append' });
+  const levelMembership = level => { membership.at(level.actors, actorsEpoch(), actorNamesMode()); return membership; };
   // A light's fields are read at most once per frame, when first used: no
   // script runs during the render phase, so a later read in the same frame
   // returns the same value (the record is rebuilt every frame, so a live edit
