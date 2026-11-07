@@ -121,3 +121,16 @@ test('moving.rs colour amounts follow colorTableEntry for negative and large ste
   }
   composer.dispose();
 });
+
+test('LightAtlas.update copies a byte source a word a texel, the bytes the byte loop gives', () => {
+  const words = new LightAtlas(128, { words: true }), bytes = new LightAtlas(128, { words: false });
+  for (let round = 0; round < 40; round++) {
+    const width = 1 + int(30), height = 1 + int(20), texels = Uint8Array.from({ length: width * height * 3 }, () => int(256));
+    const make = () => ({ width, height, pixels: new Float32Array(width * height * 3), uv: () => [0, 0] });
+    const a = make(), b = make();
+    words.add(a); bytes.add(b);
+    const minU = int(width), minV = int(height), region = round % 3 ? { minU, maxU: minU + 1 + int(width - minU), minV, maxV: minV + 1 + int(height - minV) } : null;
+    words.update(a, { partial: true, region, bytes: texels }); bytes.update(b, { partial: true, region, bytes: texels });
+  }
+  assert.deepEqual(words.pages.map(page => Buffer.from(page.pixels)), bytes.pages.map(page => Buffer.from(page.pixels)));
+});
