@@ -237,7 +237,7 @@ generic over three register models (`Reg`):
   its bands in order, the lattice of a band made again for each light from
   the row starts. The map buffer is 16-byte aligned so that the host reads
   it through 32-bit views. The scratch adds 165 KB of statics to the
-  module (`__heap_base` 0x1b21b0 → 0x1da9e0 of the 0x200000 reserved) and 29 KB of code.
+  module (`__heap_base` 0x1b21b0 → 0x1da9e0 of the 0x200000 reserved) and 31 KB of code (the module is 1,078,082 bytes, master's 1,046,802).
   The module now needs wasm SIMD (Chrome 91, Firefox 89, Safari 16.4).
   - **Check.** The block loop is the reference loop's arithmetic, so the check
     is equality with it, not a new oracle: `fog.verify` (`?fogKernel=verify`)

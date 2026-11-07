@@ -1785,7 +1785,7 @@ second, three pairs a spot (the view faces the fog surfaces for part of each tur
 * **A memo of a call's answer across frames** (the kernel is a pure function of the lights' words and tables, the nine grid words, the incoming flag and the size)
   would remove the loop when the view does not change (a player standing still), and nothing when it does; the idle A/B would show it far larger than play
   would, so it was not built. The spin A/B above (the view turning at 90 degrees a second) is the case with no reuse across frames.
-* The new module needs wasm simd128 (Chrome 91, Firefox 89, Safari 16.4) and carries 29 KB more code and 165 KB more statics (`__heap_base` 0x1b21b0 -> 0x1da9e0 of the
+* The new module needs wasm simd128 (Chrome 91, Firefox 89, Safari 16.4) and carries 31 KB more code and 165 KB more statics (`__heap_base` 0x1b21b0 -> 0x1da9e0 of the
   0x200000 reserve).
 * Not measured: the Mac, headed runs. The sim worker's Chromium path pays the same fog pass on the page (below).
 
