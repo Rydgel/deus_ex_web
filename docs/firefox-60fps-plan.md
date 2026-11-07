@@ -2832,6 +2832,127 @@ JavaScript structure, the port is a Rust owner of the registrations), the event 
 slow ticks), NPC state changes in the tenth (`js_anim_notify_event`, `js_object`, `js_tick_resume`), and the decals of the Island's slow ticks
 (`js_bool` +0.27). PHYS_Interpolating at the Battery Park spot (0.10 ms, `physPathing` through `playerMove`) is the next of the rolling kind.
 
+### Firefox p95 frames (2026-11-07)
+
+The task: bring the Firefox inline page frame p95 from 17 to 16 ms on UNATCO Island, Battery Park and the Area 51 bunker (master 4316b4d3,
+headless Linux, Ryzen 9 8945HS, Firefox 155 inline 1440x960, god mode, sessions pinned to CPUs 4-7,12-15 under the heavy lock; the Mac and headed
+runs are not measured). **Result: the slow frames are classified; no change was built, because nothing found reaches the ship bar, and the code
+added is measurement only** (`scripts/hitch-slow-frames.mjs`, and `frame-time-set.mjs --ff-prefs`). Three findings change the picture:
+1. **The frames over 16 ms are not spikes and not the collector.** On the Island 94% of them fall in the first 20 s after the map (the census
+   route's first heading), in runs of consecutive frames, and the tick leads in 66 to 88% of them on every map. Collections and uploads explain
+   2 to 7% of them.
+2. **The harness clock exaggerates the distance.** Playwright's Firefox rounds `performance.now` to 1 ms, so a frame of 16.4 ms reads 17 with
+   probability 0.4. With `privacy.reduceTimerPrecision` off (20 us steps) the same sessions give a true p95 of **17.0, 16.6 and 17.3 ms**
+   (Island, Battery Park, bunker): the true bound of 16.7 ms is 0.30, 0.00 and 0.58 ms away, and the integer "16" reading is a uniform
+   **0.50, 0.14 and 0.78 ms** per frame away (below). Battery Park is already under 16.7 ms at p95 in that session.
+3. **The early tick is the original's own view and time dependence.** The Node tick with render feedback is 7.4 ms and without it 2.1 ms on
+   the Island; the idle Island at the authored view needs 50 s to settle. It is spread over 20 hand-backs, none over 0.4 ms.
+
+**Reproduction** (profiles and runs in `.cache/perf/p95/`, outside Git):
+* The runs: `hitch-run.mjs --browser firefox --map MAP --mode scan --seconds 60 --god [--profile FILE] [--ff-prefs '{"privacy.reduceTimerPrecision":false}']`
+  (the frame-time set's command), two unprofiled sessions per map beside the set's own (`.cache/perf/frame-time-set/ff-1d1f5758`), one profiled, one
+  with the 20 us clock; an idle Island session of 60 s with and without a profile.
+* The classification: `node scripts/hitch-slow-frames.mjs RUN.json... [--over 16] [--profile PROFILE.json]` (new): per window and heading the frames
+  over the limit, the phase furthest over its median, the runs of slow frames, the uploads, the collector markers inside the slow frames (the
+  Gecko profile joined as `gecko-slow-ticks.mjs` joins it) and, on a 20 us clock, the true p95 and the shift to the allowance. The profiles were
+  read with `gecko-slow-ticks.mjs`, `gecko-phase.mjs` (`--where 'p.tick>8'`), `gecko-under.mjs`; the major collections with a join of the
+  profile's `GCMajor` markers.
+
+**Where the p95 sits** (one session per map with the 20 us clock, frames from 5 s after the map; "allowed" is 5% of the frames):
+
+| Map | frames | true p50 / p95 / p99 (ms) | over 16.7 (allowed) | 1 ms clock: frames expected to read over 16 | uniform cut for the 16 reading | for the true bound |
+|---|---:|---|---:|---:|---:|---:|
+| Island | 3,644 | 11.28 / 17.00 / 18.58 | 226 (182) | 283 (7.8%) | **0.50 ms** | 0.30 ms |
+| Battery Park | 3,645 | 12.56 / 16.60 / 19.72 | 164 (182) | 204 (5.6%) | 0.14 ms | 0 |
+| bunker | 3,600 | 10.92 / 17.28 / 23.46 | 233 (180) | 255 (7.1%) | **0.78 ms** | 0.58 ms |
+
+A frame of d ms reads over 16 on the 1 ms clock with probability clip(d - 16, 0, 1); the "uniform cut" is the shift of every frame that brings the
+expected count to the allowance. The sessions differ by about 0.5 ms from one another (Battery Park's integer sessions counted 264, 213 frames over 16 for an
+allowance of 181), so the table is one draw, not a verdict.
+
+**The classification** (frames over 16 ms on the 1 ms clock; two unprofiled sessions per map, the frame-time set's and a new one; the first number is the
+set's). "Early" is 5 to 20 s after the map, which on the census route is its first heading, the authored view.
+
+| Class | Island | Battery Park | bunker | What it is |
+|---|---:|---:|---:|---|
+| frames over 16 ms | 442 / 538 (12.0 / 14.7%) | 264 / 213 (7.3 / 5.8%) | 235 / 291 (6.5 / 8.1%) | allowed for p95 16: 184, 181, 181 |
+| A: early window | **416 / 506** | 149 / 116 | **204 / 264** | 94 / 94%, 56 / 54%, 87 / 91% of the frames over 16; 48 / 59%, 17 / 13%, 24 / 32% of the window's frames |
+| B: later, tick-led events | 26 / 32 | 115 / 97 | 31 / 27 | scripted events: Battery Park's heading 3 second half (HUD +0.6 as well) and its 42 to 46 s, the bunker's 42 to 48 s |
+| of A and B, the tick leads in | 83% / 84% | 79% / 66% (A), 68% / 69% (B) | 88% / 88% (A) | the phase furthest over its median; the actors layer leads in 10 to 18%, the render pass in 7 to 12% (Battery Park) |
+| C: collector in the frame | 9% hold >= 1 ms; 2% would be <= 16 without it | 16%; 7% | 12%; 3% | profiled sessions (a profile makes more frames slow: 915, 658, 482); mean in slow frames: minor 0.11 + slice 0.05 ms, 0.21 + 0.18, 0.23 + 0.40 |
+| D: uploads | +0.19 ms of `gl.upload`, +0.27 MB | +0.26 ms, +0.08 MB | +0.22 ms, +0.20 MB | slow minus median-ish frames: under 5% of the excess |
+| E: isolated hitches (> 25 ms) | 3 to 5 | 10 to 14 | 17 to 28 | 0.1 to 0.8% of the frames, in clusters at 40 to 43 s on all three maps (the Island's scan profile has Firefox's `FULL_GC_TIMER` major collection at 39 s: 58 slices over 2.1 s, 4 zones, largest slice 41 ms; the other two maps were not profiled there) and the bunker's at 11 to 17 s, a scripted event |
+
+Phase excess in the slow frames of class A (ms over the median frame, mean per slow frame):
+
+| Map | tick | actors | render | HUD | audio | other |
+|---|---:|---:|---:|---:|---:|---|
+| Island | **3.0** | **2.1 to 2.2** | 0.4 | 0.7 | 0.5 | |
+| Battery Park | **2.1 to 2.3** | 1.0 to 1.2 | 0.9 to 1.1 | | 0.6 to 0.7 | textures 0.4 |
+| bunker | **5.0 to 5.1** | 2.3 to 2.6 | 1.5 | 1.0 to 1.1 | 0.8 | sprites 0.6 |
+
+**Clustering.** The slow frames come in runs: the autocorrelation of the slow-frame indicator peaks at lags 1 to 5 (0.5 to 0.6 on the Island and
+bunker, 0.3 on Battery Park) and decays; there is no period. Per second of the run, 41 of 66 seconds on the Island hold none, 4 hold one and the other 20 hold 6 to 51. The scan route's
+headings make the structure: the Island's heading 1 has 49 to 60% of its frames over 16 ms, the others 0 to 3%; the bunker's heading 1 26 to 35% (its second half 41 to 48%) and the others 1 to 3%;
+Battery Park's heading 1 13 to 18% and heading 3 9 to 11% (its second half 12 to 20%).
+
+**Why the early window is slow, in order of what was measured.**
+* *The view and the five-second rule.* The idle Island at the authored view (no scan, 60 s, unprofiled): tick 8.7 ms at 5 s, 7.5 at 10 s, 7.2 at 30 s,
+  6.4 at 45 s and 5.0 from 51 s; the page mean is 17 to 19 ms until 50 s and 13 after. On the scan route the heading change at 20 s drops the tick by 0.8 ms
+  and the actors layer by 0.9 within a second. `actorInStasis` (actor-tick.mjs; the Rust `tick.rs` `start`) puts an actor to sleep only after 5 s without a
+  render and only for `Physics` None or Rotating, or `bForceStasis`; the scripted pawns (walking) never sleep, but what a rendered pawn runs differs a lot.
+* *Render feedback in Node.* `bench-sim` (idle-spot scenario, 300 warm and 600 timed ticks, Island): tick 7.57 and 7.33 ms with `--render-feedback`, 2.08 and 2.21
+  without it (digests `26f13a97bdefbac1` and `4f8740c1f31a992a`); the bench stamps every drawn mesh actor, so this is the upper bound for a view. A V8 profile of
+  both (the level tick 6.67 against 2.43 ms; the bench's own stamping, 0.88 ms, is outside it): the batch's `dispatch_event` 2.43 against 0.39 ms, `walk_loop` 1.58 against 0.57,
+  `execAttachDecal` 0.77 against 0.02, `js_walk_prelude` 0.83 against 0.23 (ms a tick, inclusive).
+* *Where the slow tick differs, in Firefox* (Gecko profile, slowest tenth of ticks minus the rest, ms a frame): Island (tick 9.79 against 6.16) JavaScript with no
+  Wasm under it +0.56, Wasm +0.47, `js_eval` +0.38, `js_walk_prelude` +0.31, `js_bool` +0.20, `js_move_riders` +0.16, `js_anim_notify_event` +0.13, `js_move_hash` +0.11;
+  Battery Park (8.26 against 5.46) JavaScript +0.42, Wasm +0.30, `js_tick_resume` +0.29, `js_eval` +0.20, `js_tick_physics` +0.19, `js_walk_prelude` +0.13; bunker
+  (10.16 against 4.73) `js_eval` +1.40, JavaScript +0.64, `js_tick_resume` +0.37, `js_bool` +0.30, `js_object` +0.27, Wasm +0.29, `js_tick_physics` +0.23,
+  `js_tick_state` +0.22. `js_tick_resume` is the JavaScript state machine (`script-state.mjs` `process`) stepping the pawns that change state: ten times more in the slow
+  ticks at Battery Park and the bunker, and content. The bunker's `js_eval` is the natives its state code calls: spawns, destroys, decal attaches ([the bunker bundle](#the-bunker-bundle-2026-11-06)).
+* *Not warm-up of the sim, but of the engine.* Under the level tick the innermost named JavaScript frame is in baseline code for 0.71 ms a frame in 5 to 25 s after the map
+  and 0.27 in 50 to 70 s (idle Island profile; Ion code 4.92 against 4.09, native and Wasm 1.93 against 1.60). The baseline time is a long tail (no function over
+  0.075 ms; `instance`, `bind`, `invokeNative`, `levelFor` and `attachedInstance` stay in baseline in the late window too), and the
+  share rises again in the 35 to 45 s bins (74, 202, 303, 159 ms a 5 s bin of the idle profile); the scan profile's full collection lies at 39 s, and a collection that
+  discards JIT code would do that, not verified (the idle profile's collections were not listed). A page cannot set Firefox's thresholds; the cross-map test of step 0 (Island after Wan Chai, same early ticks) stands.
+* *Workload that decays.* Node's counts a tick fall 10 to 14% from 5 s to 50 s (`processEvent` 850 to 738, `invokeNative` 1,227 to 1,075; tick 22.8 to 19.7 ms with the
+  instrumentation of `--tickstats --counts`), the 28 terrorists of the Island being 24% of it (190 us each at 5 s, 152 at 50 s).
+
+**What the flat per-frame cost is** (Island Gecko profile, ms a frame, every frame, not tied to the early window; each is the kind of cut that moves the whole distribution, and the
+table above says the Island needs 0.5 ms of it and the bunker 0.8): Galaxy's `Update` 0.46 (`ambientActors` 0.18 of which the Rust scan 0.08, the named reads 0.12, the batch post
+to the worklet 0.07), texture animation 0.38 (`texSubImage2D` 0.25), the sky pass 0.84 and the main `renderer.render` 0.76, the player's Tick script 0.56, the HUD root tick
+0.48 (JavaScript glue 0.22), the recorder's own GL wrapper and clock reads about 0.07. The object model's leaves (`instance`, `readInstanceField`, `namedHandle`, `readNamed`)
+are 0.9 ms of a frame over all callers, each call a few tens of ns.
+
+**Why nothing was built.**
+* The tick's early excess is 1.5 to 3 ms spread over 20 hand-backs and the Rust core itself, none over 0.4 ms; the last step's lesson applies: Gecko charges short
+  hand-backs more than they cost, and the three families built for it (`tick-tail-unshipped`: the walking prelude, PHYS_Rolling, ShowSelf; exact and verified) measured
+  -0.11 ms of the Island's tick mean, -0.29 of its tenth and -0.04 / -0.19 of the page (6 pairs, standard error 0.11 / 0.34).
+* The bar (0.5 ms of the slowest tenth or 0.3 of the page mean on one map, no regression on the other) is the size of the sessions' spread: nothing in the flat list is
+  over 0.2 ms to remove exactly, and the actors layer, the largest early addition after the tick (2.1 to 2.6 ms), is the other worker's.
+* A bundle is what would do it (the Island's 0.5 ms is the trio 0.2 to 0.3 on its early frames plus the audio scan 0.1 to 0.15 plus the actors layer), at the cost of
+  re-verifying every family together; it was not started on the evidence above, and the bunker's 0.78 is not within it.
+
+**A/B.** None was run: no change exists to compare. The measurements above stand where an A/B would, and they are single sessions (the sessions differ by 0.5 ms); the
+Island's early window is reproducible (506 and 416 frames over 16 ms in the early window of two sessions, 94% of all).
+
+**Checks.** No file under `src`, `native` or `test` changed, so `npm test` and the validators were not rerun. The six sim digests of this tree (`bench-sim.mjs --warm 60 --ticks 300
+--render-feedback`) are the expected ones: Island `5adb254a07b1ed6f`, Training `07816ec472f29b84`, Airfield `46ed0d32ae5b56af`, Wan Chai market `80d27b37e0944d88`, bunker
+`764a7bdffd2ebe59`, Dockyard `e53f348673f1247b`, no tick error; `npm run build:wasm` is warning-free. The two scripts changed are measurement: `hitch-slow-frames.mjs` ran on the
+sessions above, `frame-time-set.mjs --ff-prefs` was syntax-checked and passes the preferences to `hitch-run.mjs --ff-prefs`, which the 20 us sessions used.
+
+**What is open.**
+* The two things that decide the p95 reading are the early tick (view and time dependent, Rust-core and hand-back bound) and a flat 0.5 to 0.8 ms; both are exact-work problems
+  of 0.1 to 0.3 ms items. Order of the candidates, with their measured ceilings (Firefox, a frame): the walking pawns' hand-backs (prelude 0.73 in the slow tenth against 0.42; riders 0.31
+  against 0.15 and hash 0.26 against 0.16 need a Rust owner of the registrations; the prelude port exists), the audio scan and reads in Rust (about 0.15), the animated textures'
+  bytes (0.12, changes the shader), the JIT-tier tail (0.44, not settable).
+* The frame-time set should be run with the 20 us clock (`frame-time-set.mjs --ff-prefs '{"privacy.reduceTimerPrecision":false}'` then `hitch-slow-frames.mjs`): the integer p95 of 17 hides
+  that Battery Park is 0.1 ms under the bound and the Island 0.3 ms over.
+* Firefox's periodic full collection at about 60 s of page time (40 to 43 s after the map) makes 10 to 25 frames of 25 to 85 ms in every session; it is outside the p95 and inside the
+  slowest tenth and p99 (bunker p99 23.5 ms).
+* Not measured: the Mac, headed runs, more than one 20 us session per map.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
