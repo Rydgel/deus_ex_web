@@ -55,6 +55,7 @@ mod walk_loop;
 mod window;
 mod zone;
 mod x87;
+mod x87_ref;
 use x87::{Ext, INDEFINITE};
 
 #[panic_handler]
@@ -74,6 +75,7 @@ pub extern "C" fn result_ptr() -> *const u32 {
 }
 #[no_mangle]
 pub extern "C" fn sine_ptr() -> *mut u32 {
+    percep::fcoords_cache_clear();
     core::ptr::addr_of_mut!(SINE) as *mut u32
 }
 

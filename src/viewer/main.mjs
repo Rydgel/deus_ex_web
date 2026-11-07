@@ -150,10 +150,14 @@ const fogOrderParam=new URLSearchParams(location.search).get('fogOrder');
 // ?areaScan=js keeps RadiusActors' and VisibleActors' loops over Level.Actors in JavaScript (script-iterators.mjs scanArea); the default runs their
 // class, bHidden and radius tests in the Rust core (render.rs area_scan, the Cloud timer's foreach VisibleActors walks every actor of the level);
 // ?actorScan=verify runs both and compares.
+// ?x87=ref runs the x87 model's add, multiply, divide, square root and normalization on the u128 bodies of x87_ref.rs (script-vm-ref.wasm,
+// scripts/build-x87-ref.mjs) instead of the limb arithmetic of x87.rs (docs/firefox-60fps-plan.md "Combat tick").
+// ?fcoordsCache=off computes every FCoords(FRotator) of the AI perception, locomotion and decal code in full; the default keeps the last 32
+// distinct rotations' axes (percep.rs fcoords_axes, a pure function of the rotation).
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
-for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
+for(const [param,global] of [['x87','DEUS_EX_X87'],['fcoordsCache','DEUS_EX_FCOORDS_CACHE'],['renderScan','DEUS_EX_RENDER_SCAN'],['laser','DEUS_EX_LASER'],['levelLoop','DEUS_EX_LEVEL_LOOP'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['actorScan','DEUS_EX_ACTOR_SCAN'],['areaScan','DEUS_EX_AREA_SCAN'],['destroyScan','DEUS_EX_DESTROY_SCAN'],['fogUpload','DEUS_EX_FOG_UPLOAD'],['fogCopy','DEUS_EX_FOG_COPY'],['fogLights','DEUS_EX_FOG_LIGHTS'],['fogNotes','DEUS_EX_FOG_NOTES'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['particleItems','DEUS_EX_PARTICLE_ITEMS'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['projectilePhysics','DEUS_EX_PROJECTILE_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],

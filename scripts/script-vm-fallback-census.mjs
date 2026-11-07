@@ -10,13 +10,17 @@
 // differenced around it. The tick's slowest tenth by wall time and the other nine tenths are averaged per tick by key. A key's self
 // time leaves out the timed keys nested inside it: a call node's row is the JavaScript glue of the call, the callee's Rust
 // statements are the `wasm <function>` rows, its JavaScript statements `js statement ... (callee)` rows. Rows print to stderr at
-// exit; PLACE=json puts the player at a spot first, CENSUS_JSON=file also writes them, CENSUS_ROWS=n sets the row count (default 45), CENSUS_SORT=slow|diff (default diff).
+// exit; BASE=scenario.mjs runs that scenario (places-replay.mjs) instead of the scan route; PLACE=json puts the player at a spot first, CENSUS_JSON=file also writes them, CENSUS_ROWS=n sets the row count (default 45), CENSUS_SORT=slow|diff (default diff).
 import {writeFileSync} from 'node:fs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import {pathToFileURL} from 'node:url';
+import {resolve} from 'node:path';
 import {placeProbe} from '../src/viewer/decal-probe.mjs';
 
 const WARM = Number(process.env.SCAN_WARM ?? 60), TICKS = Number(process.env.SCAN_TICKS ?? 300);
-export default ({game, runtime}) => {
+export default async ({game, runtime, assets}) => {
+  // BASE=scenario.mjs drives the run instead of the scan route (scripts/scenarios/places-replay.mjs: the census' placements, the combat state)
+  const base = process.env.BASE ? await (await import(pathToFileURL(resolve(process.env.BASE)).href)).default({game, runtime, assets}) : null;
   const stats = globalThis.__scriptVmStats;
   if (!stats?.self) throw new Error('script-vm-fallback-census needs SCRIPT_VM_STATS=1 SCRIPT_VM_STATS_TIME=1');
   const fixture = createPlayerInputFixture(game);
@@ -75,6 +79,7 @@ export default ({game, runtime}) => {
     if (process.env.CENSUS_JSON) writeFileSync(process.env.CENSUS_JSON, JSON.stringify({ticks: ticks.length, nSlow, msSlow, msRest, rows}));
   });
   return tick_ => {
+    if (base) return base(tick_);
     const player = game.player.collisionActor;
     // PLACE='{"location":[x,y,z],"rotation":[0,yaw,0]}': the player is put there before the first tick (hitch-run.mjs --place), so a
     // spot of the slow-spot census can be read without a browser; the scan route then turns from that heading

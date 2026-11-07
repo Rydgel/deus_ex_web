@@ -29,11 +29,15 @@ export function loadScriptVmKernel() {
 
 let compiled = null;
 
+/** X87=ref (`?x87=ref`) loads script-vm-ref.wasm instead (scripts/build-x87-ref.mjs: the same core with every x87 operation on the u128
+ * bodies of x87_ref.rs, the arithmetic x87.rs ran until 2026-11-06), for A/B runs of the limb arithmetic. */
+export const x87Reference = () => (typeof process !== 'undefined' && process.env?.X87 === 'ref') || globalThis.DEUS_EX_X87 === 'ref';
+
 /** The compiled module, fetched and compiled once for every instance (the
  * trace kernel, trace-kernel.mjs, instantiates it too). */
 export function compileScriptVm() {
   return compiled ??= (async () => {
-    const url = new URL('./script-vm.wasm', import.meta.url);
+    const url = new URL(x87Reference() ? './script-vm-ref.wasm' : './script-vm.wasm', import.meta.url);
     let bytes;
     if (url.protocol === 'file:') {
       const module = 'node:fs/promises';
@@ -81,6 +85,8 @@ const decalImports = {
 function uploadSineTable(x, memory) {
   const sine = rotationSineTable(), table = new Uint32Array(memory.buffer), sineAt = x.sine_ptr() >>> 2;
   for (let i = 0; i < sine.length; i++) table[sineAt + i] = bits(sine[i]);
+  // FCOORDS_CACHE=off (`?fcoordsCache=off`) computes every FCoords(FRotator) in full (percep.rs fcoords_axes keeps the last results otherwise).
+  if ((typeof process !== 'undefined' && process.env?.FCOORDS_CACHE === 'off') || globalThis.DEUS_EX_FCOORDS_CACHE === 'off') x.fcoords_cache_enable?.(0);
 }
 
 /** An interpreter instance on `memory` (a runtime's ObjectArena memory, whose

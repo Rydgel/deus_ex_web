@@ -7,6 +7,14 @@
 //! Every operation rounds once to a 64-bit significand, nearest-even, as the
 //! JavaScript model's BigInt arithmetic does; the two are compared by
 //! scripts/validate-script-vm-x87.mjs.
+//!
+//! Since 2026-11-06 the arithmetic runs on u64 limbs (docs/firefox-60fps-plan.md "Combat tick"): a widening multiply without
+//! `__multi3`, the quotient from a 128/64 division (Hacker's Delight `divlu`) without `u128_div_rem`, the square root from a seed
+//! of the high word's 32-bit root. x87_ref.rs keeps the u128 bodies they replace: `--features x87_ref` runs them, `--features
+//! selftest` compares both over generated operands (scripts/validate-x87-fast.mjs). A significand that is not normalized (bit 63
+//! clear; lipsync.rs builds such values from an 80-bit memory word) takes the reference body.
+
+use crate::x87_ref;
 
 pub const INDEFINITE: u32 = 0xffc0_0000;
 
@@ -77,39 +85,21 @@ impl Ext {
         Self::normalized(value.unsigned_abs() as u128, 0, sign)
     }
 
-    pub fn normalized(mut sig: u128, mut exp: i32, sign: u32) -> Self {
-        if sig == 0 {
-            return Self::zero(sign);
+    pub fn normalized(sig: u128, exp: i32, sign: u32) -> Self {
+        if cfg!(feature = "x87_ref") {
+            return x87_ref::normalized(sig, exp, sign);
         }
-        let width = 128 - sig.leading_zeros();
-        if width > 64 {
-            let shift = width - 64;
-            sig = round_right(sig, shift);
-            exp += shift as i32;
-            if sig >= 1u128 << 64 {
-                sig >>= 1;
-                exp += 1;
-            }
-        } else {
-            let shift = 64 - width;
-            sig <<= shift;
-            exp -= shift as i32;
-        }
-        Self { sig: sig as u64, exp, sign, special: 0 }
+        norm_hl((sig >> 64) as u64, sig as u64, exp, sign)
     }
 
-    /// An arithmetic result: the exact (or sticky-jammed) `sig·2^exp`
-    /// rounded once to the precision control's width, nearest-even, then
-    /// held normalized to 64 bits.
-    fn rounded(sig: u128, exp: i32, sign: u32) -> Self {
-        if precision() == 24 && sig != 0 {
-            let width = 128 - sig.leading_zeros();
-            if width > 24 {
-                let shift = width - 24;
-                return Self::normalized(round_right(sig, shift), exp + shift as i32, sign);
-            }
+    /// An arithmetic result: the exact (or sticky-jammed) `hi:lo * 2^exp` rounded once to the precision control's width,
+    /// nearest-even, then held normalized to 64 bits.
+    #[inline(always)]
+    fn rounded(hi: u64, lo: u64, exp: i32, sign: u32) -> Self {
+        if cfg!(feature = "x87_ref") || precision() == 24 {
+            return x87_ref::rounded(((hi as u128) << 64) | lo as u128, exp, sign);
         }
-        Self::normalized(sig, exp, sign)
+        norm_hl(hi, lo, exp, sign)
     }
 
     pub fn nan(self) -> bool {
@@ -134,36 +124,10 @@ impl Ext {
         }
         self
     }
-    /// A NaN operand pair: the larger significand wins, the positive payload
-    /// on a tie; a lone NaN quiets.
-    fn nan_pair(self, other: Self) -> Self {
-        if !self.nan() {
-            return other.quiet();
-        }
-        if !other.nan() {
-            return self.quiet();
-        }
-        let a = self.special & 0x7f_ffff;
-        let b = other.special & 0x7f_ffff;
-        if b > a || (a == b && other.special >> 31 == 0) {
-            other.quiet()
-        } else {
-            self.quiet()
-        }
-    }
 
     pub fn add(self, other: Self) -> Self {
-        if self.nan() || other.nan() {
-            return self.nan_pair(other);
-        }
-        if self.inf() || other.inf() {
-            return if self.inf() && other.inf() && self.sign != other.sign {
-                Self::load(INDEFINITE)
-            } else if self.inf() {
-                self
-            } else {
-                other
-            };
+        if cfg!(feature = "x87_ref") || (self.special | other.special) != 0 {
+            return x87_ref::add(self, other);
         }
         if self.sig == 0 {
             return if other.sig == 0 { Self::zero(self.sign & other.sign) } else { other };
@@ -175,51 +139,62 @@ impl Ext {
         // Three guard bits plus a jammed low bit preserve nearest-even after
         // alignment; a larger exponent gap cannot cancel into the guard bits.
         let left = (a.sig as u128) << 3;
-        let right = shift_jam((b.sig as u128) << 3, (a.exp - b.exp) as u32);
+        // x87_ref::shift_jam((b.sig << 3), d) without the 128-bit variable shifts: up to 3 places of gap are an exact left shift; a larger gap
+        // shifts the significand right by d - 3 and jams the bits that fall off into the low bit (all of them, once d - 3 reaches 64).
+        let d = (a.exp - b.exp) as u32;
+        let right = if d <= 3 {
+            (b.sig as u128) << (3 - d)
+        } else if d - 3 < 64 {
+            let s = d - 3;
+            ((b.sig >> s) | u64::from(b.sig << (64 - s) != 0)) as u128
+        } else {
+            1
+        };
         let sum = if a.sign == b.sign { left + right } else { left - right };
-        Self::rounded(sum, a.exp - 3, if sum == 0 { self.sign & other.sign } else { a.sign })
+        Self::rounded((sum >> 64) as u64, sum as u64, a.exp - 3, if sum == 0 { self.sign & other.sign } else { a.sign })
     }
 
     pub fn mul(self, other: Self) -> Self {
-        if self.nan() || other.nan() {
-            return self.nan_pair(other);
+        if cfg!(feature = "x87_ref") || (self.special | other.special) != 0 {
+            return x87_ref::mul(self, other);
         }
         let sign = self.sign ^ other.sign;
-        if self.inf() || other.inf() {
-            let finite = if self.inf() { other } else { self };
-            return Self::load(if !finite.inf() && finite.sig == 0 { INDEFINITE } else { sign | 0x7f80_0000 });
+        if self.sig == 0 || other.sig == 0 {
+            return Self::zero(sign);
         }
-        Self::rounded(self.sig as u128 * other.sig as u128, self.exp + other.exp, sign)
+        let (hi, lo) = mul_wide(self.sig, other.sig);
+        Self::rounded(hi, lo, self.exp + other.exp, sign)
     }
 
     /// FDIV: 0/0 and inf/inf are the indefinite, x/0 a signed infinity and
     /// x/inf a signed zero; a finite quotient is correctly rounded.
     pub fn div(self, other: Self) -> Self {
-        if self.nan() || other.nan() {
-            return self.nan_pair(other);
+        if cfg!(feature = "x87_ref") || (self.special | other.special) != 0 || self.sig == 0 || other.sig == 0 {
+            return x87_ref::div(self, other);
+        }
+        if (self.sig & other.sig) >> 63 == 0 {
+            return x87_ref::div_finite(self, other);
         }
         let sign = self.sign ^ other.sign;
-        if self.inf() || other.inf() {
-            if self.inf() && other.inf() {
-                return Self::load(INDEFINITE);
-            }
-            return if self.inf() { Self::load(sign | 0x7f80_0000) } else { Self::zero(sign) };
-        }
-        if other.sig == 0 {
-            return if self.sig == 0 { Self::load(INDEFINITE) } else { Self::load(sign | 0x7f80_0000) };
-        }
-        if self.sig == 0 {
-            return Self::zero(sign);
-        }
-        let num = (self.sig as u128) << 64;
-        let den = other.sig as u128;
-        let q = num / den;
-        // q has 64 or 65 bits. Two more quotient bits from the remainder give
-        // the round bit in either case; the rest of the remainder is sticky.
-        let rem = (num % den) << 2;
-        let extra = rem / den;
-        let sticky = u128::from(rem % den != 0);
-        Self::rounded((q << 3) | (extra << 1) | sticky, self.exp - other.exp - 67, sign)
+        // num = self.sig << 64, den = other.sig, both normalized: q = num / den has 64 or 65 bits.
+        let (a, d) = (self.sig, other.sig);
+        let (top, r1) = if a >= d { (1u64, a - d) } else { (0u64, a) };
+        let (q0, rem) = divlu(r1, 0, d);
+        // Two more quotient bits from the remainder give the round bit in either case; the rest of the remainder is sticky.
+        let r4 = (rem as u128) << 2;
+        let d1 = d as u128;
+        let (extra, left) = if r4 >= 3 * d1 {
+            (3u64, r4 - 3 * d1)
+        } else if r4 >= 2 * d1 {
+            (2, r4 - 2 * d1)
+        } else if r4 >= d1 {
+            (1, r4 - d1)
+        } else {
+            (0, r4)
+        };
+        let lo = (q0 << 3) | (extra << 1) | u64::from(left != 0);
+        let hi = (top << 3) | (q0 >> 61);
+        Self::rounded(hi, lo, self.exp - other.exp - 67, sign)
     }
 
     /// FCOM's (C0, C3) as script-pawn-locomotion.mjs `x87compare` models
@@ -257,11 +232,8 @@ impl Ext {
 
     /// FSQRT of a finite nonnegative value or +inf; a zero keeps its sign.
     pub fn sqrt(self) -> Self {
-        if self.inf() {
-            return Self::load(0x7f80_0000);
-        }
-        if self.sig == 0 {
-            return self;
+        if cfg!(feature = "x87_ref") || self.special != 0 || self.sig >> 63 == 0 {
+            return x87_ref::sqrt(self);
         }
         let mut sig = self.sig as u128;
         let mut exp = self.exp;
@@ -276,7 +248,7 @@ impl Ext {
         if precision() == 24 {
             // The floor root (64 bits) with a sticky bit, rounded once.
             let sticky = u128::from(q * q != n2);
-            return Self::rounded((q << 1) | sticky, exp / 2 - shift / 2 - 1, 0);
+            return x87_ref::rounded((q << 1) | sticky, exp / 2 - shift / 2 - 1, 0);
         }
         // The root is never exactly halfway: q + 1 wins iff n2 - q^2 > q.
         if n2 - q * q > q {
@@ -288,6 +260,9 @@ impl Ext {
     /// FST/FSTP m32: nearest-even to 24 bits with denormal and overflow
     /// boundaries.
     pub fn store(self) -> u32 {
+        if cfg!(feature = "x87_ref") {
+            return x87_ref::store(self);
+        }
         if self.special != 0 {
             return self.special;
         }
@@ -299,7 +274,8 @@ impl Ext {
             return self.sign | 0x7f80_0000;
         }
         if e >= -126 {
-            let mut sig = round_right(self.sig as u128, 40) as u32;
+            let (q, rem) = (self.sig >> 40, self.sig & ((1 << 40) - 1));
+            let mut sig = (q + u64::from(rem > 1 << 39 || (rem == 1 << 39 && q & 1 != 0))) as u32;
             if sig >= 1 << 24 {
                 sig >>= 1;
                 e += 1;
@@ -333,7 +309,17 @@ impl Ext {
         if self.special != 0 || self.sig == 0 {
             return self;
         }
-        Self::normalized(round_right(self.sig as u128, 11), self.exp + 11, self.sign)
+        if cfg!(feature = "x87_ref") {
+            return x87_ref::store_double(self);
+        }
+        let (q, rem) = (self.sig >> 11, self.sig & 0x7ff);
+        let q = q + u64::from(rem > 0x400 || (rem == 0x400 && q & 1 != 0));
+        // q is at most 2^53, so the normalization is an exact left shift (a tiny unnormalized significand can round to zero).
+        if q == 0 {
+            return Self::zero(self.sign);
+        }
+        let shift = q.leading_zeros();
+        Self { sig: q << shift, exp: self.exp + 11 - shift as i32, sign: self.sign, special: 0 }
     }
 
     /// The shipped MSVCRT _ftol: truncate toward zero to int64 and keep the
@@ -385,44 +371,109 @@ impl Ext {
     }
 }
 
-fn shift_jam(value: u128, shift: u32) -> u128 {
-    if shift == 0 {
-        value
-    } else if shift >= 128 {
-        u128::from(value != 0)
-    } else {
-        (value >> shift) | u128::from(value & ((1u128 << shift) - 1) != 0)
+/// `hi:lo` (a 128-bit magnitude) times 2^exp rounded once to a 64-bit significand, nearest-even, or left-shifted to 64 bits:
+/// x87_ref::normalized on limbs.
+#[inline(always)]
+fn norm_hl(hi: u64, lo: u64, exp: i32, sign: u32) -> Ext {
+    if hi == 0 {
+        if lo == 0 {
+            return Ext::zero(sign);
+        }
+        let s = lo.leading_zeros();
+        return Ext { sig: lo << s, exp: exp - s as i32, sign, special: 0 };
     }
+    // The value is 64 + (64 - lz) bits wide: shift = 64 - lz bits are dropped, `rem` is them left-aligned in a word.
+    let lz = hi.leading_zeros();
+    let (mut q, rem) = if lz == 0 { (hi, lo) } else { ((hi << lz) | (lo >> (64 - lz)), lo << lz) };
+    let mut e = exp + (64 - lz) as i32;
+    if rem > 1 << 63 || (rem == 1 << 63 && q & 1 != 0) {
+        q = q.wrapping_add(1);
+        if q == 0 {
+            q = 1 << 63;
+            e += 1;
+        }
+    }
+    Ext { sig: q, exp: e, sign, special: 0 }
 }
 
-pub fn round_right(value: u128, shift: u32) -> u128 {
-    if shift == 0 {
-        return value;
-    }
-    if shift > 128 {
-        return 0;
-    }
-    if shift == 128 {
-        return u128::from(value > 1u128 << 127);
-    }
-    let q = value >> shift;
-    let rem = value & ((1u128 << shift) - 1);
-    let half = 1u128 << (shift - 1);
-    q + u128::from(rem > half || (rem == half && q & 1 != 0))
+/// The 128-bit product of two words: (high, low).
+#[inline(always)]
+fn mul_wide(a: u64, b: u64) -> (u64, u64) {
+    let (a0, a1) = (a & 0xffff_ffff, a >> 32);
+    let (b0, b1) = (b & 0xffff_ffff, b >> 32);
+    let p00 = a0 * b0;
+    let p01 = a0 * b1;
+    let p10 = a1 * b0;
+    let p11 = a1 * b1;
+    let mid = (p00 >> 32) + (p01 & 0xffff_ffff) + (p10 & 0xffff_ffff);
+    (p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32), (p00 & 0xffff_ffff) | (mid << 32))
 }
 
-/// floor(sqrt(n)) for n below 2^128.
+/// floor(u1:u0 / v) and the remainder, for v >= 2^63 and u1 < v (Hacker's Delight `divlu` with a zero shift: two 64/32 digit steps,
+/// each corrected by at most two).
+#[inline(always)]
+fn divlu(u1: u64, u0: u64, v: u64) -> (u64, u64) {
+    const B: u64 = 1 << 32;
+    let (vn1, vn0) = (v >> 32, v & 0xffff_ffff);
+    let (un1, un0) = (u0 >> 32, u0 & 0xffff_ffff);
+    let mut q1 = u1 / vn1;
+    let mut rhat = u1 - q1 * vn1;
+    while q1 >= B || q1 * vn0 > (rhat << 32) + un1 {
+        q1 -= 1;
+        rhat += vn1;
+        if rhat >= B {
+            break;
+        }
+    }
+    let un21 = (u1 << 32).wrapping_add(un1).wrapping_sub(q1.wrapping_mul(v));
+    let mut q0 = un21 / vn1;
+    rhat = un21 - q0 * vn1;
+    while q0 >= B || q0 * vn0 > (rhat << 32) + un0 {
+        q0 -= 1;
+        rhat += vn1;
+        if rhat >= B {
+            break;
+        }
+    }
+    ((q1 << 32) | q0, (un21 << 32).wrapping_add(un0).wrapping_sub(q0.wrapping_mul(v)))
+}
+
+/// floor(sqrt(n)) for n below 2^128. An n of at least 2^126 (the shapes `sqrt` makes) starts from the high word's 32-bit root
+/// and takes Newton steps from above, each a 128/64 division; any other n, and a step the division cannot take, the reference loop.
 fn isqrt(n: u128) -> u128 {
-    if n < 2 {
-        return n;
+    let hi = (n >> 64) as u64;
+    if cfg!(feature = "x87_ref") || hi < 1 << 62 {
+        return x87_ref::isqrt(n);
     }
-    let width = 128 - n.leading_zeros();
-    let mut x: u128 = 1u128 << ((width + 1) >> 1).min(64);
+    // s = floor(sqrt(hi)), 32 bits; the root r of n satisfies s * 2^32 <= r < (s + 1) * 2^32, so (s + 1) * 2^32 is above it.
+    let (mut res, mut bit, mut rest) = (0u64, 1u64 << 62, hi);
+    while bit != 0 {
+        if rest >= res + bit {
+            rest -= res + bit;
+            res = (res >> 1) + bit;
+        } else {
+            res >>= 1;
+        }
+        bit >>= 2;
+    }
+    let mut x: u128 = (res as u128 + 1) << 32;
     loop {
-        let y = (x + n / x) >> 1;
+        // n / x with x >= r >= 2^63: the 128/64 division needs hi < x; x = 2^64 divides by shifting.
+        let quotient = if x >> 64 != 0 {
+            hi as u128
+        } else if hi >= x as u64 {
+            return x87_ref::isqrt(n);
+        } else {
+            divlu(hi, n as u64, x as u64).0 as u128
+        };
+        let y = (x + quotient) >> 1;
         if y >= x {
             return x;
         }
         x = y;
     }
+}
+
+pub fn round_right(value: u128, shift: u32) -> u128 {
+    x87_ref::round_right(value, shift)
 }

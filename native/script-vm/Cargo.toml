@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 [features]
 # decal_fast_selftest (src/decal/fast.rs); not in the shipped module.
 selftest = []
+# every Ext operation runs x87_ref.rs, the u128 bodies x87.rs replaced (the A/B build: ?x87=ref); not in the shipped module.
+x87_ref = []
 
 [profile.release]
 opt-level = 3
