@@ -31,7 +31,7 @@ const K = {
   LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34, vector: 161, rotator: 176},
   FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44, vector: 162, rotator: 177},
   FIELD_ELEM: {int: 25, byte: 26, bool: 27, float: 28, object: 29},
-  LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39}, LOCAL_ELEM_VECTOR: 209, SET_LOCAL_ELEM: 210,
+  LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39}, LOCAL_ELEM_VECTOR: 209, SET_LOCAL_ELEM: 210, SET_ROTATION: 211,
   DEFAULT: {int: 45, byte: 46, bool: 47, float: 48},
   JS: {int: 50, byte: 50, bool: 52, float: 53, object: 54, vector: 163, rotator: 178, name: 195}, JS_VOID: 55,
   SET_LOCAL: {int: 60, byte: 61, bool: 62, float: 63, object: 68, vector: 196, rotator: 198},
@@ -162,7 +162,7 @@ const SMALL_NATIVES = new Set([284, 723, 721]);
  * compound assignments, the composite operators, IsA, the short-circuit pair, the perception and small natives and the
  * GC natives gc.rs runs). Each runs the body its JavaScript case has, so the list is src/runtime/native-registry.mjs's
  * `rust` layer: a native outside it, or outside the JavaScript dispatchers, never reaches a Rust kind. */
-export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, 720, ...OPERATORS.keys(), ...INCREMENTS.keys(),
+export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, 299, 720, ...OPERATORS.keys(), ...INCREMENTS.keys(),
   ...COMPOUNDS.keys(), ...COMPOSITE_OPERATORS.keys(), ...VCOMPOUNDS.keys(), ...PERCEPTION.keys(), ...SMALL_NATIVES,
   ...GC_RUST_NATIVES.keys()])].sort((a, b) => a - b));
 const STASIS_FIELDS = [['engine.actor.lastrendertime', 'float'], ['engine.actor.bstasis', 'bool'], ['engine.actor.physics', 'byte'],
@@ -240,6 +240,10 @@ export const outStructMode = () => (typeof process !== 'undefined' && process.en
  * IteratorNext run in Rust (interp.rs S_FOREACH_CYCLE, iter.rs) where 'rust'; 'js' keeps the JavaScript iterator; 'verify' compares each
  * step with a shadow JavaScript iterator. */
 export const foreachStartMode = () => (typeof process !== 'undefined' && process.env?.FOREACH_START) || globalThis.DEUS_EX_FOREACH_START || 'rust';
+/** 'rust' (default), 'js' or 'verify': SET_ROTATION / DEUS_EX_SET_ROTATION / `?setRotation=`. A statement `SetRotation(R)` or `X.SetRotation(R)`
+ * (native 299) runs in Rust (interp.rs SET_ROTATION) where 'rust'; 'js' keeps the native in the JavaScript VM (setScriptRotation); 'verify'
+ * runs the JavaScript native on a copy of what Rust did and compares the Rotation words (script-vm-foreach.mjs). */
+export const setRotationMode = () => (typeof process !== 'undefined' && process.env?.SET_ROTATION) || globalThis.DEUS_EX_SET_ROTATION || 'rust';
 /** 'rust' (default), 'js' or 'verify': STRUCT_ARRAYS / DEUS_EX_STRUCT_ARRAYS / `?structArrays=`. The parts of a local struct the Rust
  * interpreter reaches in memory: a fixed-array member of a struct local (`projList.List[i].dist`), vector members and vector array
  * elements, stores to array elements (`List[i].Projectile = p`), and struct out arguments whose members are nested structs, fixed
@@ -1001,6 +1005,38 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return [K.COMPOUND_FIELD, op, cell.offset, nodeId(n), cell.key, value.length, ...value];
   }
 
+  // `SetRotation(R)` or `X.SetRotation(R)` as a statement (native 299, SET_ROTATION): script-set-rotation.mjs setScriptRotation, which is
+  // ULevel::MoveActor with a zero Delta (docs/script-set-rotation.md): nothing for a static or immovable actor, nothing for an unchanged
+  // rotation, the three ints stored at Actor.Rotation when the actor has neither a Brush nor riders; the other cases (and any of the five
+  // fields not in the object image) run the native node in JavaScript. The rotation is evaluated by Rust without imports, so the JavaScript
+  // path evaluating it again is unobservable. The context object is evaluated first with SELF (None: Accessed None, nothing else).
+  // Premises: the runtime's own invokeNative reaches the 299 branch, and the level is not an editor level (setScriptRotation's `!level.editor`).
+  const ROT_FIELDS = ['engine.actor.bstatic', 'engine.actor.bmovable', 'engine.actor.rotation', 'engine.actor.brush', 'engine.actor.standingcount'];
+  function setRotationEffect(n) {
+    if (setRotationMode() === 'js') return null;
+    const invoked = n.op === 0x19 ? n.value : n;
+    if (!isNode(invoked) || invoked.op !== 'native' || invoked.index !== 299 || !Array.isArray(invoked.args) || invoked.args.length !== 1) return null;
+    if (services.invokeNative !== runtime.services.invokeNative || Object.hasOwn(runtime, 'invokeNative') || runtime.boundaryNatives?.has(299)) return null;
+    if (typeof runtime.levelFor !== 'function' || runtime.levelFor(instance)?.editor !== false) return null;
+    const mark = imports;
+    let context = [];
+    if (n.op === 0x19) {
+      if (!isNode(n.context) || (n.context.op !== 0x00 && n.context.op !== 0x01)) return null;
+      context = expr(n.context, 'object');
+      if (imports !== mark) { imports = mark; return null; }
+    }
+    const value = valueExpr(invoked.args[0], 'rotator');
+    if (!value || imports !== mark) { imports = mark; return null; }
+    const cells = ROT_FIELDS.map(key => fieldImageCell(key));
+    if (cells.some(cell => !cell)) { missingField = true; return null; }
+    const [stat, movable, rotation, brush, standing] = [scalarCell(cells[0]), scalarCell(cells[1]), vectorCell(cells[2]), scalarCell(cells[3]), scalarCell(cells[4])];
+    if (stat?.kind !== 'bool' || movable?.kind !== 'bool' || rotation?.kind !== 'rotator' || brush?.kind !== 'object' || standing?.kind !== 'byte') return null;
+    return [K.SET_ROTATION, nodeId(n), nodeId(invoked), n.op === 0x19 ? 1 : 0,
+      stat.offset, fieldKeyId(ROT_FIELDS[0]), stat.mask, movable.offset, fieldKeyId(ROT_FIELDS[1]), movable.mask,
+      rotation.offset, fieldKeyId(ROT_FIELDS[2]), brush.offset, fieldKeyId(ROT_FIELDS[3]), standing.offset, fieldKeyId(ROT_FIELDS[4]),
+      value.length, ...context, ...value];
+  }
+
   // `gc.Native(...)` as a statement for a GC native gc.rs runs (GC_EFFECT),
   // where the runtime's own invokeNative would reach dispatchGcNative (the
   // perception gate; the window host's gate admits each paint). The context
@@ -1120,6 +1156,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         if (n.op === 0x1b || n.op === 0x1c || (n.op === 0x38 && globalCalls)) {
           const lowered = call(n, true);
           if (lowered) return [K.S_EXPR, ...lowered.words];
+        }
+        if (n.op === 0x19 || (n.op === 'native' && n.index === 299)) {
+          const rotation = setRotationEffect(n);
+          if (rotation) return [K.S_EXPR, ...rotation];
         }
         if (n.op === 0x19) {
           const words = gcEffect(n);

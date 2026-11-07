@@ -386,6 +386,8 @@ const E_BYTE: u32 = 2;
 const E_FLOAT: u32 = 3;
 const E_OBJECT: u32 = 4;
 const E_VECTOR: u32 = 5;
+// Actor.SetRotation (native 299) as a statement, on SELF or a context object.
+const SET_ROTATION: u32 = 211;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -466,6 +468,9 @@ const TWO_63: f64 = 9_223_372_036_854_775_808.0;
 
 #[link(wasm_import_module = "env")]
 extern "C" {
+    /// SET_ROTATION=verify: what Rust decided for the SetRotation native `node` on `receiver` (0 left alone, 1 unchanged, 2 JavaScript, 3 stored)
+    /// for the requested rotation, which the host decides again from readNamed.
+    fn js_set_rotation_check(frame: u32, node: u32, receiver: u32, decision: u32, pitch: u32, yaw: u32, roll: u32);
     fn js_int(frame: u32, node: u32, receiver: u32) -> i32;
     fn js_float(frame: u32, node: u32, receiver: u32) -> f64;
     fn js_bool(frame: u32, node: u32, receiver: u32) -> i32;
@@ -1547,6 +1552,7 @@ impl Run {
                     self.self_fresh = false;
                 }
             }
+            SET_ROTATION => self.set_rotation(),
             VCOMPOUND_LOCAL => {
                 let (op, node) = (self.op(1), self.op(3));
                 let addr = self.locals.wrapping_add(self.op(2));
@@ -1796,6 +1802,68 @@ impl Run {
                 let v = self.object(SELF);
                 store32(addr, pointer_word(v));
             }
+        }
+    }
+
+    /// SET_ROTATION 211 `ctx, node, has_ctx, bStatic (off, key, mask), bMovable (off, key, mask), Rotation (off, key), Brush (off, key),
+    /// StandingCount (off, key), len`, the context object's code (when `has_ctx`), then the rotator's `len` words: script-set-rotation.mjs
+    /// setScriptRotation, ULevel::MoveActor with a zero Delta on a non-editor level (docs/script-set-rotation.md). The context object comes
+    /// first, evaluated with SELF (None: Accessed None at `ctx`, the rotator unevaluated); a receiver whose five fields the image does not
+    /// all answer for runs the native node in JavaScript before the rotator is evaluated. Then: a static or immovable actor is left alone
+    /// (MoveActor returns false), so is one whose Rotation already equals the requested ints, one with a Brush or a nonzero StandingCount
+    /// (riders) runs the native in JavaScript (the rotator is a read without imports, evaluated again there), and any other stores the three
+    /// ints at Rotation. FEATURES word 3 (SET_ROTATION=verify) has the host decide the same from readNamed first (js_set_rotation_check).
+    fn set_rotation(&mut self) {
+        let (ctx, node, has_ctx) = (self.op(1), self.op(2), self.op(3) != 0);
+        let (s_off, s_key, s_mask) = (self.op(4), self.op(5), self.op(6));
+        let (m_off, m_key, m_mask) = (self.op(7), self.op(8), self.op(9));
+        let (r_off, r_key, b_off, b_key, c_off, c_key) = (self.op(10), self.op(11), self.op(12), self.op(13), self.op(14), self.op(15));
+        let length = self.op(16) as usize;
+        self.skip(17);
+        let r = if has_ctx {
+            let object = self.object(SELF);
+            if object == 0 || object == UNDEFINED {
+                self.skip(length);
+                self.accessed_none(ctx);
+                return;
+            }
+            let (info, bind) = receiver(object);
+            Recv { handle: object, info, bind }
+        } else {
+            SELF
+        };
+        let addresses = (self.field(r, s_key, s_off), self.field(r, m_key, m_off), self.field(r, r_key, r_off), self.field(r, b_key, b_off), self.field(r, c_key, c_off));
+        let (Some(stat), Some(movable), Some(rotation), Some(brush), Some(standing)) = addresses else {
+            self.skip(length);
+            self.set_rotation_native(node, r, has_ctx);
+            return;
+        };
+        let want = self.rotator(SELF);
+        // 0 left alone (static or immovable), 1 unchanged, 2 riders or a Brush (JavaScript), 3 stored
+        let decision = if load32(stat) & s_mask != 0 || load32(movable) & m_mask == 0 {
+            0
+        } else if load_rotator(rotation) == want {
+            1
+        } else if live(load32(brush)) != 0 || load8(standing) != 0 {
+            2
+        } else {
+            3
+        };
+        if crate::iter::feature(3) {
+            unsafe { js_set_rotation_check(self.frame, node, self.handle(r), decision, want[0] as u32, want[1] as u32, want[2] as u32) };
+            self.self_fresh = false;
+        }
+        match decision {
+            2 => self.set_rotation_native(node, r, has_ctx),
+            3 => store3(rotation, rotator_words(want)),
+            _ => {}
+        }
+    }
+    fn set_rotation_native(&mut self, node: u32, r: Recv, has_ctx: bool) {
+        if has_ctx {
+            self.host_eval_on(node, r);
+        } else {
+            self.host_eval(node, SELF);
         }
     }
 

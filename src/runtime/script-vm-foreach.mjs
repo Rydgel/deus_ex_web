@@ -14,7 +14,7 @@
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {readCell} from './script-object-image.mjs';
 import {copyValue} from './script-values.mjs';
-import {outStructMode, foreachStartMode, structArraysMode} from './script-vm-lower.mjs';
+import {outStructMode, foreachStartMode, structArraysMode, setRotationMode} from './script-vm-lower.mjs';
 import {cycleScanMode, createCycleActorsIterator} from './script-iterators.mjs';
 
 const f32 = new DataView(new ArrayBuffer(4));
@@ -25,7 +25,7 @@ export class ForeachHost {
     this.vm = vm;
     this.at = 0;
     // what the imports served (a validator or a scenario reads them: the Rust paths ran when these are not zero)
-    this.counts = {lists: 0, classTests: 0, foreachChecks: 0, outChecks: 0};
+    this.counts = {lists: 0, classTests: 0, foreachChecks: 0, outChecks: 0, rotationChecks: 0};
   }
   attach(x) {
     this.at = x.vm_features_ptr();
@@ -33,6 +33,7 @@ export class ForeachHost {
     view.setUint32(this.at, outStructMode() === 'verify' || structArraysMode() === 'verify' ? 1 : 0, true);
     view.setUint32(this.at + 4, foreachStartMode() === 'verify' ? 1 : 0, true);
     view.setUint32(this.at + 8, structArraysMode() === 'verify' ? 1 : 0, true);
+    view.setUint32(this.at + 12, setRotationMode() === 'verify' ? 1 : 0, true);
   }
   /** Whether the lowering may emit the Rust foreach: not the JavaScript reference (FOREACH_START=js, CYCLE_SCAN=js). */
   get ready() { return foreachStartMode() !== 'js' && cycleScanMode() !== 'js'; }
@@ -71,6 +72,19 @@ export class ForeachHost {
     const more = shadow.iterator.next(), expected = more ? handleOf(shadow.slots.actor) : 0;
     if (expected !== found || shadow.slots.index !== cursor)
       throw new Error(`FOREACH_START=verify: ${run.compiled.displayName} step ${phase} found handle ${found} at cursor ${cursor} in Rust, ${expected} at ${shadow.slots.index} in JavaScript`);
+  }
+  /** js_set_rotation_check (SET_ROTATION=verify): the decision Rust made for a SetRotation statement on `handle` (0 left alone, 1 unchanged, 2 runs in
+   * JavaScript, 3 stored) against script-set-rotation.mjs setScriptRotation's branches decided from readNamed on the same state. */
+  rotationCheck(frame, node, handle, decision, pitch, yaw, roll) {
+    this.counts.rotationChecks++;
+    const vm = this.vm, runtime = vm.runtime, run = vm.run(frame);
+    const actor = handle === run.selfHandle ? run.self : identityOfHandle(handle);
+    const read = name => runtime.readNamed(actor, name), level = runtime.levelFor(actor), requested = [pitch | 0, yaw | 0, roll | 0];
+    const expected = !level.editor && (read('bStatic') || !read('bMovable')) ? 0
+      : read('Rotation').every((value, index) => value === requested[index]) ? 1
+        : read('Brush') !== null || read('StandingCount') !== 0 ? 2 : 3;
+    if (expected !== decision)
+      throw new Error(`SET_ROTATION=verify: ${run.compiled.displayName} node ${node} on handle ${handle}: Rust decided ${decision}, setScriptRotation's branches ${expected}`);
   }
   /** js_out_struct_check (OUT_STRUCT=verify): the struct Rust copied from `from` to `to` (dir 0 into the callee's parameter, 1 back
    * into the caller's variable) against what the JavaScript codecs make of the source, member by member. */

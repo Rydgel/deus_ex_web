@@ -6,6 +6,7 @@
 //     -- --browser firefox --map 01_NYC_UNATCOIsland --seconds 100 --mode roam   (the arguments after -- go to every session; --places FILE
 //        works too: the table reads the drawn frames from --skip seconds after the map, over every spot)
 //   [--guard [LOCKFILE]] runs each session under the heavy lock and an 8 GB scope
+//   [--cpus LIST] pins each session's process tree to the CPUs of LIST (taskset -c, e.g. 8-11)
 //
 // Every session starts its own dev server unless the arguments name --url (a fresh server per session is what a code A/B needs: the
 // in-process server keeps the modules it has transformed). Moved from .work/hitch/ab-ff.sh (2026-10-28).
@@ -18,6 +19,7 @@ const arms=option('arms','a:,b:').split(',').map(arm=>{const at=arm.indexOf(':')
 const pairs=Number(option('pairs',2)),prefix=option('prefix','ab'),dir=option('dir','.cache/perf/hitch');
 // --guard [LOCKFILE]: each session runs through the shared heavy lock (flock) and an 8 GB memory scope (systemd-run), as scripts/spot-census.mjs does.
 const guardAt=own.indexOf('--guard'),guardLock=guardAt<0?null:(own[guardAt+1]&&!own[guardAt+1].startsWith('--')?own[guardAt+1]:'/home/rydgel/projects/deus_ex_web/.work/heavy.lock');
+const cpuList=option('cpus',null);
 mkdirSync(dir,{recursive:true});
 
 /** CPU seconds (user + system) of `root` and its descendants. */
@@ -45,8 +47,10 @@ for(let i=1;i<=pairs;i++)for(const arm of i%2?arms:[...arms].reverse()){
   if(arm.query){const at=args.indexOf('--query');if(at<0)args.push('--query',arm.query);else args[at+1]=`${args[at+1]}&${arm.query}`;}
   const started=Date.now(),log=[];writeFileSync(`${out}.cpu`,'');
   // (with --guard the session's process tree hangs below flock and systemd-run: its CPU seconds are then the scope's wait included, so the .cpu files are not comparable)
-  const child=guardLock?spawn('flock',[guardLock,'systemd-run','--user','--scope','-q','-p','MemoryMax=8G','-p','MemorySwapMax=0',process.execPath,...args],{stdio:['ignore','pipe','pipe']})
-    :spawn(process.execPath,args,{stdio:['ignore','pipe','pipe']});
+  // --cpus LIST: the session's whole process tree pinned to those CPUs (taskset -c LIST), so another job's threads do not share its cores
+  const pin=cpuList?['taskset','-c',cpuList]:[];
+  const child=guardLock?spawn('flock',[guardLock,'systemd-run','--user','--scope','-q','-p','MemoryMax=8G','-p','MemorySwapMax=0',...pin,process.execPath,...args],{stdio:['ignore','pipe','pipe']})
+    :pin.length?spawn(pin[0],[...pin.slice(1),process.execPath,...args],{stdio:['ignore','pipe','pipe']}):spawn(process.execPath,args,{stdio:['ignore','pipe','pipe']});
   child.stdout.on('data',b=>log.push(b));child.stderr.on('data',b=>log.push(b));
   const timer=setInterval(()=>{try{appendFileSync(`${out}.cpu`,`${((Date.now()-started)/1000).toFixed(0)} ${cpuOfTree(child.pid).toFixed(2)}\n`);}catch{}},5000);
   const code=await new Promise(resolve=>child.on('exit',resolve));clearInterval(timer);
