@@ -158,6 +158,7 @@ const imports = {
     wr32(CALL_BLOCK_AT + 4, target.code);
     wr32(CALL_BLOCK_AT + 8, receiver);
     wr32(CALL_BLOCK_AT + 12, site.probe ?? 0xffffffff);
+    wr32(CALL_BLOCK_AT + 16, site.destroy ?? 0);
     return id;
   },
   js_step(frame, index) {
@@ -166,6 +167,10 @@ const imports = {
     const step = info?.target.steps[index];
     if (!step) throw new Error(`no JavaScript step ${index} on frame ${frame}`);
     return step(info);
+  },
+  // A begun callee with locals that need destruction has returned (script-vm-events.mjs runEnd); this host's callees have none.
+  js_run_end(frame, template) {
+    calls.push({imp: 'runEnd', frame, template, frames: framesKey()});
   },
   // FrameStack.advance (script-frame-locals.mjs) over chunks that start dirty.
   js_frame_advance(size) {
@@ -1587,6 +1592,22 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
       same(framesKey(), INITIAL_FRAMES, `js_call_begin probe-named callee (${why}) frame stack restored`);
     }
     reset();
+  }
+  // js_call_begin's CALL_BLOCK destroy word (STRING_FRAMES): a callee with locals that need destruction is followed by js_run_end with its run
+  // id and template once its body has returned, while its frame block is still on the stack; a callee with none is not.
+  for (const destroy of [0, 7]) {
+    reset();
+    const n = site(defineFn([S.ret(R.INT, E.int(7))]));
+    callSites.get(n).destroy = destroy;
+    same(value(R.INT, call(n, R.INT)), 7, `callee destroy word ${destroy}: value`);
+    const ends = calls.filter(c => c.imp === 'runEnd');
+    same(ends.length, destroy ? 1 : 0, `callee destroy word ${destroy}: js_run_end calls`);
+    if (destroy) {
+      same(ends[0].template, destroy, 'js_run_end template');
+      same(ends[0].frame, nextFrameId - 1, 'js_run_end names the begun callee\'s run');
+      if (ends[0].frames === INITIAL_FRAMES) throw new Error('js_run_end ran after the frame stack was put back');
+    }
+    same(framesKey(), INITIAL_FRAMES, `callee destroy word ${destroy}: frame stack restored`);
   }
   reset();
   wr32(LOCALS + 0x4c, 0xdeadbeef);

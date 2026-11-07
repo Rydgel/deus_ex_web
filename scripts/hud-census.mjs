@@ -107,6 +107,10 @@ const table = (title, map, limit) => {
 if (timeOnly) {
   const sorted = paints.slice().sort((a, b) => a - b);
   console.log(`${map}: ${frames} frames after ${warm}; one HUD paint (session.hud, Galaxy's update included): mean ${per(paintMs).toFixed(3)} ms, p50 ${sorted[sorted.length >> 1].toFixed(3)} ms`);
+  // (STRING_FRAMES: the bodies with locals to destroy that Rust began, over the warm-up and the frames; of them frames a JavaScript step made, and, in verify, the others checked)
+  const ends = runtime.scriptVm?.events;
+  if (ends) console.log(`js_run_end: ${ends.runEnds} bodies, ${ends.runEndsMade} with a frame JavaScript made, ${ends.runEndsVerified} unmade frames verified`);
+  for (const [key, row] of ends?.runEndsBy ?? []) console.log(`  ${key}: ${row.made} made, ${row.unmade} unmade`);
   process.exit(0);
 }
 const eventCount = [...events.values()].reduce((n, row) => n + row.n, 0), eventMs = [...events.values()].reduce((n, row) => n + row.ms, 0);

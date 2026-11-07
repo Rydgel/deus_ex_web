@@ -483,6 +483,8 @@ extern "C" {
     fn js_iterator_pop(frame: u32);
     fn js_call_begin(frame: u32, node: u32, receiver: u32, sig: u32) -> i32;
     fn js_step(frame: u32, index: u32) -> u32;
+    /// A body with locals that need destruction (STRING_FRAMES) has returned: callFunction's / processEvent's destroyFunctionLocals.
+    pub(crate) fn js_run_end(frame: u32, template: u32);
     fn js_frame_advance(size: u32);
     pub(crate) fn js_class_row(handle: u32) -> u32;
     fn js_cast(frame: u32, node: u32, handle: u32) -> u32;
@@ -502,7 +504,7 @@ extern "C" {
 // JavaScript FrameStack (script-frame-locals.mjs), then the host's count of
 // active runs (the next run id), restored with the stack after a call;
 // CALL_BLOCK [callee locals,
-// callee code, callee SELF, callee probe index], written by js_call_begin; CLASSES [table
+// callee code, callee SELF, callee probe index, destroy template (0: none)], written by js_call_begin; CLASSES [table
 // address, capacity] of the handle class table; RECEIVERS [table address,
 // capacity, epoch, verify] of the receiver table; CHECK nonzero under
 // SCRIPT_VM_CHECK.
@@ -512,7 +514,7 @@ static mut RESULT: f64 = 0.0;
 static mut FLOAT_UNDEF: u32 = 0;
 pub(crate) static mut BOUND_KEYS: [u32; 2] = [0; 2];
 pub(crate) static mut FRAMES: [u32; 4] = [0; 4];
-static mut CALL_BLOCK: [u32; 4] = [0; 4];
+static mut CALL_BLOCK: [u32; 5] = [0; 5];
 /// A callee with no probe name: CALL_BLOCK's fourth word and the call cache's probe word when ProcessInternal's gate does not apply.
 pub(crate) const PROBE_NONE: u32 = 0xffff_ffff;
 static mut CLASSES: [u32; 2] = [0; 2];
@@ -1634,18 +1636,18 @@ impl Run {
         // cache (dispatch.rs), or js_call_begin and CALL_BLOCK. A struct out
         // argument whose source the image cannot address leaves the whole call
         // to JavaScript, before anything is pushed or evaluated.
-        let (callee, locals, code, callee_self, probe) = if with_out && !self.out_addressable(&sources) {
-            (-1, 0, 0, 0, PROBE_NONE)
+        let (callee, locals, code, callee_self, probe, destroy) = if with_out && !self.out_addressable(&sources) {
+            (-1, 0, 0, 0, PROBE_NONE, 0)
         } else {
             match crate::dispatch::begin_call(self.frame, self.code as usize as u32, node, receiver, sig) {
-                Some(c) => (c.id as i32, c.locals, c.code, receiver, c.probe),
+                Some(c) => (c.id as i32, c.locals, c.code, receiver, c.probe, c.destroy),
                 None => {
                     let callee = unsafe { js_call_begin(self.frame, node, receiver, sig) };
                     self.self_fresh = false;
                     // The callee block is read before any argument runs a
                     // nested call.
                     let block = addr_of!(CALL_BLOCK) as *const u32;
-                    unsafe { (callee, *block, *block.add(1), *block.add(2), *block.add(3)) }
+                    unsafe { (callee, *block, *block.add(1), *block.add(2), *block.add(3), *block.add(4)) }
                 }
             }
         };
@@ -1739,6 +1741,11 @@ impl Run {
         unsafe { BUDGET = caller_budget };
         // callFunction copies the out parameters back, last first, after the result is taken.
         self.out_struct_back(&outs, node);
+        // ... then destroys the frame's locals that need it (the block is still live).
+        if destroy != 0 {
+            unsafe { js_run_end(callee as u32, destroy) };
+            self.self_fresh = false;
+        }
         frames_restore(saved);
         self.self_fresh = false;
         // callFunction's copyValue(fn.result, value): undefined is the zero.

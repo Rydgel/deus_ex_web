@@ -890,6 +890,11 @@ export class RustScriptVm {
         enter();
         try { return vm.step(vm.run(frame), index); } finally { leave(); }
       },
+      // A body with locals that need destruction has returned (script-vm-events.mjs runEnd).
+      js_run_end(frame, template) {
+        enter();
+        try { vm.events.runEnd(frame, template); } finally { leave(); }
+      },
       // No script runs here: the stack takes (or creates) its next chunk.
       js_frame_advance: size => vm.runtime.frameStack().advance(size),
       // No script runs here either: the row of an attached instance's class.
@@ -1190,6 +1195,8 @@ export class RustScriptVm {
     view.setUint32(this.callAt + 4, lowered.code, true);
     view.setUint32(this.callAt + 8, handleOf(receiver), true);
     view.setUint32(this.callAt + 12, probeIndex(record), true);
+    // (the template js_run_end destroys the frame's locals by, or 0 for a callee with none)
+    view.setUint32(this.callAt + 16, signature.destroys ? this.events.template(fn, lowered, layout, services) : 0, true);
     const id = this.depth;
     this.own(id, this.acquire(id, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null));
     this.depth = id + 1;
