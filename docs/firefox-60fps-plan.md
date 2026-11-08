@@ -3230,6 +3230,41 @@ audio and a third for the trio.
 * **`scanFast` pays `handleOf` per fast answer** (a `Map` lookup after the first): measured inside the final-tree A/B, not apart; cheaper would be one kept texture per pawn and floor node.
 * **Not measured**: the Mac, headed runs, Chromium's frame times (a Chromium worker session ran the switches at `verify` only), a rolling call in a Firefox page (Node covers it), and an `ambient_scan` entry marked `RENDER_JS` (no roam met one; the host's old path takes it).
 
+### Row 7.2.4 on master (2026-11-08)
+
+Stage 7's row 7.2.4 ([exit criteria](stage-7-exit-criteria.md), decision D3) asks of Firefox inline: from a map's first 5 s on, no drawn-frame gap
+over 150 ms and at most two over 50 ms a minute. It last failed on 2026-10-31 (d01854c9: 10 to 18 over 50 ms a minute on the Island). Measured
+again on master `8e34e66a`, the Linux host: `hitch-run.mjs --browser firefox --map 01_NYC_UNATCOIsland --seconds 100 --mode roam --ff-prefs
+'{"privacy.reduceTimerPrecision":false}'`, one at a time under the heavy lock and an 8 GB scope, `hitch-summary.mjs` (and `--gaps 50`) on each;
+runs in `.cache/perf/hitch/s724-8e34e66a`.
+
+| Roam | Gaps over 50 ms | A minute | Over 100 ms | Longest | fps |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2 | 1.2 | 0 | 83.5 ms | 59.1 |
+| 2 (host busy) | 13 | 7.8 | 0 | 82.8 ms | 58.2 |
+| 3 | 3 | 1.8 | 0 | 66.4 ms | 58.8 |
+| 4 | 3 | 1.8 | 0 | 66.5 ms | 58.7 |
+| 5 | 2 | 1.2 | 0 | 50.3 ms | 59.1 |
+| profiled (`--profile`) | 6 | 3.6 | 0 | 83.4 ms | 57.7 |
+
+* **Roam 2** lost 1.4 s at about 102 s: the page frame's median rose from 12 to 39 ms with every phase (tick, actors, render, HUD) about three
+  times its usual cost and no GL event, and 9 of its 13 gaps fall there (one more at 99.6 s, in the same window). The system journal has a
+  package operation (`sudo pacman -Rns`, with a boot snapshot) and the desktop shell restarting at 06:04:20 to 06:04:33 UTC, which the page clock
+  puts the window inside (`meta.started` 06:02:30.705 plus 122.3 s). Outside it the roam has 3 gaps, 1.9 a minute. Roams 4 and 5 replace it.
+* **The profiled roam** runs Firefox's sampler at 1 ms. Two of its gaps are at 5.3 and 6.2 s, the window's start (the map's opening ticks,
+  35 to 37 ms in every run).
+* **What the gaps are** (the hitch log's phases; `gecko-gaps.mjs` and `gecko-slow-ticks.mjs --slow 0.0002` on the profiled roam):
+  * at 19.3 to 20.4 s in every roam, one tick of 51 to 68 ms, then the gap (66 to 83 ms). The profile's slowest tick (68 ms, 65 ms sampled under
+    the level tick) is an actor's script tick (`scriptAndTimer`) calling ConBindEvents: `bindEventsNative` 23 ms, of it the conversation event
+    walk (`walkConversationEvents`, `bindEventsToActor`) 15 ms, and a new actor's base link (`baseLinkInstance`) 18 ms, all JavaScript under
+    the Rust VM's `js_bool` and `js_int` hand-backs (33 and 15 ms). Which conversation it binds is not identified;
+  * at 38.9 to 43.2 s, one or two gaps of 50 to 83 ms where every phase of the frame is two to three times its median: the incremental
+    collector (GCSlice markers, INTER_SLICE_GC, inside the profiled roam's pair at 40.7 and 41.2 s).
+* **Reading:** four clean roams pass both halves (1.2 to 1.8 a minute, none over 100 ms), against 10 to 18 a minute on 2026-10-31, when the
+  page frame's median was 17 to 20 ms (now about 12). The margin is thin: the two recurring events are most of the allowance, and a busy host or the
+  profiler takes a roam over it. A cheaper conversation binding (the event walk and the base link out of JavaScript) would take away the one
+  that is not the collector. Not measured: the Mac, other maps, a headed window.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

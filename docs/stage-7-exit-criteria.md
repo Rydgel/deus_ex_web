@@ -59,6 +59,9 @@ The user took each recommendation below. The alternatives are kept for the recor
    at most two gaps over 50 ms a minute.
 
    The alternative is to record today's behavior as a known Firefox limit and exclude the row.
+
+   **2026-11-08:** the bound now holds on Linux: four 100 s Island roams on master 8e34e66a drew no gap over 100 ms and 1.2 to 1.8
+   over 50 ms a minute (row 7.2.4, PARTIAL until the Mac runs it; [Firefox 60 fps plan](firefox-60fps-plan.md#row-724-on-master-2026-11-08)).
 4. **D4, loading time.** Map loading was judged good enough on 2026-10-27. The recommendation is to bound today's
    measurements, with room for noise:
    * A travel arrival reaches its first frame within 5 s in Chrome (the Island measured 4.6 s, Training 1.5 s), and within
@@ -134,7 +137,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | Clause | PASS | PARTIAL | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
-| 7.2 Frame time | 0 | 2 | 2 | 1 | 0 |
+| 7.2 Frame time | 0 | 3 | 1 | 1 | 0 |
 | 7.3 Loading time | 0 | 3 | 0 | 0 | 0 |
 | 7.4 Memory and long sessions | 0 | 2 | 0 | 1 | 0 |
 | 7.5 Audio | 0 | 2 | 0 | 0 | 0 |
@@ -144,7 +147,7 @@ worker mode the two run side by side and the slower bounds the frame rate.
 | 7.9 Failure recovery | 1 | 2 | 0 | 0 | 0 |
 | 7.10 Regression coverage | 0 | 2 | 0 | 1 | 0 |
 | 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 4 | 23 | 2 | 5 | 3 |
+| **Total** | 4 | 24 | 1 | 5 | 3 |
 
 ## The rows
 
@@ -166,10 +169,10 @@ plays sound.
 | Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.2.1 | Chrome, worker: on each map of the frame-time set, the larger of the page's and the worker's median frame work ≤ 16.7 ms (AGENTS.md: 60 fps since 2026-11-05, 8.3 ms before) | H | frame-time-set.mjs (hitch-run.mjs --mode scan, hitch-summary.mjs) | Mac | needed: a Mac measurement. Indicative, Linux 2026-11-05 (0f6d1eeb, god mode, [frame cost](play-frame-cost.md#the-frame-time-set-on-2026-11-05-linux)): every map worker-bound and at most about half the bound (Training 4.3, the Bar 4.9, Battery Park 8.2, the Airfield 8.2, Wan Chai's market 8.2, the Ship 6.5, the Chateau 5.8, Everett 4.6, the bunker 7.9, the Island 8.4 ms; 2026-11-04: the Island 8.7 to 8.9); one run's median moves by up to 0.8 ms between runs of one build; the Mac's tick was about 1.35 times this host's | MISSING |
-| 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps' jitter) | H | frame-time-set.mjs --browser B --headed (a visible window: headless Chromium draws on a synthetic 60 Hz clock) | Mac | Linux, 2026-11-05 (f2f1cb6f, 240 Hz display, [frame cost](play-frame-cost.md#row-722-headed-2026-11-05-linux)): Chrome worker passes on all ten maps (p95 8.3 to 14.9 ms, 116 to 218 fps); Firefox inline fails on six (Island 21, Ship 21, Airfield 25, Wan Chai 25, Bunker 25, Battery Park 31 ms; 37 to 59 fps), its page frame about twice Chrome's worker frame (the level tick 1.8 to 2.4 times); the Mac and Safari not run | FAIL |
+| 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set (with 0.5 ms for the frame timestamps' jitter) | H | frame-time-set.mjs --browser B --headed (a visible window: headless Chromium draws on a synthetic 60 Hz clock) | Mac | Linux, 2026-11-05 (f2f1cb6f, 240 Hz display, [frame cost](play-frame-cost.md#row-722-headed-2026-11-05-linux)): Chrome worker passes on all ten maps (p95 8.3 to 14.9 ms, 116 to 218 fps); Firefox inline fails on six (Island 21, Ship 21, Airfield 25, Wan Chai 25, Bunker 25, Battery Park 31 ms; 37 to 59 fps), its page frame about twice Chrome's worker frame (the level tick 1.8 to 2.4 times); the Mac and Safari not run. Headless since (not this row's proof): Firefox inline on master e9ea7a5e, a 20 µs page clock, 2026-11-07, the page frame's p95 under 16.7 ms on all ten maps (the Island 14.04 ms; a quiet-host control 16.32 and 16.52), so a headed rerun is due ([Firefox 60 fps plan](firefox-60fps-plan.md)) | FAIL |
 | 7.2.3 | Chrome: from a map's first 5 s on, no drawn-frame gap over 100 ms in a 120 s roam | H | hitch-run.mjs --mode roam --seconds 120, hitch-summary.mjs | Mac | weak: Linux only: with all cores, no gap over 100 ms on the Island and WanChai Underworld; pinned to two cores (a loaded machine, where the user feels it on the Mac) 2 to 4 gaps over 100 ms a run, up to 350 ms, each the worker's major GC (2026-10-28, docs/live-heap.md); not on the Mac | PARTIAL |
-| 7.2.4 | Firefox inline: from a map's first 5 s on, no gap over 150 ms and at most two over 50 ms a minute (D3) | H | hitch-ab.mjs or hitch-run.mjs --browser firefox, hitch-summary.mjs, gecko-gaps.mjs (with --profile) | Mac, Linux | fails on its second half: on the Island, Linux, 2026-10-31 (d01854c9, after the live-heap work), three 100 s roams drew no gap over 150 ms and at most one over 100 ms (longest 84, 101, 101 ms), but 10 to 18 over 50 ms a minute (2026-10-28: 26 to 31 over 50 ms in 65 s, longest 133 ms). A Gecko profile of one roam puts 12 of its 31 on major-collection slices (5 to 80 ms, 11 in two collections) and 19 on no pause (long page frames: sim and draw on one thread, 17 to 20 ms median). The worker is no way out: its non-incremental collections freeze 14 times over 150 ms a roam (up to 366 ms) idle, and once every 25 to 40 s for 200 to 250 ms with ?workerBusy=1 (docs/hitch-log.md "Firefox") | FAIL |
-| 7.2.5 | no shader program is compiled during play after a load | P | hitch-summary.mjs (programs created from 5 s on) over the frame-time set | Mac, Linux | weak: 0 programs on all ten maps of the frame-time set (Chrome, Linux, 2026-11-04), and on the Island in Firefox (2026-10-28); the Mac is not measured | PARTIAL |
+| 7.2.4 | Firefox inline: from a map's first 5 s on, no gap over 150 ms and at most two over 50 ms a minute (D3) | H | hitch-ab.mjs or hitch-run.mjs --browser firefox, hitch-summary.mjs, gecko-gaps.mjs (with --profile) | Mac, Linux | weak: passes on Linux, 2026-11-08 (master 8e34e66a, a 20 µs page clock, [Firefox 60 fps plan](firefox-60fps-plan.md#row-724-on-master-2026-11-08)): four 100 s Island roams drew no gap over 100 ms (longest 83, 66, 67, 50 ms) and 1.2, 1.8, 1.8 and 1.2 over 50 ms a minute; a fifth drew 7.8 a minute, 9 of its 13 inside 1.4 s of a host package operation and desktop shell restart (1.9 a minute outside it), and a profiled roam 3.6 under the sampler. What remains is one tick of 51 to 68 ms at about 20 s in every roam (ConBindEvents from an actor's script tick: the conversation event walk and a new actor's base link in JavaScript) and the incremental collector's slices at about 40 s, so the margin is thin; the Mac not run. Before: 2026-10-31 (d01854c9), 10 to 18 over 50 ms a minute with the page frame's median at 17 to 20 ms (docs/hitch-log.md "Firefox") | PARTIAL |
+| 7.2.5 | no shader program is compiled during play after a load | P | hitch-summary.mjs (programs created from 5 s on) over the frame-time set | Mac, Linux | weak: 0 programs on all ten maps of the frame-time set in Chrome (Linux, 2026-11-04) and in Firefox (Linux, 2026-11-07, e9ea7a5e, inline); the Mac is not measured | PARTIAL |
 
 ### 7.3 Loading time (D4)
 
@@ -303,7 +306,8 @@ Causes: **stale**, the spec predates a change in Play and fails in every browser
    7.3, 7.4.2) give each row its first status on the reference machine.
 5. **The performance work against 7.2.1.** Each step goes family by family, as a measurement names it, in the Rust core
    (AGENTS.md), and only for gains over 5%. Since the target became 60 fps (2026-11-05), what is left is Firefox's: the
-   [Firefox 60 fps plan](firefox-60fps-plan.md) for rows 7.2.2 and 7.2.4.
+   [Firefox 60 fps plan](firefox-60fps-plan.md) for rows 7.2.2 and 7.2.4. On 2026-11-07/08 Firefox met both on Linux headless
+   (the frame-time set's page p95 under 16.7 ms on all ten maps, 7.2.4's roams); 7.2.2's headed run and the Mac are left.
 6. **The long session** (7.4.3) and the audio latency (7.5.2, which starts with the original's measurement). Both pass on Linux
    (2026-11-04: [long session](long-session.md), [sound start latency](audio-latency.md)); the Mac is left.
 7. **The gate.** The sweep, the browser suite and the earlier stages' gates on one commit (7.10).
