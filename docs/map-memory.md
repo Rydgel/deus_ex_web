@@ -294,6 +294,6 @@ browser, nothing forced (Chromium at dab89bcb, Firefox at e9ea7a5e: `.cache/perf
 * Firefox's script-VM kernel memory reaches 153 MB over the 20 arrivals (Chromium 86 MB): its block allocator's high-water mark,
   which row 7.4.1's slope already covers.
 
-**A budget.** The row's bound is the user's to declare (to fit a 16 GB machine). On these figures: page plus worker after forced
-collections at most 1.25 GB on every map of the set in a session that has visited them all (the highest 1,158 MB, 8 % under), in
-every browser. The Mac is not measured: its Chromium census can run (Firefox's forced collection is Linux only).
+**The budget** (declared by the user, 2026-11-08, to fit a 16 GB machine): page plus worker after forced collections at most
+1.25 GB on every map of the set in a session that has visited them all, in every browser. On Linux both browsers pass (the highest
+1,158 MB, 8 % under); the row stays PARTIAL until the Mac runs it (its Chromium census can; Firefox's forced collection is Linux only).
