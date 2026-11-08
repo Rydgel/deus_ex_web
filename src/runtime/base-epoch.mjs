@@ -55,6 +55,11 @@ export const bumpBaseEpochFor = identity => {
   }
   for (const listener of listeners) listener(actors);
 };
+/** A level's host is gone (sim-host.mjs dispose): the log forgets the identities noted so far. Kept, they held that level's actors,
+ * and through them its runtime and its object arena, until 2,048 later notes pushed them out: in the frame-time set's travels two
+ * or three left levels at a time (docs/map-memory.md). A table whose position falls before the log's start is dropped and filled
+ * again (notedSince returns null), as after the log's own trim. */
+export const forgetNoted = () => { notedBase += noted.length; noted.length = 0; };
 /** The position after the last identity noted. */
 export const notedEnd = () => notedBase + noted.length;
 /** The identities noted since position `from`, or null when the log no longer reaches back that far. */

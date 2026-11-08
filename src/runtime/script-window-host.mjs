@@ -173,6 +173,21 @@ const HUD_CLASS_PATHS = Object.freeze([
     'colorthememanager', 'colortheme']],
 ]);
 
+// Accessors on the window host's objects (a host's own state read at each access). A getter closure made inside createWindowHost and
+// put on an object literal or by defineProperty stays in V8's map transitions (the literal's allocation site keeps the first object's
+// map, and that map keeps the first accessor pair): the first level's whole host scope, its runtime and its object arena, stayed
+// alive for the process (Chromium; docs/map-memory.md). One getter per name, shared by every host, calls the host's own reader.
+const READERS = Symbol('window host readers');
+const sharedGetters = new Map();
+function defineReaders(object, readers) {
+  object[READERS] = readers;
+  for (const name of Object.keys(readers)) {
+    let get = sharedGetters.get(name);
+    if (!get) sharedGetters.set(name, get = function () { return this[READERS][name](); });
+    Object.defineProperty(object, name, {get, enumerable: true, configurable: true});
+  }
+}
+
 export async function createWindowHost({runtime, assets, player, gameConfig = null, log = null}) {
   if (!runtime?.attach || !assets?.get) throw new TypeError('Window host requires ScriptRuntime and AssetStore');
   const inputConsole=await createInputConsole(runtime,assets);
@@ -1235,7 +1250,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isKeyDown: (win, key) => isKeyDownNative(win, key, {read: (object, offset, kind) => heap.read(object, offset, kind)}),
     largeTextDraw: (win, gc) => LT.largeTextDraw(W, win, gc),
     keyBuffer: () => editGlobals.keyBuffer,
-    get v() { return V; },
+    v: V,
   };
   // ------------------------------------------------------------------
   // ListWindow (script-window-list.mjs over script-window-list-model.mjs).
@@ -1887,9 +1902,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const gcPushRoute=gc=>W.gc.push(gc),gcPopRoute=(gc,depth)=>W.gc.pop(gc,depth);
   const gcRoutes=()=>runtime.scriptVm?.windows?.mode==='js';
   const gcTextRoute=(object,dx,dy,dw,dh,text)=>runtime.scriptVm.gc.drawText(heap,gcServices,object,dx,dy,dw,dh,text);
-  Object.defineProperty(gcServices,'drawText',{get:()=>gcRoutes()||!runtime.scriptVm?.gc?undefined:gcTextRoute,enumerable:true});
-  Object.defineProperty(gcServices,'pushGC',{get:()=>gcRoutes()?undefined:gcPushRoute,enumerable:true});
-  Object.defineProperty(gcServices,'popGC',{get:()=>gcRoutes()?undefined:gcPopRoute,enumerable:true});
+  defineReaders(gcServices,{drawText:()=>gcRoutes()||!runtime.scriptVm?.gc?undefined:gcTextRoute,
+    pushGC:()=>gcRoutes()?undefined:gcPushRoute,popGC:()=>gcRoutes()?undefined:gcPopRoute});
 
   // ------------------------------------------------------------------
   // Root construction: APlayerPawnExt::ConstructRootWindow 0x10037e70.
@@ -1979,7 +1993,6 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       return true;
     },
     resizeViewport,
-    get viewportSize(){return viewportSize;},
     /** The 3D view's rect in drawing-buffer pixels for a width x height
      * viewport: XRootWindow PreRender's frame edit (script-root-render-viewport). */
     renderViewport(root,width,height){return rootRenderViewport(W,root,{x:0,y:0,width,height});},
@@ -2013,6 +2026,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       return host;
     },
   };
+  defineReaders(host,{viewportSize:()=>viewportSize});
   lifecycle.host = host;
   return host;
 }
