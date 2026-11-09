@@ -238,3 +238,62 @@ step at the eighth round trip where the level's arena grew by half (in every run
 
 The other resources the collection purges (textures, sounds, music, fonts) attach no lazy loader in Play: the graph leaves their
 records unloaded (RF_NeedLoad), so no other kind accumulates on a held linker.
+
+## Row 7.4.2: the frame-time set (2026-11-08, Linux)
+
+`map-memory-census.mjs --maps <the frame-time set, twice>` (scripts/frame-time-maps.mjs): one page, Training first, then the console's
+`open` through the ten maps twice, the heaps after forced collections at each arrival (page plus worker: JS heap, ArrayBuffers and
+Wasm memories; Firefox's figure leaves out its report's "other", 74 to 110 MB, which the content process's explicit total includes).
+Chromium in worker mode, Firefox inline, master dab89bcb (`.cache/perf/map-memory/s742-dab89bcb/`, outside Git).
+
+**Two faults held left levels.** The first pass rose with every map and the second pass's Training read 1,368 MB in Chromium (807 on
+its first visit) and 1,149 MB in Firefox (583): at that arrival the worker (or Firefox's page) still held three levels already left,
+each one's object arena (32 to 37 MB) and its runtime's JavaScript, and all three went at the next arrival (the Island). Waiting 20 s
+instead of 3 changed nothing. A Chromium heap snapshot of the worker at that arrival (`--snapshots 4`, with each WeakMap entry
+treated as weak: a WeakMap value lives only while its key does) named the holders:
+
+1. **The rider pass's log of Base changes** (base-epoch.mjs `noted`, process-wide): every identity `bumpBaseEpochFor` notes, kept
+   until 4,096 of them, then the older 2,048 dropped. A left level's actors stayed in it, and with them that level's runtime and arena,
+   until later levels' notes pushed them out: the batches. The log only serves a rider table's catch-up (move-riders.mjs
+   `baseTableFor`, which drops a table more than 64 notes behind), so a level's dispose now clears it (`forgetNoted`, sim-host.mjs):
+   a table whose position falls before the log's start is dropped and filled again, as after the log's own trim.
+2. **The window host's accessors** (Chromium only). `gcServices`'s `drawText`, `pushGC` and `popGC` were getter closures
+   installed with `defineProperty` inside `createWindowHost`. V8 keeps the accessor pair a property was first given in the map
+   transition, and the object literal's allocation site keeps that map, so the first level's getter, and through its scope the
+   first level's whole host, runtime and arena (31 MB), stayed alive for the session. One getter per name is now shared by every
+   host and calls the host's own reader (script-window-host.mjs `defineReaders`; `host.viewportSize` the same way, and
+   `editEnv.v` is a plain property: its value was already set). Firefox's census never showed this level.
+
+Neither changes what the simulation computes: the Island's and Training's 300-tick digests (bench-sim.mjs --render-feedback) are
+unchanged (5adb254a07b1ed6f, 07816ec472f29b84), validate-native-config passes (70 checks, it reads `host.viewportSize`), and npm test
+passes 998 of 998. After the fixes every arrival holds one level arena, the current one, in both browsers.
+
+**The figures** (MB after forced collections, each map's first and second visit; `.cache/perf/map-memory/s742-fix/`), with the
+browser's whole process tree while playing: its highest RSS in the frame-time set's sessions, one 60 s scan per map in a new
+browser, nothing forced (Chromium at dab89bcb, Firefox at e9ea7a5e: `.cache/perf/frame-time-set/`):
+
+| map | Chromium (worker): pass 1, pass 2 | before the fix | Firefox (inline): pass 1, pass 2 | before the fix | browser tree while playing: Chromium, Firefox |
+|---|---:|---:|---:|---:|---:|
+| 00_Training | 807, 999 | 807, 1368 | 583, 797 | 583, 1149 | 2.2, 2.5 GB |
+| 01_NYC_UNATCOIsland | 1034, 1158 | 1112, 1262 | 824, 936 | 837, 965 | 2.7, 2.8 GB |
+| 02_NYC_Bar | 851, 918 | 1051, 1130 | 696, 763 | 839, 923 | 2.2, 2.4 GB |
+| 02_NYC_BatteryPark | 1007, 1063 | 1173, 1352 | 820, 883 | 911, 1138 | 2.7, 3.0 GB |
+| 03_NYC_Airfield | 1009, 1053 | 1187, 1254 | 825, 871 | 965, 1012 | 2.6, 2.7 GB |
+| 06_HongKong_WanChai_Market | 1044, 1070 | 1212, 1261 | 847, 881 | 972, 1014 | 2.5, 2.7 GB |
+| 09_NYC_Ship | 1051, 1078 | 1258, 1292 | 818, 852 | 966, 1007 | 2.6, 2.9 GB |
+| 10_Paris_Chateau | 986, 1003 | 1167, 1189 | 778, 810 | 899, 941 | 2.3, 2.9 GB |
+| 11_Paris_Everett | 969, 981 | 1235, 1168 | 764, 794 | 991, 920 | 2.3, 2.8 GB |
+| 15_Area51_Bunker | 1033, 1049 | 1297, 1226 | 826, 852 | 1036, 967 | 2.4, 2.9 GB |
+
+* Chromium: 807 to 1,158 MB (the Island's second visit the highest); the worker's JS heap 123 to 178 MB (243 before). The tree after
+  the collections at most 2,352 MB.
+* Firefox: 583 to 936 MB (the Island's second visit); the content process's explicit total 778 to 1,175 MB; the tree after the
+  collections at most 2,316 MB.
+* While playing, nothing forced: the tree at most 2.8 GB in Chromium (the worker's JS heap at most 342 MB used, 399 MB reserved,
+  where the row's earlier note had the Island's worker at 1.4 GB before a collection) and 3.1 GB in Firefox (Battery Park).
+* Firefox's script-VM kernel memory reaches 153 MB over the 20 arrivals (Chromium 86 MB): its block allocator's high-water mark,
+  which row 7.4.1's slope already covers.
+
+**The budget** (declared by the user, 2026-11-08, to fit a 16 GB machine): page plus worker after forced collections at most
+1.25 GB on every map of the set in a session that has visited them all, in every browser. On Linux both browsers pass (the highest
+1,158 MB, 8 % under); the row stays PARTIAL until the Mac runs it (its Chromium census can; Firefox's forced collection is Linux only).
