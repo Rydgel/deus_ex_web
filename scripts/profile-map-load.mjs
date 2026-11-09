@@ -105,10 +105,13 @@ try{
       const next=log.slice(i+1).find(([t2])=>t2>=t)?.[0]??end;steps.push({at:Math.round(t-start),ms:Math.round(next-t),text});}
     const profile=profiled?(await cdp.send('Profiler.stop')).profile:null;
     if(profile){await mkdir('.cache/perf',{recursive:true});await writeFile(`.cache/perf/${tag}-${name}.cpuprofile`,JSON.stringify(profile));}
-    const status=await page.evaluate(()=>{const s=window.deusExViewer.status();return {map:s.map,sim:s.sim,triangles:s.triangles,textures:s.textures,runtimeError:s.runtimeError?.message??null};});
-    const drawn=Boolean(timeline&&timeline.start>=start&&timeline.firstDraw!=null);
+    const status=await page.evaluate(()=>{const s=window.deusExViewer.status();return {map:s.map,sim:s.sim,mode:s.mode,triangles:s.triangles,textures:s.textures,
+      runtimeError:s.runtimeError?.message??null,toast:s.mode==='play'?null:document.getElementById('toast')?.textContent||null};});
+    // A load that left Play unavailable (its kernels did not load: the page falls back to the inspect camera) is not a load of the game: from
+    // 2026-11-07 to 11-09 the production build had no script-vm.wasm and every load there drew the map in inspect mode, timed as a pass.
+    const drawn=Boolean(timeline&&timeline.start>=start&&timeline.firstDraw!=null)&&status.mode==='play';
     loads.push({map:name,arrived:status.map,wallMs:Math.round(end-start),drawn,status,timings:timeline,steps,cpu:profile?summarize(profile):null});
-    console.error(`${name.padEnd(34)} ${status.map??'-'} ${drawn?`${(Math.round(end-start)/1000).toFixed(2)} s`:'no first frame'}${status.runtimeError?` (error: ${status.runtimeError})`:''}`);
+    console.error(`${name.padEnd(34)} ${status.map??'-'} ${drawn?`${(Math.round(end-start)/1000).toFixed(2)} s`:status.mode!=='play'?`no Play (${status.toast??status.mode})`:'no first frame'}${status.runtimeError?` (error: ${status.runtimeError})`:''}`);
     // the report so far, so that a run the browser does not survive keeps its loads
     if(option('out',null)){await mkdir(path.dirname(option('out')),{recursive:true});
       await writeFile(option('out'),JSON.stringify({tag,browser:engine,url:target.href,originalStart,travel,loads,errors,partial:true},null,1));}

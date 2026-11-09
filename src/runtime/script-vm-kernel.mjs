@@ -41,7 +41,12 @@ export const wordEqReference = () => (typeof process !== 'undefined' && process.
  * trace kernel, trace-kernel.mjs, instantiates it too). */
 export function compileScriptVm() {
   return compiled ??= (async () => {
-    const url = new URL(x87Reference() ? './script-vm-ref.wasm' : wordEqReference() ? './script-vm-eq-ref.wasm' : './script-vm.wasm', import.meta.url);
+    // Vite emits a file into the production build only for `new URL('<literal>', import.meta.url)`: the core is named that way. With
+    // the name chosen inside the call (ce3a87eb to this fix, 2026-11-07 to 11-09) the build had no script-vm.wasm, the fetch got the
+    // page's HTML and Play was unavailable on every production page. The reference builds are A/B tools of the dev server and Node
+    // (scripts/build-x87-ref.mjs, build-eq-ref.mjs), resolved at run time and not part of the production build.
+    const reference = x87Reference() ? './script-vm-ref.wasm' : wordEqReference() ? './script-vm-eq-ref.wasm' : null;
+    const url = reference === null ? new URL('./script-vm.wasm', import.meta.url) : new URL(reference, import.meta.url);
     let bytes;
     if (url.protocol === 'file:') {
       const module = 'node:fs/promises';
