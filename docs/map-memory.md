@@ -297,3 +297,31 @@ browser, nothing forced (Chromium at dab89bcb, Firefox at e9ea7a5e: `.cache/perf
 **The budget** (declared by the user, 2026-11-08, to fit a 16 GB machine): page plus worker after forced collections at most
 1.25 GB on every map of the set in a session that has visited them all, in every browser. On Linux both browsers pass (the highest
 1,158 MB, 8 % under); the row stays PARTIAL until the Mac runs it (its Chromium census can; Firefox's forced collection is Linux only).
+
+## The one-hour session's held levels (2026-11-09, Mac)
+
+The frame-time set's census holds no level after 24ad3e65's fixes, but the one-hour session (`session-hour.mjs`, Chromium, worker
+mode) still did on the Mac: after forced collections the worker kept 6 or 7 Wasm memories, where 5 is one level, for stretches of
+several maps. The heap on the last Island visit was +13.0 % over the first, and D5 failed. Worker heap snapshots, taken by a scratch
+copy of the hour when the worker held more than 5, named three holders. Each keeps at most one left level, and each depends on what
+ran last, which is why the hold came and went:
+
+1. **The realm's trace kernel's last model** (trace-kernel.mjs `traceKernel.lastModel`): a strong one-entry cache in front of the
+   kernel's WeakMap. A level's own traces go through its runtime's kernel, so after a travel or a load nothing replaced it. It held
+   the left level's model, and through the `trackedLineNodes` closure that sim-host.mjs defines on it, that level's scope. A
+   level's dispose now clears it (`forgetTraceModel`).
+2. **`setSpawnActorZone`'s accessors** (script-runtime.mjs) and 3. **the physics adapters' accessors**
+   (script-actor-physics.mjs: `runActorProjectile`, and the falling, rolling and rotation hosts built the same way). Each call made
+   a literal, then defined accessors whose getters were closures over the runtime, the actor and the level. V8 keeps an
+   AccessorPair in the descriptor array that a map's transition chain shares. The literal's allocation site, in a function every
+   level runs, reaches that array, so the getters of the call that built the chain kept their runtime alive. This is 24ad3e65's
+   window-host mechanism. `setSpawnActorZone`'s actor is now a class with prototype getters. The adapters use `defineCallAccessor`
+   (host-accessors.mjs): the same own property with the same flags, over functions shared per name that call the host's own
+   closures (`'landingCounter' in host` still tells a decoration host).
+
+None of the three changes what the simulation computes. The Island's and Training's 300-tick digests are unchanged, and
+validate-stage5-o3 (crate-stack), validate-actor-physics-kernel and the falling, rolling and spawn-zone validators pass. On
+`0a25b847` the hour passes D5 on the Mac: no level held at any of its 33 readings, the last Island visit +1.2 %, the worker's frame
++1.8 % (docs/mac-pass-2026-11-08.md "After the fix", raw runs in `.cache/perf/mac-2026-11-08/`). The same shape remains, unnamed by
+any snapshot, in actor-tick.mjs (the timer view), script-anim.mjs (the blend view), script-state.mjs (`startFrame`'s `latent` and
+`cursor`), script-doors.mjs (the `level` members) and script-load-graph.mjs (the Sound members).

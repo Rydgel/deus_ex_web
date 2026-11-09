@@ -531,6 +531,32 @@ for(const [prop,name] of Object.entries({
   bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',bIsPlayer:'bIsPlayer',
 }))Object.defineProperty(PawnView.prototype,prop,{get(){return this.runtime.readNamed(this.self,name);},
   set(value){this.runtime.writeNamed(this.self,name,value);},enumerable:true});
+/** setSpawnActorZone's actor for zone.mjs setActorZone. Its readers are prototype getters over plain fields: getters made per call
+ * (closures over the runtime) stayed in V8's map transitions behind the literal's allocation site, which every level's runtime
+ * shares, and kept a left level's runtime and object arena alive (docs/map-memory.md, the Mac hour; 24ad3e65's mechanism). */
+class SpawnZoneActor {
+  constructor(runtime,self,isPawn){this.runtime=runtime;this.self=self;this.isPawn=isPawn;}
+  get deleted(){return this.runtime.readNamed(this.self,'bDeleteMe');}
+  get position(){return this.runtime.readNamed(this.self,'Location');}
+  get region(){return this.runtime.regionValue(this.self);}
+  set region(value){this.runtime.setRegion(this.self,value.zone,value.leaf,value.zoneNumber);}
+  // APawn only (setActorZone reads them when isPawn).
+  get footRegion(){return this.runtime.regionValue(this.self,'FootRegion');}
+  set footRegion(value){this.runtime.setRegion(this.self,value.zone,value.leaf,value.zoneNumber,'FootRegion');}
+  get headRegion(){return this.runtime.regionValue(this.self,'HeadRegion');}
+  set headRegion(value){this.runtime.setRegion(this.self,value.zone,value.leaf,value.zoneNumber,'HeadRegion');}
+  get height(){return this.runtime.readNamed(this.self,'CollisionHeight');}
+  get eyeHeight(){return this.runtime.readNamed(this.self,'EyeHeight');}
+  get playerReplicationInfo(){
+    const info=this.runtime.readNamed(this.self,'PlayerReplicationInfo');
+    return info?new PlayerZoneField(this.runtime.namedReference(info,'PlayerZone')):null;
+  }
+}
+class PlayerZoneField {
+  constructor(field){this.field=field;}
+  get playerZone(){return this.field.get();}
+  set playerZone(value){this.field.set(value);}
+}
 
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],process=null}={}) {
@@ -2845,28 +2871,7 @@ export class ScriptRuntime {
     let isPawn=false;
     for(let cls=this.instance(receiver).cls;cls;cls=cls.base)
       if(cls.record.key==='engine.pawn'){isPawn=true;break;}
-    const actor={isPawn};
-    Object.defineProperties(actor,{
-      deleted:{get:()=>this.readNamed(receiver,'bDeleteMe')},
-      position:{get:()=>this.readNamed(receiver,'Location')},
-      region:{get:()=>this.regionValue(receiver),set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber)},
-    });
-    if(isPawn){
-      for(const [prop,name] of [['footRegion','FootRegion'],['headRegion','HeadRegion']])
-        Object.defineProperty(actor,prop,{get:()=>this.regionValue(receiver,name),
-          set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber,name)});
-      Object.defineProperties(actor,{
-        height:{get:()=>this.readNamed(receiver,'CollisionHeight')},
-        eyeHeight:{get:()=>this.readNamed(receiver,'EyeHeight')},
-        playerReplicationInfo:{get:()=>{
-          const info=this.readNamed(receiver,'PlayerReplicationInfo');
-          if(!info)return null;
-          const field=this.namedReference(info,'PlayerZone');
-          return {get playerZone(){return field.get();},set playerZone(value){field.set(value);}};
-        }},
-      });
-    }
-    setActorZone(actor,{levelInfo:level.actors[0],netMode:level.netMode??0,pointRegion:position=>level.pointRegion(position),
+    setActorZone(new SpawnZoneActor(this,receiver,isPawn),{levelInfo:level.actors[0],netMode:level.netMode??0,pointRegion:position=>level.pointRegion(position),
       actorLeaving:zone=>this.processEvent(zone,'ActorLeaving',[receiver]),
       zoneChange:(_,zone)=>this.processEvent(receiver,'ZoneChange',[zone]),
       actorEntered:zone=>this.processEvent(zone,'ActorEntered',[receiver]),
