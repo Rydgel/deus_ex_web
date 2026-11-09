@@ -34,6 +34,28 @@ export function defineEntryAccessor(target, prop, slot, index) {
   Object.defineProperty(target, prop, {configurable: false, enumerable: true, get, set});
 }
 
+// An accessor a host is given per call over functions that call makes (closures over a level's runtime, actor or level). V8 keeps
+// the AccessorPair a property was given in the descriptor array that a map's transition chain shares, and a literal's allocation
+// site, in a function every level runs, reaches that array: an accessor whose getter was such a closure kept a left level's runtime
+// and object arena alive (docs/map-memory.md, the Mac hour: script-actor-physics.mjs runActorProjectile's host). Here the getter
+// and setter are made once a property name and call the host's own functions, kept in a data property under CALLS.
+const CALLS = Symbol('hostCallAccessors');
+const callPairs = new Map();
+/** Define `prop` on `target` as `Object.defineProperty(target, prop, {get, set, enumerable, configurable})` did (own; getter-only when
+ * `set` is not given; the same flags), with shared functions that call `get()` and `set(value)`. */
+export function defineCallAccessor(target, prop, get, set = undefined, {enumerable = false, configurable = false} = {}) {
+  let calls = Object.hasOwn(target, CALLS) ? target[CALLS] : null;
+  if (calls === null) Object.defineProperty(target, CALLS, {value: calls = {get: Object.create(null), set: Object.create(null)}});
+  calls.get[prop] = get;
+  if (set !== undefined) calls.set[prop] = set;
+  const key = set === undefined ? `${prop}:get` : `${prop}:get,set`;
+  let pair = callPairs.get(key);
+  if (pair === undefined) callPairs.set(key, pair = set === undefined
+    ? {get() { return this[CALLS].get[prop](); }}
+    : {get() { return this[CALLS].get[prop](); }, set(value) { this[CALLS].set[prop](value); }});
+  Object.defineProperty(target, prop, {...pair, enumerable, configurable});
+}
+
 // A trie over the entries of a list, one WeakMap a level keyed by the entry itself: nothing global holds a level's entries (their cells and
 // codecs reach the level's class graph), so the arrays go with the entries when the level does. A string-keyed Map of the arrays kept the first
 // level of a browser session alive after the second was loaded (the Island's worker held two script processes).

@@ -9,6 +9,12 @@ import {rolling} from './rolling.mjs';
 import {projectile} from './projectile.mjs';
 import {physPathing} from './pathing.mjs';
 import {o3Wants,o3Body} from './o3-record.mjs';
+import {defineCallAccessor} from './host-accessors.mjs';
+
+// The hosts' accessors are defined with defineCallAccessor (host-accessors.mjs): the same own properties as before, over functions
+// shared by every host, which call this call's closures. Closures given as the accessors themselves stayed in V8's descriptor arrays
+// behind runActorProjectile's `{zoneNumber}` literal and kept a left level's runtime alive (docs/map-memory.md, the Mac hour).
+const LITERAL={enumerable:true,configurable:true};
 
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
@@ -55,13 +61,12 @@ function buildFallingAdapter(runtime,actor,level) {
   // source (0x103d0ee2-0x103d0f01, no Pawn test).
   for(const [key,name] of Object.entries({position:'Location',oldLocation:'OldLocation',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
-    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
-  if(isDecoration)Object.defineProperty(host,'landingCounter',{
-    get:()=>get('numLandings'),set:value=>runtime.writeNamed(actor,'numLandings',value),
-  });
+    defineCallAccessor(host,key,()=>get(name),value=>runtime.writeNamed(actor,name,value));
+  if(isDecoration)defineCallAccessor(host,'landingCounter',
+    ()=>get('numLandings'),value=>runtime.writeNamed(actor,'numLandings',value));
   // physFalling's IsA(ADecoration) && bBobbing branch (0x103d0f42, Decoration
   // +0x31c & 0x08), re-read at each integration. Other classes fail that IsA.
-  if(isDecoration)Object.defineProperty(host,'bobbing',{get:()=>Boolean(get('bBobbing'))});
+  if(isDecoration)defineCallAccessor(host,'bobbing',()=>Boolean(get('bBobbing')));
   // processLanded's footprint block (landing.mjs decorationFootprint): its
   // SingleLineCheck probes with the decoration as SourceActor, CollisionRadius
   // and CollisionHeight (+0x1d4/+0x1d8), the Carcass test (static class
@@ -69,9 +74,9 @@ function buildFallingAdapter(runtime,actor,level) {
   if(isDecoration){
     let isCarcass=false;
     for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.carcass')isCarcass=true;
-    Object.defineProperty(host,'radius',{get:()=>get('CollisionRadius')});
-    Object.defineProperty(host,'height',{get:()=>get('CollisionHeight')});
-    Object.defineProperty(host,'slidingCarcass',{get:()=>isCarcass&&Boolean(get('bSlidingCarcass'))});
+    defineCallAccessor(host,'radius',()=>get('CollisionRadius'));
+    defineCallAccessor(host,'height',()=>get('CollisionHeight'));
+    defineCallAccessor(host,'slidingCarcass',()=>isCarcass&&Boolean(get('bSlidingCarcass')));
     const isPlayerPawn=target=>{
       for(let cls=target&&runtime.instance(target)?.cls;cls;cls=cls.base)if(cls.record.key==='engine.playerpawn')return true;
       return false;
@@ -98,12 +103,15 @@ function buildFallingAdapter(runtime,actor,level) {
   const zoneField=name=>runtime.readNamed(regionZone(),name);
   for(const [key,name] of Object.entries({gravity:'ZoneGravity',zoneVelocity:'ZoneVelocity',
     terminalVelocity:'ZoneTerminalVelocity',fluidFriction:'ZoneFluidFriction',regionWater:'bWaterZone'}))
-    Object.defineProperty(host,key,{get:key==='regionWater'?()=>Boolean(zoneField(name)):()=>zoneField(name)});
+    defineCallAccessor(host,key,key==='regionWater'?()=>Boolean(zoneField(name)):()=>zoneField(name));
   for(const [key,name] of Object.entries({mass:'Mass',buoyancy:'Buoyancy'}))
-    Object.defineProperty(host,key,{get:()=>get(name)});
-  const zone={get bBounceVelocity(){return zoneField('bBounceVelocity');},get ZoneVelocity(){return zoneField('ZoneVelocity');}};
+    defineCallAccessor(host,key,()=>get(name));
+  // (the object literal's two getters: own, enumerable and configurable)
+  const zone={};
+  defineCallAccessor(zone,'bBounceVelocity',()=>zoneField('bBounceVelocity'),undefined,LITERAL);
+  defineCallAccessor(zone,'ZoneVelocity',()=>zoneField('ZoneVelocity'),undefined,LITERAL);
   // O3 recording (o3-record.mjs) reads the actor's Base and Region.Zone through the host; nothing else changes.
-  if(o3Wants(actor))Object.defineProperties(host,{o3Base:{get:()=>get('Base')},o3Zone:{value:zone}});
+  if(o3Wants(actor)){defineCallAccessor(host,'o3Base',()=>get('Base'));Object.defineProperty(host,'o3Zone',{value:zone});}
   Object.assign(host,{
     zoneNumber:runtime.regionValue(actor).zoneNumber,
     move:delta=>{
@@ -142,10 +150,10 @@ export function runActorRolling(runtime,actor,seconds,zone) {
   const host={};
   for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',base:'Base',bBounce:'bBounce',bDeleteMe:'bDeleteMe',oldLocation:'OldLocation'}))
-    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
+    defineCallAccessor(host,key,()=>get(name),value=>runtime.writeNamed(actor,name,value));
   // O3 recording (o3-record.mjs) reads the rest of the host's tracked state through these; nothing else changes.
-  if(o3Wants(actor)&&actor.lineage?.includes('engine.decoration'))Object.defineProperties(host,{
-    landingCounter:{get:()=>get('numLandings')},o3Base:{get:()=>get('Base')}});
+  if(o3Wants(actor)&&actor.lineage?.includes('engine.decoration')){
+    defineCallAccessor(host,'landingCounter',()=>get('numLandings'));defineCallAccessor(host,'o3Base',()=>get('Base'));}
   const services={
     zone,
     move:delta=>{
@@ -187,10 +195,10 @@ export function runActorProjectile(runtime,actor,seconds,iterations=0) {
   const host={zoneNumber:runtime.regionValue(actor).zoneNumber};
   for(const [key,name] of Object.entries({position:'Location',oldPosition:'OldLocation',velocity:'Velocity',
     acceleration:'Acceleration',physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
-    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
-  Object.defineProperty(host,'regionWater',{get:()=>Boolean(runtime.readNamed(regionZone(),'bWaterZone'))});
-  Object.defineProperty(host,'fluidFriction',{get:()=>runtime.readNamed(regionZone(),'ZoneFluidFriction')});
-  Object.defineProperty(host,'maxSpeed',{get:()=>isProjectile?get('MaxSpeed'):null});
+    defineCallAccessor(host,key,()=>get(name),value=>runtime.writeNamed(actor,name,value));
+  defineCallAccessor(host,'regionWater',()=>Boolean(runtime.readNamed(regionZone(),'bWaterZone')));
+  defineCallAccessor(host,'fluidFriction',()=>runtime.readNamed(regionZone(),'ZoneFluidFriction'));
+  defineCallAccessor(host,'maxSpeed',()=>isProjectile?get('MaxSpeed'):null);
   projectile(host,seconds,iterations,{
     destroy:()=>runtime.destroyActor(actor,false),
     move:delta=>{
@@ -234,7 +242,7 @@ export function runActorRotation(runtime,actor,seconds) {
   const view={};
   for(const [key,name] of Object.entries({rotation:'Rotation',rotationRate:'RotationRate',
     desiredRotation:'DesiredRotation',bRotateToDesired:'bRotateToDesired',bFixedRotationDir:'bFixedRotationDir'}))
-    Object.defineProperty(view,key,{get:()=>read(actor,name)});
+    defineCallAccessor(view,key,()=>read(actor,name));
   return physicsRotation(view,seconds,{
     moveActor:(_delta,rotation)=>setScriptRotation(actor,rotation,{levelFor:runtime.levelFor,read,write}),
     isProbing:name=>runtime.isProbing(actor,name),

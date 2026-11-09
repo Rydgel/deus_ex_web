@@ -28,6 +28,7 @@ import { createGame } from './game.mjs';
 import { primeSaveDirectoryHost } from './save-directory-host.mjs';
 import { handleLimit, releaseHandleRange, releaseHandlesWhere } from '../runtime/script-object-handles.mjs';
 import { forgetNoted } from '../runtime/base-epoch.mjs';
+import { forgetTraceModel } from '../runtime/trace-kernel.mjs';
 import { createSimSession } from './sim-session.mjs';
 import { createActorMeshSim } from './actor-mesh-sim.mjs';
 import { createGpuMeshLayout } from './gpu-mesh-layout.mjs';
@@ -255,6 +256,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       runtime.scriptVm?.dispose();
       // (the rider pass's log of Base changes held this level's actors: base-epoch.mjs forgetNoted)
       forgetNoted();
+      // (the realm's trace kernel's last model held this level's model, and through its trackedLineNodes this scope)
+      forgetTraceModel();
       releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit(), keepProcess ? identity => keepProcess.owns(identity) : null);
       // A process no level attaches to any more: the identities it kept through earlier levels go too.
       if (keepProcess !== runtime.process) releaseHandlesWhere(identity => runtime.process.owns(identity));

@@ -56,6 +56,16 @@ export function loadTraceKernel() {
   return pending ??= load().then(kernel => (traceKernel = kernel));
 }
 
+/** A level's host is gone (sim-host.mjs dispose): the realm's kernel forgets the last model asked of it. A level's own queries go to
+ * its runtime's kernel (createRuntimeTraceKernel), so after a map change or a load nothing replaced it: kept, it held the left
+ * level's model, and through the model's trackedLineNodes closure (sim-host.mjs) that level's runtime and object arena
+ * (docs/map-memory.md, the Mac hour). The cache only skips the WeakMap lookup. */
+export function forgetTraceModel() {
+  if (traceKernel === null) return;
+  traceKernel.lastModel = null;
+  traceKernel.lastBase = 0;
+}
+
 // The level queries' callbacks (native/script-vm/src/hash.rs), answered by
 // the query in flight (collision-kernel.mjs sets the host).
 let lineCheckHost = null;
