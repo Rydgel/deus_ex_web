@@ -41,6 +41,7 @@ import {fileURLToPath} from 'node:url';
 import {lockedMove} from '../browser-tests/menu-cursor.mjs';
 import {FRAME_TIME_SET} from './frame-time-maps.mjs';
 import {debugUrl} from './page-url.mjs';
+import {geckoReportPrefs,requestGeckoReport,forgetGeckoReportFifo} from './gecko-report-trigger.mjs';
 
 const option=(n,f)=>{const i=process.argv.indexOf(`--${n}`);return i<0?f:process.argv[i+1];};
 const flag=n=>process.argv.includes(`--${n}`);
@@ -102,7 +103,8 @@ if(flag('summary')){printVerdict(verdict(JSON.parse(readFileSync(option('summary
 const engine=option('browser','chromium');
 if(engine!=='chromium'&&engine!=='firefox')throw new Error('--browser must be chromium or firefox');
 const isChromium=engine==='chromium';
-if(!isChromium&&process.platform!=='linux')throw new Error('Firefox\'s forced GC (the memory report signal) is Linux only');
+// (Firefox's forced GC: the memory report's signal on Linux, its FIFO on macOS, gecko-report-trigger.mjs)
+if(!isChromium&&process.platform!=='linux'&&process.platform!=='darwin')throw new Error('Firefox\'s forced GC (the memory report signal or FIFO) is Linux and macOS only');
 const minutes=Number(option('minutes',60)),edge=Number(option('edge',5)),saveEvery=Number(option('save-every',10)),warmup=Number(option('warmup',1.5));
 const middle=option('maps',null)?.split(',').filter(Boolean)??FRAME_TIME_SET.filter(m=>m!==HOME);
 const route=[HOME,...middle,HOME];
@@ -134,7 +136,7 @@ if(!url){
 let browser,ffServer=null,browserPid=0;
 if(isChromium)browser=await chromium.launch({headless:!flag('headed'),args:[`--use-angle=${process.platform==='darwin'?'metal':'gl'}`,
   '--enable-precise-memory-info','--mute-audio',`--remote-debugging-port=${cdpPort}`]});
-else{ffServer=await firefox.launchServer({headless:!flag('headed'),firefoxUserPrefs:{'media.volume_scale':'0.0'}});
+else{ffServer=await firefox.launchServer({headless:!flag('headed'),firefoxUserPrefs:{...geckoReportPrefs(),'media.volume_scale':'0.0'}});
   browserPid=ffServer.process().pid;browser=await firefox.connect(ffServer.wsEndpoint());}
 const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:1});
 await context.addInitScript(()=>{try{localStorage.setItem('deusex.uiHidden','1');}catch{/* storage unavailable */}});
@@ -175,7 +177,7 @@ async function findBrowserPid(){
     try{const cmd=await readFile(`/proc/${d}/cmdline`,'utf8');if(cmd.includes(`--remote-debugging-port=${cdpPort}`)&&!cmd.includes('--type='))browserPid=Number(d);}catch{}}
 }
 async function treeRss(){
-  if(!browserPid)return null;
+  if(!browserPid||process.platform!=='linux')return null;
   const kids=new Map();
   for(const d of await readdir('/proc')){if(!/^\d+$/.test(d))continue;
     try{const st=await readFile(`/proc/${d}/stat`,'utf8');const ppid=Number(st.slice(st.lastIndexOf(')')+2).split(' ')[1]);
@@ -205,7 +207,7 @@ function geckoTotals(file){
 }
 async function geckoReading(){
   const before=new Set(readdirSync(tmpdir()));
-  process.kill(browserPid,35);  // SIGRTMIN+1 (glibc's SIGRTMIN is 34)
+  await requestGeckoReport(browserPid,true);  // Linux: SIGRTMIN+1 (glibc's SIGRTMIN is 34); macOS: the FIFO's "minimize memory report"
   for(let i=0;i<180;i++){
     await page.waitForTimeout(1000);
     const file=readdirSync(tmpdir()).find(f=>!before.has(f)&&f.startsWith('unified-memory-report-')&&f.endsWith(`-${browserPid}.json.gz`));
@@ -398,5 +400,5 @@ run.verdict=verdict(run);
 writeFileSync(`${out}.json`,JSON.stringify(run));
 printVerdict(run.verdict,say);
 say(`saved ${out}.json: ${frames.rows.length} frames (${frames.lost} lost), ${samples.length} samples`);
-await browser.close().catch(()=>{});await ffServer?.close();await server?.close();
+await browser.close().catch(()=>{});await ffServer?.close();await server?.close();forgetGeckoReportFifo();
 process.exit(run.verdict.pass?0:1);
