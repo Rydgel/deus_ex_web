@@ -220,6 +220,15 @@ verdict line, `<out>` holds the record (default `.cache/session-ten/<browser>.js
    runtime error checked every second and the frame counter advancing; **final-sound**: the music still plays, the worklet still
    renders and reports no fault or error; **no-errors**.
 
+Run on the Linux host, 2026-11-10 (headless, the tree's dev server, this tool's first commit): **Chromium (worker mode) 10.0 minutes,
+all 16 verdict lines PASS, no runtime, page or console error** (the dev server's 404 for `/favicon.ico` is listed as a note); the
+logo map ready after 5.4 s, Training 5.2 s after the click, the map change to the Island 3.1 s after the command, 342 quanta a second
+on the logo map, 204 830 quanta rendered with no underrun, fault or error at the end. **Firefox (inline mode) 10.0 minutes, all PASS,
+no error and no failed resource load**: the logo map after 9.5 s, Training 6.6 s, the Island 8.7 s, 349 quanta a second, 203 419
+quanta with no underrun. Both saved and loaded back to the saved position (Save Game and Load Game through the Esc menu on Training,
+Quick Save and Quick Load on the Island) and made footsteps on both maps. WebKit does not start on this host (Playwright's Ubuntu
+build wants ICU 74, libxml2.so.2 and flite): the tool reports that and exits with 2, so the WebKit session still needs the Mac.
+
 Playwright's WebKit cannot take every step: headless, it refuses the pointer lock without window focus and a synthetic mouse move
 carries no `movementX` (docs/mac-pass-2026-11-09.md), so `pointer-lock` and `training-look` report that harness limit as a failure and
 the menus run on the free mouse at its own position. Real Safari needs the same session by hand.

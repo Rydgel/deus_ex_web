@@ -74,9 +74,11 @@ if(!url){
 
 // ---- the browser, muted
 let browser;
-if(engine==='chromium')browser=await chromium.launch({channel:'chromium',headless:true,args:['--use-angle=gl','--mute-audio']});
-else if(engine==='firefox')browser=await firefox.launch({headless:true,firefoxUserPrefs:{'media.volume_scale':'0.0'}});
-else browser=await webkit.launch({headless:true});
+try{
+  if(engine==='chromium')browser=await chromium.launch({channel:'chromium',headless:true,args:['--use-angle=gl','--mute-audio']});
+  else if(engine==='firefox')browser=await firefox.launch({headless:true,firefoxUserPrefs:{'media.volume_scale':'0.0'}});
+  else browser=await webkit.launch({headless:true});
+}catch(error){console.error(`${engine} did not launch: ${error.message.replace(/[╔╗╚╝║═]/g,'').split('\n').map(l=>l.trim()).filter(Boolean).slice(0,3).join(' ')}`);await server?.close();process.exit(2);}
 const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:1});
 const page=await context.newPage();
 
