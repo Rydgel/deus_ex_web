@@ -3257,13 +3257,110 @@ runs in `.cache/perf/hitch/s724-8e34e66a`.
   * at 19.3 to 20.4 s in every roam, one tick of 51 to 68 ms, then the gap (66 to 83 ms). The profile's slowest tick (68 ms, 65 ms sampled under
     the level tick) is an actor's script tick (`scriptAndTimer`) calling ConBindEvents: `bindEventsNative` 23 ms, of it the conversation event
     walk (`walkConversationEvents`, `bindEventsToActor`) 15 ms, and a new actor's base link (`baseLinkInstance`) 18 ms, all JavaScript under
-    the Rust VM's `js_bool` and `js_int` hand-backs (33 and 15 ms). Which conversation it binds is not identified;
+    the Rust VM's `js_bool` and `js_int` hand-backs (33 and 15 ms). The conversation is MeetPaul (the 5 s tick is DL_StartGame's), and the
+    base link is a profile label, not a call ([BindEvents in the 20 s tick](#bindevents-in-the-20-s-tick-2026-11-10), 2026-11-10);
   * at 38.9 to 43.2 s, one or two gaps of 50 to 83 ms where every phase of the frame is two to three times its median: the incremental
     collector (GCSlice markers, INTER_SLICE_GC, inside the profiled roam's pair at 40.7 and 41.2 s).
 * **Reading:** four clean roams pass both halves (1.2 to 1.8 a minute, none over 100 ms), against 10 to 18 a minute on 2026-10-31, when the
   page frame's median was 17 to 20 ms (now about 12). The margin is thin: the two recurring events are most of the allowance, and a busy host or the
   profiler takes a roam over it. A cheaper conversation binding (the event walk and the base link out of JavaScript) would take away the one
   that is not the collector. Not measured: the Mac, other maps, a headed window.
+
+#### BindEvents in the 20 s tick (2026-11-10)
+
+The one recurring gap that is not the collector (above) was identified and cut, but not removed: its tick is still about 40 ms.
+
+**The case** (`scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --warm 60 --ticks 2000 --render-feedback` with a scenario that logs every native
+2052; the headless run reproduces both slow ticks of the profile, at its ticks 36 and 1,419):
+
+| | the 5 to 8 s tick | the 20 s tick |
+| --- | --- | --- |
+| conversation | `DL_StartGame` (owner JCDenton) | `MeetPaul` (owner PaulDenton), radius-invoked |
+| started by | `DataLinkTrigger.Touch`, `DeusExPlayer.StartDataLinkTransmission`, `DataLinkPlay.StartConversation` | PaulDenton0's `ScriptedPawn.Tick`, `DeusExPlayer.StartConversation(Self, IM_Radius)`, `ConPlay.StartConversation` (the roam's route moves it between 19.6 and 29.3 s) |
+| `invokeActor` | None | PaulDenton0 (BindName `PaulDenton`) |
+| events | 3 (speech, trigger, end) | 54 (21 speech, 16 move camera, 6 jump, 4 transfer object, 3 add goal, 2 end, choice, trigger) |
+| GObjObjects (the level's actors) | 2,598 | 2,638 |
+| Pawn pass: candidates (BindName set) | 74 (59) | 93 (78) |
+| Decoration pass | 166 (10) | 167 (11) |
+| PlayerPawn pass | 1 (1) | 1 (1) |
+| BindActor calls | 210 (70 candidates x 3) | 4,860 (90 x 54), 360 of them ConEventTransferObject |
+| StaticLoadObject calls | 0 | 360 (one per candidate and transfer event; 4 names) |
+| bindEventsNative, Node cold first call | 5.5 ms | 16.2 ms (the tick: 49.4 ms) |
+| bindEventsNative, Firefox, profile of 8e34e66a (1 ms samples) | 8 ms of a 37.5 ms tick | 23 ms of a 68.4 ms tick |
+
+Each pass of the reference visits the whole list (7,794 and 7,914 entries for the three passes): `reference` (an `instance()` lookup of a
+dictionary-mode host object, about a microsecond in Firefox) and `isA` on every entry, and after every candidate it binds the list is made
+again (`conversationActors`, 2,600 compares each: 261 times in the MeetPaul call). The event walk is 90 walks of the chain with a
+`Set` and two link reads per event, and each pair of candidate and event is a dispatch on the event's class, two to eight `readNamed`
+and two to four `scriptCaps` folds; a transfer event adds a `CreatePackage` and a recovered `StaticLoadObject` per candidate
+(`findExportIndex`, `exportRecord`, a services object and a copy of it each time). Node's V8 profile of 62 calls (31 of each) puts
+`conversationActors` at 21 % of the call under the reference and the StaticLoadObject path at 15 %.
+
+**What `baseLinkInstance` was.** Nothing in this call: the 18 ms are a label. `baseLinkInstance` (actor-link-fields.mjs) only reads
+`host[LINKS]`, its one caller is the MoveActor rider scan (`riderBaseInstance`), and no actor is linked while BindEvents runs (every
+actor of the level is attached when it enters Level.Actors; `reference` throws for one that is not). In the Gecko profile the
+label sits above unrelated leaves (`lookupMember`, the lowering, window natives) in 17 samples of the slow tick and 216 of the run (132 of
+them in the 20 to 30 s of profile time, the map's load and first seconds), the same way `isPointerCell` and a three.js material appear above `invokeNative` there: the profiler's names for
+frames the JIT inlined into the Rust VM's `js_object` hand-back, not a call. The profile was taken at 8e34e66a and its line numbers are
+that revision's.
+
+**The rest of the tick.** The 20 s tick is the first conversation start of the run. In the profile taken after the change (the 76 samples under
+the level tick in a 120 ms window around it): the original scripts building the conversation window (`script-window-*`, 23 ms), the Rust VM itself (23), ConPlay's host
+services (`script-conplay-live`, speech audio, 9), the first lowering of the callee functions (8), BindEvents (6), the rest 7. None of
+it is BindEvents' and none is cheap to remove here.
+
+**The change** (`BIND_EVENTS=rust|js|verify`, `?bindEvents=`; [Rust core](rust-core.md#november-10-bindevents-class-passes-over-the-images-class-rows-implemented),
+[conversation events](script-conversation-events.md#host-fast-paths-in-play-bind_events-2026-11-10)): the three class passes run on render.rs
+`cycle_scan` over the image's class rows (no new Rust); the strings are not in the image, so the repeated reads, loads and walks of the
+call are kept in script-conversation-bind-scope.mjs for the call only: names read once per object and field, folded once per text,
+the event chain walked once, one StaticLoadObject per item name, one dispatch per event. The reference stays under `js`.
+
+**Verification.**
+* `verify` over the Island run above (both calls): no difference; the world digest after 2,000 ticks is `64a52f060ba42031` in `js`, `rust`
+  and `verify` (`bench-sim.mjs`, same seed and flags).
+* Unit tests (test/script-conversation-events.test.mjs: the scan against the reference passes, a kind 2 entry, a list change during a
+  pass, a lying scan under verify; test/script-conversation-bind-scope.test.mjs).
+* Validators, `rust` mode: validate-script-conversation-events, validate-native-conversation-events (Unicorn oracle of the three-pass
+  body), validate-conversation-binding, -wrapper, -speech, -action-bind, -base-bind, -check-object-bind, -transfer-object-bind,
+  validate-script-datalink-transmission, validate-island-conversation (MeetPaul to its choice and the GEP gun's transfer: the output is
+  byte-identical in `js`, `rust` and `verify`), validate-instructor-conversation; `verify`: validate-island-conversation, -binding,
+  -transfer-object-bind, -check-object-bind. All pass.
+
+**Measured** (Node, headless; the call's own time, first and cold): `DL_StartGame` 5.5 to 2.2 ms, `MeetPaul` 16.2 to 5.0 ms, the 20 s tick
+49.4 to 35.5 ms. Warm (62 calls under a V8 profile): 294 to 71 ms, 4.7 to 1.1 ms a call.
+
+Firefox inline, Island roam, 100 s, five interleaved pairs on the Linux host (`hitch-run.mjs --browser firefox --mode roam --seconds 100
+--ff-prefs '{"privacy.reduceTimerPrecision":false,"media.volume_scale":"0.0"}' --query bindEvents=js|rust`, one at a time under the heavy lock;
+runs in `.cache/perf/hitch/bind-2026-11-10`):
+
+| | `js` (mean, five roams) | `rust` (mean, five roams) |
+| --- | ---: | ---: |
+| `DL_StartGame` tick (4 to 8 s) | 30.7 ms (29.3, 31.0, 30.7, 30.8, 31.6) | 25.8 ms (25.4, 26.1, 24.5, 25.8, 27.2) |
+| `MeetPaul` tick (slowest of 15 to 38 s) | 58.5 ms (56.1, 62.0, 57.8, 54.3, 62.2) | 40.5 ms (39.5, 37.2, 40.7, 43.3, 41.9) |
+| the gap at the MeetPaul tick | 66, 67, 66, 67, 84 ms | 50, 49, 50, 49, 50 ms |
+| gaps over 50 ms a minute | 2.5 (1.2, 2.4, 3.5, 1.8, 3.6) | 3.2 (8.3, 1.8, 2.3, 1.8, 1.8) |
+| longest gap | 70 ms | 87 ms (84, 100, 50, 117, 83) |
+| fps, page frame p50 / p95 | 58.4, 12.7 / 18.8 ms | 58.9, 11.7 / 18.1 ms |
+
+* Roam 1 of `rust` (8.3 a minute) has 11 gaps between 12.2 and 13.1 s with every phase of the frame two to four times its cost, a host
+  disturbance (this session was parsing a 100 MB Gecko profile beside it); without it the arm is 2.0 a minute. Its ticks are unaffected.
+* The longer gaps of the `rust` arm (100 and 117 ms) are in the collector's window (40.8 and 42.9 s, one tick of 88 ms): the same window
+  has ticks of 60, 50, 53, 52 and 64 ms in the master roams of 2026-11-08 and the `js` roams of this session; the arms do not differ in
+  how often it happens (ticks of 50 ms or more at 36 to 47 s: master 2 of 5 roams, `js` 2 of 7, `rust` 3 of 7).
+* The gap count is the sum of this window and the two BindEvents ticks; the change removes the second of the three ("the MeetPaul gap
+  66 to 84 ms" becomes 49 to 50 ms, on the line, since a 40 ms tick is followed by a normal render), not the collector's.
+* One Chromium worker roam (60 s, `bindEvents=rust`): 0 gaps over 50 ms, 60.0 fps, worker tick p50 7.2 and p95 10.0 ms.
+* A Gecko profile of the changed code (`ff-rust-p.profile.json`): `bindEventsNative` is 6 ms of the 76 sampled in the 20 s tick (23 of 97
+  before) and 2 ms of the 5 s tick (8 of 42).
+
+**Reading.** BindEvents is no longer the largest part of either tick (23 to 6 ms and 8 to 2 ms in Firefox; 18 and 5 ms off the ticks), but
+the 20 s tick is still 40 ms, over the 30 ms this work set as the bar for a clear win: what is left is the original scripts
+building the conversation's window, the Rust VM and ConPlay's services, the first time the session runs them. The row counts (7.2.4) are
+unchanged within the noise of the collector's window; the gap that follows the 20 s tick is now at the 50 ms line instead of 66 to 84 ms.
+Left unexplained: why the long ticks (64 to 88 ms) in the collector's window show in `rust` roams 2, 4 and 5 (three of seven roams against two
+of seven, of 52 and 53 ms, in `js`; the cause is the incremental collector, which this change does not touch, and the sample is small). Not measured: the Mac, a
+headed window, other maps (the same call is every conversation's start; Battery Park's and the other maps' conversations are not in the
+frame-time set).
 
 ## How each step is measured
 

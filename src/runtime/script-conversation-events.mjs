@@ -18,8 +18,18 @@ import { readFunctionMetadata } from '../unreal/script-metadata.mjs';
 import { refValue } from './script-vm.mjs';
 import { arrayReference } from './script-values.mjs';
 import { scriptCaps, scriptStringText } from './script-string-operations.mjs';
+import { switchReader } from './switch-reader.mjs';
 
 const freeze = value => Object.freeze(value);
+
+/**
+ * BIND_EVENTS (DEUS_EX_BIND_EVENTS, `?bindEvents=`): 'rust' (default) runs BindEvents' three class passes in the Rust core over the
+ * image's class rows (`scan` below) and the conversation lifecycle's per-call caches (script-conversation-bind-scope.mjs); 'js' keeps
+ * the reference passes (every GObjObjects entry through `reference` and `isA`, the list reloaded after each candidate) and
+ * no caches; 'verify' runs the Rust scan beside the reference's own selection and the caches beside real reads and loads,
+ * and throws at the first difference. docs/firefox-60fps-plan.md "BindEvents in the 20 s tick".
+ */
+export const bindEventsMode = switchReader('BIND_EVENTS', 'DEUS_EX_BIND_EVENTS', 'rust');
 
 /** Native indices registered by ConSys.u's Conversation class. */
 export const CONVERSATION_EVENT_NATIVE_INDICES = freeze({
@@ -275,7 +285,7 @@ function compareText(left, right, compare, nativeIndex, label) {
 }
 
 function bindEventsToActor(conversation, conBoundActors, invokeActor, candidateActor, services, report) {
-  const { read, reference, bindActor, equalText, nativeIndex } = services;
+  const { read, reference, bindActor, equalText, nativeIndex, chain, collect } = services;
   const candidate = reachedReference(candidateActor, reference, 'candidate actor', nativeIndex);
   if (candidate === null) return { selected: false, reason: 'null-candidate', events: 0 };
   const invoke = reachedReference(invokeActor, reference, 'invoke actor', nativeIndex);
@@ -290,40 +300,66 @@ function bindEventsToActor(conversation, conBoundActors, invokeActor, candidateA
   }
 
   let events = 0, bound = 0;
-  walkConversationEvents(conversation, {
-    read,
-    reference,
-    nativeIndex,
-    onEvent: (event, eventIndex) => {
-      const binder = requireFunction(bindActor, 'bindActor', nativeIndex);
-      const result = syncResult(binder({
-        event,
-        firstActor: invoke,
-        secondActor: candidate,
-        conversation,
-        eventIndex,
-        nativeIndex,
-        mode: 'BindEvents',
-      }), nativeIndex, 'BindActor');
-      // The C++ body tests AL from the virtual bool. An omitted value is not
-      // an original false; it means the reached event service is incomplete.
-      if (typeof result !== 'boolean') {
-        throw new ConversationEventBoundaryError(
-          `Conversation event native ${nativeIndex} BindActor returned ${String(result)}; expected bool`,
-          { nativeIndex, kind: 'RETURN', value: result },
-        );
-      }
-      events++;
-      report.eventCalls.push({ event, eventIndex, firstActor: invoke,
-        secondActor: candidate, result });
-      if (result) {
-        const added = addBoundActor(conBoundActors, candidate, services);
-        if (added.added) bound++;
-        report.addedActors.push({ candidate, event, eventIndex, ...added });
-      }
-    },
-  });
+  const onEvent = (event, eventIndex) => {
+    const binder = requireFunction(bindActor, 'bindActor', nativeIndex);
+    const result = syncResult(binder({
+      event,
+      firstActor: invoke,
+      secondActor: candidate,
+      conversation,
+      eventIndex,
+      nativeIndex,
+      mode: 'BindEvents',
+    }), nativeIndex, 'BindActor');
+    // The C++ body tests AL from the virtual bool. An omitted value is not
+    // an original false; it means the reached event service is incomplete.
+    if (typeof result !== 'boolean') {
+      throw new ConversationEventBoundaryError(
+        `Conversation event native ${nativeIndex} BindActor returned ${String(result)}; expected bool`,
+        { nativeIndex, kind: 'RETURN', value: result },
+      );
+    }
+    events++;
+    if (collect) report.eventCalls.push({ event, eventIndex, firstActor: invoke,
+      secondActor: candidate, result });
+    if (result) {
+      const added = addBoundActor(conBoundActors, candidate, services);
+      if (added.added) bound++;
+      if (collect) report.addedActors.push({ candidate, event, eventIndex, ...added });
+    }
+  };
+  if (chain === null) walkConversationEvents(conversation, { read, reference, nativeIndex, onEvent });
+  else walkRecordedChain(conversation, chain, services, onEvent);
   return { selected: true, reason: 'bound', events, bound };
+}
+
+/**
+ * The event chain of one BindEvents call (BIND_EVENTS=rust|verify): the first candidate that reaches the events walks it as the
+ * reference does, link read by link read, and notes the events in order; the later candidates take the notes. Nothing writes
+ * Conversation.eventList or ConEvent.nextEvent while the call runs (the event bodies write the speaker, owner and object
+ * links, never the chain), so the walk would reach the same events, and one that failed or was cut short is not noted: the
+ * next candidate walks again and fails where it did. BIND_EVENTS=verify also walks for real and compares.
+ */
+function walkRecordedChain(conversation, chain, services, onEvent) {
+  const { read, reference, nativeIndex } = services;
+  if (chain.events === null) {
+    const noted = [];
+    walkConversationEvents(conversation, { read, reference, nativeIndex, onEvent: (event, eventIndex, info) => {
+      noted.push(event);
+      return onEvent(event, eventIndex, info);
+    } });
+    chain.events = noted;
+    return;
+  }
+  const events = chain.events;
+  if (chain.verify) {
+    let at = 0;
+    walkConversationEvents(conversation, { read, reference, nativeIndex, onEvent: event => {
+      if (events[at++] !== event) throw new Error(`BIND_EVENTS=verify: event ${at - 1} of the chain is not the event the first walk noted`);
+    } });
+    if (at !== events.length) throw new Error(`BIND_EVENTS=verify: the chain has ${at} events, the first walk noted ${events.length}`);
+  }
+  for (let index = 0; index < events.length; index++) onEvent(events[index], index, { nativeIndex, conversation });
 }
 
 function actorObjects(objects, nativeIndex) {
@@ -351,6 +387,9 @@ export function bindEventsNative({
   isA,
   reference,
   objects,
+  scan = null,
+  scope = null,
+  collect = true,
   bindActor,
   readArray,
   writeArray,
@@ -390,6 +429,8 @@ export function bindEventsNative({
     writeArray,
     nativeIndex,
     call,
+    chain: null,
+    collect,
   };
   zeroBoundActors(conBoundActors, service);
   const report = {
@@ -401,11 +442,40 @@ export function bindEventsNative({
     eventCalls: [],
     addedActors: [],
   };
-  for (const classToken of actorClassOrder) {
-    const pass = { classToken, candidates: 0, selected: 0, events: 0, bound: 0 };
-    report.classPasses.push(pass);
+  const selectedByClass = (object, classToken) => {
+    const classTest = requireFunction(isA, 'isA', nativeIndex);
+    const matches = syncResult(classTest(object, classToken, { nativeIndex, classToken }), nativeIndex,
+      `isA ${classToken}`);
+    if (typeof matches !== 'boolean') {
+      throw new ConversationEventBoundaryError(
+        `Conversation event native ${nativeIndex} isA(${classToken}) returned ${String(matches)}`,
+        { nativeIndex, kind: 'RETURN', value: matches },
+      );
+    }
+    return matches;
+  };
+  // One selected object: BindEventsToActor, then the pass's and the report's figures.
+  const bindCandidate = (classToken, pass, object) => {
+    pass.candidates++;
+    const candidateReport = bindEventsToActor(
+      canonicalConversation,
+      conBoundActors,
+      report.invokeActor,
+      object,
+      service,
+      report,
+    );
+    if (collect) report.candidates.push({ classToken, actor: object, ...candidateReport });
+    if (candidateReport.selected) {
+      pass.selected++;
+      pass.events += candidateReport.events;
+      pass.bound += candidateReport.bound;
+    }
+  };
+  // The reference pass (BIND_EVENTS=js, and where the scan hands a pass back): the GObjObjects entries one by one from `from`.
+  const referencePass = (classToken, pass, from) => {
     let globalObjects = null;
-    for (let index = 0; ; index++) {
+    for (let index = from; ; index++) {
       // The original iterator reloads the global array and its count when
       // advancing. Native callbacks can change that storage between visits;
       // only a matching candidate's binding runs any (reference and isA are
@@ -416,33 +486,74 @@ export function bindEventsNative({
       if (raw === null) continue;
       const object = reachedReference(raw, reference, 'GObjObjects entry', nativeIndex);
       if (object === null) continue;
-      const classTest = requireFunction(isA, 'isA', nativeIndex);
-      const matches = syncResult(classTest(object, classToken, { nativeIndex, classToken }), nativeIndex,
-        `isA ${classToken}`);
-      if (typeof matches !== 'boolean') {
-        throw new ConversationEventBoundaryError(
-          `Conversation event native ${nativeIndex} isA(${classToken}) returned ${String(matches)}`,
-          { nativeIndex, kind: 'RETURN', value: matches },
-        );
-      }
-      if (!matches) continue;
-      pass.candidates++;
-      const candidateReport = bindEventsToActor(
-        canonicalConversation,
-        conBoundActors,
-        report.invokeActor,
-        object,
-        service,
-        report,
-      );
+      if (!selectedByClass(object, classToken)) continue;
+      bindCandidate(classToken, pass, object);
       globalObjects = null;
-      report.candidates.push({ classToken, actor: object, ...candidateReport });
-      if (candidateReport.selected) {
-        pass.selected++;
-        pass.events += candidateReport.events;
-        pass.bound += candidateReport.bound;
-      }
     }
+  };
+  // BIND_EVENTS=verify: the first slot of `array` from `from` that the reference pass selects, or -1.
+  const referenceStop = (array, from, length, classToken) => {
+    for (let at = from; at < length; at++) {
+      const raw = array[at];
+      if (raw === null || raw === undefined) continue;
+      const object = reachedReference(raw, reference, 'GObjObjects entry', nativeIndex);
+      if (object !== null && selectedByClass(object, classToken)) return at;
+    }
+    return -1;
+  };
+  // The pass with the class tests in the Rust core (script-vm-render.mjs cycleScan over the image's class rows, the scan
+  // CycleActors uses). It walks the level's actor array in order and stops at each object of the class: the entries it
+  // passes are answered by the image and cost no script or host read. An entry it cannot answer for (kind 2: no class row)
+  // is tested here as the reference tests it. The reference reloads GObjObjects after every candidate it binds; while the
+  // array, its length and the actors epoch are as the scan began, the next entry is the one the reload shows, and a change
+  // hands the pass back to the reference at the index the reload would continue from. Returns -1 when the pass is done,
+  // else the reference's index to continue at.
+  const scannedPass = (classToken, pass, scanner) => {
+    const array = scanner.actors(), length = array.length, epoch = scanner.epoch();
+    // (the reference's index of a slot is the number of non-empty slots before it)
+    let cursor = 0, steps = 0, counted = 0, countedTo = 0;
+    const filteredBefore = to => {
+      for (; countedTo < to; countedTo++) if (array[countedTo]) counted++;
+      return counted;
+    };
+    for (;;) {
+      const from = cursor;
+      const found = scanner.step(array, cursor, steps, length, classToken);
+      if (found === null) return filteredBefore(from);
+      cursor = found.cursor;
+      steps = found.steps;
+      if (scanner.verify) {
+        const expected = referenceStop(array, from, length, classToken);
+        // (a kind 2 stop is an entry the image could not test: the reference's test of it decides, below)
+        const agrees = found.kind === 0 ? expected === -1 : found.kind === 1 ? expected === cursor - 1 : expected === -1 || expected >= cursor - 1;
+        if (!agrees) {
+          throw new Error(`BIND_EVENTS=verify: ${classToken} pass from slot ${from}: the scan ${['ran out', 'stopped at', 'left to the reference'][found.kind]} ${found.kind ? `slot ${cursor - 1}` : ''}, the reference stops at ${expected}`);
+        }
+      }
+      if (found.kind === 0) return -1;
+      const at = cursor - 1;
+      const object = reachedReference(array[at], reference, 'GObjObjects entry', nativeIndex);
+      if (object === null) continue;
+      if (found.kind === 2 && !selectedByClass(object, classToken)) continue;
+      const index = filteredBefore(at);
+      bindCandidate(classToken, pass, object);
+      if (scanner.actors() !== array || array.length !== length || scanner.epoch() !== epoch) return index + 1;
+    }
+  };
+  // `scope` brackets the binding of one call: the host's reads and loads of the candidates and events it repeats in the call
+  // (script-conversation-bind-scope.mjs) are kept for that call only.
+  scope?.begin();
+  if (scope?.active) service.chain = { events: null, verify: scope.verify };
+  try {
+    for (const classToken of actorClassOrder) {
+      const pass = { classToken, candidates: 0, selected: 0, events: 0, bound: 0 };
+      report.classPasses.push(pass);
+      const scanner = scan === null ? null : scan();
+      const resume = scanner === null ? 0 : scannedPass(classToken, pass, scanner);
+      if (resume >= 0) referencePass(classToken, pass, resume);
+    }
+  } finally {
+    scope?.end();
   }
   return report;
 }
@@ -530,6 +641,8 @@ export function createConversationEventsNativeService({
   isA,
   reference,
   objects,
+  scan = null,
+  scope = null,
   bindActor,
   readArray,
   writeArray,
@@ -556,6 +669,10 @@ export function createConversationEventsNativeService({
         isA,
         reference,
         objects,
+        scan,
+        scope,
+        // (the report is for validators: the VM native discards it, and BIND_EVENTS=rust does not build it)
+        collect: bindEventsMode() !== 'rust',
         bindActor,
         ...slots,
         equalText,

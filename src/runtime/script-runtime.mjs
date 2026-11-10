@@ -64,7 +64,7 @@ import { createUMeshFrameCache, getUMeshFrame } from './umesh-frame.mjs';
 import { readUMeshSurfaces } from './umesh-surfaces.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
-import { bumpBaseEpoch,bumpBaseEpochFor,bumpActorsEpoch } from './base-epoch.mjs';
+import { bumpBaseEpoch,bumpBaseEpochFor,bumpActorsEpoch,actorsEpoch } from './base-epoch.mjs';
 import { bumpReceiverEpoch,bumpReceiverEpochFor } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
@@ -120,7 +120,8 @@ import { readObject, exportAt, entryOf } from '../unreal/objects.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
 import { extensionStringToName } from './script-extension-strings.mjs';
 import { scriptIsInState, scriptGetStateName } from './script-state-queries.mjs';
-import { createConversationEventsNativeService } from './script-conversation-events.mjs';
+import { createConversationEventsNativeService,bindEventsMode } from './script-conversation-events.mjs';
+import { BindScope } from './script-conversation-bind-scope.mjs';
 import { bindSpeechActor } from './script-conversation-speech.mjs';
 import { bindConversationAction } from './script-conversation-action-bind.mjs';
 import {
@@ -558,6 +559,8 @@ class PlayerZoneField {
   set playerZone(value){this.field.set(value);}
 }
 
+// BindActor of an event class with no body of its own (DConEvent::BindActor, ConEventMoveCamera's): false, nothing read.
+const noBinding=()=>false;
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],process=null}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
@@ -595,8 +598,13 @@ export class ScriptRuntime {
     this.conversationListObjects=new Map();
     this.conversationLifecycle=conversationLifecycle;
     this.windowLifecycle=windowLifecycle;
+    // What one BindEvents call repeats (script-conversation-bind-scope.mjs), and its class passes in the Rust core (bindEventScan).
+    this.bindScope=new BindScope({read:(object,key)=>this.readNamed(object,key),write:(object,key,value)=>this.writeNamed(object,key,value)});
+    this.bindScanner=null;this.bindClassRecords=new Map();
     this.conversationEventNative=createConversationEventsNativeService({
       objects:conversationObjects,
+      scan:()=>this.bindEventScan(conversationObjects),
+      scope:this.bindScope,
       read:(object,key)=>this.readNamed(object,key),
       write:(object,key,value)=>this.writeNamed(object,key,value),
       reference:object=>{this.instance(object);return object;},
@@ -607,37 +615,10 @@ export class ScriptRuntime {
           if(cls.record.key===key)return true;
         return false;
       },
-      bindActor:args=>{
-        const key=this.instance(args.event).cls.record.key;
-        const read=this.bindRead??=(object,key)=>this.readNamed(object,key),write=this.bindWrite??=(object,key,value)=>this.writeNamed(object,key,value);
-        if(key==='consys.coneventspeech')return bindSpeechActor({...args,read,write});
-        if(key==='consys.coneventanimation'||key==='consys.coneventtrade')return bindConversationAction({...args,read,write});
-        if(isConversationCheckObjectBindClass(key)){
-          const services=this.conversationLifecycle?.checkObject;
-          return bindConversationCheckObjectActor({...args,read,write,
-            classRef:services?.classRef,
-            createPackage:typeof services?.createPackage==='function'
-              ? details=>services.createPackage(details):null,
-            staticLoadObject:typeof services?.staticLoadObject==='function'
-              ? request=>services.staticLoadObject(request):null,
-          });
-        }
-        if(isConversationTransferObjectBindClass(key)){
-          const services=this.conversationLifecycle?.transferObject;
-          return bindConversationTransferObjectActor({...args,read,write,
-            classRef:services?.classRef,
-            createPackage:typeof services?.createPackage==='function'
-              ? details=>services.createPackage(details):null,
-            staticLoadObject:typeof services?.staticLoadObject==='function'
-              ? request=>services.staticLoadObject(request):null,
-          });
-        }
-        if(isConversationMoveCameraBindClass(key))
-          return bindConversationMoveCameraActor({classKey:key});
-        if(isConversationBaseBindClass(key))return bindConversationBaseActor({classKey:key});
-        throw new Error(`Original conversation event BindActor is unsupported: ${key}`);
-      },
+      bindActor:args=>this.bindScope.active?this.bindEventRouted(args):this.bindEventDispatch(args,this.instance(args.event).cls.record.key),
+      equalText:this.bindScope.equalText,
     });
+    this.bindRoutes=new Map();
     this.originalObjectIndex=null;
     this.resources=null;
     this.preparedObjects=new Map();
@@ -1374,6 +1355,130 @@ export class ScriptRuntime {
       if(cache)cache.set(base,result);else caches.set(cls,new Map([[base,result]]));
     }
     return result;
+  }
+  /** The BindActor of one event class (the virtual DConEvent::BindActor, slot +0x58), chosen by the event's class key. BindEvents'
+   * BIND_EVENTS=js path and BindActorEvents always come here. */
+  bindEventDispatch(args,key) {
+    const scope=this.bindScope,read=scope.read,write=scope.write;
+    if(key==='consys.coneventspeech')return bindSpeechActor({...args,read,write});
+    if(key==='consys.coneventanimation'||key==='consys.coneventtrade')return bindConversationAction({...args,read,write});
+    if(isConversationCheckObjectBindClass(key)){
+      const services=this.conversationLifecycle?.checkObject;
+      return bindConversationCheckObjectActor({...args,read,write,
+        classRef:services?.classRef,
+        createPackage:typeof services?.createPackage==='function'
+          ? details=>services.createPackage(details):null,
+        staticLoadObject:typeof services?.staticLoadObject==='function'
+          ? request=>scope.load(services,request):null,
+      });
+    }
+    if(isConversationTransferObjectBindClass(key)){
+      const services=this.conversationLifecycle?.transferObject;
+      return bindConversationTransferObjectActor({...args,read,write,
+        classRef:services?.classRef,
+        createPackage:typeof services?.createPackage==='function'
+          ? details=>services.createPackage(details):null,
+        staticLoadObject:typeof services?.staticLoadObject==='function'
+          ? request=>scope.load(services,request):null,
+      });
+    }
+    if(isConversationMoveCameraBindClass(key))
+      return bindConversationMoveCameraActor({classKey:key});
+    if(isConversationBaseBindClass(key))return bindConversationBaseActor({classKey:key});
+    throw new Error(`Original conversation event BindActor is unsupported: ${key}`);
+  }
+  /** bindEventDispatch inside a BindEvents call whose scope is active (script-conversation-bind-scope.mjs; BIND_EVENTS=rust|verify):
+   * an event's class is looked up once in the call and its route kept, the pair of candidate and event costing the route's body
+   * alone. BIND_EVENTS=verify also runs the dispatch and compares what the two return. */
+  bindEventRouted(args) {
+    const scope=this.bindScope,event=args.event;
+    let route=scope.routes.get(event);
+    if(route===undefined){
+      route=this.bindRoute(this.instance(event).cls.record.key);
+      scope.routes.set(event,route);
+    }
+    const result=route(args);
+    if(scope.verify){
+      const key=this.instance(event).cls.record.key,expected=this.bindEventDispatch(args,key);
+      if(result!==expected)throw new Error(`BIND_EVENTS=verify: BindActor of ${key} returned ${result}, the dispatch returns ${expected}`);
+    }
+    return result;
+  }
+  /** The route of an event class key: bindEventDispatch's choice made once per class, the body it runs with the scope's typed
+   * reads and writes, folded-name comparison and kept loads. A class whose body is the inherited or MoveCamera `return false`
+   * (validated here, once: it reads nothing) returns false without a call. */
+  bindRoute(key) {
+    const routes=this.bindRoutes,kept=routes.get(key);
+    if(kept!==undefined)return kept;
+    const scope=this.bindScope,read=scope.read,write=scope.write,equalText=scope.equalText;
+    let route;
+    if(key==='consys.coneventspeech')
+      route=args=>bindSpeechActor({event:args.event,firstActor:args.firstActor,secondActor:args.secondActor,read,write,equalText});
+    else if(key==='consys.coneventanimation'||key==='consys.coneventtrade')
+      route=args=>bindConversationAction({...args,read,write,equalText});
+    else if(isConversationCheckObjectBindClass(key))
+      route=args=>{
+        const services=this.conversationLifecycle?.checkObject;
+        return bindConversationCheckObjectActor({...args,read,write,
+          classRef:services?.classRef,
+          createPackage:typeof services?.createPackage==='function'
+            ? details=>services.createPackage(details):null,
+          staticLoadObject:typeof services?.staticLoadObject==='function'
+            ? request=>scope.load(services,request):null,
+        });
+      };
+    else if(isConversationTransferObjectBindClass(key))
+      route=args=>{
+        const services=this.conversationLifecycle?.transferObject;
+        return bindConversationTransferObjectActor({...args,read,write,equalText,
+          classRef:services?.classRef,
+          createPackage:typeof services?.createPackage==='function'
+            ? details=>services.createPackage(details):null,
+          staticLoadObject:typeof services?.staticLoadObject==='function'
+            ? request=>scope.load(services,request):null,
+        });
+      };
+    else if(isConversationMoveCameraBindClass(key)){
+      bindConversationMoveCameraActor({classKey:key});
+      route=noBinding;
+    }else if(isConversationBaseBindClass(key)){
+      bindConversationBaseActor({classKey:key});
+      route=noBinding;
+    }else throw new Error(`Original conversation event BindActor is unsupported: ${key}`);
+    routes.set(key,route);
+    return route;
+  }
+  /** The linked class record of an Engine class token ('Pawn' is engine.pawn), or null while no object of it has been linked
+   * (then no actor is of that class). BindEvents' scan names its class passes by it. */
+  bindClassRecord(token) {
+    const records=this.bindClassRecords;
+    let record=records.get(token);
+    if(record!==undefined)return record;
+    const key=`engine.${token.toLowerCase()}`;
+    for(const cls of this.linkedClasses)if(cls.record.key===key){records.set(token,record=cls.record);return record;}
+    return null;
+  }
+  /** BindEvents' class passes in the Rust core (script-conversation-events.mjs scannedPass; BIND_EVENTS): the scanner over the
+   * level's actor array, or null where the reference passes run: BIND_EVENTS=js, no Rust core, or an `objects` provider that is
+   * not the level's actors without the empty slots (script-doors.mjs conversationActors says so with `source`). */
+  bindEventScan(objects) {
+    const mode=bindEventsMode();
+    if(mode==='js')return null;
+    const source=objects?.source;
+    if(typeof source!=='function'||!this.scriptVm?.render)return null;
+    let scanner=this.bindScanner;
+    if(scanner===null||scanner.source!==source)scanner=this.bindScanner={
+      source,verify:false,
+      actors:source,
+      epoch:actorsEpoch,
+      step:(array,cursor,steps,bound,token)=>{
+        const record=this.bindClassRecord(token);
+        return record===null?null:this.scriptVm.render.cycleScan(array,cursor,steps,bound,record);
+      },
+    };
+    scanner.verify=mode==='verify';
+    if(!scanner.actors()||typeof scanner.actors().length!=='number')return null;
+    return scanner;
   }
   /** Attach storage to a receiver. The WeakMap stays the authority; a
    * non-enumerable per-runtime symbol on the receiver is a direct link that

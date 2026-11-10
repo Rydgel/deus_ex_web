@@ -252,3 +252,88 @@ test('reached unresolved links and non-boolean BindActor results fail explicitly
     bindActor: () => undefined,
   }), error => error instanceof ConversationEventBoundaryError && error.code === 'CONVERSATION_EVENT_RETURN');
 });
+
+// The Rust class scan (scan service, BIND_EVENTS) against the reference passes: a CycleActors-style stub over the raw
+// actor array, which has empty slots the provider's list does not.
+function scanFixture() {
+  const base = fixture();
+  const { actors } = base;
+  const raw = [null, actors.a, null, actors.b, actors.player, null, actors.decoration, actors.none];
+  let epoch = 0;
+  const extra = { id: 'late', className: 'Pawn', BindName: 'Late' };
+  const objects = () => raw.filter(Boolean);
+  const scanner = ({ untested = () => false, lie = null, verify = false } = {}) => () => ({
+    verify,
+    actors: () => raw,
+    epoch: () => epoch,
+    step: (list, cursor, steps, bound, token) => {
+      let kind = 0;
+      while (steps < bound) {
+        if (cursor >= list.length) cursor = 0;
+        const object = list[cursor++]; steps++;
+        if (!object) continue;
+        if (untested(object)) { kind = 2; break; }
+        if (lie?.(object, token)) continue;
+        if (base.service.isA(object, token)) { kind = 1; break; }
+      }
+      return { kind, cursor, steps };
+    },
+  });
+  const run = ({ scan = null, bindActor = base.service.bindActor, invoke = actors.a } = {}) => {
+    const output = Array(10).fill('stale');
+    const report = bindEventsNative({
+      conversation: base.conversation, conBoundActors: output, invokeActor: invoke,
+      ...base.service, objects, scan, bindActor,
+    });
+    return { output, report };
+  };
+  return { ...base, raw, objects, scanner, run, extra, bump: () => { epoch++; } };
+}
+
+test('BindEvents with the class scan selects what the reference passes select', () => {
+  const reference = scanFixture().run();
+  const scanned = scanFixture();
+  const fast = scanned.run({ scan: scanned.scanner() });
+  assert.deepEqual(fast.output.map(item => item?.id ?? item), reference.output.map(item => item?.id ?? item));
+  assert.deepEqual(fast.report.classPasses, reference.report.classPasses);
+  assert.deepEqual(fast.report.candidates.map(item => [item.classToken, item.actor.id, item.reason]),
+    reference.report.candidates.map(item => [item.classToken, item.actor.id, item.reason]));
+  assert.equal(fast.report.eventCalls.length, reference.report.eventCalls.length);
+
+  // an entry the image cannot test is tested as the reference tests it (kind 2)
+  const untested = scanFixture();
+  const slow = untested.run({ scan: untested.scanner({ untested: object => object.id !== 'none' }) });
+  assert.deepEqual(slow.report.classPasses, reference.report.classPasses);
+  assert.deepEqual(slow.output.map(item => item?.id ?? item), reference.output.map(item => item?.id ?? item));
+});
+
+test('a change of the actor list during a scanned pass hands the pass back to the reference at the reload index', () => {
+  const run = scanned => {
+    const fixtureWithScan = scanFixture();
+    let appended = false;
+    const bindActor = details => {
+      // the first binding appends an actor (SpawnActor-like): the reference reloads the list and continues after the candidate
+      if (!appended && details.secondActor.id === 'a') {
+        appended = true;
+        fixtureWithScan.raw.push(fixtureWithScan.extra);
+        fixtureWithScan.bump();
+      }
+      return fixtureWithScan.service.bindActor(details);
+    };
+    const result = fixtureWithScan.run({ scan: scanned ? fixtureWithScan.scanner() : null, bindActor });
+    return { ...result, extra: fixtureWithScan.extra };
+  };
+  const reference = run(false), fast = run(true);
+  assert.deepEqual(fast.report.candidates.map(item => [item.classToken, item.actor.id, item.reason]),
+    reference.report.candidates.map(item => [item.classToken, item.actor.id, item.reason]));
+  assert.ok(fast.report.candidates.some(item => item.actor.id === 'late'), 'the appended actor is reached by the reload');
+  assert.deepEqual(fast.report.classPasses, reference.report.classPasses);
+});
+
+test('BIND_EVENTS=verify names a scan that skips an object of the class', () => {
+  const lying = scanFixture();
+  assert.throws(() => lying.run({ scan: lying.scanner({ verify: true, lie: object => object.id === 'b' }) }),
+    /BIND_EVENTS=verify: Pawn pass from slot \d+: the scan stopped at slot \d+, the reference stops at 3/);
+  const honest = scanFixture();
+  assert.doesNotThrow(() => honest.run({ scan: honest.scanner({ verify: true }) }));
+});
