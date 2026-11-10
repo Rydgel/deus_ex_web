@@ -229,6 +229,18 @@ quanta with no underrun. Both saved and loaded back to the saved position (Save 
 Quick Save and Quick Load on the Island) and made footsteps on both maps. WebKit does not start on this host (Playwright's Ubuntu
 build wants ICU 74, libxml2.so.2 and flite): the tool reports that and exits with 2, so the WebKit session still needs the Mac.
 
+**Rerun on master after the merge (Linux, 2026-11-10, `bca77379`):**
+- **Firefox:** 10.0 minutes, all 16 steps passed.
+- **Chromium:** three ten-minute runs.
+  - Runs 2 and 3: all 16 steps passed, with the Island ready 3.0 and 2.5 s after the command.
+  - Run 1: **the page crashed** 37 s in, during the save-game step (the Save Game screen; Playwright's "Target crashed").
+    - Its scope's memory peaked at 1.9 GB, well under the 8 GB cap.
+    - Neither the kernel nor systemd-coredump recorded anything.
+  - **Eight more one-minute runs** with Playwright's browser log (`DEBUG=pw:browser`) passed every step, through Save Game, Load
+    Game, the map change and the quick save and load.
+
+So Chromium's page crashed once in twelve sessions. The cause is not explained and was not reproduced.
+
 Playwright's WebKit cannot take every step: headless, it refuses the pointer lock without window focus and a synthetic mouse move
 carries no `movementX` (docs/mac-pass-2026-11-09.md), so `pointer-lock` and `training-look` report that harness limit as a failure and
 the menus run on the free mouse at its own position. Real Safari needs the same session by hand.
