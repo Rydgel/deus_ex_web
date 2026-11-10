@@ -24,6 +24,8 @@
 //     [--js-flags FLAGS] (V8 flags, e.g. '--trace-gc --trace-incremental-marking'; V8 prints to the browser's stdout, which
 //     DEBUG=pw:browser forwards to this process's stderr)
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
+//     [--gc-markers] (with --profile: markers only, no stack sampling, so the run's frames keep their cost; for gecko-gc.mjs and
+//     gecko-gc-windows.mjs)
 //     [--ff-prefs JSON] (more Firefox preferences, e.g. '{"javascript.options.wasm_lazy_tiering":false}')
 //     [--ff-asyncstack] (keep the async stack capture Playwright's driver turns on; off by default since 2026-11-04)
 // The browser's process tree RSS is sampled on Linux only (/proc). Moved from .work/hitch/run.mjs and run-ff.mjs (2026-10-28).
@@ -65,7 +67,7 @@ const browser=isChromium
   :await firefox.launch({headless:!flag('headed'),firefoxUserPrefs:{...(flag('gclog')?{'javascript.options.mem.log':true}:{}),
     ...JSON.parse(option('ff-prefs','{}')),
     ...(flag('ff-asyncstack')?{}:{'javascript.options.asyncstack':false})},
-    env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:'js,threads,markers',
+    env:profOut?{...process.env,MOZ_PROFILER_STARTUP:'1',MOZ_PROFILER_STARTUP_FEATURES:flag('gc-markers')?'nostacksampling,threads,markers':'js,threads,markers',
       MOZ_PROFILER_STARTUP_FILTERS:'GeckoMain,DOM Worker',MOZ_PROFILER_STARTUP_ENTRIES:'40000000',MOZ_PROFILER_SHUTDOWN:profOut}:process.env});
 const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:dpr});
 // The page bars hidden (main.mjs setUiHidden), so the canvas is the whole --size, as in the validators; --show-ui keeps them.

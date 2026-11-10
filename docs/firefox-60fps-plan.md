@@ -3362,6 +3362,85 @@ of seven, of 52 and 53 ms, in `js`; the cause is the incremental collector, whic
 headed window, other maps (the same call is every conversation's start; Battery Park's and the other maps' conversations are not in the
 frame-time set).
 
+### The collector's window (2026-11-10)
+
+The other recurring gaps of row 7.2.4 (above: one or two of 50 to 117 ms at 39 to 48 s of every Island roam) are two major
+collections that run past 1.5 s, after which SpiderMonkey makes every slice uninterruptible and longer. Traced in Gecko's and
+SpiderMonkey's source (`mozilla-firefox/firefox` main, fetched 2026-11-10) and measured on the Linux host; nothing is changed in Play yet.
+
+**What Firefox does** (source, then the measurement that matches it):
+
+* **The collections.** The load's allocation-triggered zone collections schedule a full one `javascript.options.gc_delay.full`
+  (60,000 ms) later: `FULL_GC_TIMER`, all four zones, at 39 to 41 s of the roam (60 s after the one at -20 s). About six seconds
+  later a cycle collection pokes another (`CC_FINISHED`, three zones): `CCGCScheduler.h` asks for it when the cycle collector freed
+  more than 250 GC things, or more than 2,500 DOM events were made since the last collection (`LikelyShortLivingObjectCreated`).
+  Each has 140 to 210 ms of work (marking 120 to 180 ms; the full one also sweeps 36 ms, 12 of it the atoms table).
+* **How the work is spread.** `CCGCScheduler::EnsureGCRunner` runs slices from an `IdleTaskRunner` with a minimum useful budget of
+  5 ms (`mActiveIntersliceGCBudget`, 1 ms only after a cycle collection that freed over 10,000 objects) and a 250 ms maximum delay
+  (`javascript.options.gc_delay.interslice`), after which it forces a 10 ms slice. The idle deadline is the refresh driver's
+  `mostRecentRefresh + period - 1 ms` (`GetIdleDeadlineHint`, `layout.idle_period.time_limit`). `IdleTaskRunner::Run` slices
+  only when `now + 5 ms < deadline`; between that and the deadline it waits for the next painted tick; past the deadline it
+  queues itself for the next idle moment. Allocation during the mark adds 5 ms slices inside the frame (`TOO_MUCH_MALLOC`,
+  `TOO_MUCH_JIT_CODE`).
+* **Where our frames fall.** The idle slices' budgets place the vsync: the page's tick starts a median 2.65 ms after it (p10 1.7,
+  p90 4.2; headless), and the tick with its paint takes 11 to 13 ms, so it ends near `vsync + 15`: inside the band where the
+  runner only waits. A slice runs when a tick ends past `vsync + 15.67` (then for the ~2.6 ms before the next tick interrupts it)
+  or when the 250 ms timer forces one. An idle slice of 5 ms or more needs the tick, paint included, at 8 ms or less.
+* **The escalation.** `GCRuntime::maybeIncreaseSliceBudgetForLongCollections` (js/src/gc/GC.cpp) gives every slice of a
+  collection started more than 1,500 ms earlier an uninterruptible minimum budget rising linearly from 0 to 100 ms at 2,500 ms.
+  The profile matches it to the millisecond (slices of 23, 29 and 35 ms at 1,736, 1,787 and 1,852 ms). The gaps are those slices
+  plus the frame.
+
+**Measured** (`hitch-run.mjs --browser firefox --mode roam --seconds 100 --gc-markers --profile`, Island, master c15e2923, one roam
+each; `gecko-gc-windows.mjs`; runs in `.cache/perf/gc-pauses`):
+
+| Roam | Collection at | Wall | Work (mark) | Work in the first 1.5 s | Extended slices (ms, first at) |
+| --- | --- | ---: | ---: | ---: | --- |
+| as shipped | `FULL_GC_TIMER` 40.7 s | 2,145 ms | 206.0 (161.4) | 95 | 6 (101.6, 1,834 ms) |
+| | `CC_FINISHED` 47.3 s | 2,274 ms | 138.1 (123.2) | 45 | 4 (83.3, 1,879 ms) |
+| `idle_period.cross_process_scheduling` off | `FULL_GC_TIMER` 40.5 s | 2,256 ms | 162.4 (120.0) | 49 | 5 (107.5, 1,752 ms) |
+| | `CC_FINISHED` 47.0 s | 2,039 ms | 194.7 (175.1) | 124 | 4 (55.0, 1,784 ms) |
+| `gc_incremental_slice_ms` 2 (minimum budget 2 ms) | `FULL_GC_TIMER` 41.0 s | 2,194 ms | 180.0 (138.0) | 44 | 7 (115.3, 1,672 ms) |
+| | `CC_FINISHED` 47.5 s | 1,585 ms | 198.5 (183.1) | 187 | 1 (0.1, 1,585 ms) |
+| profiled roam of 8e34e66a (2026-11-08) | `FULL_GC_TIMER` 38.9 s | 1,928 ms | 182.6 (139.9) | 74 | 6 (93.8, 1,652 ms) |
+| | `CC_FINISHED` 44.8 s | 2,172 ms | 166.3 (149.2) | 90 | 5 (74.4, 1,732 ms) |
+
+* With a 2 ms minimum budget (a stand-in for frames that leave idle time) the `CC_FINISHED` collection took 71 idle slices and
+  finished at 1.59 s; the full one, at a stretch where frames ran 14 to 20 ms, took 21 slices in its first 1.5 s and escalated
+  as before. Idle time is what the collector lacks; the preference is not something a page can set.
+* The work done in the first 1.5 s ranges from 44 to 187 ms with the frames' position against the vsync. What a collection gets
+  without idle slices is about 60 ms (forced slices) plus 25 to 30 ms (allocation slices) in 1.5 s.
+
+**What is marked.** Gecko's memory report of the Island at 30 s (`map-memory-census.mjs --browser firefox --sim inline
+--keep-reports`): 141.7 MB of GC heap (Object 58.1, Array 28.4, strings 10.1, Function 9.5, Map 7.5 MB). By owner, from a Chromium
+snapshot of the same inline page (`heap-families.mjs --sm`, which counts what a SpiderMonkey heap would hold as cells: objects,
+closures and their environments, strings; V8's element arrays and heap numbers have none): 1.93 M cells, 40% of them the page's own
+render data. The largest families (depth 4, thousands of cells):
+
+| Family | Cells | What |
+| --- | ---: | --- |
+| `map.model` (a `WeakMap` value) | 307 | lighting.mjs light-map records: per surface `staticGeometry` (3 objects, 8 arrays), `uv`, `basis`, `lightEntries`, `lightMap`, `surface` |
+| `simHost.actorSim` | 84 | the actor mesh layer's per-actor closures and their contexts |
+| `NameSpelling.spellings` | 79 | name strings |
+| `map.triangles` | 74 | the BSP triangle list, read only by the world build |
+| `npcPreview.root`, `.draw` | 72, 29 | three.js objects of the NPC meshes |
+| `ScriptProcess.packageObjects.loadRecord`, `.data` | 66, 21 | load records |
+| `ScriptProcess.packageObjects` | 65 | package objects |
+| `ScriptProcess.packageObjects.function.body.built`, `.tree` | 62, 33 | function bodies that ran |
+| `sim.sprites` | 53 | sprite state |
+| `ScriptClassLoader.graph.buildLinker.objectHash` | 35 | strings |
+| `map.actors` | 33 | the decoded actors and their property tags |
+
+**Reading.** Cheaper frames do not help until the tick and paint fit in about 8 ms (a frame 2 ms cheaper still ends in the band
+where the runner waits). What does help is less work per collection: done by about 1.75 s, the slices stay under about 25 ms and the
+gaps under 50 ms. With the 60 to 90 ms a collection gets in 1.5 s when idle slices are scarce, that is about 100 ms of work, half of
+today's. If the work follows the cells (unverified), that is about 1.0 M cells instead of 1.93 M. The families above are the
+candidates, the page's light-map records first. Not measured: a headed window (the tick's lag behind the vsync may differ), the Mac
+(at 120 Hz the minimum budget is 2.5 ms and the period 8.3 ms).
+
+Tools: `gecko-gc-windows.mjs` (one line per major collection: wall, work, extended slices), `hitch-run.mjs --gc-markers` (a
+markers-only Gecko profile, no stack sampling), `heap-families.mjs --sm`, `map-memory-census.mjs --keep-reports`.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

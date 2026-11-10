@@ -13,12 +13,13 @@
 //     [--ff-prefs '{"name":value}'] (Firefox: more preferences, for experiments)
 //     [--gc-logs 10] (Firefox: Gecko's GC and CC edge logs after those arrivals, into <out>-logs/<i>/)
 //     [--gc minimize|report|none] (the forced collections; report: Firefox's memory report without its minimize; none: nothing forced)
+//     [--keep-reports] (Firefox: each memory report kept as <out>-<arrival>.memory-report.json.gz, for about:memory or a breakdown)
 //     [--settle 3] [--snapshots 5,29] (Chromium: heap snapshots of the page and the worker at those arrivals, <out>-<i>-page.heapsnapshot)
 //     [--url URL] (else a dev server for this tree in process) [--size 1440x960] [--query k=v&k=v] [--cdp-port 9343] [--out .cache/perf/map-memory/<browser>]
 //   node scripts/map-memory-census.mjs --summary <out>.json
 // Writes <out>.json after every arrival (a run the browser does not survive keeps its readings).
 import {chromium,firefox} from '@playwright/test';
-import {mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,appendFileSync,statSync,renameSync} from 'node:fs';
+import {mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,appendFileSync,statSync,renameSync,copyFileSync} from 'node:fs';
 import {readFile,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -70,6 +71,7 @@ if(!['minimize','report','none'].includes(gc))throw new Error('--gc must be mini
 const gcLogs=new Set((option('gc-logs','')).split(',').filter(Boolean).map(Number)),logDir=`${option('out',`.cache/perf/map-memory/${option('browser','chromium')}`)}-logs`;
 if(gcLogs.size&&process.platform!=='linux')throw new Error('--gc-logs: the GC and CC logs\' signal (SIGRTMIN+2) is Linux only');
 const settle=Number(option('settle',3)),snapshots=new Set((option('snapshots','')).split(',').filter(Boolean).map(Number));
+const keepReports=flag('keep-reports');
 const out=option('out',`.cache/perf/map-memory/${engine}`),cdpPort=Number(option('cdp-port',9343)),sim=option('sim',null);
 const [width,height]=option('size','1440x960').split('x').map(Number);
 mkdirSync(path.dirname(out),{recursive:true});writeFileSync(`${out}.log`,'');
@@ -191,7 +193,8 @@ async function geckoReading(minimize=true){
   for(let i=0;i<180;i++){
     await page.waitForTimeout(1000);
     const file=readdirSync(tmpdir()).find(f=>!before.has(f)&&f.startsWith('unified-memory-report-')&&f.endsWith(`-${browserPid}.json.gz`));
-    if(file){await page.waitForTimeout(500);const totals=geckoTotals(`${tmpdir()}/${file}`);rmSync(`${tmpdir()}/${file}`);return totals;}
+    if(file){await page.waitForTimeout(500);const totals=geckoTotals(`${tmpdir()}/${file}`);
+      if(keepReports)copyFileSync(`${tmpdir()}/${file}`,`${out}-${arrivals.length}.memory-report.json.gz`);rmSync(`${tmpdir()}/${file}`);return totals;}
   }
   throw new Error('no memory report from Firefox');
 }
