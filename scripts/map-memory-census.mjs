@@ -26,6 +26,7 @@ import {gunzipSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {debugUrl} from './page-url.mjs';
+import {geckoReportPrefs,requestGeckoReport,forgetGeckoReportFifo} from './gecko-report-trigger.mjs';
 
 const option=(n,f)=>{const i=process.argv.indexOf(`--${n}`);return i<0?f:process.argv[i+1];};
 const flag=n=>process.argv.includes(`--${n}`);
@@ -53,7 +54,8 @@ if(flag('summary')){summarize(JSON.parse(readFileSync(option('summary'),'utf8'))
 const engine=option('browser','chromium');
 if(engine!=='chromium'&&engine!=='firefox')throw new Error('--browser must be chromium or firefox');
 const isChromium=engine==='chromium';
-if(!isChromium&&process.platform!=='linux')throw new Error('Firefox\'s forced GC (the memory report signal) is Linux only');
+// (Firefox's forced GC: the memory report's signal on Linux, its FIFO on macOS, gecko-report-trigger.mjs)
+if(!isChromium&&process.platform!=='linux'&&process.platform!=='darwin')throw new Error('Firefox\'s forced GC (the memory report signal or FIFO) is Linux and macOS only');
 const mapsOption=option('maps','all');
 const all=mapsOption==='all'
   ?(await readdir(path.join(gameDirectory(),'Maps'))).filter(f=>/\.dx$/i.test(f)&&!/^DXMP_/i.test(f)).map(f=>f.replace(/\.dx$/i,'')).sort()
@@ -66,6 +68,7 @@ if(!['minimize','report','none'].includes(gc))throw new Error('--gc must be mini
 // --gc-logs i,j (Firefox): after those arrivals' readings, Gecko's GC and CC edge logs (SIGRTMIN+2, which runs a collection and a cycle
 // collection to write them) into <out>-logs/<i>/
 const gcLogs=new Set((option('gc-logs','')).split(',').filter(Boolean).map(Number)),logDir=`${option('out',`.cache/perf/map-memory/${option('browser','chromium')}`)}-logs`;
+if(gcLogs.size&&process.platform!=='linux')throw new Error('--gc-logs: the GC and CC logs\' signal (SIGRTMIN+2) is Linux only');
 const settle=Number(option('settle',3)),snapshots=new Set((option('snapshots','')).split(',').filter(Boolean).map(Number));
 const out=option('out',`.cache/perf/map-memory/${engine}`),cdpPort=Number(option('cdp-port',9343)),sim=option('sim',null);
 const [width,height]=option('size','1440x960').split('x').map(Number);
@@ -89,7 +92,7 @@ if(!url){
 let browser,ffServer=null,browserPid=0;
 if(isChromium)browser=await chromium.launch({args:[`--use-angle=${process.platform==='darwin'?'metal':'gl'}`,
   '--enable-precise-memory-info','--mute-audio',`--remote-debugging-port=${cdpPort}`]});
-else{ffServer=await firefox.launchServer({headless:true,firefoxUserPrefs:{'media.volume_scale':'0.0','javascript.options.asyncstack':false,...JSON.parse(option('ff-prefs','{}'))},
+else{ffServer=await firefox.launchServer({headless:true,firefoxUserPrefs:{...geckoReportPrefs(),'media.volume_scale':'0.0','javascript.options.asyncstack':false,...JSON.parse(option('ff-prefs','{}'))},
   ...(gcLogs.size?{env:{...process.env,MOZ_CC_LOG_DIRECTORY:path.resolve(logDir)}}:{})});
   browserPid=ffServer.process().pid;browser=await firefox.connect(ffServer.wsEndpoint());}
 const page=await (await browser.newContext({viewport:{width,height},deviceScaleFactor:1})).newPage();
@@ -131,7 +134,7 @@ async function findBrowserPid(){
 let rssKinds=null;
 const kindOf=cmd=>/--type=([\w-]+)/.exec(cmd)?.[1]??(/-contentproc/.test(cmd)?`content ${/ (tab|gpu|rdd|socket|utility|forkserver|web\w*)(?: |$)/.exec(cmd.replaceAll('\0',' '))?.[1]??''}`.trim():'browser');
 async function treeRss(){
-  if(!browserPid)return null;
+  if(!browserPid||process.platform!=='linux')return null;
   const kids=new Map();
   for(const d of await readdir('/proc')){if(!/^\d+$/.test(d))continue;
     try{const st=await readFile(`/proc/${d}/stat`,'utf8');const ppid=Number(st.slice(st.lastIndexOf(')')+2).split(' ')[1]);
@@ -184,7 +187,7 @@ async function geckoLogs(label){
 }
 async function geckoReading(minimize=true){
   const before=new Set(readdirSync(tmpdir()));
-  process.kill(browserPid,minimize?35:34);  // SIGRTMIN+1 (glibc's SIGRTMIN is 34): minimize, then report; SIGRTMIN: the report as it is
+  await requestGeckoReport(browserPid,minimize);  // Linux: SIGRTMIN+1 (minimize, then report) or SIGRTMIN (the report as it is); macOS: the FIFO's same commands
   for(let i=0;i<180;i++){
     await page.waitForTimeout(1000);
     const file=readdirSync(tmpdir()).find(f=>!before.has(f)&&f.startsWith('unified-memory-report-')&&f.endsWith(`-${browserPid}.json.gz`));
@@ -260,4 +263,4 @@ try{
 }catch(error){ended=error.message;say(`ended: ${error.message}`);}
 save();
 summarize({arrivals,errors,ended});
-await browser.close().catch(()=>{});await ffServer?.close();await server?.close();
+await browser.close().catch(()=>{});await ffServer?.close();await server?.close();forgetGeckoReportFifo();
