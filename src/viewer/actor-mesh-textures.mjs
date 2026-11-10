@@ -3,6 +3,19 @@ import {POLY} from '../unreal/geometry.mjs';
 import {sharedProceduralTextures} from './procedural-textures.mjs';
 import {configureSampler} from './original-sampling.mjs';
 
+/** One group's hold on a pooled texture (ActorMeshTextures.acquire): `texture`, and `release()`, which gives the hold up once. A class
+ * of prototype methods: a group held a closure and its context for it (docs/firefox-60fps-plan.md "The collector's window"). */
+class TextureLease {
+  constructor(pool,entry,key) {this.texture=entry.texture;this.pool=pool;this.entry=entry;this.key=key;this.released=false;}
+  release() {
+    if(this.released)return;this.released=true;
+    const entry=this.entry;
+    if(--entry.references===0&&!entry.disposed){
+      entry.disposed=true;this.pool.entries.delete(this.key);entry.texture.dispose();
+    }
+  }
+}
+
 /** Scene-owned static skin textures. Only GPU textures and sampler state
  * are shared; each actor retains its material, lighting and draw order.
  * Acquisition is synchronous after the existing private decoder's awaits,
@@ -35,13 +48,7 @@ export class ActorMeshTextures {
       this.entries.set(key,entry={texture,references:0,disposed:false});
     }
     entry.references++;
-    let released=false;
-    return {texture:entry.texture,release:()=>{
-      if(released)return;released=true;
-      if(--entry.references===0&&!entry.disposed){
-        entry.disposed=true;this.entries.delete(key);entry.texture.dispose();
-      }
-    }};
+    return new TextureLease(this,entry,key);
   }
   dispose() {
     if(this.disposed)return;this.disposed=true;

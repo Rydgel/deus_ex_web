@@ -2314,7 +2314,8 @@ the 2 ms spread of each arm; the hosts are fast-mode objects now, which should h
 show it). The frames of a 30 s walk in a browser worker: 2,789 before, 2,813 after.
 
 **What is left, and why.**
-* The mesh bindings' closures (item 7). Not started. In the final roam `host.actorSim` still holds 28 k closures with their contexts and feedback cells
+* (Done 2026-11-10: `meshBindingSteps` and `createMeshDraw` are classes now, docs/firefox-60fps-plan.md "The collector's window", "The actor mesh
+  layer's closures".) The mesh bindings' closures (item 7). Not started. In the final roam `host.actorSim` still holds 28 k closures with their contexts and feedback cells
   (about 60 k objects, 250 k edges: 1.7% of the worker's objects, 1.0% of its references). `meshBindingSteps` is one generator of about 900 lines whose
   seventy mutable `let`s and ninety-odd helpers close over each other and over the binding's state; a class needs each of them as a field and each helper
   as a method, with no unit-level reference to compare against, only the GPU and lighting validators and the frame digests.

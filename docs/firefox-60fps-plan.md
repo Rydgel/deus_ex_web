@@ -3521,6 +3521,76 @@ demand would remove, at the price of a view per access in the atlas, moving ligh
 not clearly safe and was left; `map.level.reachSpecs` (13 k) is a decoded copy beside the `playerScene.level.reachSpecs` game.mjs makes
 from it, a candidate for the simulation side. Frame times were not A/B measured: this changes allocation at load and the cost of a refill, not a per-frame body.
 
+#### The actor mesh layer's closures (2026-11-10)
+
+Host data layout only, from master c5809462; one commit on branch `worktree-agent-a82d4f859659ab8ee`. Measured as the families above
+were (`map-memory-census.mjs --browser chromium --sim inline --maps 01_NYC_UNATCOIsland --settle 30 --snapshots 1`, then
+`heap-families.mjs <snapshot> 4 40 --sm`), the same tree before and after.
+
+**What the named families were.** `simHost.actorSim` and `npcPreview.draw` were mostly closures (`npcPreview.root` is the three.js
+objects, below): 305 bindings on the Island, each of `meshBindingSteps` (`actor-mesh-sim.mjs`: one generator whose 62 helpers and members and 81 variables closed over each other: about 70
+closures and 6 contexts a binding) and `createMeshDraw` (`actor-mesh-draw.mjs`: 33 helpers and members, about 35 closures a binding), with
+the cache, the plan's context and the LOD each binding keeps (about 15 closures more). `sim.sprites` (53 k) is not sprite state: the first
+path to it is the session's `sprites` method, and what hangs off its scope is the script runtime's actor hosts (1,745 `MapActorHost`, about
+30 cells each: their `ScriptState`, field sets and maps, `live-heap.md` "Actor hosts and mesh bindings"). `gpuMesh.allocate` (20 k) is the
+mesh payload views (86 meshes, 232 cells each, shared by every binding of a mesh) and `game.start` (19 k) is `level.reachSpecs` (12.7 k plain
+objects, a copy of the decoded `map.level.reachSpecs`). Neither is a layer of its own, so neither is cut here.
+
+**Cut** (every value computed is the same; the page's objects and the simulation's records are the same):
+* `meshBindingSteps` makes a `MeshBinding`: the variables are fields, the helpers and the returned object's members methods of the class
+  (one `new` and the same code for every binding). The generator keeps its two `yield`s and builds the fields in the order it built the
+  variables. `createMeshDraw` makes a `MeshDraw` the same way, `createMeshLod` a `MeshLod`, and `createLodMeshFrameCache`,
+  `createPublisher` and `frameContext` (`lodmesh-frame.mjs`: the GetFrame cache, its vertex loops and a plan's context, which a binding
+  keeps for its last plan) a `LodMeshFrameCache`, a `Publisher` and a `FrameContext`. The binding is the `services` object GetFrame reads
+  (`cache`, `kernel`, `read`, `objectIndex`). A name a member and a variable shared became `_block`, `_groups`, `_gpuHandle`, `_ready`,
+  `_source`, `_vertexCount`. The conversion was made by a one-off codemod over the AST (scope analysis, every reference to a captured variable
+  rewritten, each function moved out unchanged; not kept), and the result was read.
+* One function for every binding where a closure was made for each: a group's shader hook and program keys (`groupBeforeCompile`, three
+  key functions; three.js calls both as methods of the material, which carries its binding's `deusOwner`, the group's `deusEnvironment` and
+  `deusModulated`), the draw layer's `onError`, a mirror frame's admission (`drawnInChildFrame`: made in `admitNew` it held that call's
+  context, the closures `take` and `fail` and the options for the life of the binding), the pooled texture's lease (`TextureLease`, 770
+  closures), the cache's default allocation function (`newBytes`) and a `MeshLod`'s float to word scratch pair (used at once).
+* Not allocated until used: a `MeshLod`'s JavaScript-morph alphas and its lighting-topology map (the kernel path uses neither).
+
+**Numbers** (Island at 30 s, inline, Chromium; cells as `heap-families.mjs --sm` counts them):
+
+| | Before | After |
+| --- | ---: | ---: |
+| SpiderMonkey-like cells, whole page | 1,932,373 | 1,886,036 (-46,337, -2.4%) |
+| closures | 151,018 | 112,680 (-38,338) |
+| contexts | 58,839 | 52,375 (-6,464) |
+| `simHost.actorSim` | 84 k | 55 k |
+| `npcPreview.root` + `.draw` + `gpuMesh.allocate` | 72 + 29 + 20 = 121 k | 59 + 43 + (in `.draw`) = 102 k |
+| `sim.sprites`, `game.start` | 53 k, 19 k | 53 k, 19 k |
+
+(The first-reach attribution moves the mesh payload views between the three families of the second row as their owners change; the whole
+page's figures are the ones to compare.) The simulation host's frame (`frame-alloc-meter.mjs --time`, Island, 600 frames, three interleaved runs
+of each tree): `actors` step mean 1.48, 1.61, 1.51 ms before and 1.41, 1.43, 1.42 ms after; the whole frame's allocation 1,413 KB before, 1,410 after.
+
+**Checks.** `frame-alloc-meter.mjs --compare` against the unchanged tree: identical frames on the Island (`cebe25dcbba1f08a`, 600), 00_Training
+(`398be1b404124a61`) and 03_NYC_747 (`8dbcbfae1f441921`); `hud-stream-digest.mjs --frames 1500 --stream`: identical (`16bfe2bd08ed1653`);
+bench-sim 300 ticks: Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, as before (the layer is
+not in its path). Validators, each exit 0 (`run-validators.mjs --filter`, one at a time; `lodmesh-lod` runs two): actor-mesh-scene,
+npc-mesh-preview, gpu-mesh, lodmesh-frame, lodmesh-lod(-play), mesh-lighting-play, mesh-path-frames, mesh-environment, sprite-setup,
+sprite-tiles-play, sim-split, first-draw-pose, weapon-gpu-play, weapon-play, umesh-play, context-loss-play, mirrors-play, scene-matrices,
+spawn-mesh-binding, training-cadet, render-mesh-bounds, lasers-play, weapon-lod; the unit tests (1,003) pass. One harness change:
+`validate-lodmesh-frame.mjs` held the cache's `create` and `flush` away from the cache to wrap them (`create(key,size)`), which a method
+of a class does not allow; it calls them on the cache now (`create.call(cache,key,size)`), the only place that did. Play on the Island in
+Chromium, worker mode and `?sim=inline` (25 s roams, `hitch-run.mjs`): no runtime or render error, 305 and 325 mesh actors drawn on the
+GPU path (`status().npcPreview`), two characters and a bot in the worker run's screenshot.
+
+**What is left, and why.** The page's three.js objects are most of it: 1,430 `Object3D` (a binding's group and its meshes: about 25 cells
+each, two of them closures and a context three.js makes for the rotation and quaternion callbacks), 786 geometries with five attributes
+each, 1,433 materials (6 to 7 cells each after the cut). They are what three.js allocates for an object; fewer of them means not
+creating the meshes of the opaque groups the draw batches draw instead (their geometries are read when a batch is rebuilt, so the
+attributes would have to move to plain typed arrays and the meshes be made when a group turns transparent, which changes the objects'
+ids, the tie-break of three.js's transparent sort; the number of such groups was not measured). Not done. Elsewhere: the pawn physics
+views' accessors (`defineCallAccessor` in `script-actor-physics.mjs`: 4,750 closures, each a per-key `()=>get(name)`), the 1,745 actors'
+`initialProperty` closures (`script-map-properties.mjs`), `reachSpecs` (12.7 k) and the mesh payload views' 20 arrays a mesh. The Firefox
+roam (`hitch-run.mjs --browser firefox`, `gecko-gc-windows.mjs`) was not run: 2.4% of the cells is about 3 to 4 ms of a collection's 140 to
+210 ms, which one roam cannot tell from the spread between roams (the table above). The goal of about half the work (1.0 M cells) is not
+reachable from these families: together they are 277 k of the 1.93 M cells, and 46 k are cut.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
