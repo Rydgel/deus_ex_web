@@ -178,10 +178,22 @@ export function resetPoseField(host, prop) {
 // A map host's live collision values (linkLiveCollision, linkDecorationCollision): Location, CollisionRadius and
 // CollisionHeight getters over the host's pose members. The marker names the host they read.
 const LIVE_CYLINDER = Symbol('liveCylinder');
-/** Mark `values`, the `collisionValues` a map host was just given, as reading `host`'s pose members. */
-export function markLiveCylinder(values, host) {
-  Object.defineProperty(values, LIVE_CYLINDER, {value: host});
-  return values;
+// The members of a live cylinder's values: functions shared by every host's, which find the host through the marker and the host's
+// serialized values through the prototype.
+const CYLINDER_MEMBERS = {
+  Location: {get() { return this[LIVE_CYLINDER].position; }, enumerable: true, configurable: true},
+  CollisionRadius: {get() { return this[LIVE_CYLINDER].radius ?? Object.getPrototypeOf(this).CollisionRadius ?? 0; }, enumerable: true, configurable: true},
+  CollisionHeight: {get() { return this[LIVE_CYLINDER].height ?? Object.getPrototypeOf(this).CollisionHeight ?? 0; }, enumerable: true, configurable: true},
+};
+/** The `collisionValues` of a map host that is not a mover (linkLiveCollision, linkDecorationCollision): `values`, the host's serialized
+ * values, with Location, CollisionRadius and CollisionHeight read from the host's pose members. It was a copy of all of `values`'
+ * members (the 90 to 280 members of a pawn's: 195,000 value slots for the Island's 280 of them) and three closures; the object inherits
+ * `values` and has the three members, so every read of a member sees the value the copy had (`values` is not written once the host is
+ * attached; the copy was taken after it was made). */
+export function liveCylinderValues(host, values) {
+  const cylinder = Object.create(values);
+  Object.defineProperty(cylinder, LIVE_CYLINDER, {value: host});
+  return Object.defineProperties(cylinder, CYLINDER_MEMBERS);
 }
 /** Whether `host`'s collision cylinder is its image's: its `collisionValues` are the live values marked for it, and its
  * position, collision radius and collision height are installed pose members (accessors over image cells). */

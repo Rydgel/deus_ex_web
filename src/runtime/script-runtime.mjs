@@ -20,7 +20,7 @@ import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,d
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, readCell, writeCell, writeVector3, readFixedElement, writeFixedElement, isFixedCell, isPointerCell, readStructMember, scalarCell, pointerOffset } from './script-object-image.mjs';
+import { objectImageCells, layoutOwner, readCell, writeCell, writeVector3, readFixedElement, writeFixedElement, isFixedCell, isPointerCell, readStructMember, scalarCell, pointerOffset } from './script-object-image.mjs';
 import { createFrameLocals, FrameStack, LocalCellStorage, setLocalCopy, getLocalCopy } from './script-frame-locals.mjs';
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
@@ -245,6 +245,18 @@ const reachesActor=cls=>{
 // without its parameters; the field list is fixed once prepared.
 const destroyedLocals=new WeakMap();
 const memberCaches=new WeakMap();
+// A property name's handle: the linked field, its value codec (made on first use) and the image cell its class has. One handle for each
+// field and cell (the cell of a leaf property is every class's), not one for each class and name.
+const fieldHandles=new WeakMap();
+function fieldHandle(field,cell){
+  let handle=fieldHandles.get(field);
+  if(handle===undefined){fieldHandles.set(field,handle={field,codec:null,cell,next:null});return handle;}
+  for(;;){
+    if(handle.cell===cell)return handle;
+    if(handle.next===null)return handle.next={field,codec:null,cell,next:null};
+    handle=handle.next;
+  }
+}
 // Stage 1b (docs/object-memory.md): per class, each spelled property name
 // resolved once to a handle on its linked field (a miss included).
 const fieldTables=new WeakMap();
@@ -283,31 +295,86 @@ const DESTROY_SERVICES={
   },
 };
 
+/** What every instance of one class shares in a runtime (docs/firefox-60fps-plan.md, "The script runtime's instance state"): the
+ * runtime, the object arena, the class's image cells and PropertiesSize and its table of resolved property names (shared by the classes
+ * of one layout, layoutOwner), and bDeleteMe's field of an actor class. A ScriptInstance reads them through its prototype's accessors;
+ * it kept six of its own slots for them each. */
+class InstanceClass {
+  constructor(runtime,storage,owner){
+    this.runtime=runtime;this.cells=storage.cells;this.arena=storage.arena;this.size=storage.size;this.fieldTable=fieldTable(owner);
+    // The property list the layout was made from (the owner's), which CleanupDestroyed's plan of the layout is checked against.
+    this.fields=owner.propertyLink;
+    // The Actor.bDeleteMe field of an actor class: bindNativeObject sets it for the objects whose receiver it records.
+    this.deleteMe=null;
+  }
+}
+/** The part of an instance few instances have: made when first written (the accessors of ScriptInstance read the fallback while there
+ * is none), so an object that never gets a measured index, never has the Rust VM ask for its binding set or never calls a singular
+ * function has no copy of these nine fields. */
+class InstanceExtra {
+  constructor(){
+    this.defaultsSnapshot=undefined;this.globalIndex=undefined;
+    this.textParser=undefined;this.randomLabels=undefined;this.singular=false;this.pendingKillValue=false;
+    this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
+  }
+}
 /** One attached object's VM record. Every record shares this hidden class:
  * the fields later code fills in are declared here, and an actor's
  * pendingKill (its bDeleteMe) is a prototype getter rather than a property
- * redefined per record, which left actor records in dictionary mode. */
+ * redefined per record, which left actor records in dictionary mode. What
+ * the class gives every object (runtime, arena, cells, size, fieldTable,
+ * deleteMe) is in `info`, and the fields most objects never set are in
+ * `extra`: both are read through accessors of the prototype. */
 class ScriptInstance {
   constructor(runtime,cls,slots,state,storage){
-    // The slot fallback's defaults as of attachment. An object whose every
+    this.cls=cls;this.info=runtime.instanceClassOf(cls,storage);
+    // The slot fallback's defaults as of attachment, in `extra`. An object whose every
     // property has an image cell never reads a slot, so it keeps no copy.
-    this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
-    this.defaultsSnapshot=storage.complete?undefined:defaultsSnapshot(cls);
+    this.extra=null;
+    if(!storage.complete)this.extraOf().defaultsSnapshot=defaultsSnapshot(cls);
     // The logical storage of the properties without an image cell: made when first asked for (`slots`), since an object with a cell
     // for every property never has one.
-    this.slotMap=slots.size?slots:null;this.bindings=NO_BINDINGS;this.state=state;this.singular=false;
+    this.slotMap=slots.size?slots:null;this.bindings=NO_BINDINGS;this.state=state;
     // The Rust VM's binding set of this object (script-vm-rust.mjs bindingSet) is kept while no binding was added or replaced.
-    this.bindingsVersion=0;this.bindSet=0;this.bindSetVersion=-1;this.bindSetVm=null;
+    this.bindingsVersion=0;
     // The image is [base, base+size) of the runtime's object arena (R0).
-    this.cells=storage.cells;this.arena=storage.arena;this.base=storage.base;this.size=storage.size;this.refs=storage.refs;
+    this.base=storage.base;this.refs=storage.refs;
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
-    this.nativeObject=undefined;this.loadedReference=null;this.loadedResource=null;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
-    this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
+    this.nativeObject=undefined;
+    // The identity this record belongs to, where recorded: an actor's (bindNativeObject) or a loaded package object's (prepareObject).
+    // `loadedResource`: the loaded object's resource record, which its Outer binding reads.
+    this.receiver=null;this.loadedResource=null;
     // The Rust actor tick's field mask and class flags (actor-tick-kernel.mjs).
     this.tickDesc=undefined;
     // The image range's release token (the arena's owner cell, base, size); see releaseObjectImage.
     this.imageToken=storage.base?{owner:storage.arena.owner,base:storage.base,size:storage.size,released:false}:null;
   }
+  get runtime(){return this.info.runtime;}
+  get cells(){return this.info.cells;}
+  get arena(){return this.info.arena;}
+  get size(){return this.info.size;}
+  get fieldTable(){return this.info.fieldTable;}
+  /** The Actor.bDeleteMe field of an object bindNativeObject recorded the receiver of (an actor), else null. */
+  get deleteMe(){return this.receiver===null?null:this.info.deleteMe;}
+  extraOf(){return this.extra??=new InstanceExtra();}
+  get defaultsSnapshot(){return this.extra===null?undefined:this.extra.defaultsSnapshot;}
+  get globalIndex(){return this.extra===null?undefined:this.extra.globalIndex;}
+  set globalIndex(value){this.extraOf().globalIndex=value;}
+  get textParser(){return this.extra===null?undefined:this.extra.textParser;}
+  set textParser(value){this.extraOf().textParser=value;}
+  get randomLabels(){return this.extra===null?undefined:this.extra.randomLabels;}
+  set randomLabels(value){this.extraOf().randomLabels=value;}
+  get singular(){return this.extra===null?false:this.extra.singular;}
+  set singular(value){this.extraOf().singular=value;}
+  get pendingKillValue(){return this.extra===null?false:this.extra.pendingKillValue;}
+  set pendingKillValue(value){this.extraOf().pendingKillValue=value;}
+  // The Rust VM's binding set cache (script-vm-rust.mjs bindingSet): the set's address, the bindingsVersion it was made for and the VM.
+  get bindSet(){return this.extra===null?0:this.extra.bindSet;}
+  set bindSet(value){this.extraOf().bindSet=value;}
+  get bindSetVersion(){return this.extra===null?-1:this.extra.bindSetVersion;}
+  set bindSetVersion(value){this.extraOf().bindSetVersion=value;}
+  get bindSetVm(){return this.extra===null?null:this.extra.bindSetVm;}
+  set bindSetVm(value){this.extraOf().bindSetVm=value;}
   get slots(){return this.slotMap??=new Map();}
   /** Bind `key` to `binding`: the only writer of `bindings` (script-bindings.mjs setBindingOf). */
   setBinding(key,binding){setBindingOf(this,key,binding);}
@@ -400,7 +467,8 @@ const cleanupPlans=new WeakMap();
 // The runtimes' services objects so far (their cacheId).
 let servicesCount=0;
 export function cleanupPlan(instance) {
-  const cells=instance.cells,fields=instance.cls.propertyLink;
+  // (the plan is the layout's: the classes that share a layout share the plan, made from the owner's property list)
+  const cells=instance.cells,fields=instance.info.fields;
   if(!cells||instance.poison)return null;
   let plan=cleanupPlans.get(cells);
   if(plan===undefined||plan&&plan.fields!==fields){
@@ -857,8 +925,10 @@ export class ScriptRuntime {
     // instead of lowercasing and walking the chain on every host property
     // access (docs/play-frame-cost.md).
     if(!node)return null;
-    let tables=memberCaches.get(node);
-    if(!tables)memberCaches.set(node,tables={});
+    // (the fields of a class that declares none are its layout owner's: the classes of one layout share the memo of the property names)
+    const owner=table==='fields'&&node.propertyOrder?.length===0?this.layoutOwnerOf(node):node;
+    let tables=memberCaches.get(owner);
+    if(!tables)memberCaches.set(owner,tables={});
     const cache=tables[table]??=new Map();
     let member=cache.get(name);
     if(member===undefined){
@@ -973,6 +1043,20 @@ export class ScriptRuntime {
   /** Stage 1d (docs/object-memory.md): the image cells of a class linked by
    * the native class loader, or null for a class without linked offsets (the
    * isolated decoded-metadata fixtures), whose objects keep logical slots. */
+  /** The class whose layout `cls` has (script-object-image.mjs layoutOwner): `cls` itself unless it declares no property of its own. */
+  layoutOwnerOf(cls) {
+    const graph=this.classLoader?.graph;
+    return graph&&cls?.loadRecord?layoutOwner(cls,graph):cls;
+  }
+  /** The part of an instance of `cls` that the class gives all of them (InstanceClass), made once for the storage's cells, size and
+   * arena; the table of resolved property names is the layout owner's. */
+  instanceClassOf(cls,storage) {
+    const infos=this.instanceClasses??=new WeakMap();
+    let info=infos.get(cls);
+    if(info===undefined||info.cells!==storage.cells||info.size!==storage.size||info.arena!==storage.arena)
+      infos.set(cls,info=new InstanceClass(this,storage,this.layoutOwnerOf(cls)));
+    return info;
+  }
   objectCells(cls) {
     if(!this.classLoader||!cls?.loadRecord)return null;
     const loader=this.classLoader;
@@ -1249,7 +1333,7 @@ export class ScriptRuntime {
     // The bindings carry no state: they read the instance's nativeObject (script-bindings.mjs).
     for(const name of NATIVE_HEADER_BINDING_ORDER)this.bindProperty(receiver,this.lookupMember(instance.cls,'fields',name),NATIVE_HEADER_BINDINGS[name]);
     for(let cls=instance.cls;cls;cls=cls.base)if(cls===this.actorClass){
-      instance.receiver=receiver;instance.deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
+      instance.receiver=receiver;instance.info.deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
       break;
     }
   }
@@ -1650,11 +1734,11 @@ export class ScriptRuntime {
    * before the class was returned, so the codec is built once, on first value
    * access; cells are per class. */
   namedHandle(instance,name) {
-    const table=instance.fieldTable??=fieldTable(instance.cls);
+    const table=instance.fieldTable;
     let handle=table.get(name);
     if(handle===undefined){
       const field=this.lookupMember(instance.cls,'fields',name);
-      table.set(name,handle=field?{field,codec:null,cell:instance.cells?.get(field.key)??null}:null);
+      table.set(name,handle=field?fieldHandle(field,instance.cells?.get(field.key)??null):null);
     }
     if(!handle)throw new Error(`Original property was not found: ${name}`);
     return handle;
@@ -2080,9 +2164,9 @@ export class ScriptRuntime {
       const resource=await this.prepareResource(reference);
       this.attach(reference,cls,slots);
       if(randomLabels!==null)this.instance(reference).randomLabels=randomLabels;
-      // The bindings read these two (script-bindings.mjs LOADED_HEADER_BINDINGS).
+      // The bindings read these two (script-bindings.mjs LOADED_HEADER_BINDINGS): the record's receiver and resource.
       const loaded=this.instance(reference);
-      loaded.loadedReference=reference;loaded.loadedResource=resource;
+      loaded.receiver=reference;loaded.loadedResource=resource;
       for(const name of ['Name','Class','Outer','ObjectFlags','ObjectInternal'])
         this.bindProperty(reference,this.lookupMember(cls,'fields',name),LOADED_HEADER_BINDINGS[name]);
       return reference;

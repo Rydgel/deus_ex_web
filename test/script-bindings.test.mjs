@@ -34,8 +34,8 @@ test('two instances share one header binding and read their own native objects',
   assert.equal(b.nativeObject.flags, 2);
 });
 
-test('loaded header bindings read the instance\'s reference and resource and refuse writes', () => {
-  const resource = {outer: {object: {name: 'pkg'}}}, i = instance(undefined, {loadedReference: {name: 'ConEvent0'}, loadedResource: resource});
+test('loaded header bindings read the instance\'s receiver and resource and refuse writes', () => {
+  const resource = {outer: {object: {name: 'pkg'}}}, i = instance(undefined, {receiver: {name: 'ConEvent0'}, loadedResource: resource});
   assert.equal(LOADED_HEADER_BINDINGS.Name.get(i), 'ConEvent0');
   assert.equal(LOADED_HEADER_BINDINGS.Class.get(i), i.cls.record);
   assert.equal(LOADED_HEADER_BINDINGS.Outer.get(i), resource.outer.object);

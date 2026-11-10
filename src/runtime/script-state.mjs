@@ -33,13 +33,51 @@ function probeWordsOf(words){
   return set;
 }
 
+// What a runtime's states share: its services and whether a frame's locals are a Map. One object for each (services, mapLocals) pair,
+// not two fields in every state.
+const configs = new WeakMap();
+function configOf(services, mapLocals) {
+  if (services === null || typeof services !== 'object') return Object.freeze({services, localsAreMap: Boolean(mapLocals)});
+  let pair = configs.get(services);
+  if (pair === undefined) configs.set(services, pair = [null, null]);
+  const at = mapLocals ? 1 : 0;
+  return pair[at] ??= Object.freeze({services, localsAreMap: Boolean(mapLocals)});
+}
+// A state that runs code has an execution, the node it runs and its locals; the others (most objects never run a state, 166 of the
+// Island's 12,000 do) have none of the three. The two booleans of a state change are two bits of one word.
+class StateFrame {
+  constructor() { this.execution = null; this.codeNode = null; this.localValues = null; }
+}
+const ENDING = 1, CHANGED = 2;
+
 export class ScriptState {
   /** `mapLocals`: the frame's locals are a Map (the script runtime's objects), else an object. */
   constructor(instance, services = {}, mapLocals = false) {
-    this.instance=instance;this.services=services;this.stateNode=null;
-    this.execution=null;this.codeNode=null;this.latentAction=0;this.localValues=null;this.localsAreMap=mapLocals;
-    this.probeMask=[0,0];this.endingState=false;this.changedState=false;
+    this.instance=instance;this.config=configOf(services,mapLocals);this.stateNode=null;
+    this.frame=null;this.latentAction=0;this.flags=0;
+    this.probeMask=[0,0];
   }
+  get services() { return this.config.services; }
+  get localsAreMap() { return this.config.localsAreMap; }
+  get execution() { return this.frame===null?null:this.frame.execution; }
+  set execution(value) {
+    if (this.frame === null) { if (value === null) return; this.frame = new StateFrame(); }
+    this.frame.execution = value;
+  }
+  get codeNode() { return this.frame===null?null:this.frame.codeNode; }
+  set codeNode(value) {
+    if (this.frame === null) { if (value === null) return; this.frame = new StateFrame(); }
+    this.frame.codeNode = value;
+  }
+  get localValues() { return this.frame===null?null:this.frame.localValues; }
+  set localValues(value) {
+    if (this.frame === null) { if (value === null) return; this.frame = new StateFrame(); }
+    this.frame.localValues = value;
+  }
+  get endingState() { return (this.flags&ENDING)!==0; }
+  set endingState(value) { this.flags=value?this.flags|ENDING:this.flags&~ENDING; }
+  get changedState() { return (this.flags&CHANGED)!==0; }
+  set changedState(value) { this.flags=value?this.flags|CHANGED:this.flags&~CHANGED; }
   /** The frame's locals, made when first asked for: most objects never run a state. */
   get locals() { return this.localValues??=this.localsAreMap?new Map():{}; }
   set locals(value) { this.localValues=value; }

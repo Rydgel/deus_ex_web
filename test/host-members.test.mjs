@@ -69,7 +69,8 @@ function logImage(instance, log) {
       return (...args) => { log.push([String(prop), args[0] - base, ...args.slice(1)]); return value.apply(target, args); };
     }});
   }});
-  instance.arena = wrapper;
+  // (the arena is the instance class's: an own property of this instance takes its place)
+  Object.defineProperty(instance, 'arena', {value: wrapper, writable: true, configurable: true});
 }
 
 const describe = value => {
