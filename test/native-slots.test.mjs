@@ -81,7 +81,7 @@ test('NativeSlots keeps int32 words in a typed array and every other value exact
   // every value in its own slot, first written as an int, then rewritten through the whole list (an int slot moves to the elements on the
   // first value that is not an int32 and stays there)
   for (let at = 0; at < 40; at++) slots.set(at * 4, at, 4);
-  assert.ok(slots.ints instanceof Int32Array);
+  assert.ok(slots.intWords instanceof Int32Array);
   for (const value of values) {
     for (let at = 0; at < 40; at++) {
       slots.set(at * 4, value, at % 2 ? 4 : 2);
@@ -99,7 +99,7 @@ test('NativeSlots keeps int32 words in a typed array and every other value exact
   const seen = [];
   next.forEach((value, offset) => seen.push([offset, value]));
   assert.deepEqual(seen, order);
-  assert.ok(next.ints.length >= 16 && next.size === 24);
+  assert.ok(next.intRoom >= 16 && next.size === 24);
   // two stores written alike share a shape; one that moved a slot has another
   const a = new NativeSlots(), b = new NativeSlots(), c = new NativeSlots();
   for (const store of [a, b, c]) { store.set(0, 1, 4); store.set(4, null, 4); store.set(8, 3, 4); }
@@ -145,4 +145,32 @@ test('OffsetMap answers as the Map it stands for', () => {
   const live = new OffsetMap([[0, 1]]), walked = [];
   for (const [offset] of live) { walked.push(offset); if (offset < 12) live.set(offset + 4, 0); }
   assert.deepEqual(walked, [0, 4, 8, 12]);
+});
+
+test('stores sharing an int chunk keep their own words while they grow in turn, past the chunk and the own-array size', () => {
+  const stores = Array.from({length: 60}, () => new NativeSlots()), maps = Array.from({length: 60}, () => new OffsetMap());
+  const model = stores.map(() => new Map());
+  const wordOf = (which, slot) => (which * 7919 + slot * 104729) % 4294967296 - 2147483648;
+  // a few stores grow to thousands of slots (their own array), the others stay small (blocks of the shared chunks); they grow in turn
+  for (let slot = 0; slot < 3000; slot++) for (let which = 0; which < stores.length; which++) {
+    if (slot >= (which % 20 === 0 ? 3000 : 20 + which)) continue;
+    const offset = slot * 4, value = wordOf(which, slot);
+    stores[which].set(offset, value, 4);
+    maps[which].set(offset, value);
+    model[which].set(offset, value);
+    if (slot % 331 === 0) for (const [at, expected] of model[which]) {
+      assert.equal(stores[which].value(at), expected);
+      assert.equal(maps[which].get(at), expected);
+    }
+  }
+  for (let which = 0; which < stores.length; which++) {
+    assert.equal(stores[which].size, model[which].size);
+    for (const [offset, expected] of model[which]) {
+      assert.equal(stores[which].value(offset), expected);
+      assert.equal(maps[which].get(offset), expected);
+    }
+    assert.deepEqual([...maps[which]], [...model[which]]);
+  }
+  assert.ok(stores[0].intRoom >= 1024 && stores[1].intRoom >= 16 && stores[1].intRoom < 1024);
+  assert.equal(stores[0].intBase, 0);   // a block this large has an array of its own
 });

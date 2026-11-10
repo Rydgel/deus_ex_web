@@ -176,15 +176,29 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // address -> record: an expanded script image holds its object operands as their records' addresses (expandScriptExpression's
   // resolveObject); the collector reads them back (recordAtAddress).
   // The synthetic addresses (0x70000000 + 0x40 a record) are heap numbers in the browser, and as Map keys each one is a number of its
-  // own: they are keyed by their ordinal (a negative Smi, clear of the native addresses of the registered classes).
+  // own: a record that has one is the element of its ordinal in an array (one value slot, where a Map entry is a key, a value and a
+  // chain), and the other addresses (the native addresses of the registered classes) stay Map keys.
   const SYNTHETIC_BASE = 0x70000000;
-  const addressKey = address => typeof address === 'number' && address >= SYNTHETIC_BASE && address <= 0xffffffff &&
-    ((address - SYNTHETIC_BASE) & 63) === 0 ? -1 - ((address - SYNTHETIC_BASE) >>> 6) : address;
+  const syntheticOrdinal = address => typeof address === 'number' && address >= SYNTHETIC_BASE && address <= 0xffffffff &&
+    ((address - SYNTHETIC_BASE) & 63) === 0 ? (address - SYNTHETIC_BASE) >>> 6 : -1;
+  const syntheticRecords = [];
   const recordsOfAddress = new Map();
   const recordsByAddress = {
-    get: address => recordsOfAddress.get(addressKey(address)),
-    set: (address, record) => recordsOfAddress.set(addressKey(address), record),
-    delete: address => recordsOfAddress.delete(addressKey(address)),
+    get: address => {
+      const ordinal = syntheticOrdinal(address);
+      return ordinal >= 0 ? syntheticRecords[ordinal] : recordsOfAddress.get(address);
+    },
+    set: (address, record) => {
+      const ordinal = syntheticOrdinal(address);
+      if (ordinal >= 0) syntheticRecords[ordinal] = record; else recordsOfAddress.set(address, record);
+    },
+    delete: address => {
+      const ordinal = syntheticOrdinal(address);
+      if (ordinal < 0) return recordsOfAddress.delete(address);
+      const had = syntheticRecords[ordinal] !== undefined;
+      syntheticRecords[ordinal] = undefined;
+      return had;
+    },
   };
   let loadedObjects = [];       // the GObjLoaded array (0x1029e638); see suspendLoadQueue
   const events = captureEvents ? [] : {length: 0, push() {}};

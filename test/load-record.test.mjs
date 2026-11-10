@@ -43,3 +43,17 @@ test('NativeSlots.forEach visits a slot added during the walk, and a width chang
   slots.forEach((value, offset) => order.push(offset));
   assert.deepEqual(order, [0x10, 0x14, 0x18]);
 });
+
+test('a LoadRecord\'s named fields and the store\'s own fields are different properties', () => {
+  // `base` is the record's superclass link; the store's int block is intWords/intBase/intRoom (a store field named like a record field
+  // would be overwritten by the record's constructor, which runs after the store's)
+  const record = new LoadRecord('A', 'Class');
+  assert.ok(record.intWords instanceof Int32Array);
+  assert.deepEqual([record.intBase, record.intRoom, record.base], [0, 0, null]);
+  for (let at = 0; at < 40; at++) record.set(0x10 + at * 4, at === 3 ? null : at * 3 - 7, 4);   // grows past the first block
+  record.base = {};
+  assert.equal(record.value(0x10 + 5 * 4), 8);
+  assert.equal(record.value(0x10 + 3 * 4), null);
+  assert.equal(record.value(0x10 + 39 * 4), 110);
+  assert.ok(record.intRoom >= 32 && typeof record.base === 'object');
+});
