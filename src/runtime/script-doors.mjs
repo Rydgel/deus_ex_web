@@ -536,6 +536,9 @@ export async function createScriptDoors({
     }
     return count === conversationList.length ? conversationList : conversationList = actors.filter(Boolean);
   };
+  // The array this one is made from, for BindEvents' class passes in the Rust core (ScriptRuntime.bindEventScan): the scan walks it
+  // with its empty slots, in the same order.
+  conversationActors.source = () => level.actors;
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true, process,
     conversationObjects:conversationActors,boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });

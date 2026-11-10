@@ -180,3 +180,38 @@ null would not be original-backed behavior.
 
 The Num0 fallback at1001e1cc is zero-filled native data. It is empty text;
 the literal BindName `None` remains nonempty and reaches event callbacks.
+
+## Host fast paths in Play (BIND_EVENTS, 2026-11-10)
+
+`Conversation.BindEvents` runs once per conversation start and visits every actor of the level three times
+([the Firefox 60 fps plan](firefox-60fps-plan.md#bindevents-in-the-20-s-tick-2026-11-10) has the case that made it a frame: MeetPaul
+on UNATCO Island, 2,638 actors, 54 events, 90 candidates with a BindName). The recovered bodies above are unchanged; what the
+host does around them is cheaper, and each part keeps the reference reachable. `BIND_EVENTS` (`DEUS_EX_BIND_EVENTS`,
+`?bindEvents=`): `rust` (default), `js` (the reference, which is what the sections above describe) or `verify`.
+
+* **The class passes** (`scannedPass` in script-conversation-events.mjs). The reference passes `reference` and `isA` over every
+  GObjObjects entry, three times. `rust` asks the Rust core's CycleActors scan (script-vm-render.mjs `cycleScan`, render.rs
+  `cycle_scan` over the image's class rows) for the next object of the class in the level's actor array and runs
+  BindEventsToActor on it, as the native iterator's helper at `0x10010a00` stops at each. The entries the scan passes cost no
+  script or host read; an entry the image has no class row for (kind 2) is tested by the reference's `isA`. The reference reloads
+  GObjObjects after each candidate it binds; the scan continues over the same array while the array, its length and the actors epoch
+  (base-epoch.mjs) are as the pass began, and hands the pass back to the reference pass at the index the reload would reach when
+  a binding changed them (SpawnActor or DestroyActor from a BindActor body: none does today). The provider of the list must say it is
+  the level's actors without the empty slots (script-doors.mjs `conversationActors.source`); another provider keeps the
+  reference pass. `verify` runs the reference's own selection beside every scan step and throws at the first stop that differs.
+* **The scope of one call** (script-conversation-bind-scope.mjs). Within a call the event bodies read the same name fields in every
+  pair of candidate and event, ConEventTransferObject::BindActor and ConEventCheckObject::BindActor load the same item class for
+  every candidate (StaticLoadObject of the event's `objectName` in the DeusEx package, `0x1000bc40` and `0x10007bf0`, whichever
+  actor is the candidate), and the speech, action and transfer bodies fold both names of every comparison. The scope keeps, for the
+  call only, a string, boolean or number read for an object and field until `write` stores that field; the folded text of a name;
+  the object a StaticLoadObject request returned (the same class, outer, name, file name, flags and sandbox: the later load finds
+  the export's `_Object` the first one created, or misses again and reads StaticFindObject); the event chain walked by the first
+  candidate that reaches it (`walkRecordedChain`: Conversation.eventList and ConEvent.nextEvent are not written by any body);
+  and the route of each event's class (the choice `bindEventDispatch` makes from the class key, with the inherited `return false`
+  bodies validated once). Nothing outlives `bindEventsNative`. `verify` answers from the scope and also reads, loads, folds, walks
+  and dispatches for real, and throws when they differ.
+* **The report** is not built when the VM native runs in `rust` (`collect`): the native discards it, and BIND_EVENTS=js or verify keep it.
+  `bindEventsNative` called directly (the validators) always builds it.
+
+What is not changed: the order of the three passes, BindActor's arguments and results, the `conBoundActors` writes and the boundary
+errors; `BindActorEvents` (2053) takes the reference path always (one actor, no repetition to remove).

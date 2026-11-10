@@ -1045,6 +1045,21 @@ light atlas pages; the kernel keeps, per light map, a block with its contributio
 (lists that live a frame come from the batch's scratch). No statics (the reserved region is nearly full); everything is in `alloc` blocks.
 `?movingCompose=js|verify` and `MOVING_COMPOSE=` keep the JavaScript bodies as the reference.
 
+### November 10: BindEvents' class passes over the image's class rows (implemented)
+
+`Conversation.BindEvents` (native 2052, started by every conversation: DL_StartGame at about 5 s and MeetPaul at about 20 s of the UNATCO
+Island roam) passes every actor of the level three times, `reference` and `isA` on each, and the host list it walked was filtered anew
+after each candidate. The three passes now stop at each object of the class through render.rs `cycle_scan` (the CycleActors scan, the
+class rows `class_entry` and `chain_has` read; script-vm-render.mjs `cycleScan`), with no new Rust: the walk is
+script-conversation-events.mjs `scannedPass`, over `level.actors` (`conversationActors.source` in script-doors.mjs says the list the
+provider filters is that array). An entry the table has no class row for (kind 2) goes to the reference's `isA`; a change of the array, its
+length or the actors epoch while a candidate binds hands the pass back to the reference pass at the index its reload would reach.
+`BIND_EVENTS=rust|js|verify` (`?bindEvents=`; the reference passes under `js`; `verify` runs the reference's selection beside every stop and
+throws on a difference). The rest of the call is JavaScript, kept for the call only in script-conversation-bind-scope.mjs
+([the conversation events](script-conversation-events.md#host-fast-paths-in-play-bind_events-2026-11-10),
+[Firefox 60 fps plan](firefox-60fps-plan.md#bindevents-in-the-20-s-tick-2026-11-10)): the strings are not in the image, so the names, the
+StaticLoadObject of the event's item class and the event chain are read or loaded once per call instead of once per pair of candidate and event.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
