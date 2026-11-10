@@ -3591,6 +3591,53 @@ roam (`hitch-run.mjs --browser firefox`, `gecko-gc-windows.mjs`) was not run: 2.
 210 ms, which one roam cannot tell from the spread between roams (the table above). The goal of about half the work (1.0 M cells) is not
 reachable from these families: together they are 277 k of the 1.93 M cells, and 46 k are cut.
 
+#### Both cuts against the base, interleaved (2026-11-10)
+
+Four interleaved pairs of 100 s Firefox inline Island roams, each with a markers-only profile, on a quiet host: the base 036d848a (the
+tools of this section, Play as at c5809462) from its own checkout against master b52cb98f (both cuts: 1.93 M to 1.55 M cells); the order
+reversed in every second pair. Runs and scripts in `.cache/perf/gc-pauses/ab` (`run-ab.sh`, `summary.mjs`).
+
+| Run | Page p50 | Gaps over 50 ms (a minute) | `FULL_GC_TIMER`: wall, work (mark), extended slices (ms) | `CC_FINISHED`: wall, work (mark), extended (ms) |
+| --- | ---: | --- | --- | --- |
+| base 1 | 12.2 | 3 (1.9) | 2,128 ms, 143 (107), 4 (86) | 2,037 ms, 117 (104), 6 (68) |
+| base 2 | 12.3 | 4 (2.5) | 1,999 ms, 149 (109), 6 (84) | 2,073 ms, 116 (105), 4 (68) |
+| base 3 | 11.0 | 2 (1.2) | 1,940 ms, 152 (113), 5 (93) | 1,774 ms, 133 (121), 3 (12) |
+| base 4 | 10.9 | 1 (0.6) | 1,904 ms, 150 (111), 4 (69) | 1,465 ms, 132 (119), 0 |
+| master 1 | 12.1 | 4 (2.5) | 2,470 ms, 186 (108), 4 (120) | 1,957 ms, 110 (97), 4 (52) |
+| master 2 | 12.0 | 3 (1.9) | 2,157 ms, 187 (155), 5 (133) | 2,024 ms, 123 (96), 4 (65) |
+| master 3 | 12.1 | 6 (3.7) | 2,042 ms, 149 (97), 4 (90) | 1,819 ms, 110 (97), 5 (58) |
+| master 4 | 12.0 | 4 (2.5) | 1,928 ms, 144 (106), 6 (84) | 1,955 ms, 111 (97), 3 (42) |
+
+* **Marking.** `CC_FINISHED` marks 96 to 97 ms against 104 to 121 (-8 to -20%); `FULL_GC_TIMER` 97 to 108 ms against 107 to 113, with one
+  run at 155 (-3% by the medians). The 20% of cells cut is not 20% of the marking. The totals spread more than the marking: master 1's
+  full collection waited 40 ms for the background sweeping thread (`wait_background_thread`).
+* **Gaps.** Inside the collectors' window (42 to 51 s) the base has 2, 3, 1 and 0 gaps over 50 ms and master 3, 2, 4 and 3, the longest
+  83 ms (master 1 and 3). Elsewhere both arms have the gap at 26 to 29 s and, in two base runs, MeetPaul's at 20.5 s. No improvement is
+  measurable at this sample.
+* **Frames.** The phases are the same in both arms except base 3 and 4, whose level tick ran 5.3 ms against 6.3 to 6.6 (a simulation
+  phase neither cut touches: run-to-run spread). Those two runs got the most idle slices (`CC_FINISHED` 32 and 29 against 11 to 19) and
+  the fewest gaps; base 4's `CC_FINISHED` finished at 1.47 s without an extended slice. The frame's position against the vsync moves the
+  result more than the heap cut did.
+* **The marking earlier in this section** (161 and 123 ms on the same base tree) was measured while the two workers ran their censuses
+  and validators beside it: SpiderMonkey marks in parallel on helper threads, and a busy host makes it slower. Only interleaved runs on a
+  quiet host compare.
+
+**What marking visits.** SpiderMonkey's marker visits every value slot of a marked object (fixed slots, its slots and elements buffers;
+a double in an array is a boxed value it still visits), so the time follows slots more than objects: Gecko's report has 34 MB of
+elements and 19 MB of slots buffers (about 6.6 M slots) beside the objects' own fixed slots. `heap-families.mjs --slots` estimates the
+slots per family from the Chromium snapshot of master (V8's element and property stores, and each object's named fields): 13.9 M on
+the Island page, with no family over 9%. The largest (thousands): `packageObjects.loadRecord` 1,156 (the load records' native slot
+words), the script runtime's actor hosts (`sim.sprites`) 624, `LoadEdges.records` 569, `npcPreview.draw` 430, the package identities
+408, `ScriptRuntime.instances` 403, `actorSim` 369, `map.actors` 360, the function trees 356, the property metadata 351, `map.model` 343,
+`linkedClasses.fields` 331 and `.defaults` 323, `npcPreview.root` 304, `linkedOperands` 253. The first ten are 36% of the slots, most of
+them the script process's object model.
+
+**Reading.** Half the marking is not in a few page families: it is spread over the script process's objects (load records, identities,
+instances, linked classes, function trees, metadata) and the page's mesh and actor state. Halving it means moving that object model
+out of JavaScript objects (the Rust core's object image in Wasm memory, which the collector does not trace) rather than more cuts of
+this kind. The two cuts stay: they are output-identical, the light-map one takes 13 MB off the page and the closure one makes the actor
+step a little cheaper; neither changes the row.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

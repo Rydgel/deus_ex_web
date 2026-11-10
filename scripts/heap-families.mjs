@@ -18,6 +18,9 @@
  *     strings, symbols and BigInts; V8's own element and property arrays, heap numbers, shapes, code and hidden nodes have no
  *     cell of their own there (NaN-boxed doubles, slots and elements in the object or its buffer), so the count stands in for
  *     what Firefox's collector marks, docs/firefox-60fps-plan.md "The collector's window")
+ *     [--slots] (sort by, and print, the value slots SpiderMonkey's marking would visit for the family: the words of V8's element and
+ *     property stores (FixedArray, FixedDoubleArray: a double array's elements are boxed values SpiderMonkey's marker still visits one
+ *     by one) and each object's named fields; the marking time follows slots visited more than objects)
  */
 import {openSync,readSync,fstatSync} from 'node:fs';
 const args=process.argv.slice(2).filter((a,i,all)=>!a.startsWith('--')&&!['--inside','--sample'].includes(all[i-1]));
@@ -65,7 +68,8 @@ while(qh<qt){const n=order[qh++];
       let g=extend.get(ek);if(g===undefined){g=keyOf(f===0?name:`${keys[f]}.${name}`);extend.set(ek,g);}
       f=g;d++;}
     fam[to]=f;named[to]=d;order[qt++]=to;}}
-const F=keys.length,objs=new Float64Array(F),bytes=new Float64Array(F),native=new Float64Array(F),outE=new Float64Array(F),nums=new Float64Array(F),strs=new Float64Array(F),sm=new Float64Array(F);
+const F=keys.length,objs=new Float64Array(F),bytes=new Float64Array(F),native=new Float64Array(F),outE=new Float64Array(F),nums=new Float64Array(F),strs=new Float64Array(F),sm=new Float64Array(F),slots=new Float64Array(F);
+const propertyEdge=E.property,contextEdge=E.context;let totalSlots=0;
 const smTypes=new Set(['object','closure','string','concatenated string','sliced string','regexp','symbol','bigint'].map(t=>T[t]).filter(t=>t!==undefined));
 let totalSm=0;
 let totalObjs=0,totalBytes=0,totalEdges=0;
@@ -76,14 +80,19 @@ for(let n=0;n<N;n++){const f=fam[n];if(f<0)continue;const t=nodes[n*nf],s=nodes[
   if(t===T.native&&/ArrayBufferData|ExternalStringData/.test(strOf(nodes[n*nf+1]))){native[f]+=s;continue;}
   objs[f]++;bytes[f]+=s;outE[f]+=nodes[n*nf+4];totalObjs++;totalBytes+=s;totalEdges+=nodes[n*nf+4];
   if(t===T.number)nums[f]++;else if(t===T.string||t===T['concatenated string']||t===T['sliced string'])strs[f]++;
-  if(smTypes.has(t)){sm[f]++;totalSm++;}}
+  if(smTypes.has(t)){sm[f]++;totalSm++;}
+  // value slots: a backing store's words (V8 'array' nodes: elements, property arrays, contexts' tables), an object's named fields
+  let words=0;
+  if(t===T.array)words=Math.max(0,(s-16)/8);
+  else if(t===T.object||t===T.closure)for(let e=first[n];e<first[n+1];e++){const et=edges[e*ef];if(et===propertyEdge||et===contextEdge)words++;}
+  slots[f]+=words;totalSlots+=words;}
 console.log(`${file.split('/').pop()}: ${(totalObjs/1e6).toFixed(2)} M objects (${(synthetic/1e6).toFixed(2)} M number-value strings left out), ${(totalEdges/1e6).toFixed(1)} M edges, ${(totalBytes/1048576).toFixed(0)} MB JS heap; families at depth ${depth}: ${F}`);
-const bySm=process.argv.includes('--sm');
-const rows=[...Array(F).keys()].sort((a,b)=>bySm?sm[b]-sm[a]:objs[b]-objs[a]).slice(0,top);
-if(bySm)console.log(`SpiderMonkey-like cells: ${(totalSm/1e6).toFixed(2)} M`);
-console.log(`   objects    edges    MB   numbers  strings  native MB  ${bySm?'   SM cells  ':''}family`);
+const bySm=process.argv.includes('--sm'),bySlots=process.argv.includes('--slots');
+const rows=[...Array(F).keys()].sort((a,b)=>bySlots?slots[b]-slots[a]:bySm?sm[b]-sm[a]:objs[b]-objs[a]).slice(0,top);
+if(bySm||bySlots)console.log(`SpiderMonkey-like cells: ${(totalSm/1e6).toFixed(2)} M; value slots: ${(totalSlots/1e6).toFixed(2)} M`);
+console.log(`   objects    edges    MB   numbers  strings  native MB  ${bySm||bySlots?'   SM cells     slots  ':''}family`);
 const heads=process.argv.includes('--heads');
-for(const f of rows){const h=head[f];if(heads&&h>=0){const t=nodes[h*nf];console.log(`           head: ${nodeTypes[t]} ${String(strOf(nodes[h*nf+1])).slice(0,50)} self ${nodes[h*nf+3]} edges ${nodes[h*nf+4]}`);}console.log(`${(objs[f]/1e3).toFixed(0).padStart(9)}k ${(outE[f]/1e6).toFixed(2).padStart(7)}M ${(bytes[f]/1048576).toFixed(1).padStart(6)} ${(nums[f]/1e3).toFixed(0).padStart(8)}k ${(strs[f]/1e3).toFixed(0).padStart(7)}k ${(native[f]/1048576).toFixed(1).padStart(9)}  ${bySm?`${(sm[f]/1e3).toFixed(0).padStart(9)}k  `:''}${keys[f].slice(0,140)}`);}
+for(const f of rows){const h=head[f];if(heads&&h>=0){const t=nodes[h*nf];console.log(`           head: ${nodeTypes[t]} ${String(strOf(nodes[h*nf+1])).slice(0,50)} self ${nodes[h*nf+3]} edges ${nodes[h*nf+4]}`);}console.log(`${(objs[f]/1e3).toFixed(0).padStart(9)}k ${(outE[f]/1e6).toFixed(2).padStart(7)}M ${(bytes[f]/1048576).toFixed(1).padStart(6)} ${(nums[f]/1e3).toFixed(0).padStart(8)}k ${(strs[f]/1e3).toFixed(0).padStart(7)}k ${(native[f]/1048576).toFixed(1).padStart(9)}  ${bySm||bySlots?`${(sm[f]/1e3).toFixed(0).padStart(9)}k ${(slots[f]/1e3).toFixed(0).padStart(8)}k  `:''}${keys[f].slice(0,140)}`);}
 // --inside KEY[,KEY...]: the (type, name) of the objects in each family KEY, and the edges between the family's objects. Heap
 // numbers' value strings (the snapshot's own) are left out.
 const ii=process.argv.indexOf('--inside');
