@@ -66,6 +66,12 @@ The user took each recommendation below. The alternatives are kept for the recor
 
    **2026-11-08:** the bound now holds on Linux: four 100 s Island roams on master 8e34e66a drew no gap over 100 ms and 1.2 to 1.8
    over 50 ms a minute (row 7.2.4, PARTIAL until the Mac runs it; [Firefox 60 fps plan](firefox-60fps-plan.md#row-724-on-master-2026-11-08)).
+
+   **2026-11-10:** the user parked the row again ("do both": park 7.2.4 and start the object-model migration). The collectors' window
+   (two major collections at about 40 and 47 s that run past 1.5 s, where SpiderMonkey forces long uninterruptible slices) is traced to
+   Gecko's idle-slice rule and SpiderMonkey's budget rule ([the collector's window](firefox-60fps-plan.md#the-collectors-window-2026-11-10)).
+   Two heap cuts took 3 to 20% off the marking and no gap; halving it means the script process's object model out of JavaScript
+   objects, which is under way as its own work ([object model plan](object-model-plan.md)). The row stays FAIL meanwhile.
 4. **D4, loading time.** Map loading was judged good enough on 2026-10-27. The recommendation is to bound today's
    measurements, with room for noise:
    * A travel arrival reaches its first frame within 5 s in Chrome (the Island measured 4.6 s, Training 1.5 s), and within
@@ -309,6 +315,8 @@ Causes: **stale**, the spec predates a change in Play and fails in every browser
    answering is now told by its posts' silence (7.9.2), a pixel ratio change now resizes the canvas (7.6.3), and the hidden tab is checked
    with the hide modelled (7.6.4). What headless browsers cannot produce stays open in those rows: a JavaScript heap out of memory in
    Play, a real ratio change, a real hidden tab and sleep.
+   The checks a person does in a real browser for those rows and for 7.5.1, 7.6.1, 7.6.2, 7.8.1 to 7.8.3 are listed in
+   [Stage 7 checks by hand](stage-7-hand-checks.md) (2026-11-10).
 4. **A measurement pass on the Mac.** The frame-time set, the load census and the memory budget in every browser (7.2,
    7.3, 7.4.2) give each row its first status on the reference machine. Done 2026-11-08/09 ([Mac pass](mac-pass-2026-11-08.md)):
    7.2.1, 7.2.3, 7.2.5, 7.3.2 and 7.3.3 pass; 7.2.2 passes in Chrome and Firefox (Safari, then left, was dropped on 2026-11-10); 7.2.4 fails (Firefox's Island
