@@ -19,7 +19,7 @@ export class LoadRecord extends NativeSlots {
     this.objectFlags = null;
     this.base = null;
     this.kind = kind;
-    this.instanceValues = null; // a resource's instance memory above +0x28 (a Map), made where one is constructed or first written
+    this.instanceValues = null; // a resource's instance memory above +0x28 (an OffsetMap), made where one is constructed or first written
     this.hashBuckets = null;
     this.farrays = null;
     this.script = null;
