@@ -189,6 +189,50 @@ its own textures only (0.07 ms in Wan Chai's market, 0.55 ms in the Chateau). Th
 validate-fire-texture-play, -fire-texture-rust, -native-fire-texture (1178 cases, no mismatch), -particles-play,
 -sprite-tiles-play, -sprite-tiles-mirror-play, -actor-mesh-scene, -travel-play.
 
+## The ten-minute session (row 7.1: a browser passes with it)
+
+Row 7.1 of the [Stage 7 criteria](stage-7-exit-criteria.md#71-supported-browsers-d1) asks of each supported browser, besides the
+suite and the browser validators, "a ten-minute session without a runtime error ... from the original start, loads Training, makes a
+map change, saves, loads and plays sound". `node scripts/session-hour.mjs` is not that session (it opens its maps from the debugging
+page); `node scripts/session-ten.mjs [--browser chromium|firefox|webkit] [--minutes 10] [--url URL] [--out file.json]` is. One
+browser, one page, the default simulation mode (worker in Chromium and WebKit, inline in Firefox; the first step checks which), about
+ten minutes of wall time (it starts its own dev server for the tree unless given `--url`). Chromium runs with `--mute-audio`
+(its full headless build, which grants the pointer lock), Firefox with `media.volume_scale` 0.0; muted output still renders, so the
+sound is measured as the worklet's quanta and Galaxy's voice batches, as `browser-tests/audio-resume.spec.mjs` does. It passes only if
+every step below happens and no runtime error (`status().runtimeError`), page error or console error occurs; each step prints a
+verdict line, `<out>` holds the record (default `.cache/session-ten/<browser>.json`, a screenshot beside it for each failed step).
+
+1. **start**: the page without `?debug=1` reaches the logo map DX in Play.
+2. **pointer-lock**, **logo-music**: the first click takes the pointer (not the screen, no binding reached) and starts the music: the
+   AudioContext runs (it was `uninitialized` before), the worklet opens the library, the song plays, about 344 quanta a second.
+3. **training-menu**: Esc opens the original MenuMain; the menu's cursor, driven by relative motion with the portable driver
+   (`browser-tests/menu-cursor.mjs`), clicks Training; 00_Training loads. **training-music**: its song plays.
+4. **training-walk**, **training-look**, **training-sound**: the movement keys walk the player (W, D, A, a jump); the mouse turns the
+   view and so does the original's turn key (C: `DefUser.ini`'s arrows strafe); footsteps start effect voices that the worklet applies.
+5. **save-game**, **load-game**: Esc, Save Game (the button is insensitive while a DataLink plays, `MenuMain.UpdateButtonStatus`, so
+   the tool closes the menu and tries again every few seconds), Save: `Save0001` in the browser's storage; the player walks away; Esc,
+   Load Game, the slot's row, Load: the player stands where the save left it.
+6. **map-change**: a travel by the console's `open 01_NYC_UNATCOIsland` (the engine's command chain, as `session-hour.mjs` travels),
+   not Training's own exit. **island-sound**: the new map's song plays and footsteps make voices again.
+7. **quick-save-load**: the Quick Save key (pressed until a DataLink lets the game take it), a walk away, the Quick Load key and the
+   original's confirm box answered Yes with the menu cursor: the player stands where the save left it.
+8. **session-length**: placed walks and looks (`placeProbe`, as `session-hour.mjs`) until the wall time reaches `--minutes`, the
+   runtime error checked every second and the frame counter advancing; **final-sound**: the music still plays, the worklet still
+   renders and reports no fault or error; **no-errors**.
+
+Run on the Linux host, 2026-11-10 (headless, the tree's dev server, this tool's first commit): **Chromium (worker mode) 10.0 minutes,
+all 16 verdict lines PASS, no runtime, page or console error** (the dev server's 404 for `/favicon.ico` is listed as a note); the
+logo map ready after 5.4 s, Training 5.2 s after the click, the map change to the Island 3.1 s after the command, 342 quanta a second
+on the logo map, 204 830 quanta rendered with no underrun, fault or error at the end. **Firefox (inline mode) 10.0 minutes, all PASS,
+no error and no failed resource load**: the logo map after 9.5 s, Training 6.6 s, the Island 8.7 s, 349 quanta a second, 203 419
+quanta with no underrun. Both saved and loaded back to the saved position (Save Game and Load Game through the Esc menu on Training,
+Quick Save and Quick Load on the Island) and made footsteps on both maps. WebKit does not start on this host (Playwright's Ubuntu
+build wants ICU 74, libxml2.so.2 and flite): the tool reports that and exits with 2, so the WebKit session still needs the Mac.
+
+Playwright's WebKit cannot take every step: headless, it refuses the pointer lock without window focus and a synthetic mouse move
+carries no `movementX` (docs/mac-pass-2026-11-09.md), so `pointer-lock` and `training-look` report that harness limit as a failure and
+the menus run on the free mouse at its own position. Real Safari needs the same session by hand.
+
 ## Not done
 
 * The Mac (the reference machine for the numbers): both warm hours pass on the Linux host only.
