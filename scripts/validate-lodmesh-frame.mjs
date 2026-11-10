@@ -101,8 +101,8 @@ for(const [rowIndex,row] of rows.entries()) {
     BlendAnimSequence:['None','None','None','None'],BlendAnimFrame:[0,0,0,0]}]));
   const cache=createLodMeshFrameCache({allocate:size=>new Uint8Array(size).fill(0x33)});
   const events=[],create=cache.create,flush=cache.flush;
-  cache.create=(key,size)=>{events.push({op:'create',key:String(key),size});return create(key,size);};
-  cache.flush=key=>{events.push({op:'flush',key:String(key)});return flush(key);};
+  cache.create=(key,size)=>{events.push({op:'create',key:String(key),size});return create.call(cache,key,size);};
+  cache.flush=key=>{events.push({op:'flush',key:String(key)});return flush.call(cache,key);};
   for(const [stepIndex,step] of row.spec.steps.entries()) {
     const original=referenceRow.steps[stepIndex],label=`${row.spec.name} ${step.name}`;
     for(const [id,fields] of Object.entries(step.actors))for(const [name,value] of Object.entries(fields))
