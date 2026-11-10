@@ -3441,6 +3441,86 @@ candidates, the page's light-map records first. Not measured: a headed window (t
 Tools: `gecko-gc-windows.mjs` (one line per major collection: wall, work, extended slices), `hitch-run.mjs --gc-markers` (a
 markers-only Gecko profile, no stack sampling), `heap-families.mjs --sm`, `map-memory-census.mjs --keep-reports`.
 
+#### The page's light maps and triangles in compact form (2026-11-10)
+
+The first cut at the two largest families of the table above: the light-map records of `lighting.mjs` and the BSP triangle list. Host
+data layout only; every value is the one it was (the digests below).
+
+**What was cut** (6,960 light-map records on the Island, 190 of them a brush's; about 44 cells a record before):
+
+* `lighting.mjs`: a record is a `LightMapRecord` that holds what is the light map's own (the texels `texels`, the float samples
+  `pixels`, the indices and the zone, `model`, `transform`/`transformNormal`, the mover's pose and header) and makes the rest where it is read,
+  from the model's tables and those indices: `surface`, `lightMap`, `basis` and `uv` (`lightmapBasis`, the last one asked for in a model kept in a
+  one-entry memo, which is what world.mjs's per-vertex `uv` and per-texel `basis.point` ask for), `lightEntries` and `lightRefs` (the model's
+  list for the light map; `invalidate` tests `listsAny` against it without building them), and a level record's `normal`. The brush's
+  records keep them (moving-lights.mjs reads their `surface` and `normal` for every moving light, every frame). A level record is now a
+  record, its `pixels` and its `texels`: three cells.
+* The facet and texel grid (`staticGeometry`: 3 objects and 8 arrays) are built by `refill` and dropped for a level record; `geometryFor`
+  and `gridFor` keep theirs for the records moving lights and the fog pass ask about (`reachRecord` asks every frame).
+* A light map with no animated light has no copy of its base texels (`texels` is `baseTexels`: nothing writes it without `animated`), a
+  shared frozen empty `animated`, and no `animationMemo`.
+* The cache's key is a number (`surfaceIndex * 65536 + zone`) instead of a string per record, and a surface's records are a chain
+  (`nextOfSurface`) instead of an array a surface; `recordsFor` still returns an array, `firstRecordFor` is what world.mjs's per-frame drawn
+  list and moving-lights.mjs's reach walk use.
+* `light-atlas.mjs`: a tile's `bounds` array is a getter on `AtlasTile` (world.mjs reads it once a surface).
+* `main.mjs`: `map.triangles` is released after `createWorld` (nothing else reads it: world.mjs `addModel` is the one reader, and the
+  count is kept in `map.summary.triangles`; no later `createWorld` runs on the same decoded map).
+
+**Measured** (Chromium inline Island, 30 s after the arrival, `map-memory-census.mjs --snapshots 1`, `heap-families.mjs 4 40 --sm`; the
+snapshots were deleted, the family tables are in `.cache/perf/heap-a/{base,a1,a2}-families.txt`):
+
+| | before (c5809462) | after |
+| --- | ---: | ---: |
+| SpiderMonkey-like cells, whole page | 1.93 M | 1.60 M (-17%) |
+| `map.model` | 307 k | 45 k |
+| `map.triangles` | 74 k | 0 |
+| `map.actors` | 33 k | 33 k (not touched) |
+| `world.lightMaps` | 13 k | 11 k |
+| JS heap objects / edges / MB | 3.11 M / 22.1 M / 201 | 2.57 M / 20.4 M / 188 |
+| page JS heap after forced GCs (census) | 199.2 MB | 186.3 MB |
+
+The 45 k left in `map.model` are, per record, the record, its `pixels` and its `texels` (6,770 each) and the 13,557 `ArrayBuffer` objects
+V8 makes for the two typed arrays (SpiderMonkey makes none of its own), so about 31 k SpiderMonkey cells; the atlas tiles (about 7,000) are in their own family.
+
+**Verification.**
+* `scripts/validate-light-map-digest.mjs` (new; `light-map-digests.json` recorded on c5809462 before any change): a SHA-256 of every BSP triangle,
+  of every light-map record in surface order (texels, base texels, float pixels, the surface and light-map values, normal, light lists, facet
+  and grid, `basis` and `uv` sampled at five texels, transforms) and of every attribute array of every mesh `createWorld` makes
+  (positions, normals, uvs, light-map coordinates and bounds, layers), on 01_NYC_UNATCOIsland (6,960 records, 2.74 M texels, 36,803
+  triangles) and 00_Training (5,212 records, 435 animated, 25,674 triangles): identical.
+* `npm test` files for what is touched (lighting, script-light-cache, moving-compose, world-batches, world-visibility, bsp-model, objects,
+  level-queries-world-model, map-property-tags, moving-light-leaf-list, mesh-lighting-view: 40 tests) pass.
+* The validators with `light` in their name (25: static, dynamic, moving, mover, animation (JS and Rust), spatial, leaf, atlas upload,
+  script light cache, TriggerLight, AugLight, mesh lighting, the `-play` ones in the browser's worker mode; 24 passed, 1 skipped:
+  validate-original-light-tables), the world ones (world-batches, world-batch-gpu, world-destroy, native-world-fitting, underworld-panes-play),
+  texel-sphere, scene-matrices, viewer, fog-blocks and the volumetric-fog ones, corona-tiles (and `-play`), bsp-model, page-movers-play: all pass.
+* Play in Chromium on the Island, 25 s roam each (`hitch-run.mjs`): worker mode 2,388 frames, 1,821 drawn, no errors; `?sim=inline` 1,983
+  frames, 1,808 drawn, no errors; the screenshots show the level and its conversation scene. Firefox inline, 100 s (below): 6,150 frames drawn, no errors.
+
+**Firefox's collector** (one roam, inline, Linux host, `hitch-run.mjs --browser firefox --mode roam --seconds 100 --profile --gc-markers`,
+`gecko-gc-windows.mjs`, runs in `.cache/perf/ff`), against the two shipped-configuration roams of the table above (as shipped, and the
+profiled roam of 8e34e66a):
+
+| | `FULL_GC_TIMER` work (mark) | `CC_FINISHED` work (mark) | extended slices |
+| --- | ---: | ---: | --- |
+| before (mean of 2 roams) | 194.3 (150.7) ms | 152.2 (136.2) ms | full 6 and 6, CC 4 and 5 |
+| after (1 roam) | 160.7 (118.0) ms at 40.5 s | 129.2 (114.8) ms at 47.0 s | full 5 (100.5 ms, first at 1,685 ms), CC 5 (77.6 ms, 1,683 ms) |
+
+The work fell by about the share of the cells (17% and 15%), and the roam had 6 gaps over 50 ms (3.5 a minute) with the longest at 66 ms,
+but the collections are still 130 to 160 ms of work, over the 100 ms this section asked for, and the extended slices still start at about
+1.7 s and are as long as before: **the window is not closed**. One roam against two is inside the spread of the table's other rows (138 to
+206 ms), so the cells-to-work ratio is an indication, not a measurement; no interleaved A/B was run.
+
+**Left.** The families of the table not touched here are the larger part: `simHost.actorSim` 84 k and the NPC and sprite families
+(another change), `NameSpelling.spellings` 79 k strings, the script process's `packageObjects` families (about 280 k together). In the
+light-map family: the typed arrays (`pixels`, `texels`: one cell each a record, which pooling into one buffer per level with views made on
+demand would remove, at the price of a view per access in the atlas, moving lights and fog), the atlas tile (one object a record), the
+`staticGeometry` (11 cells) each record moving lights reach keeps, a `THREE.Sphere` (2 cells) for each record world.mjs `inFrustum` tests
+(Play passes the drawn set, so it is not made there), and the `fogGrid` closure of a fog-zone record. `map.actors` (33 k: each actor's
+`values` and its saved `stack`) is read by the script attach and kept by the host accessors for the life of the level, so releasing it was
+not clearly safe and was left; `map.level.reachSpecs` (13 k) is a decoded copy beside the `playerScene.level.reachSpecs` game.mjs makes
+from it, a candidate for the simulation side. Frame times were not A/B measured: this changes allocation at load and the cost of a refill, not a per-frame body.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

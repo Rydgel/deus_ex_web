@@ -12,6 +12,19 @@ const LIGHT_DEBUG = typeof location !== 'undefined' ? new URLSearchParams(locati
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 /** `update` copies a byte source a word per texel, unless ?movingCompose=js (MOVING_COMPOSE=js in Node) keeps the byte loop as the reference. */
 const wordWrites = () => LITTLE_ENDIAN && ((typeof process !== 'undefined' && process.env?.MOVING_COMPOSE) || globalThis.DEUS_EX_MOVING_COMPOSE) !== 'js';
+/** One light map's place in the atlas. `bounds` (the sample bounds that keep a tile from bleeding into its neighbours) is made where it is
+ * read, a vertex at a time as world.mjs builds the level's geometry: an array kept for each of the Island's 7,000 tiles is a cell the
+ * collector marks in every major collection (docs/firefox-60fps-plan.md "The collector's window"). */
+class AtlasTile {
+  constructor(page, x, y, lightmap, size) {
+    this.page = page; this.enabled = true; this.x = x; this.y = y; this.lightmap = lightmap;
+    this.width = lightmap.width; this.height = lightmap.height; this.size = size;
+  }
+  get bounds() {
+    const { x, y, width, height, size } = this;
+    return [(x + .5) / size, (y + .5) / size, (x + width - .5) / size, (y + height - .5) / size];
+  }
+}
 export class LightAtlas {
   constructor(size = 1024, { words = wordWrites() } = {}) {
     this.wordWrites = words; this.packedUploads = 0; this.rectUploads = 0; this.callUploads = 0;
@@ -74,8 +87,7 @@ export class LightAtlas {
     if (page.x + width > this.size) { page.x = 0; page.y += page.rowHeight; page.rowHeight = 0; }
     if (page.y + height > this.size) page = this.addPage();
     const x = page.x + 1, y = page.y + 1;
-    const tile = { page, enabled: true, x, y, lightmap, width: lightmap.width, height: lightmap.height,
-      bounds: [(x + .5) / this.size, (y + .5) / this.size, (x + lightmap.width - .5) / this.size, (y + lightmap.height - .5) / this.size] };
+    const tile = new AtlasTile(page, x, y, lightmap, this.size);
     page.x += width; page.rowHeight = Math.max(page.rowHeight, height);
     this.tiles.set(lightmap, tile);
     return this.update(lightmap);

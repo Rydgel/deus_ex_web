@@ -286,7 +286,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode(),
   function reachLight(item, visit) {
     const { radius } = item.constants, specialLit = Boolean(item.values.bSpecialLit);
     for (const surfaceIndex of filterMovingLight(model, item.location, radius, specialLit))
-      for (const record of lighting.recordsFor(model, surfaceIndex)) {
+      for (let record = lighting.firstRecordFor(model, surfaceIndex); record; record = record.nextOfSurface) {
         const entry = reachRecord(record, item);
         if (entry) visit(record, entry);
       }

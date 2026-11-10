@@ -1143,6 +1143,9 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       progress(message); $('progress').max = total; $('progress').value = done;
     });
     loadMark('world');
+    // The BSP triangle list (a triangle and its point list each: 37,000 and 74,000 cells on the Island, which the collector marks in
+    // every major collection) is read only by createWorld's addModel; the page keeps the count (map.summary.triangles).
+    nextMap.triangles = null;
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
     // The page's GPU mesh instances (docs/gpu-mesh.md): the level's and the
     // view model's own; the simulation side keeps layouts with their
