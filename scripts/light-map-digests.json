@@ -1,0 +1,40 @@
+{
+ "01_NYC_UNATCOIsland": {
+  "triangles": 36803,
+  "trianglesSha": "9ee62799f47099562b5b4fc231963de862c63fd8f5637b18daadc9df28006438",
+  "records": 6960,
+  "owned": 190,
+  "animated": 0,
+  "texels": 2742130,
+  "recordsSha": "1e83303ed03fe23af70626629e778104e4cf9b469a5609a2cd972b22ead049f5",
+  "meshes": 111,
+  "meshesSha": "7d1fc50251d19fac75a96139e36f2ce97334375db655da40eb84fe751e6dec37",
+  "counts": {
+   "triangles": 33385,
+   "degenerate": 2638,
+   "corrected": 238,
+   "movers": 19,
+   "surfaces": 7116,
+   "backdropTriangles": 1036
+  }
+ },
+ "00_Training": {
+  "triangles": 25674,
+  "trianglesSha": "9c831050b61fa392ff41c4fe37aa06cd8a369103f633761cf4cab6355f3476fc",
+  "records": 5212,
+  "owned": 150,
+  "animated": 435,
+  "texels": 1135091,
+  "recordsSha": "202e543e882dd42603fdab0494600956a7db7569b935bb783d0dbc6e30228fdb",
+  "meshes": 132,
+  "meshesSha": "b6ecfe7e105cecc484d7906e1a24279a0531c1ef1b57eb55f60ef7c434c0d887",
+  "counts": {
+   "triangles": 24427,
+   "degenerate": 1510,
+   "corrected": 296,
+   "movers": 25,
+   "surfaces": 5378,
+   "backdropTriangles": 36
+  }
+ }
+}

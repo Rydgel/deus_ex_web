@@ -298,9 +298,10 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
         // A mover's vertices: each one's place among the brush tracker's transformed vertices.
         if (actorName) for (const source of g.sources) batch.tracked.push(model.trackedIndex[source]);
+        const tileBounds = tile.bounds ?? [0, 0, 1, 1];
         for (let i = 0; i < g.positions.length; i += 3) {
           batch.lightUV.push(...(lit ? lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))) : [0, 0, 0]));
-          batch.lightBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
+          batch.lightBounds.push(...tileBounds);
           batch.lightLayer.push(tile.page.index);
         }
         for (let i = 0; i < g.positions.length / 9; i++) batch.faces.push(surfaceIndex);
@@ -316,7 +317,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           const fogUV = [], fogBounds = [];
           for (let i = 0; i < g.positions.length; i += 3) {
             fogUV.push(...lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))));
-            fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
+            fogBounds.push(...tileBounds);
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
           fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex, Boolean(flags & POLY.Masked));
@@ -655,7 +656,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // With OccludeBsp's drawn surfaces the drawn light maps are listed
       // (brush light maps are always drawn).
       const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
-      if (drawn) for (const surfaceIndex of drawn) for (const record of lighting.recordsFor(map.model, surfaceIndex)) drawnRecords.push(record);
+      if (drawn) for (const surfaceIndex of drawn) for (let record = lighting.firstRecordFor(map.model, surfaceIndex); record; record = record.nextOfSurface) drawnRecords.push(record);
       const changed = movingLights.update(lights, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
       for (const { lightmap, region, atlas } of changed) if (!atlas) lightAtlas.update(lightmap, { partial: true, region });
       movingLights.checkAtlas();

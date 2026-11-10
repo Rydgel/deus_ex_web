@@ -176,6 +176,66 @@ function normalizeLightingChanges(value) {
   return result;
 }
 
+/** The animated lights of a light map with none (shared: nothing adds to it after the merge that made it). */
+const NO_ANIMATED = Object.freeze([]);
+const identity = value => value;
+
+/** The place of a model's one-entry basis memo: world.mjs asks a record's `uv` once a vertex and `basis.point` once a texel, and the
+ * records are made surface by surface. */
+const basisMemo = new WeakMap();
+
+/** The light map of one surface (as lighting.surface makes it). Its fields hold what the light map is: the texels and the float
+ * samples, the surface's place (model, indices, zone, owner), the normal, the placing of a mover. What is a function of the model's
+ * tables and those indices is made where it is read, not kept per record (docs/firefox-60fps-plan.md "The collector's window": about
+ * 44 objects a record before, 7,000 records on the Island, which the page's heap marks in every major collection): `surface`,
+ * `lightMap`, `basis`, `uv`, `lightEntries`, `lightRefs`. A brush's records (`owner`; 190 of the Island's 6,960) keep them, since
+ * moving-lights.mjs and the mover rebuild read them every frame. `staticGeometry` is made when a reader needs it (geometryFor,
+ * gridFor: the records moving lights reach) and kept, and `refill` builds its own copy for the rest. */
+class LightMapRecord {
+  constructor(model, surfaceIndex, index, zone, width, height, normal, transform, transformNormal, owner, dynamicLight, lightList) {
+    this.width = width; this.height = height; this.pixels = new Float32Array(width * height * 3);
+    this.index = index; this.zone = zone; this.model = model; this.surfaceIndex = surfaceIndex; this._normal = normal;
+    this.transform = transform; this.transformNormal = transformNormal; this.owner = owner;
+    this.staticPixels = null; this.moving = null; this.dynamicLight = dynamicLight; this.pose = null; this.header = null;
+    /** The light references the record was built from when they are not the model's list for its light map (a brush's, kept; a
+     * bDynamicLightMover's, set by every rebuild); null: lightReferences(model, lightMap). */
+    this.lightList = lightList;
+    this.baseTexels = null; this.texels = null; this.animated = NO_ANIMATED; this.animationMemo = null; this.lightKernel = null;
+    this.staticGeometry = null;
+    /** The next light map made for the same surface (another zone, another transform): lighting.firstRecordFor. */
+    this.nextOfSurface = null;
+    this._surface = null; this._lightMap = null; this._basis = null;
+  }
+  /** The surface's record of the model's table, as `model.surfaces.at(surfaceIndex)`. */
+  get surface() { return this.owner === null ? this.model.surfaces.at(this.surfaceIndex) : this._surface ??= this.model.surfaces.at(this.surfaceIndex); }
+  /** The light map's record of the model's table, as `model.lightMaps.at(index)`. */
+  get lightMap() { return this.owner === null ? this.model.lightMaps.at(this.index) : this._lightMap ??= this.model.lightMaps.at(this.index); }
+  /** lightmapBasis for the surface and light map; a level record's is the last one asked for in its model. */
+  get basis() {
+    if (this.owner !== null) return this._basis ??= lightmapBasis(this.model, this.surface, this.lightMap);
+    let memo = basisMemo.get(this.model);
+    if (memo?.record !== this) basisMemo.set(this.model, memo = { record: this, basis: lightmapBasis(this.model, this.surface, this.lightMap) });
+    return memo.basis;
+  }
+  uv(point) { return this.basis.uv(point); }
+  /** The plane's normal in the record's place: a level record's is `normalize(transformNormal(basis.normal))` as `surface` made it
+   * (read by nothing in Play: moving-lights.mjs reachOwned asks for a brush's, which keeps the one the pose last gave it). */
+  get normal() { return this._normal ?? normalize(this.transformNormal(this.basis.normal)); }
+  set normal(value) { this._normal = value; }
+  /** The light references the light map lists, in order. */
+  references() { return this.lightList ?? lightReferences(this.model, this.lightMap); }
+  get lightEntries() { return this.references().map(ref => ({ ref })); }
+  get lightRefs() { return new Set(this.references()); }
+  /** Whether any of `refs` is one of the lights the light map lists (invalidate's test, without making them). */
+  listsAny(refs) {
+    if (this.lightList) return this.lightList.some(ref => refs.includes(ref));
+    const { model } = this, start = model.lightMaps.lightActors(this.index);
+    if (start == null || start < 0) return false;
+    for (let at = start, { lights } = model; at < lights.length && lights[at] !== 0; at++) if (refs.includes(lights[at])) return true;
+    return false;
+  }
+}
+
 /** `kernel`: the script-VM kernel whose light.rs merges animated light maps,
  * null for animateLightMap, or undefined to decide now (lightKernelMode). */
 export async function createLighting(map, asset, assets, { kernel } = {}) {
@@ -250,59 +310,64 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
    * moves with its transform, the authored one or the current pose's
    * (`relightMover`). */
   function geometry(result) {
-    if (!result.staticGeometry && result.pose?.facet) {
+    return result.staticGeometry ??= buildGeometry(result);
+  }
+  /** What `geometry` keeps, made again: refill builds the facet and grid of a level record this way and keeps nothing (the records
+   * moving lights or the fog pass ask for keep theirs). */
+  function buildGeometry(result) {
+    if (result.pose?.facet) {
       // DrawFrame fills the facet from the tracker surface's pBase and vectors (0x10b1a977..0x10b1aa38), and
       // ComputeFromActor's grid comes from its inverse: lightmapBasis on the facet, as fog-pass.mjs moverGrid.
       const { lightMap } = result, facet = result.pose.facet, [origin, axisU, axisV, normal] = [0, 3, 6, 9].map(i => facet.slice(i, i + 3));
       const placed = lightmapBasis({ points: arrayTable([origin]), vectors: arrayTable([axisU, axisV, normal]) }, FACET_SURFACE, lightMap);
       const p00 = placed.point(0, 0), p10 = placed.point(1, 0), p01 = placed.point(0, 1);
-      result.staticGeometry = {
+      return {
         facet: { origin, axisU, axisV, normal, pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
         grid: { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),
           stepV: p01.map((v, i) => Math.fround(v - p00[i])) },
       };
     }
-    if (!result.staticGeometry) {
-      const { model, surface, basis, lightMap, owner } = result, { transform, transformNormal } = result.pose ?? result;
-      const base = model.points.at(surface.base), origin = transform(base);
-      const textureU = model.vectors.at(surface.textureU), textureV = model.vectors.at(surface.textureV), surfaceNormal = model.vectors.at(surface.normal);
-      const along = vector => transform(base.map((v, i) => v + vector[i])).map((v, i) => v - origin[i]);
-      const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
-      result.staticGeometry = {
-        facet: { origin, axisU: owner ? along(textureU) : textureU,
-          axisV: owner ? along(textureV) : textureV,
-          normal: owner ? transformNormal(surfaceNormal) : surfaceNormal,
-          pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
-        grid: { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),
-          stepV: p01.map((v, i) => Math.fround(v - p00[i])) },
-      };
-    }
-    return result.staticGeometry;
+    const { model, surface, basis, lightMap, owner } = result, { transform, transformNormal } = result.pose ?? result;
+    const base = model.points.at(surface.base), origin = transform(base);
+    const textureU = model.vectors.at(surface.textureU), textureV = model.vectors.at(surface.textureV), surfaceNormal = model.vectors.at(surface.normal);
+    const along = vector => transform(base.map((v, i) => v + vector[i])).map((v, i) => v - origin[i]);
+    const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
+    return {
+      facet: { origin, axisU: owner ? along(textureU) : textureU,
+        axisV: owner ? along(textureV) : textureV,
+        normal: owner ? transformNormal(surfaceNormal) : surfaceNormal,
+        pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
+      grid: { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),
+        stepV: p01.map((v, i) => Math.fround(v - p00[i])) },
+    };
   }
 
-  function refill(result) {
-    const { width, height, lightEntries, model, lightMap } = result, pixels = result.staticPixels ?? result.pixels;
+  /** `refs` and `lightMap` are the record's light references and light map when the caller has them (`surface` has both). */
+  function refill(result, refs = result.references(), lightMap = result.lightMap) {
+    const { width, height, model } = result, pixels = result.staticPixels ?? result.pixels;
     const zone = zoneValues[result.zone] ?? levelValues;
     const ambientKey = `${zone.AmbientHue ?? 0}:${zone.AmbientSaturation ?? 0}:${zone.AmbientBrightness ?? 0}`;
     if (!ambientCache.has(ambientKey))
       ambientCache.set(ambientKey, ambientTexel(fgetHsv(zone.AmbientHue ?? 0, zone.AmbientSaturation ?? 0, zone.AmbientBrightness ?? 0)));
-    const lights = lightEntries.map(({ ref }) => {
+    const lights = refs.map(ref => {
       const values = actors.get(ref);
       if (!values) throw new Error(`Unprepared light ${ref}`);
       if (values.LightType && values.LightBrightness) { usedLights.add(ref); stats.lightActors = usedLights.size; }
       return { values, location: (values.Location ?? [0, 0, 0]).map(Math.fround), ref };
     });
-    const { facet, grid } = geometry(result), animated = [];
+    const { facet, grid } = result.staticGeometry ?? (result.owner === null ? buildGeometry(result) : geometry(result)), animated = [];
     // A bDynamicLightMover's lights go to AddLight with no shadow mask: the
     // illumination is 0x7f everywhere (0x10b06fc4).
     result.baseTexels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights,
       shadowBits: result.dynamicLight ? null : model.lightBits,
       shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv, animated, spatial: spatialKernel,
       timeSeconds: lightFrame?.timeSeconds ?? 0 });
-    result.animated = animated;
+    // Only a light map with an animated light has texels of its own to change (animateLightMap): the working copy of the others is
+    // the base itself, and the animation's memo is made when there is something to remember.
+    result.animated = animated.length ? animated : NO_ANIMATED;
     if (animated.length) animatedRecords.add(result); else animatedRecords.delete(result);
-    const texels = result.texels = result.baseTexels.slice();
-    result.animationMemo = {};
+    const texels = result.texels = animated.length ? result.baseTexels.slice() : result.baseTexels;
+    result.animationMemo = animated.length ? {} : null;
     if (animated.length && lightFrame) animateLightMap(result.baseTexels, texels, width, animated, lightFrame, animationOptions);
     // The kernel's copy starts from the bytes just merged (its old block, if
     // the new layout fits, is reused).
@@ -332,12 +397,14 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
         if (!values) throw new Error(`Unprepared light ${ref}`);
         return inFrontOfFacet(values.Location ?? [0, 0, 0], facet.origin, facet.normal) && Boolean(values.bSpecialLit) === mover.specialLit;
       });
-      result.lightEntries = refs.map(ref => ({ ref })); result.lightRefs = new Set(refs);
+      result.lightList = refs;
     }
     refill(result);
     reposed.add(result); poseCount++;
     return result;
   }
+
+  const firstRecordFor = (model, surfaceIndex) => bySurface.get(model)?.get(surfaceIndex) ?? null;
 
   function updateActor(ref, values = {}) {
     if (!Number.isInteger(ref) || ref <= 0) throw new TypeError(`Invalid lighting actor reference: ${ref}`);
@@ -384,7 +451,15 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       result.moving = contributions;
       if (!result.staticPixels) result.staticPixels = Float32Array.from(result.pixels);
     },
-    recordsFor(model, surfaceIndex) { return bySurface.get(model)?.get(surfaceIndex) ?? []; },
+    /** The light maps made for a surface, in the order they were made (one for each zone and transform it is drawn with). */
+    recordsFor(model, surfaceIndex) {
+      const records = [];
+      for (let record = firstRecordFor(model, surfaceIndex); record; record = record.nextOfSurface) records.push(record);
+      return records;
+    },
+    /** The first of a surface's light maps (null for none), the next of them `nextOfSurface`: recordsFor without its array, for what
+     * asks every frame (world.mjs, moving-lights.mjs). */
+    firstRecordFor,
     /** Mark `owner`'s brush as a bDynamicLightMover (Mover +0x38c bit 0x10) before its surfaces are made: SetupForSurf
      * lights its surfaces from the level leaf the mover is in (relightMover), not from the brush's own light lists. */
     dynamicLightMover(owner, { specialLit = false } = {}) {
@@ -473,18 +548,20 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       // A light no light map lists (the world prepares every list before
       // Play starts) changes no cached texel: its values are not kept here.
       for (const { ref, values } of entries) if (values && actors.has(ref)) updateActor(ref, values);
-      const affected = [...cacheRecords].filter(result => changedLights.some(ref => result.lightRefs.has(ref)));
+      const affected = [...cacheRecords].filter(result => result.listsAny(changedLights));
       for (const result of affected) refill(result);
       return { changedLights, lightmaps: affected,
         affected: affected.map(result => ({ surfaceIndex: result.surfaceIndex, lightMapIndex: result.index, zone: result.zone, lightmap: result })) };
     },
-    surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n, owner = null) {
+    surface(model, surfaceIndex, zone, transform = identity, transformNormal = identity, owner = null) {
       const surface = model.surfaces.at(surfaceIndex), lm = model.lightMaps.at(surface.lightMap);
       if (!lm) { stats.missingLightmaps++; return null; }
       const [width, height] = lm.clamp;
       if (width < 1 || height < 1 || width > 1022 || height > 1022 || !lm.scale.every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid lightmap dimensions or scale');
       if (!caches.has(model)) caches.set(model, new Map());
-      const cache = caches.get(model), key = `${surfaceIndex}:${zone}`;
+      // A number for a surface and zone as the tables hold them (a string key is a cell the collector marks for every record).
+      const cache = caches.get(model), key = Number.isInteger(surfaceIndex) && surfaceIndex >= 0 && Number.isInteger(zone) && zone >= 0 && zone < 65536
+        ? surfaceIndex * 65536 + zone : `${surfaceIndex}:${zone}`;
       if (cache.has(key)) return cache.get(key);
       const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
       // A texel's world point is transform(basis.point(x, y)), computed where needed (world.mjs texelSphere), not kept per texel
@@ -494,22 +571,23 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       const refs = mover?.dynamic ? [] : lightReferences(model, lm), pitch = (width + 7) >> 3;
       if (refs.length && lm.dataOffset + refs.length * pitch * height > model.lightBits.length)
         throw new Error('Shadow mask outside serialized lighting data');
-      const lightEntries = refs.map(ref => ({ ref }));
-      stats.shadowMasks += lightEntries.length;
-      const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
-        model, surfaceIndex, surface, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,
-        basis, lightMap: lm, owner, staticPixels: null, moving: null, dynamicLight: Boolean(mover?.dynamic), pose: null, header: null };
+      stats.shadowMasks += refs.length;
+      const result = new LightMapRecord(model, surfaceIndex, surface.lightMap, zone, width, height, owner !== null ? normal : null, transform,
+        transformNormal, owner, Boolean(mover?.dynamic), owner !== null ? refs : null);
+      // What the record makes from the model on demand: a level record's is the last one asked for (it is asked for next); a
+      // brush's records keep theirs.
+      if (owner !== null) { result._surface = surface; result._lightMap = lm; result._basis = basis; } else basisMemo.set(model, { record: result, basis });
       if (mover) {
         mover.records.push(result);
         if (!mover.byPolygon.has(surfaceIndex)) mover.byPolygon.set(surfaceIndex, []);
         mover.byPolygon.get(surfaceIndex).push(result);
       }
-      refill(result);
+      refill(result, refs, lm);
       cache.set(key, result); cacheRecords.add(result); stats.lightmaps++;
       if (!bySurface.has(model)) bySurface.set(model, new Map());
-      const surfaceRecords = bySurface.get(model);
-      if (!surfaceRecords.has(surfaceIndex)) surfaceRecords.set(surfaceIndex, []);
-      surfaceRecords.get(surfaceIndex).push(result);
+      const surfaceRecords = bySurface.get(model), first = surfaceRecords.get(surfaceIndex);
+      if (!first) surfaceRecords.set(surfaceIndex, result);
+      else { let last = first; while (last.nextOfSurface) last = last.nextOfSurface; last.nextOfSurface = result; }
       if (owner) owned.push(result);
       return result;
     },
