@@ -14,7 +14,7 @@ const BASE = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
 const ready = (page, map) => page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && !s.runtimeError; }, map, { timeout: 240_000 });
 const world = page => page.evaluate(async () => { const w = await window.deusExViewer.windowProbe(); return { belt: w.belt, inHand: w.inHand, top: w.top }; });
 
-test('the wheel selects the belt items through NextBeltItem and PrevBeltItem; the F keys and Tab never reach the browser', async ({ page }) => {
+test('the wheel selects the belt items through NextBeltItem and PrevBeltItem; the F keys and Tab never reach the browser', async ({ page, browserName }) => {
   test.setTimeout(600_000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${BASE}/?debug=1`);
@@ -49,12 +49,17 @@ test('the wheel selects the belt items through NextBeltItem and PrevBeltItem; th
   await settle(items[0]);
   const box = await page.locator('#scene').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // One notch of Playwright's synthetic wheel: Chromium's 100 pixels are one 120-unit notch. Playwright's WebKit makes a pixel wheel's
+  // ticks from WebKit's 40-pixel line (browser_patches/webkit WebPageInspectorInputAgent::dispatchWheelEvent: wheelTicks = delta /
+  // Scrollbar::pixelsPerLineStep()), and WebKit's wheelDeltaY is the ticks times 120 (WheelEvent.cpp TickMultiplier): 100 pixels
+  // there are 2.5 notches, two belt steps (the Mac, 2026-11-09), so a notch is 40 pixels.
+  const NOTCH = browserName === 'webkit' ? 40 : 100;
   const notch = async (dy, expected) => { await page.mouse.wheel(0, dy); await settle(expected); };
-  await notch(100, items[1]);        // MouseWheelDown = NextBeltItem
-  await notch(100, items[2]);
-  await notch(100, items[0]);        // past the last item it wraps to the first
-  await notch(-100, items[2]);       // MouseWheelUp = PrevBeltItem
-  await notch(-100, items[1]);
+  await notch(NOTCH, items[1]);        // MouseWheelDown = NextBeltItem
+  await notch(NOTCH, items[2]);
+  await notch(NOTCH, items[0]);        // past the last item it wraps to the first
+  await notch(-NOTCH, items[2]);       // MouseWheelUp = PrevBeltItem
+  await notch(-NOTCH, items[1]);
   const real = await events('wheel', 0);
   expect(real.length).toBe(5);
   expect(real.every(e => e.prevented && e.mode === 0)).toBe(true);   // the page took them (no scrolling, no Ctrl+wheel zoom)

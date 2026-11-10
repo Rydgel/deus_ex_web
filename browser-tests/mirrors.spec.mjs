@@ -23,7 +23,9 @@ test('Training floor matches the native reflection and clips geometry behind the
   await page.waitForFunction(() => window.deusExViewer?.status().ready && Boolean(window.__mirrorProbe));
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
   const canvas = page.locator('#scene'), box = await canvas.boundingBox();
-  await page.setViewportSize({ width: 926, height: 719 + 603 - box.height });
+  // (Rounded up: Playwright takes whole pixels, and a browser may lay the bars out at fractional heights, as Firefox on macOS does;
+  // the canvas's buffer is the floor of its box, so its box between 603 and 604 gives 603.)
+  await page.setViewportSize({ width: 926, height: Math.ceil(719 + 603 - box.height) });
   await expect.poll(() => canvas.evaluate(c => [c.width, c.height])).toEqual([926, 603]);
   await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();

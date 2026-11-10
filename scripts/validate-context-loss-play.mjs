@@ -232,26 +232,32 @@ try {
     const gpu = reference.paths.includes('gpu');
     for (const event of worker ? ['loss', 'race'] : ['loss']) {
       if (only && only !== event) continue;
-      const run = await paris(browser, event);
-      assert.deepEqual(run.errors, [], `${event}: page errors`); assert.equal(run.error, null, `${event}: runtime error`);
-      assert.deepEqual(run.glErrors, [], `${event}: GL errors`);
-      assert.equal(run.graphics.losses, 1, `${event}: one loss`); assert.equal(run.graphics.restores, 1, `${event}: one restore`);
+      // In worker mode the loss case needs the frame in flight's snapshot to land after the loss. A worker quick enough to answer
+      // before the frame callback that loses the context leaves that path unexercised (Linux, 2026-11-10: one run in three), so the
+      // case runs again, up to three times; every attempt is checked in full, and the path is required of the last.
+      let run, attempts = 0;
+      do {
+        run = await paris(browser, event); attempts++;
+        assert.deepEqual(run.errors, [], `${event}: page errors`); assert.equal(run.error, null, `${event}: runtime error`);
+        assert.deepEqual(run.glErrors, [], `${event}: GL errors`);
+        assert.equal(run.graphics.losses, 1, `${event}: one loss`); assert.equal(run.graphics.restores, 1, `${event}: one restore`);
+        if (gpu) {
+          assert.deepEqual(run.paths, ['cpu'], `${event}: every mesh binding left the GPU path`);
+          assert.ok(run.graphics.converted > 0, `${event}: the restore converted the GPU path's bindings`);
+        }
+        let note = '';
+        if (run.hex !== reference.hex) {
+          // Does the scenario reproduce its own pixels at all (asynchronous texture decoding)?
+          const again = await paris(browser, null);
+          note = again.hex === reference.hex ? '' : ' (the run without a loss does not reproduce its own pixels either)';
+        }
+        assert.equal(run.hex, reference.hex, `${event}: the last frame equals the run without a loss${note}`);
+      } while (worker && event === 'loss' && run.graphics.lastRestore.drawnLost === 0 && attempts < 3);
       // Which path the frame in flight took (docs/context-loss.md "The frame in flight").
-      if (worker && event === 'loss') assert.ok(run.graphics.lastRestore.drawnLost >= 1, 'loss: the snapshot in flight was applied while the context was lost');
+      if (worker && event === 'loss') assert.ok(run.graphics.lastRestore.drawnLost >= 1, `loss: the snapshot in flight was applied while the context was lost (${attempts} attempts)`);
       if (event === 'race') assert.ok(run.graphics.lastRestore.inFlight >= 1, 'race: the snapshot in flight was applied by the restore');
-      if (gpu) {
-        assert.deepEqual(run.paths, ['cpu'], `${event}: every mesh binding left the GPU path`);
-        assert.ok(run.graphics.converted > 0, `${event}: the restore converted the GPU path's bindings`);
-      }
-      let note = '';
-      if (run.hex !== reference.hex) {
-        // Does the scenario reproduce its own pixels at all (asynchronous texture decoding)?
-        const again = await paris(browser, null);
-        note = again.hex === reference.hex ? '' : ' (the run without a loss does not reproduce its own pixels either)';
-      }
-      assert.equal(run.hex, reference.hex, `${event}: the last frame equals the run without a loss${note}`);
       const {converted, drawnLost, inFlight} = run.graphics.lastRestore;
-      summary.push(`${event}: identical after ${after} frames (${converted} bindings to the CPU path, ${drawnLost} snapshots applied while lost, ${inFlight} by the restore, ${run.staleDeletes} stale deletes)`);
+      summary.push(`${event}: identical after ${after} frames (${converted} bindings to the CPU path, ${drawnLost} snapshots applied while lost, ${inFlight} by the restore, ${run.staleDeletes} stale deletes${attempts > 1 ? `; ${attempts} attempts` : ''})`);
     }
     summary.unshift(`paths ${reference.paths.join('/')}, ${reference.bindings} bindings`);
   }

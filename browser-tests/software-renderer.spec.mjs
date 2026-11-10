@@ -15,6 +15,9 @@ test.use({ launchOptions: [async ({ browserName }, use) => use(browserName === '
     LIBGL_ALWAYS_SOFTWARE: '1' } }), { scope: 'worker' }] });
 
 test('a software renderer keeps the CPU mesh path, and Training keeps real time', async ({ page, browserName }, info) => {
+  // Firefox's case is Mesa's llvmpipe, which only Linux has (on macOS Firefox gets its GPU); WebKit has no switch to a software renderer.
+  test.skip(browserName === 'webkit' || (browserName === 'firefox' && process.platform !== 'linux'),
+    `no software renderer for ${browserName} on ${process.platform}`);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${BASE}/?debug=1`);
   await page.waitForFunction(() => window.deusExViewer?.status().gameplay?.player.grounded, null, { timeout: 360_000 });

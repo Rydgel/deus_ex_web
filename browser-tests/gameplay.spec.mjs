@@ -96,7 +96,13 @@ test('Liberty Island has a valid playable spawn and the inspection camera leaves
   const walked = await player(page); expect(walked.position).not.toEqual(initial.position);
   expect(walked.grounded).toBe(true);
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
-  const frozen = await player(page);
+  // The switch holds the simulation from the next frame on: in worker mode a frame already in flight lands after it, and on a loaded
+  // host (the Mac, 2026-11-09: 44 and then 5 units) it still carries motion. The frozen state is the first one the next read repeats.
+  let frozen = await player(page);
+  await expect.poll(async () => {
+    const next = await player(page), same = JSON.stringify(next.position) === JSON.stringify(frozen.position);
+    frozen = next; return same;
+  }, { timeout: 5_000, intervals: [200] }).toBe(true);
   await page.locator('#scene').click({ position: { x: 500, y: 350 } });
   await page.keyboard.down('KeyE'); await page.waitForTimeout(300); await page.keyboard.up('KeyE');
   expect((await player(page)).position).toEqual(frozen.position);
