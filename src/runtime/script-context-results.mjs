@@ -1,6 +1,7 @@
 import { readFunctionMetadata, readPropertyMetadata } from '../unreal/script-metadata.mjs';
 import { zeroValue } from './script-values.mjs';
 import { entryOf } from '../unreal/objects.mjs';
+import { ScriptLinks, NO_WIDTH } from './script-links.mjs';
 
 const PROPERTY_OPS = new Set([0x00, 0x01, 0x02, 0x29]);
 const FUNCTION_OPS = new Set([0x1b, 0x1c, 0x38]);
@@ -105,6 +106,8 @@ function finishDescriptor(d, contextOffset, encodedSize) {
 function zeroOfDescriptor() {
   return zeroValue({ key: this.key, metadata: this.metadata });
 }
+/** The `zero` every prepared descriptor carries (the tests build descriptors with it). */
+export const descriptorZero = zeroOfDescriptor;
 
 async function objectReference(runtime, script, index) {
   if (!Number.isInteger(index) || index === 0 || !runtime?.objects?.reference) return null;
@@ -339,12 +342,97 @@ export async function prepareContextResults(runtime, script, decoded) {
   return result;
 }
 
+// The type of a result is a small code in the script's links (the values fixedPropertyShape produces, then any other a descriptor
+// brings, in the order they come).
+const TYPE_NAMES = ['byte', 'int', 'bool', 'float', 'name', 'object', 'class', 'struct'];
+const TYPE_CODES = new Map(TYPE_NAMES.map((name, code) => [name, code]));
+function typeCode(type) {
+  let code = TYPE_CODES.get(type);
+  if (code === undefined) {
+    if (typeof type !== 'string') throw new TypeError(`A Context result type must be a string: ${String(type)}`);
+    TYPE_CODES.set(type, code = TYPE_NAMES.length);
+    TYPE_NAMES.push(type);
+  }
+  return code;
+}
+
+const int32 = value => Number.isInteger(value) && (value | 0) === value;
+
+// A function result's metadata is read from the package for each Context that calls the function (functionReturn: a fresh object of
+// fifteen to eighteen fields, 3,374 for 349 functions on the Island). A result of a function whose metadata equals, field for field,
+// the one an earlier result of that function kept takes that one: zeroValue reads the same fields from either, and the copies were the
+// only holders of themselves. Keyed by the function's identity, so the table lives as long as the function.
+const returnMetadata = new WeakMap();
+function sameFields(a, b) {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) if (!Object.hasOwn(b, key) || !Object.is(a[key], b[key])) return false;
+  return true;
+}
+function sharedMetadata(d) {
+  const owner = d.function;
+  if (d.source !== 'function' || owner === null || typeof owner !== 'object') return d.metadata;
+  const first = returnMetadata.get(owner);
+  if (first === undefined) { returnMetadata.set(owner, d.metadata); return d.metadata; }
+  return first === d.metadata || sameFields(first, d.metadata) ? first : d.metadata;
+}
+
+/**
+ * The prepared results (`prepareContextResults`' Map of value offset -> descriptor) as the entries ScriptLinks.prepared keeps: a script
+ * holds a result as its value offset, context offset, width and type code in a block of words, with the key and the metadata that
+ * zeroValue reads, in place of one descriptor object a result (11,700 on the Island; docs/firefox-60fps-plan.md "The per-script
+ * offset tables"). What no later reader asks for goes with the descriptor: the linked field, the function and its return field, the
+ * struct key, the property expression's offset and the context's encoded size (zeroContextResult reads the width, the key, the type, the
+ * context offset and the metadata only). A descriptor with no width (a DynamicCast's: it names a class, which has no typed zero) keeps
+ * none, so every width check against it fails as it did.
+ */
+export function compactContextResults(results) {
+  const entries = [];
+  for (const [offset, d] of results) {
+    if (!int32(offset) || !int32(d.contextOffset)) throw new TypeError('A Context result needs integer offsets');
+    const typed = d.source === 'property' || d.source === 'function';
+    if (typed) {
+      if (!int32(d.width) || typeof d.key !== 'string' || d.metadata === null || typeof d.metadata !== 'object' || d.zero !== zeroOfDescriptor)
+        throw new TypeError(`A Context result of ${String(d.key)} has no fixed width or typed zero`);
+    } else if (d.width !== undefined || d.key !== undefined || d.metadata !== undefined || d.zero !== undefined) {
+      throw new TypeError('A Context result without a source must have no width, key, metadata or zero');
+    }
+    entries.push({ offset, contextOffset: d.contextOffset, width: typed ? d.width : NO_WIDTH, type: typeCode(d.type),
+      key: typed ? d.key : undefined, metadata: typed ? sharedMetadata(d) : undefined });
+  }
+  return entries.sort((a, b) => a.offset - b.offset);
+}
+
+// zeroContextResult over a script's links: the same lookup, checks and messages, the descriptor's values read from their columns.
+function zeroLinkedContextResult(links, node, encodedSize) {
+  let rank = links.contextFind(node?.offset);
+  if (rank < 0) rank = links.contextFind(node?.value?.offset);
+  if (rank < 0) {
+    fail(`Unsupported null Context result at offset ${node?.offset ?? '<unknown>'}`, {
+      offset: node?.offset ?? null, size: encodedSize,
+    });
+  }
+  const stored = links.contextInt(rank, 2), width = stored === NO_WIDTH ? undefined : stored, key = links.contextKey(rank);
+  if (encodedSize !== width) {
+    fail(`Null Context result width mismatch for ${key}: ` +
+      `encoded ${encodedSize}, linked ${width}`, {
+        key, type: TYPE_NAMES[links.contextInt(rank, 3)],
+        offset: links.contextInt(rank, 1), size: encodedSize,
+      });
+  }
+  // a descriptor with no width has no typed zero either: only an encoded size of `undefined` gets this far, and it called `zero()`
+  if (width === undefined) throw new TypeError('descriptor.zero is not a function');
+  return zeroValue({ key, metadata: links.contextMetadata(rank) });
+}
+
 /**
  * Produce the typed zero for a prepared Context value and enforce the exact
  * encoded width written by Core.dll's raw memset. `node` may be the Context's
  * value node (the public key) or the Context node itself for convenience.
+ * `resultMap` is the script's links (ScriptObjects.contextResultsOf) or a Map of descriptors.
  */
 export function zeroContextResult(resultMap, node, encodedSize) {
+  if (resultMap instanceof ScriptLinks) return zeroLinkedContextResult(resultMap, node, encodedSize);
   if (!(resultMap instanceof Map)) throw new TypeError('Expected a prepared Context result Map');
   const descriptor = resultMap.get(resultMap.has(node?.offset) ? node.offset : node?.value?.offset);
   if (!descriptor) {

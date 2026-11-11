@@ -106,7 +106,7 @@ import { importClassText } from './script-class-import-text.mjs';
 import { UnmodelledClassLookup } from './original-loaded.mjs';
 import { ScriptProcess } from './script-process.mjs';
 import { setActorZone } from './zone.mjs';
-import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
+import { prepareContextResults, compactContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
 import { OriginalObjectIndexModel } from './original-object-index.mjs';
 import { destructScriptObject, freeScriptObject, releaseScriptCameraPoint } from './script-object-release.mjs';
@@ -199,9 +199,6 @@ const imagedMotionWord=instance=>instance.cells&&instance.base?flagWord(instance
 
 const lower=name=>String(name).toLowerCase();
 const NO_CHILDREN=Object.freeze([]);
-// A body without a null-Context result keeps one shared empty Map (zeroContextResult only reads it), not a Map of its own.
-const NO_CONTEXT_RESULTS=new Map();
-const keptContextResults=results=>results.size?results:NO_CONTEXT_RESULTS;
 // Event and function names are a small fixed vocabulary: keep their lowercase.
 const lowerNames=new Map();
 const lowerName=name=>{
@@ -725,7 +722,6 @@ export class ScriptRuntime {
     this.rng=rng;
     this.nameServices=nameServices;
     this.relocation=relocation;
-    this.contextResults=shared.contextResults;
     this.levelTickActorOptions=new WeakSet();this.levelTickActorServices=new WeakMap();
     this.services={
       // A number naming these services in caches that outlive the level (script-vm.mjs operandCache).
@@ -735,7 +731,7 @@ export class ScriptRuntime {
       objectReference:(script,index,node)=>this.objects.operand(script,node),
       castObject:(value,target,kind)=>this.castObject(value,target,kind),
       objectToString:value=>scriptObjectToString(value,object=>this.instances.get(object)?.nativeObject??object),
-      zeroContextResult:(script,node,size)=>zeroContextResult(this.contextResults.get(script),node,size),
+      zeroContextResult:(script,node,size)=>zeroContextResult(this.objects.contextResultsOf(script),node,size),
       localReference:(locals,script,node)=>localReference(locals,this.objects.operand(script,node)),
       // refValue(localReference(...)): same operand/scope checks and value
       // copy (the field codec is readWhole's copyStored), without the lvalue.
@@ -989,7 +985,7 @@ export class ScriptRuntime {
     const bindings=await this.objects.link(script,compiled.decoded);
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
-    this.contextResults.set(script,keptContextResults(await prepareContextResults(this,script,compiled.decoded)));
+    this.objects.setContextResults(script,compactContextResults(await prepareContextResults(this,script,compiled.decoded)));
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const fields=[];
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
@@ -1011,7 +1007,7 @@ export class ScriptRuntime {
     const bindings=await this.objects.link(script,compiled.decoded);
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
-    this.contextResults.set(script,keptContextResults(await prepareContextResults(this,script,compiled.decoded)));
+    this.objects.setContextResults(script,compactContextResults(await prepareContextResults(this,script,compiled.decoded)));
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const labels=new Map();
     if(script.labelTableOffset!==0xffff){

@@ -2,6 +2,7 @@ import {serializeGcScriptExpression} from './script-bytecode-serialization.mjs';
 import {decodeScript} from '../unreal/bytecode.mjs';
 import {METADATA_KINDS} from './original-loaded.mjs';
 import { exportAt } from '../unreal/objects.mjs';
+import { ScriptLinks } from './script-links.mjs';
 
 // Resource objects: loaded with the package that holds them and collected like a class (docs/class-graph-design.md "The collection over
 // classes"), so they are the process's.
@@ -39,8 +40,9 @@ export class ScriptObjects {
     this.process = process;
     this.objects = new Map();
     this.packageObjects = process?.packageObjects ?? this.objects;
-    this.linkedScripts = process?.linkedScripts ?? new WeakMap();
-    this.linkedOperands = process?.linkedOperands ?? new WeakMap();
+    // Linked bytecode: script -> ScriptLinks (script-links.mjs: its bindings, its expanded operands by expression offset and its prepared
+    // null-Context results).
+    this.links = process?.scriptLinks ?? new WeakMap();
     // Advances whenever an expanded operand can change (link, GC rewrite), so
     // callers may keep a resolved operand while it is unchanged.
     this.operandCount = 0;
@@ -107,12 +109,12 @@ export class ScriptObjects {
    * Each expanded operand is keyed by its expression's offset, not by its node, so
    * a body's tree can be released and decoded again (docs/live-heap.md step 8). */
   async link(script, decoded) {
-    if (this.linkedScripts.has(script)) {
-      const objects = this.linkedOperands.get(script);
+    const linked = this.links.get(script);
+    if (linked !== undefined) {
       for (const node of decoded.expressions.values())
-        if ((node.fieldIndex ?? node.functionIndex ?? node.objectIndex) !== undefined && !objects.has(node.offset))
+        if ((node.fieldIndex ?? node.functionIndex ?? node.objectIndex) !== undefined && linked.find(node.offset) < 0)
           throw new Error('Script already has a different linked bytecode buffer');
-      return this.linkedScripts.get(script);
+      return linked;
     }
     const asset = script.asset;
     if (!asset) throw new Error('Script linking requires its source package asset');
@@ -122,43 +124,57 @@ export class ScriptObjects {
         if (node[name] !== undefined) indices.add(node[name]);
       }
     }
-    const bindings = new Map(await Promise.all([...indices].map(async index => [index, await this.resolve(asset,index)])));
-    const objects=new Map();
-    for(const node of decoded.expressions.values()){
-      const index=node.fieldIndex??node.functionIndex??node.objectIndex;
-      if(index!==undefined)objects.set(node.offset,bindings.get(index));
+    const bound = await Promise.all([...indices].map(async index => [index, await this.resolve(asset,index)]));
+    const indexes = [], identities = [], positionOf = new Map();
+    for (const [index, identity] of bound) { positionOf.set(index, indexes.length); indexes.push(index); identities.push(identity); }
+    const offsets = [], positions = [];
+    for (const node of decoded.expressions.values()) {
+      const index = node.fieldIndex ?? node.functionIndex ?? node.objectIndex;
+      if (index !== undefined) { offsets.push(node.offset); positions.push(positionOf.get(index)); }
     }
-    this.linkedScripts.set(script,bindings);
-    this.linkedOperands.set(script,objects);
+    const links = ScriptLinks.make(indexes, identities, offsets, positions);
+    this.links.set(script, links);
     this.operandEpoch++;
-    return bindings;
+    return links;
   }
   /** Package-index lookup is for linking metadata. Execution reads the
    * individual expanded operand, which GC may clear independently of other
    * occurrences of that same original package index. */
   reference(script, index) {
     if (!index) return null;
-    const bindings = this.linkedScripts.get(script);
+    const bindings = this.links.get(script);
     if (!bindings?.has(index)) throw new Error(`Unlinked script reference ${script.entry.path}:${index}`);
     return bindings.get(index);
   }
   operandReference(script,node) {
-    const operands=this.linkedOperands.get(script),offset=node?.offset;
-    if(!operands?.has(offset))throw new Error(`Unlinked bytecode operand ${script.entry.path}:${offset}`);
-    return {reference:true,get:()=>operands.get(offset),set:value=>{
+    const links=this.links.get(script),offset=node?.offset,rank=links===undefined?-1:links.find(offset);
+    if(rank<0)throw new Error(`Unlinked bytecode operand ${script.entry.path}:${offset}`);
+    return {reference:true,get:()=>this.links.get(script).operandAt(rank),set:value=>{
       if(value!==null&&typeof value!=='object')throw new TypeError('Bytecode object operand requires UObject identity or null');
-      operands.set(offset,value);this.operandEpoch++;
+      this.links.get(script).setOperandAt(rank,value);this.operandEpoch++;
     }};
   }
   operand(script,node) {
     // operandReference(...).get() without allocating the lvalue per access.
-    const operands=this.linkedOperands.get(script);
-    if(!operands?.has(node?.offset))throw new Error(`Unlinked bytecode operand ${script.entry.path}:${node?.offset}`);
-    return operands.get(node.offset);
+    const links=this.links.get(script),offset=node?.offset,rank=links===undefined?-1:links.find(offset);
+    if(rank<0)throw new Error(`Unlinked bytecode operand ${script.entry.path}:${offset}`);
+    return links.operandAt(rank);
+  }
+  /** Keep the null-Context results prepared for a linked script (script-context-results.mjs `compactContextResults`): the links become
+   * an object as long as its elements need to be, in the table in place of the old one. */
+  setContextResults(script,entries) {
+    const links=this.links.get(script);
+    if(links===undefined)throw new Error(`Script bytecode is not linked: ${script.entry.path}`);
+    this.links.set(script,links.prepared(entries));
+  }
+  /** The links that hold a script's prepared null-Context results, or undefined when they were never prepared. */
+  contextResultsOf(script) {
+    const links=this.links.get(script);
+    return links?.hasContexts?links:undefined;
   }
   nameOperandReference(script,node) {
     // A name operand: an expression's or a label table entry's FName (both carry nameIndex).
-    if(!this.linkedOperands.has(script)||node?.nameIndex===undefined)
+    if(!this.links.has(script)||node?.nameIndex===undefined)
       throw new Error(`Unlinked bytecode name operand ${script.entry.path}`);
     return {reference:true,get:()=>node.name,set:value=>{
       // Core's collector changes GNames entry flags, never the FName value.
@@ -167,7 +183,7 @@ export class ScriptObjects {
     }};
   }
   serializeExpression(script,offset,archive) {
-    if(!this.linkedOperands.has(script))throw new Error(`Script bytecode is not linked: ${script.entry.path}`);
+    if(!this.links.has(script))throw new Error(`Script bytecode is not linked: ${script.entry.path}`);
     // The operands are keyed by offset, so a decode of the script's own bytes walks the same slots. One tree is kept for the
     // expressions that follow in the same body.
     if(this.serializing?.script!==script)this.serializing={script,decoded:decodeScript(script)};
