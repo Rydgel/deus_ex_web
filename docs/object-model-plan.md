@@ -3,8 +3,8 @@
 Host representation only: none of this changes what the simulation computes, and each step is held to the same digests the earlier
 live-heap steps were ([live heap](live-heap.md), [object memory](object-memory.md), [Rust core](rust-core.md), [class graph](class-graph-design.md)).
 This is the plan behind [row 7.2.4](firefox-60fps-plan.md#native-slots-out-of-the-collectors-marking-2026-11-10): the collections that run
-past 1.5 s in Firefox's inline mode, whose marking is spread over the script process's objects. Step 1 (the load graph's native slots) is
-done and measured; the rest is ordered here by value slots and risk. A statement marked *(guess)* has no measurement or source behind it yet.
+past 1.5 s in Firefox's inline mode, whose marking is spread over the script process's objects. Steps 1 (the load graph's native slots) and 2
+(the per-script offset tables) are done and measured; the rest is ordered here by value slots and risk. A statement marked *(guess)* has no measurement or source behind it yet.
 
 ## What the measurements say
 
@@ -54,11 +54,11 @@ the branch, same method). What each holds is from the code named, or labelled.
 
 | Family | Slots | What it holds | Typed JS | Rust image | Risk |
 | --- | ---: | --- | --- | --- | --- |
-| `linkedOperands` + `linkedScripts` | 253 + 132 | `WeakMap` script -> `Map` expression offset -> identity (script-objects.mjs `link`) and script -> `Map` export index -> identity | offsets as a sorted `Int32Array`, identities as one dense array (a third of the slots; the WeakMap key keeps the lifetime) | *(guess)* the lowered words could index the same dense array | low |
+| `linkedOperands` + `linkedScripts` + `contextResults` (step 2, done) | 253 + 132 + 200 -> 99 | `WeakMap` script -> `Map` expression offset -> identity (script-objects.mjs `link`), script -> `Map` package index -> identity and script -> `Map` offset -> null-Context descriptor object: 7,222 scripts on the Island, 86,443 operands, 37,845 bindings, 11,651 descriptors | done: one `ScriptLinks` object a script (script-links.mjs, an Array subclass: the bindings' identities, then the context results' key and metadata, as its elements; offsets, binding positions, widths and the like in shared Int32 chunks); 28 k cells -> 8 k, 585 k slots -> 99 k | *(guess)* the lowered words could index the same dense array | low (done) | the digests, the link and class validators, the unit tests against the Maps |
 | `linkedClasses.defaults` | 326 | `cls.defaults`: a `DefaultsMap` of field key -> `Map` array index -> value; 25,000 inner maps (*guess:* most with one entry, a field that is not an array; about 13 slots each in the snapshot) | an inner store with the Map's API and an inline first entry; many creation sites (script-class-loader.mjs, script-runtime.mjs, script-window-host.mjs, script-map-properties.mjs), so the `DefaultsMap`'s `version` and `sameDefaults` comparison must keep their meaning | the class image holds the same values (script-runtime.mjs `imageCheckMode`) | low-medium |
 | `linkedClasses.fields`, `.propertyLink`, `linkedClasses` | 331, 143, 123 | per class a `Map` name -> field identity (direct fields), the inherited chain as an array, and the class object | a dense array and a name index; the identities are objects and stay | the class rows for BindEvents ([rust-core.md](rust-core.md) 2026-11-10) are the start | medium |
 | `packageObjects.function.body.tree`, `.built`, `.script` | 356, 138, 91 | decoded statements and expressions of the 900 functions that ran (nodes as literals since step 8), their compiled closures and the script's bytes view | a policy, not a representation: decode when a function runs and release it after, as step 8 did for operands *(guess: costs decode time on hot functions)* | the lowering (`RustScriptVm.lowerings.lowered.nodes`, 93, and `.entries.node`, 92) holds the words; the trees stay only for statements the lowering leaves to JavaScript | medium: the JS leaves need the nodes |
-| `packageObjects.metadata`, `contextResults` | 351, 200 | `PropertyMetadata` (14 stored fields and the type's own), `FunctionMetadata` (13), `ClassMetadata` (7); `contextResults`: a null-Context result per Context node | columns for the numeric fields (`arrayDim`, `elementSize`, `flags`, offsets) behind the same getters | the property rows of the class image are the same numbers (offset, size, flags) | medium: readers use `Object.hasOwn` and spreads in places |
+| `packageObjects.metadata` (`contextResults`: step 2, above) | 351 | `PropertyMetadata` (14 stored fields and the type's own), `FunctionMetadata` (13), `ClassMetadata` (7); `contextResults`: a null-Context result per Context node | columns for the numeric fields (`arrayDim`, `elementSize`, `flags`, offsets) behind the same getters | the property rows of the class image are the same numbers (offset, size, flags) | medium: readers use `Object.hasOwn` and spreads in places |
 | `packageObjects` | 412 | the process table: 31,050 identities `{asset, index, key, kind, name, loadRecord, function, metadata, fieldPending}`, 32,000 key strings | the key strings could be dropped for a (package, export) int key; identity objects stay (they are the public handle) | | medium |
 | `ScriptResourceRegistry.resources` | 219 | `Map` key -> resource record (textures, sounds, meshes, fonts: byte arrays and header values) | | | |
 | `ScriptObjects.objects` | 126 | the level's identities | cleared per level already | | |
@@ -69,8 +69,11 @@ By value slots recovered per unit of risk, and by what each unlocks:
 
 1. **Done (step 1):** the records' int words, `instanceValues` and `defaults.data` as `OffsetMap`, `recordsOfAddress`. About 0.6 M slots
    by the estimator; the numbers are in [the plan](firefox-60fps-plan.md#native-slots-out-of-the-collectors-marking-2026-11-10). It costs the Island's boot 30 to 90 ms (0.6 to 2.6% on a quiet host, interleaved, more under load): a slot read is a typed load and a compare, a write a little more.
-2. **Operand tables** (`linkedOperands`, `linkedScripts`: 385 k slots, a third left): a container swap in script-objects.mjs behind
-   `link`/`operandOf`; no lifetime change (the WeakMap key); checked by the digests and the link and class validators.
+2. **Done (step 2): the per-script offset tables** (`linkedOperands`, `linkedScripts`, `contextResults`: 585 k slots and 28 k cells by
+   the estimator on the Island, 99 k and 8 k after; the whole page 12.13 M to 11.57 M slots and 1.49 M to 1.46 M cells). One `ScriptLinks`
+   object a script in one `WeakMap` (the key keeps the lifetime), no lifetime change; the numbers are in
+   [the plan](firefox-60fps-plan.md#the-per-script-offset-tables-2026-11-11). No measurable cost: the Island's boot 5,716 against 5,679 ms
+   and its tick 4.38 ms against 4.38 ms (interleaved medians, four runs an arm).
 3. **Class defaults' inner maps** (`linkedClasses.defaults`: 326 k, 250 k recoverable): one class with the Map's API at the creation
    sites; `DefaultsMap.version` kept.
 4. **Hash tables** (343 k raw, 229 k references): delta tables if nothing writes a linked table afterwards (a check to write first);
@@ -99,6 +102,19 @@ Instances (the third table) go with the other worker's object-image changes and 
 * **Shapes must not carry values' kinds** (6,935 shapes and 25 MB of position tables against 304), and an offset map whose entries come
   in a per-class order must not have shapes at all.
 * **Tests must not assert on graphs**: a failing `assert.equal(shapeA, shapeB)` makes node inspect the shape graph without a limit (75 GB).
+
+## What step 2 taught
+
+* **Identities cannot go into a shared chunk of references.** The numbers of a script's tables (indexes, offsets, positions, widths) are in
+  shared Int32 chunks, but the identities are elements of the script's own object: a chunk of references would keep the identities of every
+  dead script that shares it alive, which is the lifetime change this plan avoids. The same holds for the descriptors' metadata.
+* **V8's element store for an object that grows one element at a time is 17 slots at least**, and the estimator counts it; an `Array`
+  subclass made with its length is exact (`%DebugPrint`). Growing it later is not exact either, so a script whose results are prepared after
+  its link gets a new object sized for them.
+* **Dropping what nothing reads cut more than the container swap.** The descriptors kept a spread copy of each function result's property and
+  its own metadata (3,374 of each for 349 functions): the three families fell from 585 k to 99 k slots, the page by 0.56 M.
+* **The tables no longer exist as Maps for the validators**: a check that compared the process's `contextResults` field now compares
+  `scriptLinks`.
 
 ## Checks every step needs
 

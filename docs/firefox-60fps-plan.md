@@ -3820,6 +3820,126 @@ the escalation; the full collection (all four zones, the atoms zone's sweep with
 are the ones `docs/object-model-plan.md` orders (hash buckets, the load records' remaining fields, linked classes and operands,
 function trees, identities), each measured the same way.
 
+#### The per-script offset tables (2026-11-11)
+
+Step 2 of the object-model plan ([object-model-plan.md](object-model-plan.md)): the three tables the script process keeps for each
+linked script. Host data layout only: every method keeps its results and error messages, and the output is identical (the checks below).
+Commit `16291e11`, from master 29168214.
+
+**What the tables held** (headless Island at 300 ticks, a probe over every script `ScriptObjects.link` linked): 7,222 scripts.
+
+| Table | Was | Size |
+| --- | --- | --- |
+| `linkedScripts` | `WeakMap` script -> `Map` package index -> identity | 37,845 entries (median 3 a script, p99 34, max 101) |
+| `linkedOperands` | `WeakMap` script -> `Map` expression offset -> identity | 86,443 entries (median 4, p90 28, p99 111, max 641); no operand is null; 48,598 of them name an identity another operand of the script names; offsets under 5,924 |
+| `contextResults` | `WeakMap` script -> `Map` value offset -> descriptor object (a body with no null-Context result shared one empty Map) | 11,651 descriptors in 2,561 Maps (4,661 scripts had none); 8,277 of a property, 3,374 of a function; 1,418 distinct by key, field, type, width and function; the function ones each hold a fresh spread copy of the return property's identity and its own metadata (13 to 18 fields) |
+
+Every binding is an identity some operand of the script also holds (0 bindings that no operand holds). The bindings are read while a
+function or state is prepared (`prepareClassOperands`, the field links, `prefetchDynamicLoadPackages`, and `reference` for the
+null-Context pass) and afterwards only by `reference` (one unit test) and by a second link of the same script (never on the Island).
+`operand()` is called about 41 times a tick in the steady state (200 ticks after 60 warm ones): a lookup that costs a few comparisons
+more is not on a path the tick can see (the compiled bodies and the Rust interpreter keep what they resolved while
+`ScriptObjects.operandEpoch` is unchanged).
+
+**What was cut:**
+
+* `ScriptLinks` (`script-links.mjs`), one object a script in one `WeakMap` (the key keeps the lifetime, as before; `ScriptProcess.scriptLinks`
+  replaces the three fields). Its numbers are a block of a shared 4,096-word Int32 chunk (the scheme of `native-slots.mjs`; a block of 1,024
+  words or more has an array of its own): the package indexes of the bindings in first-reference order, the expression offsets of the
+  operands in ascending order and the binding position of each. An operand is its binding's identity; a lookup is a binary search; an
+  operand the GC archive writes (`operandReference().set`) goes to a per-script `overrides` Map, so the binding stays what `reference`
+  answers. Everything `link`, `reference`, `operand`, `operandReference`, `nameOperandReference` and `serializeExpression` answered or
+  threw is as it was (the `link` awaits too: one `resolve` an index, as before), and the object is the bindings' read API (`get`, `has`,
+  `size`, `keys`, `values`, `entries`, `forEach`) for the callers that took the Map.
+* The null-Context results are a second block of the same object: the value offsets (ascending), the context offsets, the widths and a type
+  code a result, with the result's key string and metadata as elements after the identities (two references a result, no descriptor object).
+  `compactContextResults` makes them from the descriptors `prepareContextResults` still builds, so that function and its Map are as they
+  were; `zeroContextResult` reads the columns, or a Map of descriptors as before (the unit test and fixture harnesses use one), and raises the
+  same errors with the same fields, a DynamicCast result's width mismatch included. What nothing reads after the preparation is not kept:
+  the linked field, the function and its return property, the struct key, the property expression's offset and the encoded size
+  (`zeroContextResult` reads the width, key, type, context offset and metadata; a search of `src`, `scripts` and `test` finds no other reader).
+* A function result's metadata (a fresh object for each Context that calls the function: 3,374 for 349 functions) is shared with the
+  first one kept for the function when it equals it field for field (`Object.is` on each of its own keys); 3,025 of the 3,374 copies
+  were compared on the base tree and every one equalled the first. A copy that differs keeps its own.
+* The object is an `Array` subclass so that the engine allocates its element store exactly as long as it needs to be: V8 gives a plain
+  object that grows elements one at a time a store of 17 slots (`%DebugPrint`: `FixedArray[17]` for three elements, `[3]` for an
+  `Array` subclass made with `super(3)`), which the estimator counts. Growing it later is not exact either (a store of 3 grown to
+  7 elements had 20 to 22 slots), so `prepared()` makes a new object, sized for the results, for the 2,561 scripts that have some (the old one is garbage; an
+  empty set is marked on the object itself). The Array methods other than the Map-like ones above are not for use.
+* The bindings were a Map and the object is an Array; the callers only iterate them and read `get` (a search of `link`'s callers).
+  `validate-script-process` compared `runtime.contextResults === shared.contextResults`; the fields are gone, so it compares
+  `runtime.objects.links === shared.scriptLinks` (it passes on this tree and on 29168214).
+
+**Measured** (Chromium inline Island, 30 s after the arrival, `map-memory-census.mjs --snapshots 1`, `heap-families.mjs 4 45 --slots` and
+`--sm`; base master 29168214 against the branch, same host and method; the branch's snapshot is of the final code, a first one before the
+metadata sharing read 11.60 M slots; both snapshots were deleted after the readings):
+
+| | Base | Branch |
+| --- | ---: | ---: |
+| Value slots (whole page) | 12.13 M | 11.57 M (-0.56 M, -4.6%) |
+| SpiderMonkey-like cells | 1.49 M | 1.46 M |
+| Objects / edges / JS heap | 2.45 M / 18.7 M / 175 MB | 2.41 M / 18.4 M / 171 MB |
+| `linkedOperands` (objects, cells, slots) | 14 k, 7 k, 253 k | |
+| `linkedScripts` | 14 k, 7 k, 132 k | |
+| `contextResults` | 17 k, 14 k, 200 k | |
+| the three families together | 45 k, 28 k, 585 k | `ScriptProcess.scriptLinks`: 15 k, 8 k, 99 k |
+
+The whole page fell by more than the three families' difference in cells (28 k to 8 k, 20 k of the 30 k) because the descriptors' linked-field
+copies and metadata copies the tables kept are gone with them; the family figures are a first-reach attribution, so the whole page is the
+one to compare (the lesson of step 1). What is left of the family is the object a script (7,222), the identities as its elements (37,845
+references), the two references a result (23,300) and the five named fields of each object, most of them null or small numbers.
+
+**Checks** (output identical to the base 29168214; the references of `.cache/perf/heap-d/ref` are the base's):
+
+* `bench-sim --ticks 300` digests: Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, the base's.
+* `frame-alloc-meter.mjs --compare` against the base's files: identical 600 frames on the Island (`cebe25dcbba1f08a`), 400 on Training
+  (`17bd229a3923df21`) and on the 747 (`246552d18332b537`); `hud-stream-digest.mjs --frames 1500 --stream --compare` identical
+  (`16bfe2bd08ed1653`).
+* `npm test`: 1,026 tests, 1,026 pass, 0 skipped, 0 fail. The new `test/script-links.test.mjs` (9 tests) compares the store with the two
+  Maps it replaced on random scripts (bindings by index, order, `has`/`get` of absent and non-numeric keys, operands by offset with
+  repeated offsets, written operands, blocks sharing chunks and one larger than a chunk), the compact Context results with the descriptors
+  Map through `zeroContextResult` (values and every error field, the cast and the unprepared cases), the replacement by `prepared()`
+  (written operands carried over, a set prepared twice, an empty set), the metadata sharing, and `ScriptObjects` end to end (errors,
+  epoch and listeners, the same-buffer relink, a reference taken before the replacement). No assert is made on a graph.
+* Validators (`run-validators.mjs --filter F --jobs 1`, one 8 GB scope each, `NATIVE_PROBE_PYTHON` set): 47 filters, 67 validators pass,
+  1 skips (`save-game`: it needs the Wine capture `wc1`), 0 fail, covering the script link and class load (script-serialization,
+  script-process, class-loader and its struct-bools, class-default-travel, class-import-text, class-context-static-call,
+  script-class-bind, script-loaded-objects, script-struct-values and -layout, script-state-queries, linker-preload, -imports and
+  script-linker-lazy-loader, native-config-classes, the script, scripted-actor, sound, conversation and weapon constructions,
+  window-construction, property-serialize-item), the script VM (script-vm-interp and -x87, script-datalink-transmission), collection and
+  cleanup (process-collection, the four cleanup ones, loadmap-gc, process-memory, native-process-internal, native-goto-state,
+  native-door-state), spawn (script-spawn, script-spawn-touching, script-decoration), save and load (save-load-play, save-snapshot,
+  save-directory, save-info-corpus, level-save, rotating-brush-save, load-saves: all 41 internet save slots), travel (all nine: endings,
+  newgame, newgame-play, play, restore, restore-objects, restore-play, transitions and travel itself), the conversations (island,
+  instructor, conversation-binding, the three native-conversation ones, training-datalink-live and -datalinks, infolink-walking-trigger),
+  inventory-spawn and keypad. `validate-script-process` passes here and on 29168214 (17 s on each).
+* Play once in Chromium worker mode and once inline (`?sim=inline`) on the Island (`hitch-run.mjs --mode roam --seconds 25`): worker 2,422
+  frames (1,810 drawn), inline 1,963 (1,793 drawn); both `runtimeError` null, not paused, no console or page errors.
+
+**Tick and boot** (the base is a `git archive` of 29168214 in its own tree; interleaved, the order alternating; other work shared the
+lock-serialised host between the runs):
+
+* Tick: four interleaved pairs of `bench-sim` on the Island (120 warm and 300 ticks; pairs 1 and 3 base first, 2 and 4 branch first),
+  tick medians base 4.29, 4.38, 4.38 and 4.52 ms, branch 4.25, 4.30, 4.56 and 4.46: the median of the medians is 4.38 ms for both arms
+  (means 4.62 and 4.60 ms, CPU per tick 5.86 and 5.87 ms, p95 8.2 to 8.7 and 8.2 to 9.0 ms; both arms end on digest `611cd27609ddab78`).
+  The lookup is not on a path the tick can see, as the 41 calls a tick predicted.
+* Boot (`bench-sim --ticks 3`, the headless Island's boot and login, four interleaved rounds an arm, rounds 1 and 3 base first): base 5,700,
+  5,802, 5,731 and 5,621 ms, branch 5,759, 5,596, 5,611 and 5,746; medians 5,716 and 5,679 ms (-37 ms, -0.6%), inside the runs'
+  spread (181 and 163 ms). The link now allocates a position map and the arrays the block is built from, and the 2,561 scripts with results
+  a second object, against the three Maps it replaced; the sum is not measurable on a boot of 5.7 s.
+
+**Not done, and why.**
+
+* The Firefox marking is not measured here (the main session runs the interleaved A/B). Unverified: how SpiderMonkey allocates an `Array`
+  subclass instance's named fields (I expect them in a slots buffer, which the marker visits, not extra cells; not checked in Gecko's source
+  or measured), so the slots figure for the object's named fields is V8's.
+* Five named fields a script (`words`, `base`, `overrides`, `contextWords`, `contextBase`): the last three are null or zero for most
+  scripts and could be header words (21 k slots of nulls and numbers, tag tests for the marker).
+* The 23 k references of the results: a property result's key and metadata are its field identity's (the field is one of the script's
+  bindings), so one binding position could replace both; it would read `identity.metadata` at the call, which a later change to that
+  property would make differ from what was captured at the preparation, so it is not done without a check that nothing replaces it.
+* The identities themselves (37,845 references) are the script's lifetime hold on them and stay.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
