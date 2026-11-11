@@ -2,14 +2,18 @@ import {test,expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
 import { BASE } from './browsers.mjs';
 
-// The Training instructor (UNATCOTroop3) by ordinary use. The only setup is the simulation's place probe, which puts the player in
-// front of him and aims (it sets no frob target, flag, label or timer; the original HighlightCenterObject query selects him). The use is
-// the right mouse button (DefUser.ini RightMouse=ParseRightClick; F is CenterView). What the conversation does is read through the
-// simulation's probes, in either simulation mode (sim-worker.mjs `call`, or the page inline): conversationProbe for the conversation and
-// its speech, liveProbe for the frob target and the flags.
+// The Training instructor (UNATCOTroop3): his greeting by radius, then by ordinary use. The only setup is the simulation's place probe,
+// which puts the player in front of him and aims (it sets no frob target, flag, label or timer; the original HighlightCenterObject
+// query selects him). The use is the right mouse button (DefUser.ini RightMouse=ParseRightClick; F is CenterView). What the conversation
+// does is read through the simulation's probes, in either simulation mode (sim-worker.mjs `call`, or the page inline): conversationProbe
+// for the conversation and its speech, liveProbe for the frob target and the flags.
+// The original's rules (docs/script-instructor-conversation.md, "radius greeting"): MunitionsTrooperFrob's radiusDistance is 160 and the
+// use's MaxFrobDistance 112, so wherever a use can reach him, ScriptedPawn.Tick has already started the greeting by radius
+// (StartConversation(Self, IM_Radius)) with no key; a use is refused while it plays and in the first second after it ends; and radius
+// replays are held out for 5 s after (lastFirstPersonConvoTime), so a greeting started in that window is the use's.
 // Before the simulation worker this spec patched main.mjs and read the page's own game; the subtitle window's tree and the speech's
 // decoded sample it read that way are checked headless by scripts/validate-instructor-conversation.mjs, not here.
-test('ordinary use plays the instructor, terminates, takes the second route after FlagTrigger, and survives Player start',async({page})=>{
+test('the instructor greets by radius, plays again by ordinary use, terminates, takes the second route after FlagTrigger, and survives Player start',async({page})=>{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${BASE}/?debug=1`);
  await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
@@ -28,35 +32,42 @@ test('ordinary use plays the instructor, terminates, takes the second route afte
   await expect.poll(async()=>(await read(['@player'],['FrobTarget']))['@player'].FrobTarget,{timeout:5000}).toBe('UNATCOTroop3');
  };
  const use=()=>page.locator('#scene').click({position:{x:600,y:350},button:'right'});
+ // Every conversation the simulation reports, read back to back from here on. A greeting lasts 1.1 to 1.8 s of game time, and on a slow
+ // page (the Mac's headless Chromium draws with SwiftShader at 15 to 18 fps, stalls about a second as a conversation starts, and a click
+ // takes about a second to return: docs/mac-pass-2026-11-11.md) a poll begun after the step that starts it can find it over.
+ const seen=[];let watching=true;
+ const watcher=(async()=>{while(watching){const c=await conversation().catch(()=>null);seen.push({at:Date.now(),...(c??{con:null})});await new Promise(r=>setTimeout(r,50));}})();
+ const saw=(from,test)=>expect.poll(()=>seen.some(c=>c.at>=from&&test(c)),{timeout:15000,intervals:[100]}).toBe(true);
+ const ended=()=>expect.poll(conversation,{timeout:20000,intervals:[100]}).toBeNull();
  await page.locator('#scene').click({position:{x:600,y:350}});
  await page.waitForTimeout(2500);
  expect(await page.evaluate(()=>window.deusExViewer.status().mode)).toBe('play');
 
- // 1. The greeting: his speech, then the conversation ends by itself.
- // (The greeting lasts 1.1 to 1.8 s of game time. Playwright's polls back off to a second apart, which on a slow page (the Mac's
- // headless Chromium draws with SwiftShader, 18 fps, and stalls about a second as the conversation starts: docs/mac-pass-2026-11-10.md)
- // can straddle it, so these two sample every 100 ms.)
- await face([-80,0,0]);await use();
- await expect.poll(async()=>(await conversation())?.con??null,{intervals:[100]}).toBeTruthy();
- await expect.poll(async()=>(await conversation())?.speaker??null,{timeout:8000,intervals:[100]}).toBe('UNATCOTroop3');
- expect((await conversation())?.text?.length??0).toBeGreaterThan(0);
+ // 1. The greeting by radius: placed 80 units in front of him, his speech, then the conversation ends by itself.
+ let from=Date.now();await face([-80,0,0]);
+ await saw(from,c=>c.con==='MunitionsTrooperFrob'&&c.speaker==='UNATCOTroop3'&&(c.text?.length??0)>0);
  await mkdir('reports/instructor',{recursive:true});await page.screenshot({path:'reports/instructor/greeting.png'});
- await expect.poll(conversation,{timeout:15000}).toBeNull();
+ await ended();
  expect(await error()).toBeNull();
  expect((await page.evaluate(()=>window.deusExViewer.status().npcPreview.actors.filter(a=>a.actor.startsWith('UNATCO')).length))).toBe(4);
+ // ... and by ordinary use, past the 1 s repeat gate and inside the 5 s that hold radius replays out.
+ await page.waitForTimeout(1100);from=Date.now();await use();
+ await saw(from,c=>c.con==='MunitionsTrooperFrob'&&c.speaker==='UNATCOTroop3');
+ await ended();
 
- // 2. Natural movement through FlagTrigger.Touch sets MunitionsTrooperReady, and use then takes the second route.
+ // 2. Natural movement through FlagTrigger.Touch sets MunitionsTrooperReady, and the instructor takes the second route
+ // (MunitionsTrooperTake, radiusDistance 350: by radius or by the use, whichever comes first).
  await page.evaluate(([at])=>window.deusExViewer.placeProbe({location:at,rotation:[0,0,0]}),[troop.map((v,i)=>v+[-333,-60,40][i])]);
  await page.waitForTimeout(700);
  await page.keyboard.down('KeyW');
  try{await expect.poll(()=>flag('MunitionsTrooperReady'),{timeout:20000}).toBe(1);}finally{await page.keyboard.up('KeyW');}
  await page.waitForTimeout(1100);   // past the original 1 s repeat gate
- await face([-80,0,0]);await use();
- await expect.poll(async()=>(await conversation())?.con??null).toBe('MunitionsTrooperTake');
+ from=Date.now();await face([-80,0,0]);await use();
+ await saw(from,c=>c.con==='MunitionsTrooperTake');
  await page.screenshot({path:'reports/instructor/surrender.png'});
- await expect.poll(conversation,{timeout:20000}).toBeNull();
- await page.waitForTimeout(1100);await use();
- await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
+ await ended();
+ await page.waitForTimeout(1100);from=Date.now();await use();
+ await saw(from,c=>Boolean(c.con));
 
  // 3. Player start ends the conversation and starts over; the instructor speaks again.
  await page.locator('#tools-options').click();
@@ -65,9 +76,10 @@ test('ordinary use plays the instructor, terminates, takes the second route afte
  await expect.poll(conversation).toBeNull();
  expect(await error()).toBeNull();
  await page.waitForTimeout(2500);
- await face([-80,0,0]);await use();
- await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
- await expect.poll(conversation,{timeout:15000}).toBeNull();
+ from=Date.now();await face([-80,0,0]);await use();
+ await saw(from,c=>c.con==='MunitionsTrooperFrob');
+ await ended();
+ watching=false;await watcher;
  expect(await error()).toBeNull();
  expect(errors).toEqual([]);
 });

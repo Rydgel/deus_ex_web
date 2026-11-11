@@ -15,8 +15,18 @@ npm run build
 npx vite preview --host 127.0.0.1 --port 5174
 ```
 
-Open `http://127.0.0.1:5174/` (the original start: the folder gate, then the logo map), pick the game folder, and load Training from
-MenuMain. Keep the sound on, low (several checks are about the audio). `?debug=1` is not needed and changes the page; leave it off.
+Open `http://127.0.0.1:5174/?checks=1` (the original start: the folder gate, then the logo map), pick the game folder, and load
+Training from MenuMain. Keep the sound on, low (several checks are about the audio). `?debug=1` is not needed and changes the page; leave
+it off.
+
+**The recorder (`?checks=1`, 2026-11-11).** A one-line panel in the bottom left corner ("Checks recorder", a count of events, Copy report,
+Save, Clear) records what each row below looks for while you only act: the hidden intervals with the level's game time before and after
+and the frames, music and movement around them; a stop of the whole page while visible (system sleep); the audio context's changes, an
+output device change and underruns; Escape, F11, Alt+Enter and W as the page received them, with the pointer lock and fullscreen state;
+the pixel ratio and canvas sizes; the folder picks, the saves' source and the persistence answer; and any error. It keeps its log across a
+reload in the same tab. When a browser's checks are done, press **Copy report** (or Save, which downloads it) and paste the text back:
+the per-row facts are at the top, the full event list below. It adds only that panel to the page (passive listeners and the page's read
+probes, `src/viewer/hand-checks.mjs`). Use a new tab (or Clear) for the second browser's run.
 
 ## 7.5.1 Sound after a hidden tab or an interruption
 
@@ -77,5 +87,6 @@ MenuMain. Keep the sound on, low (several checks are about the audio). `?debug=1
 
 ## Recording
 
-Per row: browser and version, OS, the date, PASS or what differed, and a screenshot where something looked wrong. I turn them into
-row updates in `scripts/stage7-criteria.mjs`.
+Per browser: the recorder's report (Copy report), and in a line per row what you saw that it cannot (the sound coming back, the
+picture sharp, the browser's own banner or prompt and its wording), PASS or what differed, and a screenshot where something looked
+wrong. I turn them into row updates in `scripts/stage7-criteria.mjs`.

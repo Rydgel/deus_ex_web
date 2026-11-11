@@ -46,6 +46,9 @@ for(const [index,c] of cases.entries()){
  boundLevel.moveActor=function(...args){boundCalls.push({self:this,args});return c.return;};
  const runtime=Object.create(ScriptRuntime.prototype);
  runtime.boundaryNatives=new Set();runtime.levelFor=()=>boundLevel;
+ // The receiver stands for an attached actor, as in Play: soundField's reflected read answers only for attached instances since
+ // the bunker bundle (4ed50f0a).
+ runtime.instances=new WeakMap();runtime.instances.set(boundReceiver,{cls:null});
  runtime.collisionViewActors=new WeakSet();
  runtime.namedReference=(actor,name)=>({get:()=>actor.fields[name],set:v=>{actor.fields[name]=v;}});
  runtime.readNamed=(actor,name)=>runtime.namedReference(actor,name).get();
