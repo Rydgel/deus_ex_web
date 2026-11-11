@@ -100,12 +100,12 @@ test('NativeSlots keeps int32 words in a typed array and every other value exact
   next.forEach((value, offset) => seen.push([offset, value]));
   assert.deepEqual(seen, order);
   assert.ok(next.intRoom >= 16 && next.size === 24);
-  // two stores written alike share a shape; one that moved a slot has another
+  // two stores written alike share a shape, whatever values they hold: where a slot lives is the store's, not the shape's
   const a = new NativeSlots(), b = new NativeSlots(), c = new NativeSlots();
   for (const store of [a, b, c]) { store.set(0, 1, 4); store.set(4, null, 4); store.set(8, 3, 4); }
-  assert.equal(a.shape, b.shape);
-  c.set(8, null);
-  assert.notEqual(c.shape, a.shape);
+  assert.ok(a.shape === b.shape);
+  c.set(8, null, 4);    // the same width: the same key
+  assert.ok(c.shape === a.shape);
   assert.equal(a.value(8), 3);
   assert.equal(c.value(8), null);
   assert.equal(Object.is(new NativeSlots().assign(0, -0), -0), true);

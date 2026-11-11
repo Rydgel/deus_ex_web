@@ -11,12 +11,12 @@ test('a LoadRecord is its own slot store and records written alike share one slo
     record.assign(0x24, record === a ? null : a, 4);
   }
   c.set(0x08, 7, 2);
-  assert.equal(a.nativeSlots, a);
+  assert.ok(a.nativeSlots === a);   // identity checks use ok(x === y): a failing equal would make node inspect the whole record or shape graph, without limits
   assert.ok(a instanceof NativeSlots);
-  assert.equal(slotValue(b, 0x24), a);
+  assert.ok(slotValue(b, 0x24) === a);
   assert.equal(slotValue(a, 0x24), null);
-  assert.equal(b.shape, a.shape);          // the same writes in the same order
-  assert.notEqual(c.shape, a.shape);
+  assert.ok(b.shape === a.shape);          // the same writes in the same order
+  assert.ok(c.shape !== a.shape);
   assert.equal(c.width(0x08), 2);
   assert.equal(b.has(0x08), false);
   assert.equal(b.value(0x08), undefined);
