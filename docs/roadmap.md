@@ -1222,6 +1222,11 @@ measurements justify them. Validate supported desktop browsers, graphics capabil
 errors, resize/fullscreen, pointer-lock loss, pause/tab suspension, audio activation,
 local file access, and persistent storage behavior.
 
+**Closed (2026-11-12).** The [Stage 7 exit criteria](stage-7-exit-criteria.md) stand at 23 PASS, 10 ACCEPTED and 4 EXCLUDED:
+the validator sweep and the Stage 4, 5 and 6 gates pass on one commit (2439b054), and the browser suite passes there on Linux in
+Chromium and Firefox. The user closed the stage without the checks by hand and without the Mac's rerun of its Chromium suite;
+each ACCEPTED row names what was not run ([Stage 7 close](stage-7-exit-criteria.md#stage-7-close)).
+
 **Progress (2026-10-14/15): periodic hitches.** `?hitchlog=1` records what the page, the
 simulation worker and WebGL did in every frame and saves a file to send back
 ([hitch log](hitch-log.md), `scripts/analyze-hitchlog.mjs`). It found that the previous map's
