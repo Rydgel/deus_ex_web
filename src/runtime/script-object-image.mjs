@@ -134,8 +134,9 @@ export function layoutOwner(cls, graph) {
   if (owner !== undefined) return owner;
   owner = cls;
   const base = cls.base, link = cls.propertyLink, baseLink = base?.propertyLink;
-  if (base?.loadRecord && cls.loadRecord && cls.propertyOrder?.length === 0 && link && baseLink && link.length === baseLink.length &&
-    link.every((field, index) => field === baseLink[index]) &&
+  // (a class that declares no property holds its base's list itself: class-link-lists.mjs)
+  if (base?.loadRecord && cls.loadRecord && cls.propertyOrder?.length === 0 && link && baseLink &&
+    (link === baseLink || link.length === baseLink.length && link.every((field, index) => field === baseLink[index])) &&
     graph.slotOf(cls.loadRecord, 0x3c) === graph.slotOf(base.loadRecord, 0x3c))
     owner = layoutOwner(base, graph);
   layoutOwners.set(cls, owner);

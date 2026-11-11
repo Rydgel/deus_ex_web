@@ -6,7 +6,10 @@
  * 233,000 entries in copies of 230 classes' Maps. A changed default replaces the class's entry (the inner Maps are never changed
  * in place) and nothing writes a snapshot, so objects attached while the class's entries are the same ones share one copy.
  */
+import {DefaultsMap} from './defaults-map.mjs';
+
 const snapshots = new WeakMap();
+// (a class whose defaults are a DefaultsMap shares its frozen layer: nothing is copied; the Map path below is for any other table)
 
 const sameEntries = (copy, defaults) => {
   if (copy.size !== defaults.size) return false;
@@ -16,7 +19,9 @@ const sameEntries = (copy, defaults) => {
 
 /** A Map with `cls.defaults`'s entries now: the previous snapshot of the class when it still has exactly those entries. Read-only. */
 export function defaultsSnapshot(cls) {
-  const defaults = cls.defaults, kept = snapshots.get(cls);
+  const defaults = cls.defaults;
+  if (defaults instanceof DefaultsMap) return defaults.snapshot();
+  const kept = snapshots.get(cls);
   if (kept !== undefined && sameEntries(kept, defaults)) return kept;
   const copy = new Map(defaults);
   snapshots.set(cls, copy);
