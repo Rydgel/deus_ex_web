@@ -14,7 +14,8 @@ import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import { defaultsSnapshot } from './class-defaults-snapshot.mjs';
 import { NATIVE_HEADER_BINDINGS, LOADED_HEADER_BINDINGS, MirroredBinding, bindingReference, NO_BINDINGS, setBindingOf, deleteBindingOf } from './script-bindings.mjs';
-import {DefaultsMap} from './defaults-map.mjs';
+import {DefaultsMap, defaultValues, snapshotOfDefaults} from './defaults-map.mjs';
+import {propertyLinkOf, destructorLinkOf} from './class-link-lists.mjs';
 import {switchReader} from './switch-reader.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
@@ -498,6 +499,8 @@ const sameDefaultValues=(current,values)=>{
 };
 const sameDefaults=(snapshot,defaults)=>{
   if(snapshot.size!==defaults.size)return false;
+  // (a table nobody has written since the snapshot was taken from it is the snapshot)
+  if(defaults instanceof DefaultsMap&&defaults.isViewOf(snapshot))return true;
   for(const [key,values] of defaults)if(snapshot.get(key)!==values)return false;
   return true;
 };
@@ -887,8 +890,8 @@ export class ScriptRuntime {
           const base=metadata.base?await this.loadClass(record.asset,metadata.base):null;
           cls={record,metadata,base,nameCounter:0,...await this.members(record),
             ...await this.linkedChildren(record,metadata.children),defaults:new DefaultsMap(base?.defaults)};
-          cls.propertyLink=[...cls.propertyOrder,...(base?.propertyLink??[])];
-          cls.destructorLink=cls.propertyLink.filter(field=>field.metadata.flags&0x00400000);
+          cls.propertyLink=propertyLinkOf(cls.propertyOrder,base);
+          cls.destructorLink=destructorLinkOf(cls.propertyLink,cls.propertyOrder,base);
           for(const property of metadata.properties){
             const field=this.lookupMember(cls,'fields',property.name);
             if(!field)throw new Error(`Default property is not linked: ${record.key}.${property.name}`);
@@ -903,7 +906,7 @@ export class ScriptRuntime {
               // linker always builds; object references need no such work.
               if(value?.kind==='Class')await this.loadClass(value.asset,value.index);
             }
-            values.set(property.arrayIndex,value);cls.defaults.set(field.key,values);
+            values.set(property.arrayIndex,value);cls.defaults.set(field.key,defaultValues(values));
           }
         }
         if(record.key==='core.object')await this.field(this.lookupMember(cls,'fields','ObjectFlags'));
@@ -1074,7 +1077,7 @@ export class ScriptRuntime {
     let image=classImages.get(cls);
     if(image&&imageCurrent(image,cls))return image;
     const arena=this.objectArena(),base=arena.alloc(layout.size);
-    const defaults=new Map(cls.defaults),refs=new Array(layout.refCount).fill(null);
+    const defaults=snapshotOfDefaults(cls.defaults),refs=new Array(layout.refCount).fill(null);
     let poison=null;
     for(const [key,cell] of layout.cells){
       const field=layout.fields.get(key);
@@ -3653,7 +3656,7 @@ export class ScriptRuntime {
       // the class's Map in place: the class image and the interpreters' copies of it are current, and were rebuilt for each write
       // (docs/first-frames.md "Class defaults").
       if(sameDefaultValues(cls.defaults.get(field.key),values))return;
-      cls.defaults.set(field.key,values);
+      cls.defaults.set(field.key,defaultValues(values));
       classDefaultsChanged();
     });
   }

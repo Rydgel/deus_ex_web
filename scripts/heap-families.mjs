@@ -89,7 +89,7 @@ for(let n=0;n<N;n++){const f=fam[n];if(f<0)continue;const t=nodes[n*nf],s=nodes[
 console.log(`${file.split('/').pop()}: ${(totalObjs/1e6).toFixed(2)} M objects (${(synthetic/1e6).toFixed(2)} M number-value strings left out), ${(totalEdges/1e6).toFixed(1)} M edges, ${(totalBytes/1048576).toFixed(0)} MB JS heap; families at depth ${depth}: ${F}`);
 const bySm=process.argv.includes('--sm'),bySlots=process.argv.includes('--slots');
 const rows=[...Array(F).keys()].sort((a,b)=>bySlots?slots[b]-slots[a]:bySm?sm[b]-sm[a]:objs[b]-objs[a]).slice(0,top);
-if(bySm||bySlots)console.log(`SpiderMonkey-like cells: ${(totalSm/1e6).toFixed(2)} M; value slots: ${(totalSlots/1e6).toFixed(2)} M`);
+if(bySm||bySlots)console.log(`SpiderMonkey-like cells: ${(totalSm/1e6).toFixed(2)} M; value slots: ${(totalSlots/1e6).toFixed(2)} M (${totalSm} cells, ${totalSlots} slots)`);
 console.log(`   objects    edges    MB   numbers  strings  native MB  ${bySm||bySlots?'   SM cells     slots  ':''}family`);
 const heads=process.argv.includes('--heads');
 for(const f of rows){const h=head[f];if(heads&&h>=0){const t=nodes[h*nf];console.log(`           head: ${nodeTypes[t]} ${String(strOf(nodes[h*nf+1])).slice(0,50)} self ${nodes[h*nf+3]} edges ${nodes[h*nf+4]}`);}console.log(`${(objs[f]/1e3).toFixed(0).padStart(9)}k ${(outE[f]/1e6).toFixed(2).padStart(7)}M ${(bytes[f]/1048576).toFixed(1).padStart(6)} ${(nums[f]/1e3).toFixed(0).padStart(8)}k ${(strs[f]/1e3).toFixed(0).padStart(7)}k ${(native[f]/1048576).toFixed(1).padStart(9)}  ${bySm||bySlots?`${(sm[f]/1e3).toFixed(0).padStart(9)}k ${(slots[f]/1e3).toFixed(0).padStart(8)}k  `:''}${keys[f].slice(0,140)}`);}

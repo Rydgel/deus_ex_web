@@ -3820,6 +3820,95 @@ the escalation; the full collection (all four zones, the atoms zone's sweep with
 are the ones `docs/object-model-plan.md` orders (hash buckets, the load records' remaining fields, linked classes and operands,
 function trees, identities), each measured the same way.
 
+#### The linked classes' defaults and property links (2026-11-11)
+
+Step 3 of [object-model-plan.md](object-model-plan.md): the script process's per-class tables (`linkedClasses.defaults`, `.propertyLink`, `.destructorLink`, and
+the copies of the defaults that class images and attached objects held). Host data layout only: every method of the structures keeps its results, and the
+output is identical (the checks below). Code: `defaults-map.mjs`, `class-link-lists.mjs`, the class loader's link loop, `class-defaults-snapshot.mjs` and
+the class image in `script-runtime.mjs`. **Status: code and unit tests done; the heavy checks marked pending below wait for the Stage 7 gate.**
+
+**What the Island held** (a scenario of `bench-sim` read at tick 30 on the headless Island, base 29168214; 967 classes linked):
+
+* `cls.defaults`: 85,437 entries in 967 tables; 75,126 of them (88%) are the base's entry again (the same value Map), 4,286 differ from it and 6,025 are
+  fields the base has no default for. Only 97 classes' tables equal the base's whole. The value Maps: 10,311 different ones for 13,324 entries; 9,782 have one
+  entry (6,986 a scalar at index 0, with 1,873 different values; 2,793 an object or array at index 0, 2,324 different), 529 have more (463 different
+  contents). The plan's guess of 25,000 inner Maps (made from the browser snapshot's 24,000 objects) was 10,300; most of the redundancy was in the outer tables, not in
+  the inner Maps.
+* Every one of 302 class images and each class's attached-object snapshot was a flat copy of the whole table (`new Map(cls.defaults)`): `classImages.defaults`,
+  77 K slots, and the snapshot copies.
+* `propertyLink`: 455 of the 967 classes declare no property and held a copy of their base's list (219,386 entries over the 967 lists; 512 different
+  contents). `destructorLink`: 8,588 entries, 145 empty lists, 221 different contents among 967 arrays.
+
+**What was cut:**
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| A class's defaults table (`DefaultsMap`) | a `Map` of every field with a default, the base's entries copied at the link | its own entries (10,311 on the Island: the ones that differ from the base's, plus the class's own fields) over a frozen layer; a base's entry the class has no values for is hidden. `get`, `has`, `size` and the entries are those of the flat table holding the same writes (a randomized model test); `version` counts `set`, `delete` and `clear` as before |
+| A class image's `defaults` and an attached object's snapshot | `new Map(cls.defaults)` each | `cls.defaults.snapshot()`: the table's entries become a frozen layer the table stands on (a later write is an overlay on it), so the image, the objects and the classes linked from this one share it; a table nobody wrote since returns the layer it has, and `sameDefaults` is true at once for it. A table with more than 24 layers is flattened (a default rewritten between snapshots again and again) |
+| A default's values (index -> value) | a `Map` each, 10,311 | `DefaultValues`, a `Map` whose `set`, `delete` and `clear` throw: the Maps are shared, and a writer would change every class that shares one. A scalar at index 0 (7,000 of them) is one object a value (1,873): the table holds only values with no reference, so it keeps nothing of a purged class, and a NaN is not merged (`Object.is` does not tell its bits apart); `-0` is its own |
+| `propertyLink` and `destructorLink` of a class that declares no property | a copy of the base's arrays (219,386 entries over the 967 lists) | the base's arrays themselves; `destructorLink` is also the base's when none of the class's own properties has a destructor (512 arrays were 221 contents) and is otherwise `[...own with a destructor, ...base's]`, which is the filter of `[...own, ...base's list]` |
+
+What a reader sees is unchanged, with one exception: the order of the entries when a table is iterated (its own entries, then the layers'; the flat table's was
+the property list's). Nothing depends on it: the class loader's collection of the class-valued defaults, the one reader that did, takes the values while it makes
+the entries, in the property list's order. A changed default replaces the class's entry as before (nothing writes a value Map in place: the grep of every
+`defaults.get`/`set` site found none, and `DefaultValues` throws if one appears). A class links against its base's table as it is at the link loop, as it
+copied it then. The class image is rebuilt exactly when it was (the version check), or not at all when the table is provably equal: with the value Maps shared, a
+`refreshConfigDefaults` that rewrites equal values, or a default written back to what the image has, is no longer a change by `sameDefaults` (the image built from
+equal contents is equal). Link arrays: nothing changes one (grep of every `propertyLink`/`destructorLink` reader); `FREEZE_LINKS=on` (Node's environment) freezes
+them and checks each class's `destructorLink` against the filter, and the digests and validators run with it. `layoutOwner` and the Rust VM's chain check read
+the lists by their members, as before (`layoutOwner` answers at once for an identical array).
+
+**Slots** (Chromium inline Island 30 s after the arrival, `map-memory-census.mjs --sim inline --snapshots 1`, `heap-families.mjs 4 300 --slots`/`--sm`;
+base 29168214's snapshot against the branch's; the census was taken before the last cut of `destructorLink` (sharing it when the class's own properties have no
+destructor), so its figures are a little short of the code's):
+
+| | Base | Branch |
+| --- | ---: | ---: |
+| Value slots (whole page) | 12,133,600 | 11,689,301 (-444 K, -3.7%) |
+| SpiderMonkey-like cells | 1,485,826 | 1,480,918 (-4.9 K, -0.3%) |
+| Objects / edges / JS heap | 2.45 M / 18.7 M / 175 MB | 2.44 M / 18.2 M / 171 MB |
+| Page JS after forced collections (census row) | 173.3 MB | 168.7 MB |
+| `linkedClasses.defaults` (all its subfamilies) | 322 K slots, 13 K cells | 59 K slots, 6 K cells (`.own` 40 K, `.parent.own` 12 K, the table objects 7 K) |
+| `ScriptRuntime.classImages.defaults` | 77 K, 0 K cells | 24 K, 2 K cells |
+| `linkedClasses.propertyLink` | 142 K (0.45 M edges) | 59 K (0.18 M edges) |
+| `linkedClasses.destructorLink` | 9 K | 4 K |
+| The four families | 553 K slots, 15 K cells | 146 K slots, 10 K cells |
+
+The structure afterwards (the same scenario probe on the branch at tick 30, before the `destructorLink` cut): 967 tables, 413 frozen layers reached, 881 own Maps
+with 10,311 entries in all (the 4,286 + 6,025 above, counted from the other side), the visible entries unchanged at 85,437, at most 8 layers under a table; 5,198
+value Maps (from 10,311: the 1,873 scalar ones, the 2,793 with an object, 529 with more entries); 512 `propertyLink` arrays holding 92,459 entries (from 967
+arrays and 219,386). The cells moved little: about 5,100 value Maps and 455 arrays went, and the layers and own Maps cost about 1,300 new objects (413 and 881); the cut is in the references (440 K slots, 0.5 M edges), which is what the plan expected of a step that keeps the objects'
+lifetimes.
+
+**Checks** (all against the base 29168214; "final" is the code of this commit):
+
+* `bench-sim --ticks 300` digests with `FREEZE_LINKS=on IMAGE_CHECK=verify` (the version and the full walk agree at every construction), final code: Island
+  `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, the same as the base; the Island alone without the switches on the code
+  before the `destructorLink` sharing, the same.
+* Unit tests (final): `defaults-map.test.mjs` (60 seeds of 500 random `set`/`delete`/`clear`/`snapshot`/derive steps against a flat Map model: contents, size, version
+  and every earlier snapshot; frozen layers throw; a derived table keeps its base as it linked; layers that pile up; `DefaultValues` immutable; scalar interning
+  and its edges: `-0`, NaN, kinds, objects, index 1), `class-link-lists.test.mjs` (shared and own arrays, own-first order, the filter's equality), and
+  `class-defaults-snapshot`, `instance-class-sharing`, `classes`, `script-class-registration`, `script-class-serialization`, `script-object-construction`,
+  `script-property-lifecycle`, `script-spawn` and `script-config`: 36 tests, 0 fail (11 of them again with `FREEZE_LINKS=on`). The whole suite on the code
+  before the `destructorLink` sharing: 1,027 tests, 1,027 pass, 0 fail.
+* Boot time (`bench-sim --ticks 3 --warm 0`, Island, five rounds an arm interleaved, the base a `git archive` of 29168214, the host running other jobs, load
+  about 5, final code): base 5,438, 5,181, 5,180, 5,430, 5,262 ms (median 5,262, mean 5,298), branch 5,148, 5,168, 5,133, 5,336, 5,280 ms (median 5,168, mean
+  5,213): -1.8% by the medians, no difference beyond the spread. The link loop reads the base's entry for every field through the layers (a probe: 26 ns a read
+  at 8 layers against 4.7 ns in a flat Map, about 220,000 reads at the boot); in the steady state the table is read about 44 times a tick.
+
+**Pending** (heavy; run after the Stage 7 gate): the whole `npm test` on the final code; `frame-alloc-meter.mjs --compare` on the three maps (Island 600 frames,
+the others 400) and `hud-stream-digest.mjs --frames 1500 --stream --compare` against `.cache/perf/heap-d/ref/`; the validators of the area with
+`FREEZE_LINKS=on` (class loader, class-default-travel, class-import, config, property, object image/layout/properties/handles, cleanup, linker, state, spawn,
+decoration, save, load-game, load-saves, level-save, travel, island, instructor, play-hud, process-collection, process-memory, original-loaded,
+inventory-spawn, weapon-construction, window, gc-underline, loadmap, script-class-bind, native-process-internal, world-destroy, end-load, npc-weapon-startup,
+script-process); interleaved tick pairs on the Island; a 25 s roam in Chromium in worker mode and inline; the census again on the final code. Until they
+pass, this step is not mergeable.
+
+**Left.** Classes that declare properties still hold their own `propertyLink` (512 arrays, 92 K entries): a persistent list would change the readers' array API.
+The 2,793 value Maps with an object or array at index 0 are not merged (a table keyed by identity would keep a purged class's references; 2,324 different
+identities, so at most 470 Maps). The class tables' own Maps (881) and layers (413) are separate objects from the table that holds them; folding them into one
+would save up to 1,300 cells. Marking time is not measured here: the interleaved Firefox A/B runs on master.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

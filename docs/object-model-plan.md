@@ -55,8 +55,8 @@ the branch, same method). What each holds is from the code named, or labelled.
 | Family | Slots | What it holds | Typed JS | Rust image | Risk |
 | --- | ---: | --- | --- | --- | --- |
 | `linkedOperands` + `linkedScripts` | 253 + 132 | `WeakMap` script -> `Map` expression offset -> identity (script-objects.mjs `link`) and script -> `Map` export index -> identity | offsets as a sorted `Int32Array`, identities as one dense array (a third of the slots; the WeakMap key keeps the lifetime) | *(guess)* the lowered words could index the same dense array | low |
-| `linkedClasses.defaults` | 326 | `cls.defaults`: a `DefaultsMap` of field key -> `Map` array index -> value; 25,000 inner maps (*guess:* most with one entry, a field that is not an array; about 13 slots each in the snapshot) | an inner store with the Map's API and an inline first entry; many creation sites (script-class-loader.mjs, script-runtime.mjs, script-window-host.mjs, script-map-properties.mjs), so the `DefaultsMap`'s `version` and `sameDefaults` comparison must keep their meaning | the class image holds the same values (script-runtime.mjs `imageCheckMode`) | low-medium |
-| `linkedClasses.fields`, `.propertyLink`, `linkedClasses` | 331, 143, 123 | per class a `Map` name -> field identity (direct fields), the inherited chain as an array, and the class object | a dense array and a name index; the identities are objects and stay | the class rows for BindEvents ([rust-core.md](rust-core.md) 2026-11-10) are the start | medium |
+| `linkedClasses.defaults` | 326 | `cls.defaults`: a `DefaultsMap` of field key -> `Map` array index -> value; *measured:* 85,437 entries over the Island's 967 classes, 75,126 of them the base's entry again, and 10,311 different value Maps (9,782 with one entry: 6,986 a scalar at index 0, 1,873 different) | **done (step 3):** the table is its own entries over a frozen layer of its base's (`snapshot()` is the layer, so images and attached objects share it), the value Maps are immutable and the scalar ones interned; 322 k + 77 k (`classImages.defaults`) slots to 59 k + 24 k | the class image holds the same values (script-runtime.mjs `imageCheckMode`) | low-medium |
+| `linkedClasses.fields`, `.propertyLink`, `linkedClasses` | 331, 143, 123 | per class a `Map` name -> field identity (direct fields), the inherited chain as an array, and the class object | a dense array and a name index; the identities are objects and stay. `propertyLink` and `destructorLink` of a class that declares no property are its base's arrays: **done (step 3)**, 143 k to 59 k slots | the class rows for BindEvents ([rust-core.md](rust-core.md) 2026-11-10) are the start | medium |
 | `packageObjects.function.body.tree`, `.built`, `.script` | 356, 138, 91 | decoded statements and expressions of the 900 functions that ran (nodes as literals since step 8), their compiled closures and the script's bytes view | a policy, not a representation: decode when a function runs and release it after, as step 8 did for operands *(guess: costs decode time on hot functions)* | the lowering (`RustScriptVm.lowerings.lowered.nodes`, 93, and `.entries.node`, 92) holds the words; the trees stay only for statements the lowering leaves to JavaScript | medium: the JS leaves need the nodes |
 | `packageObjects.metadata`, `contextResults` | 351, 200 | `PropertyMetadata` (14 stored fields and the type's own), `FunctionMetadata` (13), `ClassMetadata` (7); `contextResults`: a null-Context result per Context node | columns for the numeric fields (`arrayDim`, `elementSize`, `flags`, offsets) behind the same getters | the property rows of the class image are the same numbers (offset, size, flags) | medium: readers use `Object.hasOwn` and spreads in places |
 | `packageObjects` | 412 | the process table: 31,050 identities `{asset, index, key, kind, name, loadRecord, function, metadata, fieldPending}`, 32,000 key strings | the key strings could be dropped for a (package, export) int key; identity objects stay (they are the public handle) | | medium |
@@ -71,8 +71,12 @@ By value slots recovered per unit of risk, and by what each unlocks:
    by the estimator; the numbers are in [the plan](firefox-60fps-plan.md#native-slots-out-of-the-collectors-marking-2026-11-10). It costs the Island's boot 30 to 90 ms (0.6 to 2.6% on a quiet host, interleaved, more under load): a slot read is a typed load and a compare, a write a little more.
 2. **Operand tables** (`linkedOperands`, `linkedScripts`: 385 k slots, a third left): a container swap in script-objects.mjs behind
    `link`/`operandOf`; no lifetime change (the WeakMap key); checked by the digests and the link and class validators.
-3. **Class defaults' inner maps** (`linkedClasses.defaults`: 326 k, 250 k recoverable): one class with the Map's API at the creation
-   sites; `DefaultsMap.version` kept.
+3. **Done (step 3): the linked classes' defaults and property links.** A class's defaults table is its own entries over a frozen layer of
+   its base's (88% of the Island's 85,000 entries repeated the base's), a class image and an attached object's snapshot are that layer
+   instead of a copy, a default's values are immutable and a scalar is one shared object, and a class that declares no property holds
+   its base's `propertyLink` and `destructorLink`. Whole page 12.13 M to 11.69 M value slots (-3.7%), cells 1,485,826 to 1,480,918; the
+   families it touched 553 k to 146 k slots. The numbers, checks and load time are in
+   [the plan](firefox-60fps-plan.md#the-linked-classes-defaults-and-property-links-2026-11-11).
 4. **Hash tables** (343 k raw, 229 k references): delta tables if nothing writes a linked table afterwards (a check to write first);
    otherwise indices into the object table when it exists.
 5. **`objectHash`** (115 k, 35 k strings) and the identity table's key strings (32 k): numeric keys.
@@ -99,6 +103,16 @@ Instances (the third table) go with the other worker's object-image changes and 
 * **Shapes must not carry values' kinds** (6,935 shapes and 25 MB of position tables against 304), and an offset map whose entries come
   in a per-class order must not have shapes at all.
 * **Tests must not assert on graphs**: a failing `assert.equal(shapeA, shapeB)` makes node inspect the shape graph without a limit (75 GB).
+
+## What step 3 taught
+
+* **Measure the table before choosing the representation.** The plan guessed 25,000 inner Maps and an inline-first-entry store; the Island has 10,300 value
+  Maps, and 88% of the 85,000 outer entries repeat the base's. A layered table over frozen layers took 75,000 entries out; interning the scalar value Maps took
+  5,100 objects.
+* **A class image is a snapshot, so a frozen layer is the right copy.** `new Map(cls.defaults)` for each image and attached object was another 77 K slots
+  (14% of the four families); `snapshot()` costs nothing.
+* **The cell count barely moves when the references do** (-0.3% cells against -3.7% slots): this family's gain is in what the marker visits, not in how many
+  objects it marks.
 
 ## Checks every step needs
 

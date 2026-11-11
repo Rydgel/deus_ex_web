@@ -1,7 +1,8 @@
 /** Original class loading with the VM's canonical identity/value representation.
  * See docs/script-load-graph.md for original authority and remaining services.
  */
-import {DefaultsMap} from './defaults-map.mjs';
+import {DefaultsMap, defaultValuesOf} from './defaults-map.mjs';
+import {propertyLinkOf, destructorLinkOf} from './class-link-lists.mjs';
 import {readClass} from '../unreal/classes.mjs';
 import {ClassMetadata} from './class-metadata.mjs';
 import {createScriptLoadGraph} from './script-load-graph.mjs';
@@ -91,12 +92,12 @@ export class ScriptClassLoader {
     for (const field of cls.propertyLink ?? []) {
       const property = field.loadRecord;
       if (!property || !(slotOf(property, 0x3c) & 0x4000)) continue;
-      const values = new Map();
+      const indices = [], values = [];
       for (let index = 0; index < slotOf(property, 0x34); index += 1) {
         const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
-        if (data.has(offset)) values.set(index, this.value(property, data.get(offset)));
+        if (data.has(offset)) { indices.push(index); values.push(this.value(property, data.get(offset))); }
       }
-      if (values.size) cls.defaults.set(field.key, values);
+      if (indices.length) cls.defaults.set(field.key, defaultValuesOf(indices, values));
     }
   }
 
@@ -237,7 +238,7 @@ export class ScriptClassLoader {
       labelTableOffset: slotOf(loaded, 0x80), scriptSize: slotOf(loaded, 0x48)});
     const cls = {record, metadata, base, loadRecord: loaded, nameCounter: 0,
       fields: new Map(), methods: new Map(), states: new Map(), stateOrder: [],
-      propertyOrder: [], defaults: new DefaultsMap(), defaultsSource: 'original-linker-serialized'};
+      propertyOrder: [], defaults: null, defaultsSource: 'original-linker-serialized'};
     for (let child = slotOf(loaded, 0x38); child; child = slotOf(child, 0x2c)) {
       const identity = this.identity(child);
       const kind = propertyKindOf(child), name = nameText(slotOf(child, 0x20)).toLowerCase();
@@ -255,33 +256,10 @@ export class ScriptClassLoader {
         cls.propertyOrder.push(identity);
       }
     }
-    cls.propertyLink = [...cls.propertyOrder, ...(base?.propertyLink ?? [])];
-    cls.destructorLink = cls.propertyLink.filter(field => field.metadata.flags & 0x00400000);
-    const data = loaded.defaults.data;
-    for (const field of cls.propertyLink) {
-      const property = field.loadRecord;
-      if (!property) throw new Error(`Native default property is not loaded: ${field.key}`);
-      // The values of this property, per index, in a scratch list (no Map yet): a field the base class links too usually has the base's
-      // raw defaults, and then the same values; the base's Map stands for them (nothing changes a defaults Map in place: a changed
-      // default replaces the class's entry). A subclass otherwise held its own Map and table for every inherited field
-      // (docs/live-heap.md, steps 2 and 3).
-      scratchIndices.length = 0; scratchValues.length = 0;
-      for (let index = 0; index < slotOf(property, 0x34); index += 1) {
-        const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
-        if (data.has(offset)) { scratchIndices.push(index); scratchValues.push(this.value(property, data.get(offset))); }
-      }
-      if (!scratchIndices.length) continue;
-      const baseValues = base?.defaults.get(field.key);
-      let same = baseValues !== undefined && baseValues.size === scratchIndices.length;
-      for (let i = 0; same && i < scratchIndices.length; i += 1)
-        same = baseValues.has(scratchIndices[i]) && Object.is(baseValues.get(scratchIndices[i]), scratchValues[i]);
-      if (same) cls.defaults.set(field.key, baseValues);
-      else {
-        const values = new Map();
-        for (let i = 0; i < scratchIndices.length; i += 1) values.set(scratchIndices[i], scratchValues[i]);
-        cls.defaults.set(field.key, values);
-      }
-    }
+    cls.propertyLink = propertyLinkOf(cls.propertyOrder, base);
+    cls.destructorLink = destructorLinkOf(cls.propertyLink, cls.propertyOrder, base);
+    // (made here, after the awaits above: the table views the base's as it is at the loop)
+    const data = loaded.defaults.data, baseDefaults = base?.defaults, defaults = cls.defaults = new DefaultsMap(baseDefaults);
     // Class-valued defaults (class'WeaponAssaultGun' inside InitialInventory)
     // must carry linked ancestry before the VM can cast them. The original
     // linker loads referenced exports while serializing defaults; identity()
@@ -293,7 +271,36 @@ export class ScriptClassLoader {
       if (Array.isArray(value)) { for (const member of value) collect(member); return; }
       if (typeof value === 'object' && !value.kind) for (const member of Object.values(value)) collect(member);
     };
-    for (const values of cls.defaults.values()) for (const value of values.values()) collect(value);
+    // The class's defaults start as its base's table (a view of its frozen layer: defaults-map.mjs), so the loop sets only the entries that
+    // differ from it; an entry the base has and this class has no values for is hidden. Every entry's values are collected, in the order
+    // of the property list, which is the order the entries were made in.
+    for (const field of cls.propertyLink) {
+      const property = field.loadRecord;
+      if (!property) throw new Error(`Native default property is not loaded: ${field.key}`);
+      // The values of this property, per index, in a scratch list (no Map yet): a field the base class links too usually has the base's
+      // raw defaults, and then the same values; the base's values stand for them (nothing changes a defaults Map in place: a changed
+      // default replaces the class's entry). A subclass otherwise held its own Map and table for every inherited field
+      // (docs/live-heap.md, steps 2 and 3).
+      scratchIndices.length = 0; scratchValues.length = 0;
+      for (let index = 0; index < slotOf(property, 0x34); index += 1) {
+        const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
+        if (data.has(offset)) { scratchIndices.push(index); scratchValues.push(this.value(property, data.get(offset))); }
+      }
+      const baseValues = baseDefaults?.get(field.key);
+      if (!scratchIndices.length) {
+        if (baseValues !== undefined) defaults.delete(field.key);
+        continue;
+      }
+      let values = baseValues;
+      let same = values !== undefined && values.size === scratchIndices.length;
+      for (let i = 0; same && i < scratchIndices.length; i += 1)
+        same = values.has(scratchIndices[i]) && Object.is(values.get(scratchIndices[i]), scratchValues[i]);
+      if (!same) {
+        values = defaultValuesOf(scratchIndices, scratchValues);
+        defaults.set(field.key, values);
+      }
+      for (const value of values.values()) collect(value);
+    }
     // A back-edge (A's defaults reference B, B's reference A) resolves the way
     // the original linker does: the export already on the load stack is
     // returned in progress instead of awaited into a circular dependency.
