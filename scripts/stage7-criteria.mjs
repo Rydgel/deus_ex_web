@@ -10,18 +10,19 @@
  *            host, or every supported browser.
  *   status   as last measured (a Stage 7 row is a measurement, not only the existence of a proof): PASS, PARTIAL (a proof exists but not
  *            for every browser or machine the row names, or not since a change that touches it), FAIL (measured, it misses the bound),
- *            MISSING (no proof, or no measurement), EXCLUDED.
+ *            MISSING (no proof, or no measurement), EXCLUDED; ACCEPTED (the user closed the stage with the part `accepted` names not
+ *            run: the checks only a person in a real browser can do, 2026-11-11; what the headless proofs show is kept in `weak`).
  *   decision the user's decision of 2026-10-28 the row rests on (D1 to D6). */
 
 export const CLAUSES = Object.freeze({
   1: 'Supported browsers', 2: 'Frame time', 3: 'Loading time', 4: 'Memory and long sessions', 5: 'Audio', 6: 'Window and input',
   7: 'Graphics capability and failures', 8: 'Files and storage', 9: 'Failure recovery', 10: 'Regression coverage', 11: 'Excluded',
 });
-export const STATUSES = Object.freeze(['PASS', 'PARTIAL', 'FAIL', 'MISSING', 'EXCLUDED']);
+export const STATUSES = Object.freeze(['PASS', 'ACCEPTED', 'PARTIAL', 'FAIL', 'MISSING', 'EXCLUDED']);
 
 export const CRITERIA = [];
 const add = (id, claim, kind, status, extra = {}) =>
-  CRITERIA.push({id, clause: Number(id.split('.')[1]), claim, kind, status, proof: [], machine: '-', need: null, weak: null, decision: null, excluded: null, ...extra});
+  CRITERIA.push({id, clause: Number(id.split('.')[1]), claim, kind, status, proof: [], machine: '-', need: null, weak: null, decision: null, excluded: null, accepted: null, ...extra});
 const ALL = 'all browsers', MAC = 'Mac', LINUX = 'Linux';
 
 // 7.1 Supported browsers (D1) -----------------------------------------------------------------------------------------------------------
@@ -78,9 +79,11 @@ add('7.4.3', 'the one-hour session (D5) in Chrome and Firefox', 'H', 'PASS', {de
   proof: ['session-hour.mjs ([long session](long-session.md))'],
   weak: 'Chrome (worker) and Firefox (inline) pass on the Mac. Chrome, 2026-11-09 (0a25b847, [Mac pass](mac-pass-2026-11-08.md#after-the-fix-the-hour-again)): no runtime error, ten map changes, 5 of 5 saves, the last Island visit +1.2 % from the warm plateau, the median frame work 0.0 % (page) and +1.8 % (worker), no left level held at any of its 33 readings; on dfd61024 it failed (+13.0 %, worker +9.3 %): three holders each kept a left level now and then (the trace kernel\'s last model, and accessors made per call in setSpawnActorZone and the physics adapters, kept by V8\'s allocation sites), fixed in 0a25b847 ([map memory](map-memory.md#the-one-hour-sessions-held-levels-2026-11-09-mac)). Firefox, 2026-11-09 (177e242a, the forced collection through Gecko\'s memory-report FIFO, the host under swap, [Mac pass](mac-pass-2026-11-09.md#743-the-hour)): no runtime error, ten map changes, 5 of 5 saves, the last Island visit +0.5 % from the 973.0 MB plateau, the median page frame work 8.0 then 7.0 ms, five Wasm memories at all 43 readings. The holds were intermittent, so one clean hour in each is evidence, not proof. Linux, 2026-11-04 (8f82b56b, before those fixes), with the first plateau after a warm-up pass (the user\'s reading of D5): Chrome -2.4 %, Firefox +6.2 %, the frame work within bounds'});
 
+const BY_HAND = 'closed without its [checks by hand](stage-7-hand-checks.md) by the user\'s decision of 2026-11-11 (no more Mac passes; "close without")';
+
 // 7.5 Audio (D6) ------------------------------------------------------------------------------------------------------------------------
-add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'PARTIAL',
-  {machine: `${MAC}, ${LINUX}`, proof: ['browser-tests/audio-resume.spec.mjs', 'validate-galaxy-music-play.mjs'],
+add('7.5.1', 'sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a real hidden tab and a real interruption of the audio device, in either browser`, machine: `${MAC}, ${LINUX}`, proof: ['browser-tests/audio-resume.spec.mjs', 'validate-galaxy-music-play.mjs'],
     weak: 'passes in Chromium and Firefox on Linux, 2026-11-04: the first click starts the logo map\'s song; a hidden page (modelled, as headless browsers keep a background tab visible) keeps the mix playing, as the original\'s DSBCAPS_GLOBALFOCUS buffer does, and the game\'s sound comes back with its ticks; a suspended context resumes by itself (before, only a key or a click resumed it, and a key after Exit brought the sound back); on the Mac (2026-11-09) the spec passes in Firefox and Playwright\'s WebKit, and in Chromium when run again (in the whole run no music came in the second after the click, on a loaded host); a real hidden tab and a system interruption not run'});
 add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s plus one render quantum (D6)', 'O', 'PASS',
   {decision: 'D6', machine: `${MAC}, ${LINUX}`, proof: ['galaxy-output-capture.sh latency and audio-latency-original.mjs (the original under Wine or CrossOver)',
@@ -88,17 +91,17 @@ add('7.5.2', 'a sound\'s latency from PlaySound to output ≤ the original\'s pl
     weak: 'passes on the Mac, 2026-11-11 (881d4cbc, [Mac pass](mac-pass-2026-11-11.md#4-sound-start-latency-752)): the original under CrossOver 26.3 over 20 minutes, take median 44.39 ms and p95 57.11 (the bound 47.29 and 60.01); Play right after, Chromium (worker) 43.06 and 51.66, Firefox (inline) 43.46 and 51.93. Two caveats: the reader\'s cursor check had to accept 89 % of the first 200 callbacks there (CrossOver\'s cursor moves in 2,048-byte steps out of step with Galaxy\'s callbacks, and no other dword matches at all), which the user accepted on 2026-11-11 (the check is now 85 %; Linux\'s 200 of 200 and its figures unchanged); and the start placement the uniform take assumes is confirmed for 109 of 250 real starts there (100 of 109 on Linux), the rest not examined. passes on Linux, 2026-11-04: from a start to the host taking its first frame out of Galaxy\'s buffer (D6\'s "output" as the user chose to read it, 2026-11-04; each host\'s own buffering to the device after it is reported, not bounded), the original under Wine 11.20 over 20 minutes (the phase of Galaxy\'s 20 ms timer against Wine\'s 10 ms mixer moves its figure by several ms, so a minute is not enough) median 45.6 ms and p95 56.1; Play in Chromium (worker) 46.0 and 55.4, in Firefox (inline) 45.0 and 55.7'});
 
 // 7.6 Window and input ------------------------------------------------------------------------------------------------------------------
-add('7.6.1', 'the pointer lock is taken on the first click; one Escape releases it and reaches the game (MenuMain); a lost lock or a blur lets go of the held input and Play goes on (no pause, the user\'s choice 2026-10-30); a hidden page resumes without catch-up', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['browser-tests/pointer-lock.spec.mjs', 'browser-tests/original-start-input.spec.mjs'],
+add('7.6.1', 'the pointer lock is taken on the first click; one Escape releases it and reaches the game (MenuMain); a lost lock or a blur lets go of the held input and Play goes on (no pause, the user\'s choice 2026-10-30); a hidden page resumes without catch-up', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a real Escape under the pointer lock (Playwright plays the browser\'s rule as its call), a real tab or application switch with a key held, and a real hidden page\'s resume`, machine: ALL, proof: ['browser-tests/pointer-lock.spec.mjs', 'browser-tests/original-start-input.spec.mjs'],
     weak: 'Chrome\'s worker mode, headless, Linux (2026-10-30): the browser\'s Escape rule played as its call (exitPointerLock, no key) opens MenuMain once, a delivered key as well counts once, the free mouse drives the menu; a blur lets go of the held movement and the level\'s clock goes on; a real Escape is not exercised under Playwright (the user saw two presses needed on Chrome Linux and macOS before the change); the hidden-page resume is not tested; on the Mac (2026-11-09) both specs pass in Chromium and Firefox, and Playwright\'s WebKit refuses the pointer lock without window focus, so they cannot pass there'});
-add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox)', 'O, H', 'PARTIAL',
-  {machine: ALL, proof: ['browser-tests/original-start-input.spec.mjs', 'input-bindings.spec.mjs'],
+add('7.6.2', 'Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox)', 'O, H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a held Escape and F11 in a real browser\'s fullscreen`, machine: ALL, proof: ['browser-tests/original-start-input.spec.mjs', 'input-bindings.spec.mjs'],
     weak: 'passes in Chromium and Firefox on Linux (2026-10-28): Keyboard Lock where the browser has it, and in Firefox Alt+Enter takes the fullscreen and the pointer without it (the pointer asked again at fullscreenchange, which Firefox needs); a held Escape and F11 in a real browser are not exercised; on the Mac (2026-11-09) both specs pass in Chromium and Firefox; in Playwright\'s WebKit the refused pointer lock fails them, and input-bindings.spec\'s wheel case read Playwright\'s synthetic 100 pixels as 2.5 notches (WebKit\'s 40-pixel line; the spec now gives it 40, 2026-11-10)'});
-add('7.6.3', 'resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error', 'H', 'PARTIAL',
-  {machine: `${LINUX}, ${MAC}`, proof: ['validate-resize-play.mjs', '[a resize](boot.md#a-resize)'],
+add('7.6.3', 'resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a real change of the pixel ratio (a zoom, another screen), so \`watchPixelRatio\` stays unmeasured`, machine: `${LINUX}, ${MAC}`, proof: ['validate-resize-play.mjs', '[a resize](boot.md#a-resize)'],
     weak: 'resizes during Play equal a fresh load at the final size byte for byte, the frame and MenuMain over the kept frame, in Chromium and Firefox on Linux (2026-10-31, again 2026-11-10), and the page at a new pixel ratio does in Chromium; a real ratio change (a zoom, another screen) is not produced headless, so `watchPixelRatio` is unmeasured; on the Mac (2026-11-11, 881d4cbc) validate-resize-play passes in Chromium (resize and ratio) and Firefox (resize)'});
-add('7.6.4', 'a hidden tab or system sleep stops Play (no frame, no tick); it comes back by itself with no catch-up (no click: the user\'s choice, 2026-10-30) and the audio follows', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'browser-tests/hidden-tab.spec.mjs'],
+add('7.6.4', 'a hidden tab or system sleep stops Play (no frame, no tick); it comes back by itself with no catch-up (no click: the user\'s choice, 2026-10-30) and the audio follows', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a real hidden tab, system sleep, and the audio after them`, machine: ALL, proof: ['pointer-lock.spec.mjs (blur)', 'browser-tests/hidden-tab.spec.mjs'],
     weak: 'blur is tested (the game goes on, held input let go); the hidden page passes in Chromium and Firefox on Linux (2026-10-31: no frame and no tick while hidden, back with no click, no catch-up, the held input let go) with the hide modelled (`document.hidden`, `visibilitychange`, no animation frame), as headless browsers keep a background tab visible; hidden-tab.spec and the blur pass in Chromium, Firefox and Playwright\'s WebKit on the Mac (2026-11-09); a real hidden tab, system sleep and the audio not measured'});
 
 // 7.7 Graphics capability and failures --------------------------------------------------------------------------------------------------
@@ -112,15 +115,16 @@ add('7.7.3', 'a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh pat
     weak: 'passes on Linux, 2026-11-04: the renderer is named (Firefox masks it as "llvmpipe, or similar", still recognised), the mesh path is the CPU one, Training keeps real time (game 10.02 and 10.07 s in 10.04 s) and draws 133 fps (SwiftShader) and 195 fps (llvmpipe) at 960×640; "playable" is read as keeping real time, the frame rate reported, not bounded; on the Mac (2026-11-09) Chromium passes, and the spec has no case for macOS Firefox (llvmpipe is Linux only) or WebKit, which it now skips (2026-11-10); Linux, 2026-11-10: SwiftShader 134.5 fps, llvmpipe 235.5 fps, real time kept'});
 
 // 7.8 Files and storage -----------------------------------------------------------------------------------------------------------------
-add('7.8.1', 'the game folder opens through the gate\'s picker in every supported browser', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['browser-tests/viewer.spec.mjs'],
+add('7.8.1', 'the game folder opens through the gate\'s picker in every supported browser', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: the system\'s own folder picker (the specs hand the folder to the gate\'s input)`, machine: ALL, proof: ['browser-tests/viewer.spec.mjs'],
     weak: 'the picker opens the folder in Chromium and Firefox headless (`setInputFiles`; viewer.spec passes in both on Linux, 2026-10-28, and on the Mac, 2026-11-09); in Playwright\'s WebKit the same folder given three times keeps the first (viewer.spec:54; a player picks once); a real picker is not run'});
-add('7.8.2', 'saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running', 'H', 'PARTIAL',
-  {machine: ALL, proof: ['browser-tests/save-game.spec.mjs', 'save-folder.spec.mjs', 'test/save-store.test.mjs', 'test/save-persistence.test.mjs'],
+add('7.8.2', 'saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running', 'H', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: the browser\'s real persistence prompt, answered once each way`, machine: ALL, proof: ['browser-tests/save-game.spec.mjs', 'save-folder.spec.mjs', 'test/save-store.test.mjs', 'test/save-persistence.test.mjs'],
     weak: 'the save, load and Saves window specs pass in Chromium and Firefox on Linux (2026-10-28; Firefox\'s persist() prompt no longer holds the later saves); on the Mac (2026-11-09) save-game.spec passes in Chromium, Firefox and Playwright\'s WebKit, and save-folder.spec skips (it needs the desktop slots of `.work/real-saves`); a real persistence prompt\'s answer is not observed; the unit tests use a fake store'});
-add('7.8.3', 'in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads', 'H, O', 'MISSING',
-  {machine: `${MAC}, ${LINUX}`, proof: ['save-folder.spec.mjs headed with a real folder', 'validate-save-game.mjs'],
-    need: '[save storage](save-storage.md) says a headed Chromium with a real folder was not run'});
+add('7.8.3', 'in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads', 'H, O', 'ACCEPTED',
+  {accepted: `${BY_HAND}; not run: a headed Chromium with a real folder on disk, its grant kept across visits ("Reconnect folder") and the original loading the slots written there ([save storage](save-storage.md))`,
+    machine: `${MAC}, ${LINUX}`, proof: ['save-folder.spec.mjs', 'validate-save-game.mjs'],
+    weak: 'the folder flow headless in Chromium (save-folder.spec, on Linux: the origin private file system as a real FileSystemDirectoryHandle from the page\'s picker call, the two real desktop slots listed with the original\'s info and picture and one loaded, the import into browser storage and the zip export); the slots Play writes against the original\'s (validate-save-game, in the closing sweep on 2439b054: the FlagBase flag by flag, the slot\'s files and SaveInfo, and the original under Wine loading Play\'s slots, wc1 and wc2)'});
 add('7.8.4', 'settings persist across reloads in every supported browser (row 6.1.5\'s proof)', 'O', 'PASS',
   {machine: ALL, proof: ['browser-tests/config-persistence.spec.mjs', 'validate-config-persistence.mjs'],
     weak: 'the spec passes in Chromium and Firefox on Linux (2026-10-28), and in Chromium, Firefox and Playwright\'s WebKit on the Mac (2026-11-09)'});
@@ -230,6 +234,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const decisions = [...new Set(CRITERIA.filter(row => row.clause === Number(c)).map(row => row.decision).filter(Boolean))];
     console.log(`\n### 7.${c} ${name}${decisions.length ? ` (${decisions.join(', ')})` : ''}\n\n| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |\n| --- | --- | --- | --- | --- | --- | --- |`);
     for (const row of CRITERIA.filter(row => row.clause === Number(c)))
-      console.log(`| ${row.id} | ${cell(row.claim)} | ${row.kind} | ${cell(row.proof.join(', ') || '-')} | ${cell(row.machine)} | ${cell([row.need && `needed: ${row.need}`, row.weak && (row.status === 'FAIL' ? row.weak : `weak: ${row.weak}`), row.excluded].filter(Boolean).join('; ') || '-')} | ${row.status} |`);
+      console.log(`| ${row.id} | ${cell(row.claim)} | ${row.kind} | ${cell(row.proof.join(', ') || '-')} | ${cell(row.machine)} | ${cell([row.accepted && `accepted: ${row.accepted}`, row.need && `needed: ${row.need}`, row.weak && (row.status === 'FAIL' ? row.weak : `weak: ${row.weak}`), row.excluded].filter(Boolean).join('; ') || '-')} | ${row.status} |`);
   }
 }
