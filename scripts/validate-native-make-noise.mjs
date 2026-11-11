@@ -170,7 +170,10 @@ for(const [index,c] of cases.entries()){
   runtime.boundaryNatives=new Set();runtime.collisionViewActors=new WeakSet();
   runtime.instances=new WeakMap();
   const attach=o=>{if(o&&!runtime.instances.has(o))runtime.instances.set(o,{cls:o.cls??null});};
-  for(const o of [emitter,ins,levelInfo,...pawns,ins?.fields.Enemy])attach(o);
+  // Every stand-in for an original object is attached, as Play's are: soundField's reflected read answers only for attached
+  // instances since the bunker bundle (4ed50f0a), so an unattached GameInfo or PRI would read as "not linked".
+  for(const o of [emitter,ins,levelInfo,levelInfo.fields.Game,...pawns,ins?.fields.Enemy,ins?.fields.PlayerReplicationInfo,
+   ...pawns.map(p=>p.fields.PlayerReplicationInfo)])attach(o);
   runtime.levelFor=()=>level;
   runtime.namedReference=(actor,name)=>({get:()=>actor.fields?.[name],set:v=>{actor.fields[name]=v;}});
   runtime.readNamed=(actor,name)=>runtime.namedReference(actor,name).get();

@@ -21,7 +21,9 @@ test('static lighting, display brightness and fixed original cameras render with
   // (Rounded up: Playwright takes whole pixels, and a browser may lay the bars out at fractional heights, as Firefox on macOS does;
   // the canvas's buffer is the floor of its box, so its box between 603 and 604 gives 603.)
   await page.setViewportSize({ width: 926, height: Math.ceil(719 + 603 - box.height) });
-  await expect.poll(() => canvas.evaluate(c => [c.width, c.height])).toEqual([926, 603]);
+  // (The page can take seconds to apply the new size: on the Mac the suite's headless Chromium draws with SwiftShader, and there
+  // the first read after the resize answered 5.9 s later, past a 5 s poll; docs/mac-pass-2026-11-11.md "Chromium: lighting".)
+  await expect.poll(() => canvas.evaluate(c => [c.width, c.height]), { timeout: 20000 }).toEqual([926, 603]);
   const initial = await page.evaluate(() => window.deusExViewer.status());
   expect(initial).toMatchObject({ renderErrors: [], lightingEnabled: true, brightness: .6,
     lighting: { missingLightmaps: 0, lightmaps: 5212, atlasPages: 6 } });
