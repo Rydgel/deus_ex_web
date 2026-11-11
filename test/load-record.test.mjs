@@ -57,3 +57,14 @@ test('a LoadRecord\'s named fields and the store\'s own fields are different pro
   assert.equal(record.value(0x10 + 39 * 4), 110);
   assert.ok(record.intRoom >= 32 && typeof record.base === 'object');
 });
+
+test('a record has at most sixteen named fields, the size of a SpiderMonkey object\'s fixed slots', () => {
+  const record = new LoadRecord('A', 'Class');
+  for (let at = 0; at < 30; at++) record.set(at * 4, at % 3 ? at : null, 4);
+  record.nativeAddress = 0x70000040;
+  assert.equal(record.address, 0x70000040);
+  record.address = 0x70000080;
+  assert.equal(record.nativeAddress, 0x70000080);
+  const named = Object.keys(record).filter(name => !/^\d+$/.test(name));
+  assert.ok(named.length <= 16, `a record has ${named.length} own named properties: ${named.join(', ')}`);
+});

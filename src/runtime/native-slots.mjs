@@ -17,8 +17,9 @@
  * The int words are a block of a shared Int32Array chunk (4096 words, handed out by a bump allocator): a store costs no typed array
  * object of its own (one more cell for the marker, 35,000 on the Island), a block a store outgrows is left behind, a chunk is freed
  * when no store has a block in it, and the most a long-lived store can pin is the rest of its chunk. A block holds, from its first word
- * up, the store's int words and, from its last word down, one code for each slot position: the rank of its int word (>= 0), or ~rank
- * of its element (< 0). The code lives with the store, not in the shape, so the shapes stay the ones of the write orders (a shape that
+ * up, a header (the block's room, the int words and the elements used: so the store itself has three fields, a record being a
+ * SpiderMonkey object of at most 16 fixed slots and its own thirteen leaving three), the store's int words and, from its last word down,
+ * one code for each slot position: the rank of its int word (>= 0), or ~rank of its element (< 0). The code lives with the store, not in the shape, so the shapes stay the ones of the write orders (a shape that
  * said where each slot lives would be one for every combination of value kinds: 6,900 against 300 on the Island).
  *
  * The cell operations map onto two writes: `set` is the Map's set of a new cell (value and width replaced), `assign` the old
@@ -31,7 +32,8 @@ const MAX_OFFSET = 1 << 22;   // offset * 256 + 255 stays a small integer (V8's 
 const MAX_WIDTH = 254;
 const CHUNK = 4096;           // int words in a shared chunk
 const OWN_BLOCK = 1024;       // a block this large has an Int32Array of its own
-const FIRST_BLOCK = 32;       // the first block of a slot store: the words of 10 to 15 slots and the codes of 24 (the Island's records)
+const HEADER = 3;             // a slot store's block starts with its room, its int words used and its elements used
+const FIRST_BLOCK = 48;       // the first block of a slot store: the header, the words of 10 to 15 slots and the codes of 24 (the Island's records)
 const FIRST_ENTRIES = 8;      // the first entries of an offset map
 
 const key = (offset, width) => {
@@ -130,12 +132,10 @@ export const slotValue = (record, offset) => record?.nativeSlots instanceof Nati
 
 export class NativeSlots {
   constructor() {
+    // Three fields, whatever the store holds: a record is a SpiderMonkey object of at most 16 fixed slots, and its own thirteen leave three.
     this.shape = EMPTY;
-    this.intWords = NO_WORDS;   // the block: intBase + rank is an int word, intBase + intRoom - 1 - position the position's code
-    this.intBase = 0;
-    this.intRoom = 0;           // the words of the block
-    this.intCount = 0;          // the int words used (an unused one of a slot that moved to the elements included)
-    this.refCount = 0;          // the elements used
+    this.intWords = NO_WORDS;   // the chunk (or array) that has the store's block
+    this.intBase = 0;           // the block's first word: [room, intCount, refCount], the int words, free words, the position codes
   }
 
   /** Fixtures: [offset, cell] entries, a cell being {value, width} (width optional) or the raw value. */
@@ -148,6 +148,9 @@ export class NativeSlots {
     return slots;
   }
 
+  /** The words of the block (0 before the first slot): the header, the int words, the free words and the codes. */
+  get intRoom() { return this.intWords === NO_WORDS ? 0 : this.intWords[this.intBase]; }
+
   /** The offset's position in the slot order, or -1. */
   at(offset) { return this.shape.position(offset); }
 
@@ -157,16 +160,16 @@ export class NativeSlots {
 
   /** The value of the slot at a position. */
   valueAt(at) {
-    const code = this.intWords[this.intBase + this.intRoom - 1 - at];
-    return code >= 0 ? this.intWords[this.intBase + code] : this[~code];
+    const words = this.intWords, base = this.intBase, code = words[base + words[base] - 1 - at];
+    return code >= 0 ? words[base + HEADER + code] : this[~code];
   }
 
   /** The slot's value, or undefined when the slot is absent. */
   value(offset) {
     const at = this.shape.position(offset);
     if (at < 0) return undefined;
-    const code = this.intWords[this.intBase + this.intRoom - 1 - at];
-    return code >= 0 ? this.intWords[this.intBase + code] : this[~code];
+    const words = this.intWords, base = this.intBase, code = words[base + words[base] - 1 - at];
+    return code >= 0 ? words[base + HEADER + code] : this[~code];
   }
 
   /** The slot's width, or undefined when the slot is absent or its writer gave none. */
@@ -195,40 +198,46 @@ export class NativeSlots {
   store(at, slotKey, value) {
     const shape = this.shape;
     if (shape.keys[at] !== slotKey) this.shape = shape.replace(at, slotKey);
-    const words = this.intWords, codeAt = this.intBase + this.intRoom - 1 - at, code = words[codeAt];
+    const words = this.intWords, base = this.intBase, codeAt = base + words[base] - 1 - at, code = words[codeAt];
     if (code < 0) this[~code] = value;
-    else if (isInt32(value)) words[this.intBase + code] = value;
+    else if (isInt32(value)) words[base + HEADER + code] = value;
     else {
-      this[this.refCount] = value;
-      words[codeAt] = ~this.refCount++;
+      const rank = words[base + 2]++;
+      this[rank] = value;
+      words[codeAt] = ~rank;
     }
   }
 
   append(slotKey, value) {
     const shape = this.shape, at = shape.size;
-    if (this.intCount + at + 2 > this.intRoom) this.grow(at);
-    const words = this.intWords, base = this.intBase, codeAt = base + this.intRoom - 1 - at;
+    if (this.intWords === NO_WORDS || HEADER + this.intWords[this.intBase + 1] + at + 2 > this.intWords[this.intBase]) this.grow(at);
+    const words = this.intWords, base = this.intBase, codeAt = base + words[base] - 1 - at;
     if (isInt32(value)) {
-      words[base + this.intCount] = value;
-      words[codeAt] = this.intCount++;
+      const rank = words[base + 1]++;
+      words[base + HEADER + rank] = value;
+      words[codeAt] = rank;
     } else {
-      this[this.refCount] = value;
-      words[codeAt] = ~this.refCount++;
+      const rank = words[base + 2]++;
+      this[rank] = value;
+      words[codeAt] = ~rank;
     }
     this.shape = shape.add(slotKey);
   }
 
   /** The block becomes one half as large again, its int words and its `size` codes kept. */
   grow(size) {
-    const from = this.intWords, start = this.intBase, was = this.intRoom;
-    const room = was === 0 ? FIRST_BLOCK : (was * 3 >> 1) + 7 & ~7;
+    const from = this.intWords, start = this.intBase, first = from === NO_WORDS;
+    const was = first ? 0 : from[start], ints = first ? 0 : from[start + 1], refs = first ? 0 : from[start + 2];
+    const room = first ? FIRST_BLOCK : (was * 3 >> 1) + 7 & ~7;
     claim(room);
     const words = blockWords, base = blockBase;
-    for (let at = 0; at < this.intCount; at++) words[base + at] = from[start + at];
+    words[base] = room;
+    words[base + 1] = ints;
+    words[base + 2] = refs;
+    for (let at = 0; at < ints; at++) words[base + HEADER + at] = from[start + HEADER + at];
     for (let at = 0; at < size; at++) words[base + room - 1 - at] = from[start + was - 1 - at];
     this.intWords = words;
     this.intBase = base;
-    this.intRoom = room;
   }
 
   /** fn(value, offset, width) for every slot, in first-write order (a slot fn adds is visited, as the array it was is). */
