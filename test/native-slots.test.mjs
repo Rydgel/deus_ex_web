@@ -74,7 +74,7 @@ test('LoadEdges keeps the order, contents and lifetimes of the Map of Sets it re
 });
 
 test('NativeSlots keeps int32 words in a typed array and every other value exactly, wherever it moves', () => {
-  const values = [0, 1, -1, 0x7fffffff, -0x80000000, 0x80000000, 0xffffffff, 2 ** 40, -0, NaN, Infinity, -Infinity, 0.5, 1e300,
+  const values = [0, 1, -1, 0x7fffffff, -0x80000000, 0x80000000, 0xffffffff, 2 ** 40, -0, -0x7fffffff, -2130706433, -2130706432, -2130706431, NaN, Infinity, -Infinity, 0.5, 1e300,
     null, undefined, true, false, 'text', 10n, 2n ** 70n, {a: 1}, [1, 2], new Uint8Array(3), Symbol.for('s')];
   const slots = new NativeSlots();
   const same = (a, b) => Object.is(a, b);
@@ -173,4 +173,16 @@ test('stores sharing an int chunk keep their own words while they grow in turn, 
   }
   assert.ok(stores[0].intRoom >= 1024 && stores[1].intRoom >= 16 && stores[1].intRoom < 1024);
   assert.equal(stores[0].intBase, 0);   // a block this large has an array of its own
+});
+
+test('the int words\' lowest values are elements, in both stores, and read back exactly', () => {
+  const edge = [-0x80000000, -0x7fffffff, -0x80000000 + 0x1000000 - 1, -0x80000000 + 0x1000000, -0x80000000 + 0x1000001, -1, 0, 0x7fffffff];
+  const slots = new NativeSlots(), map = new OffsetMap();
+  edge.forEach((value, at) => { slots.set(at * 4, value, 4); map.set(at * 4, value); });
+  for (let round = 0; round < 3; round++) edge.forEach((value, at) => {
+    const next = edge[(at + round + 1) % edge.length];
+    slots.set(at * 4, next, 4);
+    map.set(at * 4, next);
+    assert.ok(Object.is(slots.value(at * 4), next) && Object.is(map.get(at * 4), next));
+  });
 });
