@@ -201,10 +201,11 @@ async function play() {
       if (freeze && !process.argv.includes('--real-time')) await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
         const response = await route.fetch();
         let body = await response.text();
-        for (const original of ['const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);',
-          'const dt = Math.max(0, (time - lastTime) / 1000);']) {
+        // (the lines as they are since 7525ca4d and 82482dcb: the worker's first post carries dt 0, the level's first tick having run during the load)
+        for (const [original, fixed] of [['const dt = first ? 0 : Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);', 'const dt = first ? 0 : 1 / 60;'],
+          ['const previousTime = lastTime, dt = Math.max(0, (time - lastTime) / 1000);', 'const previousTime = lastTime, dt = 1 / 60;']]) {
           if (!body.includes(original)) throw new Error(`the fixed-step patch no longer matches main.mjs: ${original}`);
-          body = body.replace(original, 'const dt = 1 / 60;');
+          body = body.replace(original, fixed);
         }
         await route.fulfill({response, body});
       });
