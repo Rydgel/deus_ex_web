@@ -16,6 +16,8 @@ const openSessions = new WeakMap();
 export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1, process: given} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {handleLimit, releaseHandleRange, releaseHandlesWhere} = await import('../src/runtime/script-object-handles.mjs');
+  const {forgetNoted} = await import('../src/runtime/base-epoch.mjs');
+  const {forgetTraceModel} = await import('../src/runtime/trace-kernel.mjs');
   const share = globalThis.process?.env?.DX_SCRIPT_PROCESS !== 'new';
   const process = given !== undefined ? given : travel?.arrival && share ? lastProcess : null;
   if (lastProcess && process !== lastProcess && !openSessions.get(lastProcess)) releaseHandlesWhere(identity => lastProcess.owns(identity));
@@ -199,6 +201,10 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
      * travel arrival may attach to it (openSession `process`); the next session that does not releases them. */
     dispose(end = handleLimit()) {
       runtime.audio?.dispose?.(); sim.dispose();
+      // The level's own releases, as sim-host.mjs dispose makes them (24ad3e65): the interpreter leaves the process-wide WeakRef walks,
+      // the rider pass's log of Base changes forgets this level's actors, and the trace kernel its last model. Without them this
+      // session's runtime stayed alive (validate-script-process: "levels left that a GC does not free", from fa750520 on).
+      runtime.scriptVm?.dispose(); forgetNoted(); forgetTraceModel();
       releaseHandleRange(handleStart, end, identity => runtime.process.owns(identity));
       openSessions.set(runtime.process, openSessions.get(runtime.process) - 1);
       runtime.arena.listeners.length = 0;
