@@ -3792,6 +3792,34 @@ offset map's scan (17). So the load costs 30 to 90 ms on a boot of 3.8 to 5.5 s;
 0.64 M fewer value slots by the estimator, 0.4 M fewer edges, and no change in the cell count (1.55 M): if the marking follows cells, it
 moves little; if it follows slots, about the 4.6% of them.
 
+#### All four cuts against the base, interleaved (2026-11-11)
+
+The method of "Both cuts against the base": four interleaved pairs of 100 s Firefox inline Island roams with markers-only profiles,
+the base 036d848a against master 0da32296 (the light maps and triangles, the actor mesh closures, the runtime's instance state and the
+native slots: about 1.93 M to 1.48 M cells and 13.9 M to about 12.2 M value slots, the last summed from each cut's own measurement).
+Runs in `.cache/perf/gc-pauses/ab/r2-*`. Pair 1 ran on a disturbed host (page p50 16.3 and 14.0 ms against 10.7 to 12.7 in the other
+pairs) and is left out of the reading.
+
+| Run | Page p50 | Gaps over 50 ms (a minute) | `FULL_GC_TIMER`: wall, work (mark), extended (ms) | `CC_FINISHED`: wall, work (mark), extended (ms) |
+| --- | ---: | --- | --- | --- |
+| base 2 | 12.4 | 3 (1.9) | 2,150 ms, 165 (125), 6 (93) | 1,858 ms, 116 (104), 6 (68) |
+| base 3 | 11.1 | 1 (0.6) | 1,838 ms, 150 (111), 6 (80) | 1,869 ms, 134 (121), 4 (11) |
+| base 4 | 10.8 | 2 (1.2) | 2,390 ms, 196 (115), 3 (116) | 1,923 ms, 137 (122), 6 (19) |
+| master 2 | 12.7 | 3 (1.9) | 2,069 ms, 164 (135), 6 (127) | 1,852 ms, 124 (95), 5 (63) |
+| master 3 | 10.7 | 3 (1.9) | 1,893 ms, 133 (96), 5 (78) | **747 ms**, 111 (98), 0 |
+| master 4 | 10.7 | 0 (0) | 1,779 ms, 136 (99), 6 (73) | **951 ms**, 112 (99), 0 |
+
+* **`CC_FINISHED`** marks 95 to 99 ms against 104 to 122 (-19% by the medians), and in two of three clean master runs it finished in
+  under a second with no extended slice, which no base run here or in the earlier A/B did.
+* **`FULL_GC_TIMER`** marks 96 to 135 ms against 111 to 125 (about -9%) and still runs past 1.5 s in every run, with five or six
+  extended slices.
+* **Gaps:** 1.9, 1.9 and 0 a minute on master against 1.9, 0.6 and 1.2 on the base: no difference this sample can show.
+
+**Reading.** About 12% of the slots out of the heap took a fifth off the second collection's marking and sometimes brings it in before
+the escalation; the full collection (all four zones, the atoms zone's sweep with it) stays over. The row is unchanged. The next steps
+are the ones `docs/object-model-plan.md` orders (hash buckets, the load records' remaining fields, linked classes and operands,
+function trees, identities), each measured the same way.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
