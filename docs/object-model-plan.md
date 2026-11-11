@@ -68,7 +68,7 @@ the branch, same method). What each holds is from the code named, or labelled.
 By value slots recovered per unit of risk, and by what each unlocks:
 
 1. **Done (step 1):** the records' int words, `instanceValues` and `defaults.data` as `OffsetMap`, `recordsOfAddress`. About 0.6 M slots
-   by the estimator; the numbers are in [the plan](firefox-60fps-plan.md#native-slots-out-of-the-collectors-marking-2026-11-10).
+   by the estimator; the numbers are in [the plan](firefox-60fps-plan.md#native-slots-out-of-the-collectors-marking-2026-11-10). It costs the Island's boot 30 to 90 ms (0.6 to 2.6% on a quiet host, interleaved, more under load): a slot read is a typed load and a compare, a write a little more.
 2. **Operand tables** (`linkedOperands`, `linkedScripts`: 385 k slots, a third left): a container swap in script-objects.mjs behind
    `link`/`operandOf`; no lifetime change (the WeakMap key); checked by the digests and the link and class validators.
 3. **Class defaults' inner maps** (`linkedClasses.defaults`: 326 k, 250 k recoverable): one class with the Map's API at the creation

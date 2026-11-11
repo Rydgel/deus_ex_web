@@ -3648,13 +3648,15 @@ identical (the checks below).
 linker object, 1.1% byte arrays, 0.5% arrays, 0.3% uint32; no double, `-0` or NaN):
 
 * `NativeSlots` / `LoadRecord` (`native-slots.mjs`, `load-record.mjs`): a slot that holds an int32 keeps it in an `Int32Array`, the others
-  stay indexed elements of the record (304,000 of them, dense). The int words are a block of a shared 4,096-word chunk, so a record has no
-  typed array of its own (that would have been 35,000 more cells); the block starts with its room and counts, ends with one code per slot
-  position (where the slot lives), and so the shapes stay the 304 of the write orders. A slot is an int slot until it is given a value that
-  is not an int32 (a `-0`, a uint32, a double, a BigInt, a string, an object, a null) and an element slot from then on. The record has 16
-  named fields (a SpiderMonkey object has 16 fixed slots): `address` is an alias of `nativeAddress`.
+  stay indexed elements of the record (304,000 of them, dense). The words are a block of a shared 4,096-word chunk, so a record has no
+  typed array of its own (that would have been 35,000 more cells): the block is a header (its room and the elements used) and one word a slot
+  position, either the int32 or `MIN + the element's rank` (so a read is one typed load and a compare; an int32 in the lowest 2^24 of the
+  range is an element like any other value that is not a plain int). The kind of a slot is the store's, not the shape's, so the shapes stay
+  the 304 of the write orders. A slot is an int slot until it is given a value that is not an int32 (a `-0`, a uint32, a double, a BigInt,
+  a string, an object, a null) and an element slot from then on. The record has 16 named fields (a SpiderMonkey object has 16 fixed
+  slots): `address` is an alias of `nativeAddress`.
 * `record.instanceValues` and `record.defaults.data` (a `Map` each, 2,140 and 1,103 on the Island) are an `OffsetMap`: a `Map` subclass with
-  the same API and `instanceof Map`, over the same chunks (offsets, codes and int words in one block, a lookup a scan: the maps are read at
+  the same API and `instanceof Map`, over the same chunks (the offsets and a word each in one block, a lookup a scan: the maps are read at
   class link and resource construction). A key that is not an offset, or a `delete`, makes it an ordinary Map for good.
 * The graph's address -> record table keeps the synthetic addresses (every record's) as the elements of an array by ordinal.
 * Left (see the plan): the 1,339 hash tables (229,000 record references: a lifetime question), `objectHash` (35,000 string cells), the
@@ -3679,21 +3681,38 @@ linker object, 1.1% byte arrays, 0.5% arrays, 0.3% uint32; no double, `-0` or Na
 The family figures are a first-reach attribution (an object goes to the first path the walk met), so a cut moves objects between families;
 the whole-page sum is the figure to compare. It fell by less than the 2.3 M slots of the six families: the estimator counts V8's element
 capacity, and the records' named fields (16 a record, 550,000 slots) are what is left of them, with the 304,000 elements and the other
-families above. The int words are not in the figure at all: they are in chunks (about 190 of them), outside the heap's objects.
+families above. The int words are not in the figure at all: they are in chunks (about 250 of them), outside the heap's objects.
 
-**Checks** (output identical to the base):
+**Checks** (output identical to the base; on a572e084):
 * bench-sim digests, 300 ticks: Island `15e3720088490242`, Training `148077479825af78`, 747 `ad8e591a01434df5`; `frame-alloc-meter --compare`:
   Island 600 frames, 747 and Training 400, identical; `hud-stream-digest --frames 1500 --stream --compare` identical (`16bfe2bd08ed1653`).
-* `npm test`: 1,012 tests, 1,008 pass, 4 skipped, none fail (the new ones: the slot store against the Map it replaced for every kind of value,
-  `OffsetMap` against `Map`, stores sharing chunks while they grow past the chunk size, a record's named fields).
-* Validators (below).
+* `npm test`: 1,013 tests pass (the new ones: the slot store against the Map it replaced for every kind of value and the edges of the int
+  range, `OffsetMap` against `Map`, stores sharing chunks while they grow past the chunk size, a record's named fields).
+* Validators (`run-validators --filter`, 8 GB scopes, the captures of `.work/travel` and the saves of `.work/internet-saves` linked in): 68
+  validators in 42 filters, 66 pass, 1 is skipped (a `validate-save-game` case that needs the Wine capture `wc1`), covering the load graph (font, mesh, sound, music, texture, static, dynamic), class loader and link, linker, state,
+  defaults and class-default-travel, config, property, process-collection, original-loaded, object layout and image, save-game,
+  save-load-play, save-snapshot, save-directory, save-info-corpus (41 files), load-saves (41 of 41), root-snapshot, process-memory,
+  travel (all ten), island and instructor conversations, inventory-spawn, weapon-construction and play-hud. One fails: `validate-script-process`,
+  identically on the unchanged base 13ce5312 ("levels left that a GC does not free: 01_NYC_UNATCOIsland"); it is not from this change.
+* Play in Chromium on the Island, 40 s roam each: worker mode 3,386 frames, `?sim=inline` 2,927 frames, no errors.
 * Two mistakes the checks caught on the way: a store field named `base` that a record already had (the class-link validators failed
   at the first class), and a first version that kept each slot's kind in the shape: 6,935 shapes and 25 MB of position tables against 304
   (the census's `heap-families --inside` showed the shapes). A third was a unit test whose failing `assert.equal(shapeA, shapeB)` made
   node inspect the whole shape graph without a depth limit (75 GB, the app's OOM kill of 2026-11-10); the tests compare shapes and
   records with `assert.ok(a === b)` now.
 
-**Marking.** (A/B and boot time below, once measured.)
+**Load time** (headless boot of the map and the player's login, `bench-sim --ticks 3`, interleaved base and branch, six rounds an arm; the
+base is a clean copy of 13ce5312): the first layout (a code a slot and the ints by rank) cost 447 ms on the Island (+6.9%); the profile put
+178 ms of it in `NativeSlots.value`, which became one typed load a read. On a quiet host the Island's boot is 5,525 ms against 5,557
+(+0.6%; process CPU +0.3%), the 747's 3,817 against 3,898 ms (+2.1%; CPU +2.6%), Training's 3,841 against 3,910 (+1.8%; CPU +1.5%). Measured
+with other jobs running (four to six rounds, wall only) the Island read +3.3% to +5.0% and the 747 +2.4%: the spread is the host's. Taking
+`OffsetMap` back to `Map` in a scratch copy, and the old slot store back with the new `OffsetMap`, each put the Island within 1% of the
+branch (the spread of the runs); the profile's remaining difference is `value` (247 ms of self time against 335), `assign`/`put` (27 against 58) and the
+offset map's scan (17). So the load costs 30 to 90 ms on a boot of 3.8 to 5.5 s; the 7.3.x rows' margins are not re-measured here.
+
+**Marking.** Not measured: the interleaved Firefox A/B is run on master with the other worker's cut. What this change gives the marker is
+0.64 M fewer value slots by the estimator, 0.4 M fewer edges, and no change in the cell count (1.55 M): if the marking follows cells, it
+moves little; if it follows slots, about the 4.6% of them.
 
 ## How each step is measured
 
