@@ -848,7 +848,9 @@ async function judgeLive(task, add, fail, result) {
     if (play.killed || play.code !== 0) return {error: `play step: ${play.killed ?? tail(play.out)}`};
     const compare = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'compare', '--map', map, ...(tag ? ['--tag', tag] : [])], {limitSeconds: 600}));
     if (compare.killed || compare.code !== 0) return {error: `compare step: ${compare.killed ?? tail(compare.out)}`};
-    const report = readJson(path.join(root, '.work/live-acceptance', map, 'report.json'));
+    // live-acceptance.mjs writes a tagged replay's comparison under its tag only (report-<tag>.json, since 4928697b): report.json is an untagged
+    // replay's, and for a tagged scene a stale one (the 2026-11-11 dry run read MeetManderley's of 2026-10-17)
+    const report = readJson(path.join(root, '.work/live-acceptance', map, `report${tag ? `-${tag}` : ''}.json`));
     const actors = Object.entries(report.actors);
     const different = actors.filter(([, e]) => e.firstDifference !== null);
     const problems = [];
@@ -921,7 +923,7 @@ async function judgeConversation(task, add, fail, result) {
   // TweenToWaiting) and two guards' LastRenderTime (--render-history) are now replayed (docs/conversation-camera.md, item 2).
   const live = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'compare', '--map', c.map, '--tag', c.tag, ...(c.playerBlend ? ['--player-blend'] : [])], {limitSeconds: 600}));
   if (live.killed || live.code !== 0) return fail(`live compare: ${live.killed ?? tail(live.out)}`);
-  const liveReport = readJson(path.join(root, '.work/live-acceptance', c.map, 'report.json'));
+  const liveReport = readJson(path.join(root, '.work/live-acceptance', c.map, `report-${c.tag}.json`));   // the tag's own (see the live checks above)
   const liveProblems = [], allow = c.liveAllow ?? {};
   for (const [name, e] of Object.entries(liveReport.actors)) {
     if (e.firstDifference === null) continue;
