@@ -121,13 +121,38 @@ function structCell(entry, metadata, offset) {
 // keyed by field key, and the class's reference-array length.
 const classCells = new WeakMap();
 
+// A class that declares no property of its own (the class loader's propertyOrder is empty) lists its base's properties, the same
+// field objects in the same order (cls.propertyLink is `[...propertyOrder, ...base.propertyLink]`), at the same offsets in the
+// same PropertiesSize: its layout, cells and field table are its base's. 145 of the 289 classes the Island attaches are such
+// classes (decoration and pawn subclasses that differ in their defaults and their script only); they share the nearest ancestor
+// that declares a property, which is the layout's owner (docs/firefox-60fps-plan.md, "The script runtime's instance state").
+const layoutOwners = new WeakMap();
+/** The class whose layout `cls` has: the nearest ancestor (or `cls` itself) with the same linked property list and
+ * PropertiesSize. `graph` reads the sizes. */
+export function layoutOwner(cls, graph) {
+  let owner = layoutOwners.get(cls);
+  if (owner !== undefined) return owner;
+  owner = cls;
+  const base = cls.base, link = cls.propertyLink, baseLink = base?.propertyLink;
+  if (base?.loadRecord && cls.loadRecord && cls.propertyOrder?.length === 0 && link && baseLink && link.length === baseLink.length &&
+    link.every((field, index) => field === baseLink[index]) &&
+    graph.slotOf(cls.loadRecord, 0x3c) === graph.slotOf(base.loadRecord, 0x3c))
+    owner = layoutOwner(base, graph);
+  layoutOwners.set(cls, owner);
+  return owner;
+}
+
 /** The image cells of a class linked by the native class loader. */
 export function objectImageCells(cls, {graph, identity}) {
   let result = classCells.get(cls);
   if (result) return result;
-  result = layoutCells(linkedClassLayout(cls, {graph, identity}));
+  const owner = layoutOwner(cls, graph);
+  if (owner !== cls) result = objectImageCells(owner, {graph, identity});
+  else {
+    result = layoutCells(linkedClassLayout(cls, {graph, identity}), fieldIndexOf(graph));
+    for (const [key, cell] of result.cells) registerFieldCell(key, cell);
+  }
   classCells.set(cls, result);
-  for (const [key, cell] of result.cells) registerFieldCell(key, cell);
   return result;
 }
 
@@ -282,7 +307,34 @@ function sharedCell(key, cell) {
   return cell;
 }
 
-function layoutCells(layout) {
+// The other cells (a string, a name, a dynamic array, a struct or a fixed array: `ref` is their position in the reference array) are the
+// same in every class that has the same properties before theirs in link order, which a subclass that adds none and the classes of one
+// chain below its last addition have. Equal cells (the same tag, offset, mask, reference position, parts, key and flags) are one object:
+// the Island's 11,300 of them (a Map entry and a cell object of twelve slots each per class) are a few thousand. Nothing writes a cell
+// once layoutCells has made it.
+const canonicalCells = new Map();
+const cellSignature = cell => `${cell.tag}|${cell.offset}|${cell.mask}|${cell.ref}|${cell.refCount}|${cell.key}|${cell.dim}|${cell.stride}|` +
+  `${cell.actorBase ? 1 : 0}|${cell.handle ? 1 : 0}|${cell.element ? `[${cellSignature(cell.element)}]` : ''}|` +
+  `${cell.members ? `{${cell.members.map(cellSignature).join(',')}}` : ''}`;
+function canonicalCell(cell) {
+  const id = cellSignature(cell), kept = canonicalCells.get(id);
+  if (kept !== undefined) return kept;
+  canonicalCells.set(id, cell);
+  return cell;
+}
+
+// The linked fields of a class graph by property key: the `fields` of every class layout of the graph. A property's key (the declaring
+// class and its name) names one field, so the layouts of the classes that inherit it share the entry instead of a Map each.
+const fieldIndexes = new WeakMap();
+function fieldIndexOf(graph) {
+  let index = fieldIndexes.get(graph);
+  if (!index) fieldIndexes.set(graph, index = new Map());
+  return index;
+}
+
+/** `layout`'s cells by property key and their reference count. `index` (class layouts): the graph's shared field index, which
+ * becomes the layout's `fields` unless a key of it names another field there than the layout's (then the layout has its own). */
+function layoutCells(layout, index = null) {
   const cells = new Map();
   let refCount = 0;
   for (const entry of layout.properties) {
@@ -292,11 +344,19 @@ function layoutCells(layout) {
     else {
       cell.ref = refCount;
       if (entry.key === 'engine.actor.base') cell.actorBase = true;
+      if (index) cell = canonicalCell(cell);
     }
     refCount += cell.refCount;
     cells.set(entry.key, cell);
   }
-  return Object.freeze({size: layout.size, refCount, cells, fields: new Map(layout.properties.map(entry => [entry.key, entry.field]))});
+  let fields = index;
+  if (index) for (const entry of layout.properties) {
+    const known = index.get(entry.key);
+    if (known === undefined) index.set(entry.key, entry.field);
+    else if (known !== entry.field) { fields = null; break; }
+  }
+  return Object.freeze({size: layout.size, refCount, cells,
+    fields: fields ?? new Map(layout.properties.map(entry => [entry.key, entry.field]))});
 }
 
 

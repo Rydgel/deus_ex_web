@@ -38,7 +38,7 @@ export const NATIVE_HEADER_BINDINGS = Object.freeze({
 });
 
 /** The same fields of a loaded package object (ScriptRuntime.prepareLoadedObject): read from the instance's
- * `loadedReference` and `loadedResource`, and immutable. */
+ * `receiver` (the loaded object) and `loadedResource`, and immutable. */
 const loadedLifecycle = name => Object.freeze({
   get() { throw new Error(`Loaded ${name} requires the live native object lifecycle`); },
   set() { throw new Error(`Loaded ${name} mutation requires its native lifecycle service`); },
@@ -48,7 +48,7 @@ const loadedImmutable = (name, get) => Object.freeze({
   set() { throw new Error(`Loaded ${name} mutation requires its native lifecycle service`); },
 });
 export const LOADED_HEADER_BINDINGS = Object.freeze({
-  Name: loadedImmutable('Name', instance => instance.loadedReference.name),
+  Name: loadedImmutable('Name', instance => instance.receiver.name),
   Class: loadedImmutable('Class', instance => instance.cls.record),
   Outer: loadedImmutable('Outer', instance => instance.loadedResource.outer?.object ?? instance.loadedResource.outer ?? null),
   ObjectFlags: loadedLifecycle('ObjectFlags'),

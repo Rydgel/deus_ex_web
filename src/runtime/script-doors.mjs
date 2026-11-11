@@ -418,14 +418,15 @@ function makeBinding(runtime, record, field) {
   // reset clears the store, so the next read starts from the initial value.
   if (runtime.hasImageCell(host, field)) return null;
   return {
+    // (the store is made when the first such property is stored: an actor whose every property is in the image has none)
     get: () => {
-      const stored = record.store.get(field.key);
-      if (stored !== undefined || record.store.has(field.key)) return stored;
+      const stored = record.store?.get(field.key);
+      if (stored !== undefined || record.store?.has(field.key)) return stored;
       const value = record.initialProperty(field);
-      record.store.set(field.key, value);
+      (record.store ??= new Map()).set(field.key, value);
       return value;
     },
-    set: value => { record.store.set(field.key, value); },
+    set: value => { (record.store ??= new Map()).set(field.key, value); },
   };
 }
 
@@ -983,7 +984,7 @@ export async function createScriptDoors({
    * class-default) values: its object storage and the store of properties
    * without an image cell. */
   function resetProperties(record) {
-    record.store.clear();
+    record.store?.clear();
     // LevelInfo.PawnList is the scene level's pawn list, which the host's
     // collidable rebuild (player-scene reset) owns until clearStartupPawnList
     // evicts it; the property reset leaves it as the rebuild left it.
@@ -1079,7 +1080,7 @@ export async function createScriptDoors({
     const existing = identities.get(identity);
     if (existing) return existing;
     const state = runtime.attach(identity, cls);
-    const record = { object: identity, cls, state, role, store: new Map(), level, levelInfo, callbackView: null };
+    const record = { object: identity, cls, state, role, store: null, level, levelInfo, callbackView: null };
     identities.set(identity, record);
     if (role === 'mover') moversByObject.set(identity, record);
     record.callbackView = { actor: identity, mover: identity, name: identity.name, values: identity.values };
