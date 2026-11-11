@@ -3638,6 +3638,63 @@ out of JavaScript objects (the Rust core's object image in Wasm memory, which th
 this kind. The two cuts stay: they are output-identical, the light-map one takes 13 MB off the page and the closure one makes the actor
 step a little cheaper; neither changes the row.
 
+#### Native slots out of the collector's marking (2026-11-10)
+
+Step 1 of moving the script process's object model out of JavaScript objects (the families, their order and their checks are in
+[object-model-plan.md](object-model-plan.md)). Host data layout only: every method of the structures keeps its results, and the output is
+identical (the checks below).
+
+**What was cut** (the load graph of the Island: 34,583 records, 820,000 native slots; 63% int32, 19% records, 11% null, 4.6% the package's
+linker object, 1.1% byte arrays, 0.5% arrays, 0.3% uint32; no double, `-0` or NaN):
+
+* `NativeSlots` / `LoadRecord` (`native-slots.mjs`, `load-record.mjs`): a slot that holds an int32 keeps it in an `Int32Array`, the others
+  stay indexed elements of the record (304,000 of them, dense). The int words are a block of a shared 4,096-word chunk, so a record has no
+  typed array of its own (that would have been 35,000 more cells); the block starts with its room and counts, ends with one code per slot
+  position (where the slot lives), and so the shapes stay the 304 of the write orders. A slot is an int slot until it is given a value that
+  is not an int32 (a `-0`, a uint32, a double, a BigInt, a string, an object, a null) and an element slot from then on. The record has 16
+  named fields (a SpiderMonkey object has 16 fixed slots): `address` is an alias of `nativeAddress`.
+* `record.instanceValues` and `record.defaults.data` (a `Map` each, 2,140 and 1,103 on the Island) are an `OffsetMap`: a `Map` subclass with
+  the same API and `instanceof Map`, over the same chunks (offsets, codes and int words in one block, a lookup a scan: the maps are read at
+  class link and resource construction). A key that is not an offset, or a `delete`, makes it an ordinary Map for good.
+* The graph's address -> record table keeps the synthetic addresses (every record's) as the elements of an array by ordinal.
+* Left (see the plan): the 1,339 hash tables (229,000 record references: a lifetime question), `objectHash` (35,000 string cells), the
+  named fields' numbers, `LoadEdges.records` (one element a held record, the strong hold the edges' lifetimes are defined by).
+
+**Measured** (Chromium inline Island, 30 s after the arrival, `map-memory-census.mjs --snapshots 1`, `heap-families.mjs 4 40 --slots`; base
+13ce5312 against the branch, same host and method; the snapshots were deleted):
+
+| | Base | Branch |
+| --- | ---: | ---: |
+| Value slots (whole page) | 13.87 M | 13.23 M (-0.64 M, -4.6%) |
+| SpiderMonkey-like cells | 1.55 M | 1.55 M |
+| Objects / edges | 2.52 M / 20.1 M | 2.52 M / 19.7 M |
+| `packageObjects.loadRecord` (slots) | 1,156 k | 919 k |
+| `LoadEdges.records` | 569 k | 438 k |
+| `loadRecord.instanceValues` | 164 k | 85 k (its OffsetMaps' elements and the objects they hold) |
+| `loadRecord.defaults.data` | 127 k | gone (its maps are blocks; what they hold is counted under the first family that reached it) |
+| `buildLinker.recordsOfAddress` | 115 k | gone |
+| `loadRecord.hashBuckets` | 156 k | 156 k |
+| `loadRecord.data` (the class FArrays' entries) | 123 k | 123 k |
+
+The family figures are a first-reach attribution (an object goes to the first path the walk met), so a cut moves objects between families;
+the whole-page sum is the figure to compare. It fell by less than the 2.3 M slots of the six families: the estimator counts V8's element
+capacity, and the records' named fields (16 a record, 550,000 slots) are what is left of them, with the 304,000 elements and the other
+families above. The int words are not in the figure at all: they are in chunks (about 190 of them), outside the heap's objects.
+
+**Checks** (output identical to the base):
+* bench-sim digests, 300 ticks: Island `15e3720088490242`, Training `148077479825af78`, 747 `ad8e591a01434df5`; `frame-alloc-meter --compare`:
+  Island 600 frames, 747 and Training 400, identical; `hud-stream-digest --frames 1500 --stream --compare` identical (`16bfe2bd08ed1653`).
+* `npm test`: 1,012 tests, 1,008 pass, 4 skipped, none fail (the new ones: the slot store against the Map it replaced for every kind of value,
+  `OffsetMap` against `Map`, stores sharing chunks while they grow past the chunk size, a record's named fields).
+* Validators (below).
+* Two mistakes the checks caught on the way: a store field named `base` that a record already had (the class-link validators failed
+  at the first class), and a first version that kept each slot's kind in the shape: 6,935 shapes and 25 MB of position tables against 304
+  (the census's `heap-families --inside` showed the shapes). A third was a unit test whose failing `assert.equal(shapeA, shapeB)` made
+  node inspect the whole shape graph without a depth limit (75 GB, the app's OOM kill of 2026-11-10); the tests compare shapes and
+  records with `assert.ok(a === b)` now.
+
+**Marking.** (A/B and boot time below, once measured.)
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
