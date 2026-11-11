@@ -241,6 +241,11 @@ build wants ICU 74, libxml2.so.2 and flite): the tool reports that and exits wit
 
 So Chromium's page crashed once in twelve sessions. The cause is not explained and was not reproduced.
 
+**Eight more ten-minute Chromium sessions (2026-11-10 and 11-11, master 13ce5312 to 428083e1)**, one at a time under the heavy lock
+and a 6 GB scope with Playwright's browser log (`DEBUG=pw:browser`), `.cache/perf/crash-hunt/hunt.sh`: all eight passed every step
+(600 to 770 s each; the only notes are the two failed resource loads every run has). With the earlier runs the page crashed once in
+twenty ten-minute sessions and none of eight one-minute ones; it was not seen again, and its cause stays unexplained.
+
 Playwright's WebKit cannot take every step: headless, it refuses the pointer lock without window focus and a synthetic mouse move
 carries no `movementX` (docs/mac-pass-2026-11-09.md), so `pointer-lock` and `training-look` report that harness limit as a failure and
 the menus run on the free mouse at its own position. Real Safari needs the same session by hand.
