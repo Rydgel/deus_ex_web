@@ -2,7 +2,7 @@
  * docs/script-load-graph.md. Package I/O is supplied before entering the graph.
  */
 import {Reader} from '../unreal/package.mjs';
-import {NativeSlots} from './native-slots.mjs';
+import {NativeSlots, OffsetMap} from './native-slots.mjs';
 import {LoadRecord} from './load-record.mjs';
 import {LoadEdges} from './script-load-edges.mjs';
 import {expandScriptExpression, skipExpandedScriptExpression} from '../unreal/classes.mjs';
@@ -176,15 +176,29 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // address -> record: an expanded script image holds its object operands as their records' addresses (expandScriptExpression's
   // resolveObject); the collector reads them back (recordAtAddress).
   // The synthetic addresses (0x70000000 + 0x40 a record) are heap numbers in the browser, and as Map keys each one is a number of its
-  // own: they are keyed by their ordinal (a negative Smi, clear of the native addresses of the registered classes).
+  // own: a record that has one is the element of its ordinal in an array (one value slot, where a Map entry is a key, a value and a
+  // chain), and the other addresses (the native addresses of the registered classes) stay Map keys.
   const SYNTHETIC_BASE = 0x70000000;
-  const addressKey = address => typeof address === 'number' && address >= SYNTHETIC_BASE && address <= 0xffffffff &&
-    ((address - SYNTHETIC_BASE) & 63) === 0 ? -1 - ((address - SYNTHETIC_BASE) >>> 6) : address;
+  const syntheticOrdinal = address => typeof address === 'number' && address >= SYNTHETIC_BASE && address <= 0xffffffff &&
+    ((address - SYNTHETIC_BASE) & 63) === 0 ? (address - SYNTHETIC_BASE) >>> 6 : -1;
+  const syntheticRecords = [];
   const recordsOfAddress = new Map();
   const recordsByAddress = {
-    get: address => recordsOfAddress.get(addressKey(address)),
-    set: (address, record) => recordsOfAddress.set(addressKey(address), record),
-    delete: address => recordsOfAddress.delete(addressKey(address)),
+    get: address => {
+      const ordinal = syntheticOrdinal(address);
+      return ordinal >= 0 ? syntheticRecords[ordinal] : recordsOfAddress.get(address);
+    },
+    set: (address, record) => {
+      const ordinal = syntheticOrdinal(address);
+      if (ordinal >= 0) syntheticRecords[ordinal] = record; else recordsOfAddress.set(address, record);
+    },
+    delete: address => {
+      const ordinal = syntheticOrdinal(address);
+      if (ordinal < 0) return recordsOfAddress.delete(address);
+      const had = syntheticRecords[ordinal] !== undefined;
+      syntheticRecords[ordinal] = undefined;
+      return had;
+    },
   };
   let loadedObjects = [];       // the GObjLoaded array (0x1029e638); see suspendLoadQueue
   const events = captureEvents ? [] : {length: 0, push() {}};
@@ -370,7 +384,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     writeSlot(soundClass, 0x49c, objectStatic);
     writeSlot(soundClass, 0x4a0, intern('System'));
     writeSlot(soundClass, 0x4e4, 0x10101041);
-    soundClass.defaults = {data: new Map(), num: 0x54, max: 0x54};
+    soundClass.defaults = {data: new OffsetMap(), num: 0x54, max: 0x54};
     for (let offset = 0x28; offset < 0x54; offset += 4) soundClass.defaults.data.set(offset, 0);
     soundClass.defaultsSource = 'original-native-sound-registration';
     // Font is native-only as well: initializer 0x103855b0 registers size
@@ -383,7 +397,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     writeSlot(fontClass, 0x49c, objectStatic);
     writeSlot(fontClass, 0x4a0, intern('System'));
     writeSlot(fontClass, 0x4e4, FONT_NATIVE.staticConstructor);
-    fontClass.defaults = {data: new Map(), num: FONT_NATIVE.instanceSize, max: FONT_NATIVE.instanceSize};
+    fontClass.defaults = {data: new OffsetMap(), num: FONT_NATIVE.instanceSize, max: FONT_NATIVE.instanceSize};
     for (let offset = 0x28; offset < FONT_NATIVE.instanceSize; offset += 4) fontClass.defaults.data.set(offset, 0);
     fontClass.defaultsSource = 'original-native-font-registration';
     // Music is native-only too: initializer 0x10370eb0 registers size 0x4c,
@@ -395,7 +409,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     writeSlot(musicClass, 0x49c, objectStatic);
     writeSlot(musicClass, 0x4a0, intern('System'));
     writeSlot(musicClass, 0x4e4, MUSIC_NATIVE.staticConstructor);
-    musicClass.defaults = {data: new Map(), num: MUSIC_NATIVE.instanceSize, max: MUSIC_NATIVE.instanceSize};
+    musicClass.defaults = {data: new OffsetMap(), num: MUSIC_NATIVE.instanceSize, max: MUSIC_NATIVE.instanceSize};
     for (let offset = 0x28; offset < MUSIC_NATIVE.instanceSize; offset += 4) musicClass.defaults.data.set(offset, 0);
     musicClass.defaultsSource = 'original-native-music-registration';
   }
@@ -407,7 +421,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       writeSlot(cls, 0x3c, size); writeSlot(cls, 0x484, 0x12);
       writeSlot(cls, 0x49c, objectStatic); writeSlot(cls, 0x4a0, intern('System'));
       writeSlot(cls, 0x4e4, 0x10101041);
-      cls.defaults = {data: new Map(), num: size, max: size};
+      cls.defaults = {data: new OffsetMap(), num: size, max: size};
       for (let offset = 0x28; offset < size; offset += 4) cls.defaults.data.set(offset, 0);
       cls.defaultsSource = 'original-native-mesh-registration';
     }
@@ -595,7 +609,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         existing.nativeSlots.forEach((value, offset, width) => {
           if (offset >= 0x28) existing.nativeSlots.set(offset, null, width);
         });
-        existing.instanceValues = new Map();
+        existing.instanceValues = new OffsetMap();
         existing.script = null;
         existing.defaults = null;
         existing.farrays = null;
@@ -712,7 +726,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound', 'Engine.Font', 'Engine.Music'].includes(kind)) return;
     const source = classRecordOf(object)?.defaults?.data;
     if (!(source instanceof Map)) throw new Error(`Resource construction requires loaded class defaults: ${kind}`);
-    object.instanceValues = new Map([...source].filter(([offset]) => offset >= 0x28)
+    object.instanceValues = new OffsetMap([...source].filter(([offset]) => offset >= 0x28)
       .map(([offset, value]) => [offset, deepCopy(value)]));
     if (kind === 'Engine.LodMesh') constructLodMesh(object, meshServices);
     else if (kind === 'Engine.Mesh') constructMesh(object, meshServices);
@@ -754,7 +768,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         value = Object.fromEntries([...structFieldChain(slotOf(property, 0x5c))]
           .map(field => [nameText(slotOf(field, 0x20)), (value >>> (8 * slotOf(field, 0x48))) & 255]));
       }
-      (object.instanceValues ??= new Map()).set(offset, value);
+      (object.instanceValues ??= new OffsetMap()).set(offset, value);
     },
     objectConstructor: object => writeSlot(object, 0, 0x10179dfc),
     objectSerialize: (object, archive) => serializeLoadedObject(object, archive, preloadServices, {events}),
@@ -817,7 +831,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     read: (object, offset) => offset < 0x28 ? slotOf(object, offset) : object.instanceValues?.get(offset),
     write(object, offset, value, type) {
       if (offset < 0x28) { writeSlot(object, offset, value); return; }
-      (object.instanceValues ??= new Map()).set(offset, type === 'u8'
+      (object.instanceValues ??= new OffsetMap()).set(offset, type === 'u8'
         ? ((object.instanceValues.get(offset) ?? 0) & 0xffffff00) | (value & 255) : value);
     },
     objectConstructor: object => writeSlot(object, 0, 0x10179dfc),
@@ -847,7 +861,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const musicServices = {
     ...textureServices,
     read: (object, offset) => object.instanceValues?.get(offset),
-    write: (object, offset, value) => { (object.instanceValues ??= new Map()).set(offset, value); },
+    write: (object, offset, value) => { (object.instanceValues ??= new OffsetMap()).set(offset, value); },
     writeVtable: (object, vtable) => writeSlot(object, 0, vtable),
     uobjectSerialize: (object, archive) => serializeLoadedObject(object, archive, preloadServices, {events}),
   };
@@ -996,7 +1010,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
 
   /** dataReference: the defaults/instance backing store is a Map(byteOffset -> value). */
   function dataReference(data, offset, detail = {}) {
-    const map = data instanceof Map ? data : (data.instanceValues ??= new Map());
+    const map = data instanceof Map ? data : (data.instanceValues ??= new OffsetMap());
     const property = detail.property ?? null;
     return {
       reference: true,
@@ -1103,7 +1117,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         for (const [offset, value] of superData) data.set(offset, deepCopy(value));
       }
     },
-    allocateDefaults: () => new Map(),
+    allocateDefaults: () => new OffsetMap(),
     // UClass::Serialize's LoadConfig(0,0,0) on the class default object
     // (0x1012829a). With GConfig bound (setConfig), the recovered body imports
     // the installed .ini values into the Defaults block; without it the call

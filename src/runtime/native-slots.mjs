@@ -1,12 +1,27 @@
 /** A load-graph record's native slots: byte offset -> value and the slot's byte width, in the order the offsets were first written.
  *
- * Host representation only (docs/live-heap.md, step 7 and "Load records and functions"). The slots used to be a Map of one {value, width}
- * cell per slot, about a million objects for the simulation worker's major GC to mark on the Island. Step 7 made them one array of
- * (key, value) pairs; the keys were the same few dozen numbers in every record, and the array, its wrapper and the record were three
- * objects. Here the slots are shaped like V8 shapes objects: a `SlotShape` is the ordered list of the keys (offset * 256 + width + 1, or
- * offset * 256 when the writer gave no width) a store has, shared by every store that took the same writes in the same order, and the
- * values are the store's indexed elements, one per key, in the same order. A record is its own slot store (LoadRecord extends NativeSlots,
- * script-load-graph.mjs), so a record is one object and its elements.
+ * Host representation only (docs/live-heap.md, steps 7 and "Load records and functions"; docs/firefox-60fps-plan.md "Native slots out of
+ * the collector's marking"). The slots used to be a Map of one {value, width} cell per slot, about a million objects for the simulation
+ * worker's major GC to mark on the Island. Step 7 made them one array of (key, value) pairs; then the slots were shaped like V8 shapes
+ * objects: a `SlotShape` is the ordered list of the keys (offset * 256 + width + 1, or offset * 256 when the writer gave no width) a
+ * store has, shared by every store that took the same writes in the same order, and the values were the store's indexed elements. A
+ * record is its own slot store (LoadRecord extends NativeSlots, script-load-graph.mjs), so a record is one object and its words.
+ *
+ * Now a slot that holds an int32 (the load graph's names, sizes, flags, indexes and vtable words: 63% of the Island's 820,000 slots)
+ * keeps it in an Int32Array, which a collector's marker never visits, where an array element is visited whatever it holds. Every other
+ * value (null, a record or other object, a string, a number past int32, -0, NaN, a BigInt) is an indexed element of the store itself,
+ * dense in the order the slots took to that representation. A slot is an int slot until it is given a value that is not an int32; from
+ * then on it is an element slot (no way back: a slot that is given a null and then a number would otherwise move words on each flip).
+ *
+ * The words are a block of a shared Int32Array chunk (4096 words, handed out by a bump allocator): a store costs no typed array object
+ * of its own (one more cell for the marker, 35,000 on the Island), a block a store outgrows is left behind, a chunk is freed when no
+ * store has a block in it, and the most a long-lived store can pin is the rest of its chunk. The block is a header (its room in slots
+ * and the elements used: so the store itself has three fields, a record being a SpiderMonkey object of at most 16 fixed slots and its own
+ * thirteen leaving three) and one word for each slot position. A word that is >= FLOOR is the slot's int32; a word below it is
+ * MIN + the rank of the slot's element, so that a read is one typed load and a compare. (An int32 below FLOOR, 2^24 values at the
+ * bottom of the range, is an element like any other value that is not a plain int.) The word lives with the store, not in the shape, so
+ * the shapes stay the ones of the write orders (a shape that said where each slot lives would be one for every combination of value
+ * kinds: 6,900 against 300 on the Island).
  *
  * The cell operations map onto two writes: `set` is the Map's set of a new cell (value and width replaced), `assign` the old
  * `cell.value = value` (an existing slot keeps its width; a new one takes the given width). The store itself stands for the record's
@@ -16,6 +31,12 @@ const NEAR = 0x800;           // offsets below this have a direct position table
 const SMALL = 8;              // a shape this small is searched, not tabled
 const MAX_OFFSET = 1 << 22;   // offset * 256 + 255 stays a small integer (V8's 31-bit Smi)
 const MAX_WIDTH = 254;
+const CHUNK = 4096;           // int words in a shared chunk
+const OWN_BLOCK = 1024;       // a block this large has an Int32Array of its own
+const FIRST_ROOM = 24;        // the slots a store's first block has room for (the Island's records have 9 to 39, most 20 to 22)
+const FIRST_ENTRIES = 8;      // the first entries of an offset map
+const MIN = -0x80000000;      // a word of MIN + rank is the slot's element number rank
+const FLOOR = MIN + 0x1000000; // the words below it are element ranks: a store has at most MAX_OFFSET (4 M) slots, so at most 4 M ranks
 
 const key = (offset, width) => {
   if (!Number.isInteger(offset) || offset < 0 || offset >= MAX_OFFSET)
@@ -25,6 +46,27 @@ const key = (offset, width) => {
     throw new TypeError(`Native slot +0x${offset.toString(16)} width ${String(width)} is outside 0..${MAX_WIDTH}`);
   return offset * 256 + width + 1;
 };
+
+/** True when the value is an int32 a word can hold as it is: not -0 (an Int32Array would read it back as 0), not below FLOOR. */
+const isInt32 = value => typeof value === 'number' && (value | 0) === value && value >= FLOOR && (value !== 0 || 1 / value > 0);
+
+const NO_WORDS = new Int32Array(0);
+
+let chunk = new Int32Array(CHUNK), claimed = 0;
+let blockWords = NO_WORDS, blockBase = 0;
+
+/** A block of `size` words: `blockWords` and `blockBase` name it. */
+function claim(size) {
+  if (size >= OWN_BLOCK) {
+    blockWords = new Int32Array(size);
+    blockBase = 0;
+    return;
+  }
+  if (claimed + size > CHUNK) { chunk = new Int32Array(CHUNK); claimed = 0; }
+  blockWords = chunk;
+  blockBase = claimed;
+  claimed += size;
+}
 
 /** The ordered keys of the stores that share it, and the shapes one more key or one replaced key leads to. */
 class SlotShape {
@@ -92,7 +134,10 @@ export const slotValue = (record, offset) => record?.nativeSlots instanceof Nati
 
 export class NativeSlots {
   constructor() {
+    // Three fields, whatever the store holds: a record is a SpiderMonkey object of at most 16 fixed slots, and its own thirteen leave three.
     this.shape = EMPTY;
+    this.intWords = NO_WORDS;   // the chunk (or array) that has the store's block
+    this.intBase = 0;           // the block's first word: [room, elements used], then a word for each slot position
   }
 
   /** Fixtures: [offset, cell] entries, a cell being {value, width} (width optional) or the raw value. */
@@ -105,17 +150,28 @@ export class NativeSlots {
     return slots;
   }
 
-  /** The offset's position in the elements, or -1. */
+  /** The slots the block has room for (0 before the first slot). */
+  get intRoom() { return this.intWords === NO_WORDS ? 0 : this.intWords[this.intBase]; }
+
+  /** The offset's position in the slot order, or -1. */
   at(offset) { return this.shape.position(offset); }
 
   get size() { return this.shape.size; }
 
   has(offset) { return this.shape.position(offset) >= 0; }
 
+  /** The value of the slot at a position. */
+  valueAt(at) {
+    const word = this.intWords[this.intBase + 2 + at];
+    return word >= FLOOR ? word : this[word - MIN];
+  }
+
   /** The slot's value, or undefined when the slot is absent. */
   value(offset) {
     const at = this.shape.position(offset);
-    return at < 0 ? undefined : this[at];
+    if (at < 0) return undefined;
+    const word = this.intWords[this.intBase + 2 + at];
+    return word >= FLOOR ? word : this[word - MIN];
   }
 
   /** The slot's width, or undefined when the slot is absent or its writer gave none. */
@@ -128,33 +184,211 @@ export class NativeSlots {
 
   /** The slot becomes (value, width), whether or not it was present. */
   set(offset, value, width) {
-    const slotKey = key(offset, width), shape = this.shape, at = shape.position(offset);
-    if (at >= 0) {
-      if (shape.keys[at] !== slotKey) this.shape = shape.replace(at, slotKey);
-      this[at] = value;
-    } else this.append(slotKey, value);
+    const slotKey = key(offset, width), at = this.shape.position(offset);
+    if (at >= 0) this.store(at, slotKey, value); else this.append(slotKey, value);
     return value;
   }
 
   /** A present slot takes the value and keeps its width; an absent one is added with the given width. */
   assign(offset, value, width) {
-    const at = this.shape.position(offset);
-    if (at >= 0) this[at] = value;
-    else this.append(key(offset, width), value);
+    const shape = this.shape, at = shape.position(offset);
+    if (at >= 0) this.put(at, value); else this.append(key(offset, width), value);
     return value;
   }
 
-  append(slotKey, value) {
+  /** The present slot at `at` takes the value under `slotKey`. */
+  store(at, slotKey, value) {
     const shape = this.shape;
-    this[shape.size] = value;
+    if (shape.keys[at] !== slotKey) this.shape = shape.replace(at, slotKey);
+    this.put(at, value);
+  }
+
+  /** The present slot at `at` takes the value, and keeps its key. */
+  put(at, value) {
+    const words = this.intWords, base = this.intBase, index = base + 2 + at, word = words[index];
+    if (word < FLOOR) this[word - MIN] = value;
+    else if (isInt32(value)) words[index] = value;
+    else {
+      const rank = words[base + 1]++;
+      this[rank] = value;
+      words[index] = MIN + rank;
+    }
+  }
+
+  append(slotKey, value) {
+    const shape = this.shape, at = shape.size;
+    if (this.intWords === NO_WORDS || at >= this.intWords[this.intBase]) this.grow(at);
+    const words = this.intWords, base = this.intBase;
+    if (isInt32(value)) words[base + 2 + at] = value;
+    else {
+      const rank = words[base + 1]++;
+      this[rank] = value;
+      words[base + 2 + at] = MIN + rank;
+    }
     this.shape = shape.add(slotKey);
+  }
+
+  /** The block becomes one half as large again, its `size` slot words kept. */
+  grow(size) {
+    const from = this.intWords, start = this.intBase, first = from === NO_WORDS;
+    const was = first ? 0 : from[start], refs = first ? 0 : from[start + 1];
+    const room = first ? FIRST_ROOM : (was * 3 >> 1) + 7 & ~7;
+    claim(room + 2);
+    const words = blockWords, base = blockBase;
+    words[base] = room;
+    words[base + 1] = refs;
+    for (let at = 0; at < size; at++) words[base + 2 + at] = from[start + 2 + at];
+    this.intWords = words;
+    this.intBase = base;
   }
 
   /** fn(value, offset, width) for every slot, in first-write order (a slot fn adds is visited, as the array it was is). */
   forEach(fn) {
     for (let at = 0; at < this.shape.size; at++) {
       const code = this.shape.keys[at] & 255;
-      fn(this[at], this.shape.keys[at] >> 8, code === 0 ? undefined : code - 1);
+      fn(this.valueAt(at), this.shape.keys[at] >> 8, code === 0 ? undefined : code - 1);
     }
+  }
+}
+
+/** A resource's instance memory above +0x28 (`record.instanceValues`) and a class's default data (`record.defaults.data`): a Map of
+ * byte offset -> value, in the order the offsets were first set. Every Map method the readers use answers as the Map did, and
+ * `instanceof Map` holds; the Map itself stays empty. The entries are a block of the shared chunks, with the words of the slot stores
+ * above: `room` offsets (a lookup is a scan of up to 100 of them: the maps are read when a class is linked or a resource constructed,
+ * not per frame), then `room` value words (an int32, or MIN + the rank of the entry's element). No shape: the order of a class's
+ * defaults is its own, so shapes would be one a class (6,900 shapes' worth of keys on the Island). A key that is not a plain offset (an
+ * integer from 0 below 1 << 22) or a `delete` turns the store into an ordinary Map for the rest of its life (`plain`), so nothing a Map
+ * accepts is refused; neither happens in the load graph. */
+export class OffsetMap extends Map {
+  constructor(entries) {
+    super();
+    this.intWords = NO_WORDS;
+    this.intBase = 0;
+    this.intRoom = 0;           // the entries the block has room for
+    this.refCount = 0;          // the elements used
+    this.count = 0;             // the entries
+    this.plain = false;
+    if (entries !== undefined && entries !== null) for (const [offset, value] of entries) this.set(offset, value);
+  }
+
+  /** The store becomes the Map it stands for. */
+  makePlain() {
+    if (this.plain) return;
+    const entries = [...this.entries()];
+    for (let at = 0; at < this.refCount; at++) this[at] = undefined;
+    this.intWords = NO_WORDS;
+    this.intBase = 0;
+    this.intRoom = this.refCount = this.count = 0;
+    this.plain = true;
+    for (const [offset, value] of entries) super.set(offset, value);
+  }
+
+  /** The entry's index, or -1. */
+  indexOf(offset) {
+    const words = this.intWords, base = this.intBase, count = this.count;
+    for (let at = 0; at < count; at++) if (words[base + at] === offset) return at;
+    return -1;
+  }
+
+  valueAt(at) {
+    const word = this.intWords[this.intBase + this.intRoom + at];
+    return word >= FLOOR ? word : this[word - MIN];
+  }
+
+  get size() { return this.plain ? super.size : this.count; }
+
+  has(offset) { return this.plain ? super.has(offset) : this.indexOf(offset) >= 0; }
+
+  get(offset) {
+    if (this.plain) return super.get(offset);
+    const at = this.indexOf(offset);
+    return at < 0 ? undefined : this.valueAt(at);
+  }
+
+  set(offset, value) {
+    if (this.plain) return super.set(offset, value);
+    if (!Number.isInteger(offset) || offset < 0 || offset >= MAX_OFFSET) {
+      this.makePlain();
+      return super.set(offset, value);
+    }
+    const at = this.indexOf(offset);
+    if (at >= 0) this.store(at, value); else this.append(offset, value);
+    return this;
+  }
+
+  /** The entry at `at` takes the value (an int slot given a value that is not an int32 becomes an element slot). */
+  store(at, value) {
+    const words = this.intWords, index = this.intBase + this.intRoom + at, word = words[index];
+    if (word < FLOOR) this[word - MIN] = value;
+    else if (isInt32(value)) words[index] = value;
+    else {
+      this[this.refCount] = value;
+      words[index] = MIN + this.refCount++;
+    }
+  }
+
+  append(offset, value) {
+    const at = this.count;
+    if (at === this.intRoom) this.grow();
+    const words = this.intWords, base = this.intBase;
+    words[base + at] = offset;
+    if (isInt32(value)) words[base + this.intRoom + at] = value;
+    else {
+      this[this.refCount] = value;
+      words[base + this.intRoom + at] = MIN + this.refCount++;
+    }
+    this.count = at + 1;
+  }
+
+  /** The block becomes one half as large again. */
+  grow() {
+    const from = this.intWords, start = this.intBase, was = this.intRoom, count = this.count;
+    const room = was === 0 ? FIRST_ENTRIES : (was * 3 >> 1) + 7 & ~7;
+    claim(room * 2);
+    const words = blockWords, base = blockBase;
+    for (let at = 0; at < count; at++) {
+      words[base + at] = from[start + at];
+      words[base + room + at] = from[start + was + at];
+    }
+    this.intWords = words;
+    this.intBase = base;
+    this.intRoom = room;
+  }
+
+  delete(offset) {
+    if (!this.has(offset)) return false;
+    this.makePlain();
+    return super.delete(offset);
+  }
+
+  clear() {
+    if (this.plain) { super.clear(); return; }
+    for (let at = 0; at < this.refCount; at++) this[at] = undefined;
+    this.intWords = NO_WORDS;
+    this.intBase = 0;
+    this.intRoom = this.refCount = this.count = 0;
+  }
+
+  /** [offset, value] for every entry in order (an entry added during the walk is visited, as the Map's iterators do). */
+  * entries() {
+    if (this.plain) { yield* super.entries(); return; }
+    for (let at = 0; at < this.count; at++) yield [this.intWords[this.intBase + at], this.valueAt(at)];
+  }
+
+  * keys() {
+    if (this.plain) { yield* super.keys(); return; }
+    for (let at = 0; at < this.count; at++) yield this.intWords[this.intBase + at];
+  }
+
+  * values() {
+    if (this.plain) { yield* super.values(); return; }
+    for (let at = 0; at < this.count; at++) yield this.valueAt(at);
+  }
+
+  [Symbol.iterator]() { return this.entries(); }
+
+  forEach(fn, thisArg) {
+    if (this.plain) { super.forEach(fn, thisArg); return; }
+    for (let at = 0; at < this.count; at++) fn.call(thisArg, this.valueAt(at), this.intWords[this.intBase + at], this);
   }
 }

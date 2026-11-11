@@ -11,12 +11,12 @@ test('a LoadRecord is its own slot store and records written alike share one slo
     record.assign(0x24, record === a ? null : a, 4);
   }
   c.set(0x08, 7, 2);
-  assert.equal(a.nativeSlots, a);
+  assert.ok(a.nativeSlots === a);   // identity checks use ok(x === y): a failing equal would make node inspect the whole record or shape graph, without limits
   assert.ok(a instanceof NativeSlots);
-  assert.equal(slotValue(b, 0x24), a);
+  assert.ok(slotValue(b, 0x24) === a);
   assert.equal(slotValue(a, 0x24), null);
-  assert.equal(b.shape, a.shape);          // the same writes in the same order
-  assert.notEqual(c.shape, a.shape);
+  assert.ok(b.shape === a.shape);          // the same writes in the same order
+  assert.ok(c.shape !== a.shape);
   assert.equal(c.width(0x08), 2);
   assert.equal(b.has(0x08), false);
   assert.equal(b.value(0x08), undefined);
@@ -42,4 +42,29 @@ test('NativeSlots.forEach visits a slot added during the walk, and a width chang
   const order = [];
   slots.forEach((value, offset) => order.push(offset));
   assert.deepEqual(order, [0x10, 0x14, 0x18]);
+});
+
+test('a LoadRecord\'s named fields and the store\'s own fields are different properties', () => {
+  // `base` is the record's superclass link; the store's int block is intWords/intBase/intRoom (a store field named like a record field
+  // would be overwritten by the record's constructor, which runs after the store's)
+  const record = new LoadRecord('A', 'Class');
+  assert.ok(record.intWords instanceof Int32Array);
+  assert.deepEqual([record.intBase, record.intRoom, record.base], [0, 0, null]);
+  for (let at = 0; at < 40; at++) record.set(0x10 + at * 4, at === 3 ? null : at * 3 - 7, 4);   // grows past the first block
+  record.base = {};
+  assert.equal(record.value(0x10 + 5 * 4), 8);
+  assert.equal(record.value(0x10 + 3 * 4), null);
+  assert.equal(record.value(0x10 + 39 * 4), 110);
+  assert.ok(record.intRoom >= 32 && typeof record.base === 'object');
+});
+
+test('a record has at most sixteen named fields, the size of a SpiderMonkey object\'s fixed slots', () => {
+  const record = new LoadRecord('A', 'Class');
+  for (let at = 0; at < 30; at++) record.set(at * 4, at % 3 ? at : null, 4);
+  record.nativeAddress = 0x70000040;
+  assert.equal(record.address, 0x70000040);
+  record.address = 0x70000080;
+  assert.equal(record.nativeAddress, 0x70000080);
+  const named = Object.keys(record).filter(name => !/^\d+$/.test(name));
+  assert.ok(named.length <= 16, `a record has ${named.length} own named properties: ${named.join(', ')}`);
 });
