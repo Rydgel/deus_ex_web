@@ -1,4 +1,5 @@
 import { hitchEnabled, createHitchLog } from './hitch-log.mjs';
+import './hand-checks.mjs';   // ?checks=1 only: the recorder for Stage 7's checks by hand (docs/stage-7-hand-checks.md)
 import * as THREE from 'three';
 import './style.css';
 import { closeToolbarMenus } from './toolbar.mjs';
