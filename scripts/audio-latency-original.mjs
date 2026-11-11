@@ -77,7 +77,10 @@ export function analyzeLatencyTrace(text, { size = BYTES_PER_SECOND } = {}) {
     if (hits > best) { best = hits; cursor = off; }
   }
   const checked = Math.min(200, callbacks.length);
-  if (!cursor || best < 0.9 * checked) throw new Error(`no buffer dword follows A (best ${cursor} ${best}/${checked})`);
+  // 85 %, not all: under CrossOver on the Mac (2026-11-11) the cursor moves in 2,048-byte steps out of step with Galaxy's callbacks,
+  // so a poll reads it one step past A at about 1 callback in 10 (178 of the first 200, 90.4 % of all 58,959); no other dword matched
+  // at all (the next best 0 of 200). Wine on Linux matched 195 to 200 of 200. The user accepted 89 % as enough (2026-11-11).
+  if (!cursor || best < 0.85 * checked) throw new Error(`no buffer dword follows A (best ${cursor} ${best}/${checked})`);
   const unwrapPlay = unwrapper(size), plays = wordSeries.get(cursor).map(s => ({ t: s.t, play: unwrapPlay(s.value) }));
   // Callback heads unwrapped onto the play cursor's scale.
   const playAt = t => plays[firstAbove(plays, t, s => s.t) - 1]?.play ?? null;
