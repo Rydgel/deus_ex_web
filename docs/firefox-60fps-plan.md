@@ -3820,6 +3820,28 @@ the escalation; the full collection (all four zones, the atoms zone's sweep with
 are the ones `docs/object-model-plan.md` orders (hash buckets, the load records' remaining fields, linked classes and operands,
 function trees, identities), each measured the same way.
 
+#### The Mac on a quiet host: row 7.2.4 passes (2026-11-10/11)
+
+The reference machine's third pass ([Mac pass](mac-pass-2026-11-10.md#4-firefox-inline-on-the-island-724)) ran on 57f28f9f, which has
+the first cut only (light maps and triangles), after the user closed the heavy apps. All five 100 s Island roams pass (four headless,
+one headed at 120 Hz): 0.6 to 1.2 gaps over 50 ms a minute, none over 100 ms, the longest 83 ms.
+
+The Mac's reading differs from Linux's:
+
+* **Where the gaps open.** Every gap is the first frame after a major collection's slice that spends 1.8 to 3.0 ms in
+  `prepare.mark_discard_code`. That frame's whole page work is 3 to 10 times its median, and the frames after it stay slow for 100
+  to 250 ms. `FULL_GC_TIMER` and `ALLOC_TRIGGER` discard code; `CC_FINISHED` spends 0.01 ms there and has no gap. That the slowdown
+  is the page's JIT code being compiled again is inferred, since the profiles are markers only.
+* **The extended slices make no gap.** Six of nine collections finish within 1.5 s. Those that run past it have 3 to 6 extended
+  slices, 13 to 31 ms in all. At 120 Hz the frames are cheaper than the period (7 to 8 ms of 8.33), so about a quarter of a long
+  collection's frames get an idle slice.
+* **MeetPaul's tick** is 27 to 30 ms, against about 40 ms on Linux.
+
+Linux's three clean roams on the four cuts are within the bound too (1.8, 1.8 and 0 a minute, none over 100 ms), with no margin.
+
+Open: a sampled profile of the discard window, to show the recompilation, and whether Linux's gaps also open at a discard. The
+object-model rounds go on for Linux's margin, judged by the same interleaved A/B.
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.

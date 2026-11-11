@@ -51,8 +51,9 @@ test('training plays with gravity, stances, blocked doors, linked use, stairs an
   // DefUser.ini: RightMouse=ParseRightClick, the use (F is CenterView)
   await page.locator('#scene').click({ position: { x: 500, y: 350 }, button: 'right' });
   await expect.poll(async () => (await status(page)).gameplay.doors.movers.find(m => m.name === 'DeusExMover16').alpha, { timeout: 5000 }).toBe(1);
-  const panels = (await status(page)).gameplay.doors.movers.filter(m => m.tag === 'UN_maindoor');
-  expect(panels.map(m => m.offset[1])).toEqual([-56, 56]);
+  // (the main door's panels are other movers, which a read right after DeusExMover16's last step can find one step short of their key:
+  // -55.99994 in Firefox on a disturbed Mac, docs/mac-pass-2026-11-10.md; they still have to reach it exactly)
+  await expect.poll(async () => (await status(page)).gameplay.doors.movers.filter(m => m.tag === 'UN_maindoor').map(m => m.offset[1]), { timeout: 5000 }).toEqual([-56, 56]);
   await page.screenshot({ path: 'reports/movement/browser/door-open.png' });
   await page.keyboard.down('KeyW');
   await expect.poll(async () => (await player(page)).position[0]).toBeGreaterThan(100);

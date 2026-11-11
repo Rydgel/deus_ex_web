@@ -33,9 +33,12 @@ test('ordinary use plays the instructor, terminates, takes the second route afte
  expect(await page.evaluate(()=>window.deusExViewer.status().mode)).toBe('play');
 
  // 1. The greeting: his speech, then the conversation ends by itself.
+ // (The greeting lasts 1.1 to 1.8 s of game time. Playwright's polls back off to a second apart, which on a slow page (the Mac's
+ // headless Chromium draws with SwiftShader, 18 fps, and stalls about a second as the conversation starts: docs/mac-pass-2026-11-10.md)
+ // can straddle it, so these two sample every 100 ms.)
  await face([-80,0,0]);await use();
- await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
- await expect.poll(async()=>(await conversation())?.speaker??null,{timeout:8000}).toBe('UNATCOTroop3');
+ await expect.poll(async()=>(await conversation())?.con??null,{intervals:[100]}).toBeTruthy();
+ await expect.poll(async()=>(await conversation())?.speaker??null,{timeout:8000,intervals:[100]}).toBe('UNATCOTroop3');
  expect((await conversation())?.text?.length??0).toBeGreaterThan(0);
  await mkdir('reports/instructor',{recursive:true});await page.screenshot({path:'reports/instructor/greeting.png'});
  await expect.poll(conversation,{timeout:15000}).toBeNull();
