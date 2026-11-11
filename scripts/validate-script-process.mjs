@@ -136,7 +136,7 @@ await (async () => {
   }
   check(runtime.classes === shared.classes && runtime.linkedClasses === shared.linkedClasses && runtime.functions === shared.functions &&
     runtime.states === shared.states && runtime.structs === shared.structs && runtime.structLayouts === shared.structLayouts &&
-    runtime.contextResults === shared.contextResults && runtime.classLoader === shared.classLoader && runtime.resources === shared.resources,
+    runtime.objects.links === shared.scriptLinks && runtime.classLoader === shared.classLoader && runtime.resources === shared.resources,
     'the runtime\'s classes, readiness, class loader or resource registry are not the process\'s');
   check(runtime.actorClass && runtime.actorClass === shared.actorClass, 'Engine.Actor\'s class is not the process\'s');
   notes.push(`classes: ${shared.linkedClasses.size} linked, ${shared.functions.size} prepared functions, ${shared.states.size} prepared states`);

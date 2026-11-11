@@ -23,15 +23,14 @@ export class ScriptProcess {
     this.packageObjects = new Map();
     // Every identity this process holds, from its table, the class loader and the resource registry.
     this.identities = new WeakSet();
-    // Readiness: ScriptObjects' linked bytecode (script -> bindings, script -> operand table by expression offset).
-    this.linkedScripts = new WeakMap();
-    this.linkedOperands = new WeakMap();
+    // Readiness: ScriptObjects' linked bytecode (script -> ScriptLinks: its bindings, its operands by expression offset and its prepared
+    // null-Context results).
+    this.scriptLinks = new WeakMap();
     // (written by prepareFunction and read by nothing: it holds nothing now, and a function is reached through its identity's `function`)
     this.functions = new Map();
     this.states = new Map();
     this.structs = new Map();
     this.structLayouts = new Map();
-    this.contextResults = new WeakMap();
     // The classes: class key -> pending linked class, and the linked ones in link order (SaveConfig's GObjObjects walk).
     this.classes = new Map();
     this.linkedClasses = new Set();
