@@ -3825,7 +3825,7 @@ function trees, identities), each measured the same way.
 Step 3 of [object-model-plan.md](object-model-plan.md): the script process's per-class tables (`linkedClasses.defaults`, `.propertyLink`, `.destructorLink`, and
 the copies of the defaults that class images and attached objects held). Host data layout only: every method of the structures keeps its results, and the
 output is identical (the checks below). Code: `defaults-map.mjs`, `class-link-lists.mjs`, the class loader's link loop, `class-defaults-snapshot.mjs` and
-the class image in `script-runtime.mjs`. **Status: code and unit tests done; the heavy checks marked pending below wait for the Stage 7 gate.**
+the class image in `script-runtime.mjs`. **Status: done and checked on the final code (the checks below); not yet measured in Firefox.**
 
 **What the Island held** (a scenario of `bench-sim` read at tick 30 on the headless Island, base 29168214; 967 classes linked):
 
@@ -3858,51 +3858,59 @@ equal contents is equal). Link arrays: nothing changes one (grep of every `prope
 them and checks each class's `destructorLink` against the filter, and the digests and validators run with it. `layoutOwner` and the Rust VM's chain check read
 the lists by their members, as before (`layoutOwner` answers at once for an identical array).
 
-**Slots** (Chromium inline Island 30 s after the arrival, `map-memory-census.mjs --sim inline --snapshots 1`, `heap-families.mjs 4 300 --slots`/`--sm`;
-base 29168214's snapshot against the branch's; the census was taken before the last cut of `destructorLink` (sharing it when the class's own properties have no
-destructor), so its figures are a little short of the code's):
+**Slots** (Chromium inline Island 30 s after the arrival, `map-memory-census.mjs --browser chromium --sim inline --maps 01_NYC_UNATCOIsland --settle 30
+--snapshots 1`, `heap-families.mjs 4 300 --slots`/`--sm`; the base's snapshot (29168214) against the final code's, same host and method):
 
 | | Base | Branch |
 | --- | ---: | ---: |
-| Value slots (whole page) | 12,133,600 | 11,689,301 (-444 K, -3.7%) |
-| SpiderMonkey-like cells | 1,485,826 | 1,480,918 (-4.9 K, -0.3%) |
-| Objects / edges / JS heap | 2.45 M / 18.7 M / 175 MB | 2.44 M / 18.2 M / 171 MB |
-| Page JS after forced collections (census row) | 173.3 MB | 168.7 MB |
+| Value slots (whole page) | 12,133,600 | 11,684,788 (-448,812, -3.7%) |
+| SpiderMonkey-like cells | 1,485,826 | 1,480,334 (-5,492, -0.37%) |
+| Objects / edges / JS heap | 2.45 M / 18.7 M / 175 MB | 2.44 M / 18.1 M / 171 MB |
+| Page JS after forced collections (census row) | 173.3 MB | 168.8 MB |
 | `linkedClasses.defaults` (all its subfamilies) | 322 K slots, 13 K cells | 59 K slots, 6 K cells (`.own` 40 K, `.parent.own` 12 K, the table objects 7 K) |
-| `ScriptRuntime.classImages.defaults` | 77 K, 0 K cells | 24 K, 2 K cells |
+| `ScriptRuntime.classImages.defaults` | 77 K, 0 K cells | 24 K, 2 K cells (`.own` 22 K) |
 | `linkedClasses.propertyLink` | 142 K (0.45 M edges) | 59 K (0.18 M edges) |
-| `linkedClasses.destructorLink` | 9 K | 4 K |
-| The four families | 553 K slots, 15 K cells | 146 K slots, 10 K cells |
+| `linkedClasses.destructorLink` | 9 K | 2 K |
+| `ScriptRuntime.lastLinkedInstance.cls.defaults` | 3 K | gone |
+| The five families | 553 K slots, 15 K cells | 144 K slots, 9 K cells |
 
-The structure afterwards (the same scenario probe on the branch at tick 30, before the `destructorLink` cut): 967 tables, 413 frozen layers reached, 881 own Maps
+The structure afterwards
+(the same `bench-sim` scenario probe on the branch at tick 30, taken before the last cut, that of `destructorLink`): 967 tables, 413 frozen layers reached, 881 own Maps
 with 10,311 entries in all (the 4,286 + 6,025 above, counted from the other side), the visible entries unchanged at 85,437, at most 8 layers under a table; 5,198
 value Maps (from 10,311: the 1,873 scalar ones, the 2,793 with an object, 529 with more entries); 512 `propertyLink` arrays holding 92,459 entries (from 967
-arrays and 219,386). The cells moved little: about 5,100 value Maps and 455 arrays went, and the layers and own Maps cost about 1,300 new objects (413 and 881); the cut is in the references (440 K slots, 0.5 M edges), which is what the plan expected of a step that keeps the objects'
-lifetimes.
+arrays and 219,386). The cells moved little: about 5,100 value Maps and 455 arrays went, and the layers and own Maps cost about 1,300 new objects (413 and 881); the
+cut is in the references (449 K slots, 0.6 M edges), which is what the plan expected of a step that keeps the objects' lifetimes.
 
-**Checks** (all against the base 29168214; "final" is the code of this commit):
+**Checks** (all on the final code, commit of this section, against the base 29168214 and the reference files of `.cache/perf/heap-d/ref/`; every heavy run under the flock
+and an 8 GB scope):
 
-* `bench-sim --ticks 300` digests with `FREEZE_LINKS=on IMAGE_CHECK=verify` (the version and the full walk agree at every construction), final code: Island
-  `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, the same as the base; the Island alone without the switches on the code
-  before the `destructorLink` sharing, the same.
-* Unit tests (final): `defaults-map.test.mjs` (60 seeds of 500 random `set`/`delete`/`clear`/`snapshot`/derive steps against a flat Map model: contents, size, version
-  and every earlier snapshot; frozen layers throw; a derived table keeps its base as it linked; layers that pile up; `DefaultValues` immutable; scalar interning
-  and its edges: `-0`, NaN, kinds, objects, index 1), `class-link-lists.test.mjs` (shared and own arrays, own-first order, the filter's equality), and
-  `class-defaults-snapshot`, `instance-class-sharing`, `classes`, `script-class-registration`, `script-class-serialization`, `script-object-construction`,
-  `script-property-lifecycle`, `script-spawn` and `script-config`: 36 tests, 0 fail (11 of them again with `FREEZE_LINKS=on`). The whole suite on the code
-  before the `destructorLink` sharing: 1,027 tests, 1,027 pass, 0 fail.
-* Boot time (`bench-sim --ticks 3 --warm 0`, Island, five rounds an arm interleaved, the base a `git archive` of 29168214, the host running other jobs, load
-  about 5, final code): base 5,438, 5,181, 5,180, 5,430, 5,262 ms (median 5,262, mean 5,298), branch 5,148, 5,168, 5,133, 5,336, 5,280 ms (median 5,168, mean
-  5,213): -1.8% by the medians, no difference beyond the spread. The link loop reads the base's entry for every field through the layers (a probe: 26 ns a read
-  at 8 layers against 4.7 ns in a flat Map, about 220,000 reads at the boot); in the steady state the table is read about 44 times a tick.
-
-**Pending** (heavy; run after the Stage 7 gate): the whole `npm test` on the final code; `frame-alloc-meter.mjs --compare` on the three maps (Island 600 frames,
-the others 400) and `hud-stream-digest.mjs --frames 1500 --stream --compare` against `.cache/perf/heap-d/ref/`; the validators of the area with
-`FREEZE_LINKS=on` (class loader, class-default-travel, class-import, config, property, object image/layout/properties/handles, cleanup, linker, state, spawn,
-decoration, save, load-game, load-saves, level-save, travel, island, instructor, play-hud, process-collection, process-memory, original-loaded,
-inventory-spawn, weapon-construction, window, gc-underline, loadmap, script-class-bind, native-process-internal, world-destroy, end-load, npc-weapon-startup,
-script-process); interleaved tick pairs on the Island; a 25 s roam in Chromium in worker mode and inline; the census again on the final code. Until they
-pass, this step is not mergeable.
+* **Output identical.** `bench-sim --ticks 300`: Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, the same as the base, plain
+  and (an earlier run of the same code) with `FREEZE_LINKS=on IMAGE_CHECK=verify`, where the class image's version and the full walk agree at every construction.
+  `frame-alloc-meter.mjs --compare`: identical, Island 600 frames (`cebe25dcbba1f08a`), 00_Training 400 (`17bd229a3923df21`), 03_NYC_747 400 (`246552d18332b537`).
+  `hud-stream-digest.mjs --frames 1500 --stream --compare`: identical (`16bfe2bd08ed1653`). The ten tick-A/B runs below (warm 120, 300 ticks) all end at the digest
+  `611cd27609ddab78`, base and branch alike.
+* **`npm test`**: 1,028 tests, 1,028 pass, 0 fail, 0 skipped.
+* **Unit tests** new in this change: `defaults-map.test.mjs` (60 seeds of 500 random `set`/`delete`/`clear`/`snapshot`/derive steps against a flat Map model: contents, size,
+  version and every earlier snapshot; frozen layers throw; a derived table keeps its base as it linked; layers that pile up; `DefaultValues` immutable; scalar
+  interning and its edges: `-0`, NaN, kinds, objects, index 1) and `class-link-lists.test.mjs` (shared and own arrays, own-first order, the filter's equality).
+* **Validators**, `npm run validate -- --jobs 2 --filter F` for each of 38 filters with `FREEZE_LINKS=on` (links frozen: no writer; `destructorLink` checked against
+  the filter at every link): 172 pass, 2 skip, 0 fail. The filters: class-loader, class-default-travel, class-import, config (8), object-image, object-layout,
+  object-properties, object-handles, state (3), linker (3), property (4), spawn (7), decoration, cleanup (4), save-game, save-load-play, save-snapshot,
+  level-save, load-game, load-saves (all 41 internet slots), travel (10), island (10), instructor, play-hud, script-process, process-collection, process-memory,
+  original-loaded, inventory-spawn, weapon-construction, window (92 pass, 1 skip: `validate-window-scene-frame`), gc-underline, loadmap (2), script-class-bind,
+  native-process-internal, world-destroy, end-load, npc-weapon-startup. The other skip was `validate-save-game`'s case C, which needs `.work/play-saves` (not linked in
+  the worktree at first); with it linked the validator passes with no skip.
+* **Tick cost**, interleaved `bench-sim` pairs (Island, `--warm 120 --ticks 300`, five pairs, the first of a pair alternating, the base a `git archive` of 29168214,
+  under the flock): tick medians base 4.34, 4.54, 4.48, 4.40, 4.34 ms and branch 4.27, 4.55, 4.34, 4.31, 4.34 ms; **median of the medians 4.40 ms against 4.34 ms
+  (-1.4%)**, mean of the means 4.648 against 4.572 ms (-1.6%), CPU a tick (median) 5.91 against 5.76 ms (-2.5%): no difference beyond the spread of one run.
+* **Boot time** (`bench-sim --ticks 3 --warm 0`, five rounds an arm interleaved, the host loaded, load about 5): base 5,438, 5,181, 5,180, 5,430, 5,262 ms (median 5,262),
+  branch 5,148, 5,168, 5,133, 5,336, 5,280 ms (median 5,168): -1.8%. The boots of the tick pairs (quiet host): base 5,732, 5,804, 5,758, 5,724, 5,763 ms (median 5,758),
+  branch 5,653, 5,853, 5,751, 5,751, 5,529 ms (median 5,751): -0.1%. The link loop reads the base's entry for every field through the layers (a probe: 26 ns a read
+  at 8 layers against 4.7 ns in a flat Map, about 220,000 reads at the boot), which the boot does not show; in the steady state the table is read about 44 times a tick.
+* **Play**, Chromium, Island, `hitch-run.mjs --mode roam --seconds 25`, the status read at the end: worker mode 2,413 frames (1,812 drawn), `?sim=inline` 1,967 frames
+  (1,794 drawn); `runtimeError` null, not paused, no page error, no error event in either. The worker run's longest gap between drawn frames after the load is 83 ms
+  once (1 gap over 50 ms); the inline run has four gaps over 50 ms, 350 ms and 5,583 ms at 5 s and 683 ms at 11 s of the page's clock (the map load, which inline mode runs
+  on the page's thread) and one of 83 ms at 11.6 s; the base's inline roam has the same load gaps (317 ms, 5,666 ms and 683 ms) and two small ones (67 and 83 ms) at about 11.8 s: no gap over 83 ms after the load in either.
 
 **Left.** Classes that declare properties still hold their own `propertyLink` (512 arrays, 92 K entries): a persistent list would change the readers' array API.
 The 2,793 value Maps with an object or array at index 0 are not merged (a table keyed by identity would keep a purged class's references; 2,324 different

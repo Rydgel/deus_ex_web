@@ -74,9 +74,10 @@ By value slots recovered per unit of risk, and by what each unlocks:
 3. **Done (step 3): the linked classes' defaults and property links.** A class's defaults table is its own entries over a frozen layer of
    its base's (88% of the Island's 85,000 entries repeated the base's), a class image and an attached object's snapshot are that layer
    instead of a copy, a default's values are immutable and a scalar is one shared object, and a class that declares no property holds
-   its base's `propertyLink` and `destructorLink`. Whole page 12.13 M to 11.69 M value slots (-3.7%), cells 1,485,826 to 1,480,918; the
-   families it touched 553 k to 146 k slots. The numbers, checks and load time are in
-   [the plan](firefox-60fps-plan.md#the-linked-classes-defaults-and-property-links-2026-11-11).
+   its base's `propertyLink` and `destructorLink`. Whole page 12,133,600 to 11,684,788 value slots (-3.7%), cells 1,485,826 to
+   1,480,334 (-0.37%); the five families it touched 553 K to 144 K slots. Output identical (digests, frame and HUD streams, `npm test`,
+   38 validator filters with the links frozen); the Island's tick -1.4% and boot -0.1% to -1.8%, within the spread. The numbers, checks and load time are in
+   [the plan](firefox-60fps-plan.md#the-linked-classes-defaults-and-property-links-2026-11-11); Firefox's marking is not yet measured.
 4. **Hash tables** (343 k raw, 229 k references): delta tables if nothing writes a linked table afterwards (a check to write first);
    otherwise indices into the object table when it exists.
 5. **`objectHash`** (115 k, 35 k strings) and the identity table's key strings (32 k): numeric keys.
