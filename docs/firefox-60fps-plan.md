@@ -3638,6 +3638,84 @@ out of JavaScript objects (the Rust core's object image in Wasm memory, which th
 this kind. The two cuts stay: they are output-identical, the light-map one takes 13 MB off the page and the closure one makes the actor
 step a little cheaper; neither changes the row.
 
+#### The script runtime's instance state (2026-11-10)
+
+The second cut at the script process's object model, in the families that are the runtime's own per-object and per-class state (the
+actor hosts' collision values, `ScriptRuntime.instances`, the per-class cell, field and name tables). Host representation only: every
+value is the one it was (the checks below). Commit `e199ecf4`, from master 13ce5312.
+
+**What was cut** (slots from the Chromium heap snapshots of the same Island, `heap-families.mjs --slots`):
+
+| Structure | Was | Is |
+| --- | --- | --- |
+| A class that declares no property (145 of the 289 classes the Island attaches: pawn and decoration subclasses that differ in defaults and script) | its own `cells` Map (230 entries on average), `fields` Map, name table, name memo and cleanup plan | the nearest ancestor's with the same `propertyLink` and PropertiesSize (`layoutOwner`, script-object-image.mjs): 176 layouts for 289 classes |
+| The cells of strings, names, arrays, structs and fixed arrays | one object of twelve slots for each class and property (11,300 on the Island) | equal cells (tag, offset, mask, reference position, parts, key, flags) are one object (2,400) |
+| `layout.fields` (key to linked field) | a Map for each class layout (345 K slots) | one index for the class graph |
+| Property name handles `{field, codec, cell}` | one for each class and name (40,500 objects) | one for each field and cell (about 540) |
+| `ScriptInstance` (12,458 on the Island) | 31 own slots | 16: runtime, arena, cells, size, field table and bDeleteMe are the class's (`InstanceClass`, read through accessors); the measured index, the Rust VM's binding set cache, `singular`, `pendingKillValue`, the text parser, the random labels and the defaults snapshot are in an `InstanceExtra` made on first write (the map actors have one for the first two); a loaded object's `loadedReference` is its `receiver` |
+| `ScriptState` (11,634) | 11 slots | 7: services and locals kind shared by the runtime's states, `execution`, `codeNode` and locals in a frame made when the state runs code (166 do), the two booleans in one word |
+| `collisionValues` of a decoration or pawn host (428 on the Island) | a copy of all the host's `values` (90 to 280 members) and three closures | an object that inherits `values`, with the three live members (shared getters) |
+| A map actor's `store` Map | one for each of 1,745 hosts | made when a property without an image cell is first stored |
+
+**Slots** (value slots of the heap snapshot; the families of this section are `ScriptRuntime.instances.*`, `instanceClasses`,
+`fieldTables`, `memberCaches.fields`, `classImages.layout.fields`, `CollisionWorld.actors.collisionValues` and the name handles):
+
+| Snapshot | Base 13ce5312 | After | |
+| --- | ---: | ---: | --- |
+| headless Island, 600 ticks, forced GCs (`bench-sim`, `v8.writeHeapSnapshot`) | 15.64 M slots, 1.31 M cells | 14.26 M (-1.38 M, -8.8%), 1.25 M | the families of this section: 2,848 K to 1,534 K |
+| Chromium inline Island at 30 s (`map-memory-census.mjs --sim inline --snapshots 1`) | 13.88 M slots, 1.55 M cells | 12.79 M (-1.09 M, -7.9%), 1.48 M | the owner's families, thousands of slots: `ScriptRuntime.instances` 403 to 236 (+27 of `extra`); the per-class cell, name and plan tables (`CollisionWorld.actors.<symbol>.fieldTable` 205, `.cells` 146, `instances.cells` 144 with its members and elements about 100, the cleanup plans `.cells.sites` 92 and 20) to `instanceClasses.cells` 88 and its plans 62; `instances.state` 133 to 89; `collisionValues` 115 to 2; `sim.sprites` 624 to 602 |
+
+Families (thousands of slots, headless snapshot, before to after): `ScriptRuntime.instances.cells` 408 and `classImages.layout.fields`
+345 to `instanceClasses.cells` 197 (the cells Maps of the 183 layouts and their 2,400 cells); `fieldTables` 367 to 118; `memberCaches.fields`
+284 to 147 (the memo is shared by the classes of a layout; the rest are the layouts' own); `ScriptRuntime.instances` 388 to 253 (with the
+WeakMap's table); `.state` 128 to 70; `CollisionWorld.actors.collisionValues` 195 to 2. Unchanged: `instances.loadedResource` 158 (the
+resource records, held by nothing else), `.bindings` 142, `.refs` 94, `imageToken` 37, `nativeObject` 29.
+
+What the metric counts, for the next reader: it counts V8's words. An empty `Map` is 18 words of table there and, in SpiderMonkey, an
+object whose marker visits no entry, so the 7,000 Maps of the actor hosts' families (`store`, `authored`, `rest`) and the hosts'
+null-prototype pending tables (105 words each in V8's dictionaries) are overcounted; the per-class tables above are counted by their
+entries and are real.
+
+**Checks** (all against the base 13ce5312, built from `git archive` in a separate tree):
+
+* `bench-sim --ticks 300` digests: Island `15e3720088490242`, 00_Training `148077479825af78`, 03_NYC_747 `ad8e591a01434df5`, the same before and after.
+* `frame-alloc-meter.mjs --compare`: identical 600 frames on the three maps (`cebe25dcbba1f08a`, `398be1b404124a61`, `8dbcbfae1f441921`).
+* `hud-stream-digest.mjs --frames 1500 --stream --compare`: identical (`16bfe2bd08ed1653`).
+* `npm test`: 1,007 tests, 1,003 pass, 4 skipped, 0 fail (`test/instance-class-sharing.test.mjs` is new: layout owners and their shared
+  cells, field table, handles and cleanup plan on DeusEx's real ScriptedPawn and decoration families, the instance's shared and extra
+  parts, the state's frame and bits, the live cylinder's values; `test/host-members.test.mjs` and `test/script-bindings.test.mjs`
+  take the accessors).
+* Validators (`run-validators.mjs --filter F --jobs 1` for each of 34 filters, in an 8 GB scope): 44 pass, 1 skips (save-game: no Wine
+  saves), 0 fail, for actor physics (native-actor-physics: 114 oracle cases, 0 mismatches; native-walking, walk-kernel, walk-loop,
+  native-falling, native-rolling, native-swimming, native-encroachment, native-check-encroachment, collision-kernel, collision-hulls,
+  pawn-move-kernel, pawn-physics-kernel, actor-tick), the cleanup and class-image ones (cleanup, property-destroy, object-image,
+  object-layout, class-loader, native-goto-state, native-door-state, native-process-internal), spawn and decorations (script-spawn,
+  script-decoration, plant-push, decoration-settle-roll, island-falling-water, island-swimming) and save and travel (save-snapshot,
+  travel, travel-restore, save-load-play). `validate-script-process` fails with "levels left that a GC does not free (their runtimes
+  stay alive): 01_NYC_UNATCOIsland", and it fails the same way, with the same output, on the untouched base 13ce5312 (a tree made
+  from `git archive`): not this change's, and not looked at. `validate-load-saves` (all 41 internet save slots, one process each, in an 8 GB scope): 41 of 41 load, 0 stop by name.
+* Tick cost, interleaved `bench-sim` pairs (Island, 120 warm and 300 ticks, four pairs, base first, on a host running the other
+  worker's `validate-load-saves`): median of the tick medians 7.45 ms for both arms (base 7.19, 7.65, 7.80, 7.26; after 7.27, 7.62,
+  7.56, 8.14), the CPU per tick 9.13 to 9.68 against 9.29 to 11.36 (the last pair's second arm met a load spike). No difference
+  beyond the host's noise; the accessors read through one more object on the Rust glue's reads of `instance.cells` and `.arena`.
+* Play once in Chromium worker mode and once inline (`?sim=inline`) on the Island (`hitch-run.mjs --mode roam --seconds 25`, the status read
+  at the end): worker 2,451 frames, inline 1,981 frames, `runtimeError` null, no render errors, no errors in either; 305 props drawn.
+
+**Not done, and why.**
+* `ScriptProcess.linkedClasses.propertyLink` (143 K slots in the browser snapshot) holds a copy of the base's list for each class that
+  declares no property; one shared array there would halve it (script-class-loader.mjs: `cls.propertyLink = [...cls.propertyOrder,
+  ...base.propertyLink]`; `destructorLink` the same). It is in the class loader the other worker is changing, so it was left.
+* The actor hosts' own state (the `sim.sprites` family, 624 K): `values` (a copy of the class defaults and the authored values for each host, which
+  `...values` spreads in player.mjs, doors.mjs and the mover's collision values read as plain members, so a prototype chain is not
+  transparent), the `initialProperty` closure with its `authored` Maps, `initialStorage` (an ArrayBuffer and a refs array for each
+  host, for a property reset) and the four per-host state sets. Cutting them needs the readers audited one by one.
+* The falling adapters (`script-actor-physics.mjs`, about 60 K slots, 13 K cells: 45 closures for each of the decorations that landed)
+  as a class with prototype accessors, the instance's `imageToken` and its `FinalizationRegistry` entry (12 K of each: one record for
+  each registration in SpiderMonkey) and `refs` (only 172 of 2,425 actors hold the class image's values, so a shared copy-on-write
+  array saves nothing).
+* The effect on Firefox's marking is not measured: the slots are the Chromium snapshot's estimate (the measure of "What marking visits"
+  above).
+
 ## How each step is measured
 
 * **Headed only:** a visible, uncovered window on the 240 Hz display. Headless Firefox and Chromium do not pace frames like a display.
