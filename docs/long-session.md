@@ -246,6 +246,14 @@ and a 6 GB scope with Playwright's browser log (`DEBUG=pw:browser`), `.cache/per
 (600 to 770 s each; the only notes are the two failed resource loads every run has). With the earlier runs the page crashed once in
 twenty ten-minute sessions and none of eight one-minute ones; it was not seen again, and its cause stays unexplained.
 
+**Accepted as documented (the user, 2026-11-11).** Row 7.1.2 passes with this crash open. So that a recurrence leaves evidence,
+`session-ten.mjs` now keeps the browser's own log in `<out>.browser.log` (Playwright's `DEBUG=pw:browser`, set before Playwright loads;
+the lines go to the file, not the console) and quotes a crash's lines in the result (`browserLog.crash`). Playwright's headless
+Chromium writes no minidump: its default switches include `--disable-breakpad`, and `--enable-crash-reporter` with
+`--crash-dumps-dir` (and the testing switch) wrote none in a probe. Its stderr does carry a crashed renderer's reason, signal and
+unsymbolized stack: a deliberate `chrome://crash` logged "Intentionally crashing", "Received signal 11 SEGV_MAPERR" and its frames, and
+the capture kept them (23 lines). A one-minute session with the change passes (7 log lines, no crash lines).
+
 Playwright's WebKit cannot take every step: headless, it refuses the pointer lock without window focus and a synthetic mouse move
 carries no `movementX` (docs/mac-pass-2026-11-09.md), so `pointer-lock` and `training-look` report that harness limit as a failure and
 the menus run on the free mouse at its own position. Real Safari needs the same session by hand.

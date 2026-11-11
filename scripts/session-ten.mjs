@@ -39,11 +39,29 @@
 // focus and gives a synthetic mouse move no movementX: there the pointer-lock and training-look steps cannot pass (the tool reports
 // them as the harness limit), the menus are driven with the free mouse at its own position, and the rest is as in the other browsers.
 // The game folder is the one the dev server serves (the production gate's folder picker is scripts/profile-map-load.mjs --folder).
-import {chromium,firefox,webkit} from '@playwright/test';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {lockedMove} from '../browser-tests/menu-cursor.mjs';
+
+// The browser's own log (row 7.1.2's crash, 2026-11-10: a renderer crash left no kernel or core-dump record). Playwright's headless
+// Chromium writes no minidump (its default switches turn the crash reporter off, and --enable-crash-reporter with --crash-dumps-dir
+// wrote none on 2026-11-11), but the browser's stderr carries a crashed process's signal, reason and stack ("Received signal 11
+// SEGV_MAPERR", "Check failed", "Out of memory", unsymbolized frames). Playwright logs that stderr under DEBUG=pw:browser, which its
+// logger reads when it loads, so it is set before the import below; its lines go to <out>.browser.log instead of the console, and a
+// crash's lines are quoted in the result.
+const browserLog=[];
+if(!/pw:browser/.test(process.env.DEBUG??''))process.env.DEBUG=[process.env.DEBUG,'pw:browser'].filter(Boolean).join(',');
+const stderrWrite=process.stderr.write.bind(process.stderr);
+process.stderr.write=(chunk,...rest)=>{
+  const text=String(chunk);
+  if(!text.includes('pw:browser'))return stderrWrite(chunk,...rest);
+  browserLog.push(...text.split('\n').filter(Boolean));
+  if(browserLog.length>50000)browserLog.splice(0,browserLog.length-50000);
+  const done=rest.find(r=>typeof r==='function');if(done)done();
+  return true;
+};
+const {chromium,firefox,webkit}=await import('@playwright/test');
 
 const option=(n,f)=>{const i=process.argv.indexOf(`--${n}`);return i<0?f:process.argv[i+1];};
 const f1=v=>Number.isFinite(v)?v.toFixed(1):'-';
@@ -441,11 +459,16 @@ try{await releaseKeys();}catch{/* the page is gone */}
 const result={browser:engine,args:process.argv.slice(2),started:new Date(started).toISOString(),minutes:wallS/60,asked:minutes,sim,
   userAgent:await page.evaluate(()=>navigator.userAgent).catch(()=>null),travelMap:TRAVEL_MAP,mapChange:'the console\'s open <map>, not Training\'s own exit',
   steps,errors,notes,ended,lookRounds,pass:steps.every(s=>s.pass)&&wallS>=minutes*60-1};
+const browserLogFile=out.replace(/\.json$/,'')+'.browser.log';
+mkdirSync(dirname(browserLogFile),{recursive:true});writeFileSync(browserLogFile,browserLog.join('\n')+'\n');
+result.browserLog={file:browserLogFile,lines:browserLog.length,
+  crash:browserLog.filter(l=>/Received signal|Check failed|Out of memory|OOM|FATAL|Intentionally crashing|#\d+ 0x/.test(l)).slice(0,80)};
 console.log('\n| Step | Result | From (min) | To (min) | Detail |\n|---|---|---:|---:|---|');
 for(const s of steps)console.log(`| ${s.name} | ${s.pass?'PASS':'FAIL'} | ${f1(s.startS/60)} | ${f1(s.endS/60)} | ${s.detail.replace(/\|/g,'/')} |`);
 console.log('');
 for(const s of steps)console.log(`${s.pass?'PASS':'FAIL'}  ${s.name}: ${s.detail}`);
 if(wallS<minutes*60-1)console.log(`FAIL  wall time: ${f1(wallS/60)} min of ${minutes}`);
+if(result.browserLog.crash.length)console.log(`\nthe browser log's crash lines (${browserLogFile}):\n${result.browserLog.crash.slice(0,20).join('\n')}`);
 console.log(`\nsession-ten ${engine} (${sim??'-'} mode, ${f1(wallS/60)} min, ${errors.length} errors${notes.length?`, ${notes.length} failed resource loads`:''}): ${result.pass?'PASS':'FAIL'}`);
 writeFileSync(out,JSON.stringify(result,null,1));say(`saved ${out}`);
 await browser.close().catch(()=>{});await server?.close();
