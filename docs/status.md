@@ -253,16 +253,20 @@ runs, without a gate that runs every proof together on one commit (Stages 4 and 
 the rows that last ran before the Play fixes above are named in
 [the exit criteria](stage-6-exit-criteria.md#stage-6-close).
 
-## Stage 7 browser runtime — in progress
+## Stage 7 browser runtime — complete
 
 The [Stage 7 exit criteria](stage-7-exit-criteria.md) (adopted 2026-10-28) define 34
 rows plus 3 exclusions: supported browsers, frame time, loading time, memory and long
 sessions, audio, window and input, graphics failures, files and storage, failure
 recovery and regression coverage. `node scripts/stage7-criteria.mjs` prints the
 scoreboard. At its adoption (2026-10-28) 1 row passed, 18 were partial, 2 failed
-and 13 had no proof yet. The browser suite passes 41 of 41 in Chromium and Firefox
-on Linux; WebKit, Safari and the Mac have not run it. Frame time, loading time and
-memory still need their measurements on the reference machine.
+and 13 had no proof yet. The user closed the stage on 2026-11-12 at 23 PASS, 10 ACCEPTED
+and 4 EXCLUDED (Safari dropped on 2026-11-10 and counted with the exclusions). The
+validator sweep and the Stage 4, 5 and 6 gates pass on the closing commit, and the
+browser suite passes 53 of 53 in Chromium and Firefox on Linux there. Frame time,
+loading time and memory pass on the reference machine. The ACCEPTED rows name what was
+not run: the [checks by hand](stage-7-hand-checks.md) and the Mac's last Chromium suite
+([Stage 7 close](stage-7-exit-criteria.md#stage-7-close)).
 
 ## Roadmap summary
 
@@ -279,7 +283,8 @@ memory still need their measurements on the reference machine.
   complete (2026-10-21, gate 50 of 50).
 - **Stage 6:** persist saves and map state, then validate the full campaign —
   complete (2026-10-26, 54 of 54 rows).
-- **Stage 7:** meet browser compatibility, performance, and reliability targets.
+- **Stage 7:** meet browser compatibility, performance, and reliability targets —
+  complete (2026-11-12, 23 PASS, 10 ACCEPTED, 4 EXCLUDED).
 
 The numbered stages and acceptance criteria are in [the roadmap](roadmap.md).
 We are building an independent browser runtime through reverse engineering of the

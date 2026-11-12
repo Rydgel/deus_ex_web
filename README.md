@@ -67,7 +67,7 @@ list of criteria. For the game's behavior, each criterion is a comparison with t
 | 4 | Presentation: meshes, lighting, effects, HUD, menus, sound and music | Done (2026-10-17): 70 of 70 criteria |
 | 5 | Gameplay: movement, AI, combat, stealth, skills, augmentations, conversations | Done (2026-10-21): 50 of 50 scenarios |
 | 6 | Saves, map travel and the whole campaign | Done (2026-10-26): 54 of 54 rows |
-| 7 | Browser support, performance and reliability | In progress ([criteria](docs/stage-7-exit-criteria.md)) |
+| 7 | Browser support, performance and reliability | Done (2026-11-12): 23 rows pass, 10 accepted without their checks by hand or a last Mac run, 4 excluded ([criteria](docs/stage-7-exit-criteria.md#stage-7-close)) |
 
 In practice, the page starts the way the original does: the splash screen, the logo map
 with its camera flight, then the main menu. From there you can start a new game, play
@@ -99,7 +99,11 @@ Limits:
   the game runs from translated original code, but has not been checked case by case, so
   expect bugs.
 - Multiplayer, gamepads, touch screens and the screenshot key are not supported.
-- Safari and Windows have not been tested.
+- Safari and Windows are not supported: Stage 7 dropped Safari and excluded Windows, and
+  neither has been tested.
+- Stage 7's [checks by hand](docs/stage-7-hand-checks.md) were not run: a real hidden tab,
+  system sleep, a held Escape in fullscreen, a zoom or another screen, the system's folder
+  picker and the storage prompt. Their headless halves pass.
 
 The detailed record is in [project status](docs/status.md), and each stage's exit criteria
 document lists what it proves and what stays open.
@@ -185,10 +189,11 @@ build never contains game data.
 | Chrome, Chromium (macOS, Linux) | Tested. The simulation runs in a Web Worker. |
 | Firefox (macOS, Linux) | Tested. The simulation runs on the page, where Firefox's garbage collector pauses less. |
 | Edge and other Chromium browsers | Expected to behave like Chrome. Not tested. |
-| Safari | Not tested yet. It has no Keyboard Lock and cannot save to a folder. |
+| Safari | Not supported (dropped from Stage 7 on 2026-11-10). It has no Keyboard Lock and cannot save to a folder. |
 | Phones and tablets | Not supported: the game needs a keyboard and a mouse. |
 
-The browser test suite passes 41 of 41 tests in Chromium and Firefox on Linux (2026-10-28).
+The browser test suite passes 53 of 53 tests in Chromium and Firefox on Linux, on Stage 7's
+closing commit (2026-11-12).
 Windows has not been tested, because neither development machine runs it.
 
 ## Controls
@@ -355,19 +360,26 @@ the stage gates, the runner's memory limits and the inspection tools.
 
 ## Performance
 
-The target is 120 fps, which means 8.3 ms of work per frame on the reference machine (an
-Apple M2 Pro at 1440×960), without changing what the simulation computes. Several things
-help:
+The target is 60 fps, which means 16.7 ms of host work per frame on the reference machine
+(an Apple M2 Pro at 1440×960), without changing what the simulation computes. It was
+120 fps until 2026-11-05. Stage 7 measured it on a set of ten maps, in Chrome and Firefox
+on that Mac (November 2026):
 
-- In Chrome, the simulation runs in a Web Worker, so simulating and drawing overlap.
-- Hot paths run in Rust and WebAssembly, and mesh animation and lighting run on the GPU.
-- The latest work (October 2026) removed Chrome's garbage-collection freezes. The
-  simulation's live JavaScript heap on Liberty Island fell from about 8.2 to 2.6 million
-  objects. On the developer's Mac, Chrome and Firefox now play smoothly.
+- In Chrome, the simulation runs in a Web Worker, so simulating and drawing overlap. A
+  map's median frame work is 2.1 to 4.0 ms in the worker and 0.9 to 2.2 ms on the page.
+- On a 120 Hz display, 95% of drawn frames take at most 9.2 to 10.1 ms in Chrome and 9.3
+  to 10.3 ms in Firefox, depending on the map.
+- Hot paths run in Rust and WebAssembly, mesh animation and lighting run on the GPU, and no
+  shader is compiled during play after a map loads.
+- Loading, on the production build: the logo map's first frame in 3.5 to 3.9 s (Chrome) and
+  5.7 to 7.2 s (Firefox); a map change's first frame in 1.15 s (Chrome) and 3.03 s
+  (Firefox), the median over all 83 maps; Load Game in 1.31 s and 3.94 s.
+- Memory: each map of the set stays within 1.25 GB for the page and the worker together,
+  and a one-hour session runs without errors or growing memory in both browsers.
 
-Still open: a short stall right after a map loads. The 120 fps target is not met
-everywhere yet, and the Stage 7 frame-time rows still need their measurements on the
-reference machine. `?hitchlog=1` records the timing of every frame
+Still open: on Linux, Firefox's longest garbage collections can still cause more hitches
+over 50 ms than Stage 7's bound allows (two of four Island runs stay within it; the Mac
+passes). `?hitchlog=1` records the timing of every frame
 ([hitch recorder](docs/hitch-log.md)).
 
 ## Contributing

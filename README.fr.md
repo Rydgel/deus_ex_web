@@ -72,7 +72,7 @@ comparaison avec l'original.
 | 4 | Présentation : modèles, éclairage, effets, HUD, menus, son et musique | Terminé (17/10/2026) : 70 critères sur 70 |
 | 5 | Jouabilité : déplacements, IA, combat, infiltration, compétences, augmentations, dialogues | Terminé (21/10/2026) : 50 scénarios sur 50 |
 | 6 | Sauvegardes, changements de carte et campagne complète | Terminé (26/10/2026) : 54 lignes sur 54 |
-| 7 | Navigateurs, performances et fiabilité | En cours ([critères](docs/stage-7-exit-criteria.md)) |
+| 7 | Navigateurs, performances et fiabilité | Terminé (12/11/2026) : 23 lignes passent, 10 acceptées sans leurs vérifications à la main ni un dernier passage sur le Mac, 4 exclues ([critères](docs/stage-7-exit-criteria.md#stage-7-close)) |
 
 En pratique, la page démarre comme l'original : l'écran de lancement, la carte du logo
 avec son mouvement de caméra, puis le menu principal. De là, on peut commencer une nouvelle
@@ -110,7 +110,12 @@ Limites :
   original traduit sans avoir été vérifié cas par cas : attendez-vous à des bugs.
 - Le multijoueur, les manettes, les écrans tactiles et la touche de capture d'écran ne sont
   pas pris en charge.
-- Safari et Windows n'ont pas été testés.
+- Safari et Windows ne sont pas pris en charge : l'étape 7 a abandonné Safari et exclu
+  Windows, et aucun des deux n'a été testé.
+- Les [vérifications à la main](docs/stage-7-hand-checks.md) de l'étape 7 n'ont pas été
+  faites : un vrai onglet masqué, la mise en veille, Échap maintenu en plein écran, un zoom
+  ou un autre écran, le sélecteur de dossier du système et la demande de stockage. Leurs
+  moitiés sans interface passent.
 
 Le détail est dans l'[état du projet](docs/status.md). Le document des critères de sortie
 de chaque étape dit ce qu'elle prouve et ce qui reste ouvert.
@@ -198,11 +203,11 @@ version compilée ne contient jamais de données du jeu.
 | Chrome, Chromium (macOS, Linux) | Testé. La simulation tourne dans un Web Worker. |
 | Firefox (macOS, Linux) | Testé. La simulation tourne sur la page, où le ramasse-miettes de Firefox fait moins de pauses. |
 | Edge et autres navigateurs Chromium | Devraient se comporter comme Chrome. Non testés. |
-| Safari | Pas encore testé. Il n'a pas Keyboard Lock et ne peut pas sauvegarder dans un dossier. |
+| Safari | Non pris en charge (abandonné à l'étape 7 le 10/11/2026). Il n'a pas Keyboard Lock et ne peut pas sauvegarder dans un dossier. |
 | Téléphones et tablettes | Non pris en charge : le jeu demande un clavier et une souris. |
 
-La suite de tests navigateur passe 41 tests sur 41 dans Chromium et Firefox sous Linux
-(28/10/2026). Windows n'a pas été testé : aucune des deux machines de développement ne
+La suite de tests navigateur passe 53 tests sur 53 dans Chromium et Firefox sous Linux, sur
+le commit de clôture de l'étape 7 (12/11/2026). Windows n'a pas été testé : aucune des deux machines de développement ne
 l'utilise.
 
 ## Commandes
@@ -379,22 +384,30 @@ de mémoire du lanceur et les outils d'inspection.
 
 ## Performances
 
-L'objectif est 120 images par seconde, soit 8,3 ms de travail par image sur la machine de
-référence (un Apple M2 Pro en 1440×960), sans changer ce que calcule la simulation.
-Plusieurs choses y contribuent :
+L'objectif est 60 images par seconde, soit 16,7 ms de travail de l'hôte par image sur la
+machine de référence (un Apple M2 Pro en 1440×960), sans changer ce que calcule la
+simulation. Il était de 120 images par seconde jusqu'au 05/11/2026. L'étape 7 l'a mesuré
+sur un ensemble de dix cartes, dans Chrome et Firefox sur ce Mac (novembre 2026) :
 
 - Dans Chrome, la simulation tourne dans un Web Worker : simulation et dessin se font en
-  même temps.
-- Les chemins critiques tournent en Rust et WebAssembly, et l'animation et l'éclairage des
-  modèles tournent sur le GPU.
-- Le dernier chantier (octobre 2026) a supprimé les gels dus au ramasse-miettes dans Chrome.
-  Le tas JavaScript vivant de la simulation sur Liberty Island est passé d'environ 8,2 à
-  2,6 millions d'objets. Sur le Mac du développeur, Chrome et Firefox tournent maintenant
-  de façon fluide.
+  même temps. Le travail médian par image d'une carte est de 2,1 à 4,0 ms dans le worker et
+  de 0,9 à 2,2 ms sur la page.
+- Sur un écran à 120 Hz, 95 % des images dessinées prennent au plus 9,2 à 10,1 ms dans
+  Chrome et 9,3 à 10,3 ms dans Firefox, selon la carte.
+- Les chemins critiques tournent en Rust et WebAssembly, l'animation et l'éclairage des
+  modèles tournent sur le GPU, et aucun shader n'est compilé en jeu après le chargement
+  d'une carte.
+- Chargement, sur la version compilée : la première image de la carte du logo en 3,5 à
+  3,9 s (Chrome) et 5,7 à 7,2 s (Firefox) ; la première image après un changement de carte
+  en 1,15 s (Chrome) et 3,03 s (Firefox), en médiane sur les 83 cartes ; Load Game en 1,31 s
+  et 3,94 s.
+- Mémoire : chaque carte de l'ensemble reste sous 1,25 Go pour la page et le worker
+  ensemble, et une session d'une heure tourne sans erreur ni mémoire qui grossit dans les
+  deux navigateurs.
 
-Reste à faire : un court blocage juste après le chargement d'une carte. L'objectif de
-120 images par seconde n'est pas encore atteint partout, et les lignes de temps par image de
-l'étape 7 attendent encore leurs mesures sur la machine de référence. `?hitchlog=1`
+Reste à faire : sous Linux, les plus longues collectes du ramasse-miettes de Firefox peuvent
+encore causer plus d'à-coups de plus de 50 ms que la limite de l'étape 7 ne le permet (deux
+parcours de Liberty Island sur quatre restent dedans ; le Mac passe). `?hitchlog=1`
 enregistre la durée de chaque image ([hitch recorder](docs/hitch-log.md)).
 
 ## Contribuer
