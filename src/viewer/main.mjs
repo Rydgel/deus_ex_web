@@ -541,7 +541,7 @@ let cameraMoved = false, lastInspect = 0;
 const keys = new Set(), velocity = new THREE.Vector3();
 const busy = (title, message) => {
   $('gate').hidden = false; $('gate-title').textContent = title; $('gate-message').textContent = message;
-  $('gate-choose').hidden = loading; $('progress').hidden = !loading;
+  $('gate-choose').hidden = loading; $('progress').hidden = !loading; $('gate-notice').hidden = loading;
 };
 function toast(message, ms = 4000) { $('toast').textContent = message; setTimeout(() => { if ($('toast').textContent === message) $('toast').textContent = ''; }, ms); }
 // The player's kept settings (docs/config-persistence.md): the store the asset stores read the config files through, and the storage
@@ -1351,7 +1351,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     throw error;
   } finally {
     loading = false; $('map').disabled = false; $('choose').disabled = false;
-    $('progress').hidden = true; $('gate-choose').hidden = false;
+    $('progress').hidden = true; $('gate-choose').hidden = false; $('gate-notice').hidden = false;
     $('reset').disabled = !world; $('loadout').disabled = !game;
   }
   return status();
