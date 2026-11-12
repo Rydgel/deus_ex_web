@@ -3967,7 +3967,7 @@ lock-serialised host between the runs):
 Step 3 of [object-model-plan.md](object-model-plan.md): the script process's per-class tables (`linkedClasses.defaults`, `.propertyLink`, `.destructorLink`, and
 the copies of the defaults that class images and attached objects held). Host data layout only: every method of the structures keeps its results, and the
 output is identical (the checks below). Code: `defaults-map.mjs`, `class-link-lists.mjs`, the class loader's link loop, `class-defaults-snapshot.mjs` and
-the class image in `script-runtime.mjs`. **Status: done and checked on the final code (the checks below); not yet measured in Firefox.**
+the class image in `script-runtime.mjs`. **Status: done and checked on the final code (the checks below); measured in Firefox with step 2 in [six cuts against the base](#six-cuts-against-the-base-interleaved-2026-11-12).**
 
 **What the Island held** (a scenario of `bench-sim` read at tick 30 on the headless Island, base 29168214; 967 classes linked):
 
@@ -4058,6 +4058,60 @@ and an 8 GB scope):
 The 2,793 value Maps with an object or array at index 0 are not merged (a table keyed by identity would keep a purged class's references; 2,324 different
 identities, so at most 470 Maps). The class tables' own Maps (881) and layers (413) are separate objects from the table that holds them; folding them into one
 would save up to 1,300 cells. Marking time is not measured here: the interleaved Firefox A/B runs on master.
+
+#### Six cuts against the base, interleaved (2026-11-12)
+
+The two steps above, merged on master (7898683e and ebf0659d; b85b594c, during which the runs were taken, has the same runtime). The
+method is the same as in "All four cuts against the base": four interleaved pairs of 100 s Firefox inline Island roams with markers-only
+profiles, the base 036d848a against the main checkout (`run-ab.sh r3 4`, then `summary.mjs r3`). The runs are in
+`.cache/perf/gc-pauses/ab/r3-*`. The gaps are from `gecko-gaps.mjs --gap 50 --skip 5`.
+
+**The heap of the merged tree** (Chromium inline Island 30 s after the arrival, `map-memory-census.mjs --snapshots 1` and
+`heap-families.mjs 4 45 --slots`, the same host and method as the base 29168214; tables in `.cache/perf/heap-d/six-families-*.txt`):
+
+| | Base 29168214 | Master ebf0659d |
+| --- | ---: | ---: |
+| Value slots | 12,133,600 | 11,117,151 (-1.02 M, -8.4%) |
+| SpiderMonkey-like cells | 1,485,826 | 1,453,476 (-2.2%) |
+| Objects, edges, JS heap | 2.45 M, 18.7 M, 175 MB | 2.40 M, 17.9 M, 168 MB |
+
+The two steps' own measurements (-0.56 M and -0.45 M slots) add up to the merged tree's.
+
+Pair 1's base ran on a disturbed host (page p50 15.9 ms against 10.8 to 13.8 in the other runs), as pair 1 did in the round before.
+That pair is left out of the reading below.
+
+| Run | Page p50 | Gaps over 50 ms (a minute) | `FULL_GC_TIMER`: wall, work (mark), extended (ms) | `CC_FINISHED`: wall, work (mark), extended (ms) |
+| --- | ---: | --- | --- | --- |
+| base 1 | 15.9 | 7 (4.4) | 2,429 ms, 174 (128), 6 (121) | 2,077 ms, 208 (189), 4 (78) |
+| base 2 | 11.2 | 2 (1.2) | 2,055 ms, 154 (116), 4 (89) | 1,959 ms, 119 (107), 6 (70) |
+| base 3 | 13.8 | 4 (2.5) | 2,426 ms, 194 (162), 5 (139) | 2,111 ms, 141 (113), 4 (62) |
+| base 4 | 11.4 | 2 (1.2) | 2,140 ms, 146 (108), 4 (83) | 2,057 ms, 113 (100), 4 (60) |
+| master 1 | 10.8 | 5 (3.1) | 1,924 ms, 133 (94), 5 (66) | **749 ms**, 108 (94), 0 |
+| master 2 | 10.8 | 1 (0.6) | 2,021 ms, 140 (101), 4 (50) | **689 ms**, 102 (89), 0 |
+| master 3 | 12.4 | 7 (4.4), one of 117 ms | 1,923 ms, 150 (111), 4 (65) | 2,146 ms, 99 (86), 7 (47) |
+| master 4 | 10.9 | 1 (0.6) | 1,924 ms, 126 (88), 4 (76) | 1,897 ms, 104 (92), 3 (16) |
+
+* **`CC_FINISHED`** marks 86 to 92 ms against 100 to 113 in pairs 2 to 4, -17% by the medians. Two of the four master runs finish in under
+  a second with no extended slice. No base run in this round or the earlier ones did.
+* **`FULL_GC_TIMER` still escalates.** Every master run takes 1.92 to 2.02 s, past 1.5 s, with four or five extended slices of 50 to 76 ms
+  in all. On the base it is 2.06 to 2.43 s with 50 to 139 ms of extended slices. Its marking is 88 to 111 ms against 108 to 162, -13% by
+  the medians of pairs 2 to 4.
+* **Against the four cuts.** In the round before, the master marked `FULL_GC_TIMER` in 96 to 135 ms and `CC_FINISHED` in 95 to 99 ms.
+  This round's 88 to 111 and 86 to 94 are a little lower. The two rounds' bases differ by as much (`CC_FINISHED` 104 to 122 there, 100 to
+  113 here), so this sample cannot separate the last two steps' 1.0 M slots (8% of the page) from the noise.
+* **Gaps:**
+  * Master 0.6, 4.4 and 0.6 a minute, against 1.2, 2.5 and 1.2 on the base. Master 1, in the disturbed pair, is 3.1.
+  * In pairs 2 to 4, a collection slice overlaps 2 master gaps against 4 on the base, so fewer gaps open during a collection.
+  * Seven of the eight runs, in both arms, have a gap between 17 and 29 s that overlaps no collection. It is a point of the roam, not the
+    collector.
+  * Master 3 has a cluster of four gaps at 73.0 to 73.7 s, one of them 117 ms, that no GC or CC marker overlaps. Its page p50 of 12.4 ms
+    suggests a busy host. The markers-only profile cannot show what ran there *(unexplained)*.
+  * Most gaps are 50 ms, three periods of the headless 60 Hz clock.
+
+**Reading.** Linux is still indicative and still has no margin: two of four master roams are within the bound (0.6 and 0.6 a minute) and
+two are not (3.1 and 4.4). Most of the remaining gaps are not inside a collection. The full collection still runs past 1.5 s. The next
+lever for `FULL_GC_TIMER` is the remaining marking work: hash buckets, metadata, function trees and identities, in the order of
+`docs/object-model-plan.md`. A stack-sampled roam is needed to name the gaps outside the collections.
 
 ## How each step is measured
 

@@ -80,7 +80,7 @@ By value slots recovered per unit of risk, and by what each unlocks:
    its base's `propertyLink` and `destructorLink`. Whole page 12,133,600 to 11,684,788 value slots (-3.7%), cells 1,485,826 to
    1,480,334 (-0.37%); the five families it touched 553 K to 144 K slots. Output identical (digests, frame and HUD streams, `npm test`,
    38 validator filters with the links frozen); the Island's tick -1.4% and boot -0.1% to -1.8%, within the spread. The numbers, checks and load time are in
-   [the plan](firefox-60fps-plan.md#the-linked-classes-defaults-and-property-links-2026-11-11); Firefox's marking is not yet measured.
+   [the plan](firefox-60fps-plan.md#the-linked-classes-defaults-and-property-links-2026-11-11); Firefox's marking, with step 2: [six cuts against the base](firefox-60fps-plan.md#six-cuts-against-the-base-interleaved-2026-11-12) (`CC_FINISHED` -17%, `FULL_GC_TIMER` -13% and still past 1.5 s).
 4. **Hash tables** (343 k raw, 229 k references): delta tables if nothing writes a linked table afterwards (a check to write first);
    otherwise indices into the object table when it exists.
 5. **`objectHash`** (115 k, 35 k strings) and the identity table's key strings (32 k): numeric keys.
