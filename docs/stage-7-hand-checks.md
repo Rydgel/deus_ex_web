@@ -90,3 +90,28 @@ probes, `src/viewer/hand-checks.mjs`). Use a new tab (or Clear) for the second b
 Per browser: the recorder's report (Copy report), and in a line per row what you saw that it cannot (the sound coming back, the
 picture sharp, the browser's own banner or prompt and its wording), PASS or what differed, and a screenshot where something looked
 wrong. I turn them into row updates in `scripts/stage7-criteria.mjs`.
+
+## Results: Chrome 157, Linux, 2026-11-12
+
+Google Chrome 157.0.8103.50 on the Linux host (Hyprland 0.56 on Wayland, one 1920×1080 screen at 240 Hz, a French AZERTY layout), the
+production build of master 5483c6b3 served by `vite preview` on 127.0.0.1:5174, a fresh profile, the window tiled at 941×1030. The
+assistant ran the checks in that real window: clicks through the DevTools protocol (trusted input, so the pointer lock and fullscreen
+are granted as for a click), keys as real Wayland key events with their real key codes (Hyprland's `send_shortcut` and
+`send_key_state`; `wtype` was dropped, as its own keymap gives every key the code of whatever it maps first, Escape), the sound read
+from Chrome's own PipeWire stream (`parec --monitor-stream`, dBFS per window, the stream at 25 %). The user picked the game folder the
+first time and clicked the one bubble Chrome gives no keyboard focus to ("Reconnect folder"'s). The two recorder reports, the
+screenshots and the helper scripts are in `.work/hand-checks/2026-11-12-chrome-linux/` (local). No runtime error in either report.
+
+| Row | Chrome 157, Linux |
+| --- | --- |
+| 7.5.1 | PASS. The logo map's song plays from the folder pick's click. Footsteps raise Training's level from about −72 to −56 dBFS. Hidden tabs of 22, 31 and 10 s keep the mix playing (the worklet's quanta advance through them, as the original's global-focus buffer would), and the sound is on after, 0 underruns; one 0.5 s window near silence came right after the 31 s hide and was not seen again at 0.2 s resolution. The default output switched HDMI → analog → HDMI in PipeWire (not a physical unplug) moves the stream with no gap and the context stays running. |
+| 7.6.1 | PASS. The first click takes the pointer. One Escape: the browser releases the lock and the keydown still reaches the page 50 ms later; MenuMain opens once. W held, Ctrl+Tab away, W let go there, Ctrl+Tab back: the view did not move in the 2 s after (the held input let go), the level's clock went on. |
+| 7.6.2 | PASS. Alt+Enter: fullscreen and the pointer, the picture 1440×1080 in 1920×1080. Escape held 2 s: the first press reaches the game (Keyboard Lock), Chrome leaves fullscreen and the pointer after 1.5 s. F11 outside fullscreen is the page's (`ActivateAugmentation 8`), so Chrome's own F11 fullscreen does not happen; the window made fullscreen by the window manager instead keeps 4:3 and the HUD. |
+| 7.6.3 | PASS for zoom, another screen not run (one screen). Zooms of 80, 90, 110 and 125 % keep the picture 4:3 with its backing at the device pixels (941×705 for 1176.6×881.6 CSS px at 0.8, 940×705 for 752.2×564.2 at 1.25), the HUD and belt in place; the recorder logs each pixel-ratio change. Zooming in from the keyboard reaches Chrome only from its toolbar: the page takes Ctrl+= (Equals, `ShowScores`) and Ctrl+keypad plus (GreyPlus, `QuickSave`, which saved a game); Ctrl+keypad minus (unbound) zooms out. |
+| 7.6.4 | PASS for a hidden tab, system sleep not run. Hidden 31.45 s: the level's clock advanced 2.57 s over 34 s of wall time, 2.55 s of them visible (no tick while hidden, no catch-up), back with no click, the sound on. |
+| 7.8.1 | PASS. The gate's button opens the GTK portal's "Open File" dialog (its button "Upload"); Chrome then asks "Upload 299 files to this site? This will upload all files from "Deus Ex GOTY Edition". Only do this if you trust the site." with Cancel focused; with Upload the logo map loads. |
+| 7.8.2 | PASS. Saved in Training: the slot is listed with its picture. Chrome shows no persistence prompt and `persist()` answers false (Chrome decides by engagement, without asking). After a reload Load Game lists the slot and loads it. |
+| 7.8.3 | PASS for steps 1 and 2; step 3 (the original loading these slots) not run. "Use a Save folder…": the dialog "Select where this site can save changes", then Chrome's "Allow this site to edit files? http://127.0.0.1:5174 will be able to edit files in Save" (Don't Allow focused, Allow). Two saves write `Save0001` and `Save0002` (`00_training.dxs`, `SaveInfo.dxs`). The tab closed and opened: the page keeps the folder and offers "Reconnect folder"; Chrome's bubble "View and edit files from the last time you visited this site: Save" (Allow this time, Allow on every visit, Don't allow); allowed, the Saves window reads 2 saves and Load Game lists both slots and loads one. |
+
+Firefox is not installed on the Linux host, so its run, the Mac, system sleep, a second screen, a physical output unplug and 7.8.3's
+step 3 remain.
