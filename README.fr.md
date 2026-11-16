@@ -110,8 +110,9 @@ Limites :
   original traduit sans avoir été vérifié cas par cas : attendez-vous à des bugs.
 - Le multijoueur, les manettes, les écrans tactiles et la touche de capture d'écran ne sont
   pas pris en charge.
-- Safari et Windows ne sont pas pris en charge : l'étape 7 a abandonné Safari et exclu
-  Windows, et aucun des deux n'a été testé.
+- Safari n'est pas pris en charge : l'étape 7 l'a abandonné, et il n'a pas été testé.
+- Windows est hors des tests : l'étape 7 l'a exclu, et aucune vérification n'y a été faite. Des
+  amis ont joué à une version antérieure sous Windows, et c'est tout ce que l'on en sait.
 - Les [vérifications à la main](docs/stage-7-hand-checks.md) de l'étape 7 n'ont pas été
   faites : un vrai onglet masqué, la mise en veille, Échap maintenu en plein écran, un zoom
   ou un autre écran, le sélecteur de dossier du système et la demande de stockage. Leurs
@@ -207,8 +208,8 @@ version compilée ne contient jamais de données du jeu.
 | Téléphones et tablettes | Non pris en charge : le jeu demande un clavier et une souris. |
 
 La suite de tests navigateur passe 53 tests sur 53 dans Chromium et Firefox sous Linux, sur
-le commit de clôture de l'étape 7 (12/11/2026). Windows n'a pas été testé : aucune des deux machines de développement ne
-l'utilise.
+le commit de clôture de l'étape 7 (12/11/2026). Windows est hors de ces tests : aucune des deux machines de développement ne
+l'utilise. Des amis y ont joué à une version antérieure ; les retours sous Windows sont les bienvenus.
 
 ## Commandes
 

@@ -99,8 +99,9 @@ Limits:
   the game runs from translated original code, but has not been checked case by case, so
   expect bugs.
 - Multiplayer, gamepads, touch screens and the screenshot key are not supported.
-- Safari and Windows are not supported: Stage 7 dropped Safari and excluded Windows, and
-  neither has been tested.
+- Safari is not supported: Stage 7 dropped it, and it has not been tested.
+- Windows is outside the tests: Stage 7 excluded it, and no check has been run there. Friends
+  have played an earlier build on Windows, and that is all that is known about it.
 - Stage 7's [checks by hand](docs/stage-7-hand-checks.md) were not run: a real hidden tab,
   system sleep, a held Escape in fullscreen, a zoom or another screen, the system's folder
   picker and the storage prompt. Their headless halves pass.
@@ -194,7 +195,8 @@ build never contains game data.
 
 The browser test suite passes 53 of 53 tests in Chromium and Firefox on Linux, on Stage 7's
 closing commit (2026-11-12).
-Windows has not been tested, because neither development machine runs it.
+Windows is outside these tests, because neither development machine runs it. Friends have
+played an earlier build there; reports from Windows are welcome.
 
 ## Controls
 
