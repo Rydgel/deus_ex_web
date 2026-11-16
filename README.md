@@ -11,6 +11,9 @@
 An independent reimplementation of **Deus Ex** (Ion Storm, 2000) that runs in a desktop
 browser and aims to behave exactly like the original game.
 
+**[Play it in your browser](https://rydgel.github.io/deus_ex_web/)** with your own copy of the game. You choose its folder,
+the browser reads it locally, and nothing is uploaded.
+
 It is not a remake, and it does not emulate the Windows game. Your own copy of the game
 supplies the maps, textures, sounds, music and compiled UnrealScript. This project runs
 that bytecode in its own virtual machine, and it reimplements the engine's native code
@@ -110,6 +113,13 @@ The detailed record is in [project status](docs/status.md), and each stage's exi
 document lists what it proves and what stays open.
 
 ## Getting started
+
+### Play in the browser
+
+A build is published at <https://rydgel.github.io/deus_ex_web/>. Open it in Chrome or Firefox on a
+computer, choose the folder your copy of the game is installed in, and play. The browser reads
+the files locally; nothing is uploaded. The rest of this section is for building the project
+yourself.
 
 ### Requirements
 

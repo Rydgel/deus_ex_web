@@ -11,6 +11,9 @@
 Une réimplémentation indépendante de **Deus Ex** (Ion Storm, 2000) qui tourne dans un
 navigateur de bureau et vise à se comporter exactement comme le jeu original.
 
+**[Jouer dans le navigateur](https://rydgel.github.io/deus_ex_web/)** avec votre propre copie du jeu. Vous choisissez son
+dossier, le navigateur le lit en local, et rien n'est envoyé.
+
 Ce n'est pas un remake, et le jeu Windows n'est pas émulé. Votre propre copie du jeu
 fournit les cartes, les textures, les sons, la musique et l'UnrealScript compilé. Le projet
 exécute ce bytecode dans sa propre machine virtuelle et réimplémente le code natif du
@@ -122,6 +125,13 @@ Le détail est dans l'[état du projet](docs/status.md). Le document des critèr
 de chaque étape dit ce qu'elle prouve et ce qui reste ouvert.
 
 ## Démarrage
+
+### Jouer dans le navigateur
+
+Une version est publiée sur <https://rydgel.github.io/deus_ex_web/>. Ouvrez-la dans Chrome ou Firefox
+sur un ordinateur, choisissez le dossier où votre copie du jeu est installée, et jouez. Le
+navigateur lit les fichiers en local ; rien n'est envoyé. La suite de cette section sert à
+compiler le projet soi-même.
 
 ### Prérequis
 
