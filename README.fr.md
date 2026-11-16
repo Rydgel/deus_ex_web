@@ -451,7 +451,7 @@ chacune avec ses preuves. Pour commencer :
 
 ## Mentions légales
 
-- Ce projet est indépendant. Il n'est ni affilié à Eidos, Square Enix ou tout autre
+- Ce projet est indépendant. Il n'est ni affilié à Eidos, Square Enix, Embracer Group ou tout autre
   détenteur des droits de Deus Ex, ni approuvé ou soutenu par eux.
 - Deus Ex est une marque de son propriétaire. Le nom n'est utilisé que pour dire avec quel
   jeu ce projet fonctionne.

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The page's tab icon: this project's own mark, a night skyline in the colours of docs/readme/banner.svg.
+       Not the game's logo, which belongs to its owner. -->
+  <rect width="32" height="32" rx="6" fill="#07121c"/>
+  <circle cx="23" cy="9" r="3.5" fill="#f2b33d"/>
+  <path fill="#3fc8f4" d="M3 24v-7h4v-6h5v8h3v-5h5v7h3v-4h4v-2h2v9z"/>
+  <path fill="none" stroke="#deb879" stroke-width="2" stroke-linecap="round" d="M4 27.5h24"/>
+</svg>

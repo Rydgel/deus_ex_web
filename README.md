@@ -419,7 +419,7 @@ places to start:
 ## Legal
 
 - This is an independent project. It is not affiliated with, endorsed by or sponsored by
-  Eidos, Square Enix or any other holder of the rights to Deus Ex.
+  Eidos, Square Enix, Embracer Group or any other holder of the rights to Deus Ex.
 - Deus Ex is a trademark of its owner. The name is used only to say which game this
   project works with.
 - The repository does not include or distribute any of the original game's files: no maps,

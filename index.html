@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Explore the original Deus Ex maps in your browser using local game files." />
   <title>Deus Ex · Browser Runtime</title>
+  <link rel="icon" type="image/svg+xml" href="/src/viewer/favicon.svg" />
 </head>
 <body>
   <main id="app">
@@ -70,6 +71,11 @@
       <div id="gate">
         <div class="gate-content">
           <p class="eyebrow">ORIGINAL GAME DATA</p>
+          <!-- Shown in place of the title, the message and the two buttons where touch is the main pointer (style.css). -->
+          <div id="gate-touch">
+            <h1>The game needs a computer</h1>
+            <p>It is played with a keyboard and a mouse, in Chrome or Firefox on a desktop or a laptop. Open this page there.</p>
+          </div>
           <h1 id="gate-title">Open your Deus Ex installation</h1>
           <p id="gate-message">Choose the folder containing Maps, Textures, and System. Files are read on this device.</p>
           <button id="gate-choose">Choose game folder</button>
@@ -91,8 +97,11 @@
                 <li>The game keeps keys the browser would use, such as <kbd>Ctrl+=</kbd>: zoom the page from the browser's menu.</li>
               </ul>
             </details>
-            <p class="gate-legal">An independent project, not affiliated with, endorsed by or sponsored by Eidos, Square Enix or any
-              other holder of the rights to Deus Ex. Deus Ex is a trademark of its owner. No original game files are included.</p>
+            <p class="gate-legal">An independent project, not affiliated with, endorsed by or sponsored by Eidos, Square Enix,
+              Embracer Group or any other holder of the rights to Deus Ex. Deus Ex is a trademark of its owner. No original game
+              files are included.</p>
+            <p class="gate-legal">Free software under the GNU AGPL:
+              <a href="https://github.com/Rydgel/deus_ex_web" target="_blank" rel="noopener">source code and documentation</a>.</p>
           </div>
         </div>
       </div>

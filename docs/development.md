@@ -113,6 +113,28 @@ npm run preview
 
 The preview uses `http://127.0.0.1:5174` and requires folder selection.
 
+### The public page
+
+The same build is published at <https://rydgel.github.io/deus_ex_web/> (GitHub Pages) by
+`.github/workflows/pages.yml`. It runs only when started by hand, on the commit it is started on; a push
+never deploys (AGENTS.md):
+
+```sh
+gh workflow run pages.yml
+```
+
+- The workflow builds with the base path GitHub Pages reports (`npm run build -- --base=/deus_ex_web/`) and
+  with a fixed Rust version, the one the validators and the browser suite run with. Raise that version
+  together with a validator sweep.
+- The build has no game data: the runner has no copy of the game, and the `/__game__/` endpoints exist only
+  in the development server. Each visitor chooses their own game folder, which the browser reads locally.
+- To check a deployment, build the same commit in a clean clone with the same base and Rust version, and
+  compare the published files with it by hash. On 2026-11-16 all of them were identical, and on the
+  published address Training loaded with the production test's numbers (`browser-tests/viewer.spec.mjs`),
+  in headless Chromium.
+- Where touch is the main pointer (a phone or a tablet), the gate says the game needs a computer and shows
+  no folder button (`#gate-touch`, `browser-tests/touch-gate.spec.mjs`).
+
 ## Validate and inspect data
 
 ```sh
