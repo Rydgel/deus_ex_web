@@ -1,0 +1,4 @@
+# Renders stay out of Git (the score quotes four bars of the game's theme; later renders will show game content)
+out/
+# Third-party sample libraries (downloaded, about 1 GB; see video/music/README.md)
+samples/
