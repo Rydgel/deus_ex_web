@@ -134,6 +134,12 @@ gh workflow run pages.yml
   in headless Chromium.
 - Where touch is the main pointer (a phone or a tablet), the gate says the game needs a computer and shows
   no folder button (`#gate-touch`, `browser-tests/touch-gate.spec.mjs`).
+- A link to the page shared on X, Discord or Slack shows a card: a title, one sentence and
+  `docs/readme/card.jpg`. The tags need absolute addresses, so they exist only in a build made with
+  `DX_PUBLIC_URL`, the address the page is published at; the workflow passes it, and a local build or a
+  fork's carries no card (`scripts/vite-page-card.mjs`, `test/page-card.test.mjs`). The image is drawn by
+  `node scripts/render-page-card.mjs` from a README screenshot; run it again with `--address` if the page
+  moves to another address.
 
 ## Validate and inspect data
 

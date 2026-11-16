@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { gameDirectory } from './scripts/game-directory.mjs';
+import { pageCard } from './scripts/vite-page-card.mjs';
 
 export default defineConfig({
   publicDir: false,
@@ -102,5 +103,7 @@ export default defineConfig({
         }
       });
     },
-  }],
+  },
+  // The public page's link preview: only in a build made with DX_PUBLIC_URL (scripts/vite-page-card.mjs).
+  pageCard()],
 });

@@ -39,7 +39,11 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v6
       # A project site is served under /<repository>/. With a custom domain `base_path` is empty and the base is `/`.
+      # DX_PUBLIC_URL gives the build the address it is published at, for the link preview's absolute addresses
+      # (scripts/vite-page-card.mjs).
       - name: Build (the Wasm crates, then the page)
+        env:
+          DX_PUBLIC_URL: ${{ steps.pages.outputs.base_url }}
         run: npm run build -- --base="${{ steps.pages.outputs.base_path }}/"
       - uses: actions/upload-pages-artifact@v5
         with:
