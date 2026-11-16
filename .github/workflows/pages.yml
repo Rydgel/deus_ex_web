@@ -1,0 +1,54 @@
+# The public page, https://rydgel.github.io/deus_ex_web/: the production build (`npm run build`) on GitHub Pages.
+#
+# Manual only. AGENTS.md keeps delivery local unless the user asks, so nothing here runs on a push: start it from the
+# Actions tab ("Run workflow") or with `gh workflow run pages.yml`, and it publishes the commit it is started on.
+#
+# The build has no game data. The runner has no copy of the game, the development server's `/__game__/` endpoints do not
+# exist in a build (vite.config.mjs), and the page asks each visitor for their own game folder, which the browser reads
+# locally.
+name: Public page
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Rust with the WebAssembly target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+      - run: npm ci
+      - id: pages
+        uses: actions/configure-pages@v6
+      # A project site is served under /<repository>/. With a custom domain `base_path` is empty and the base is `/`.
+      - name: Build (the Wasm crates, then the page)
+        run: npm run build -- --base="${{ steps.pages.outputs.base_path }}/"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
