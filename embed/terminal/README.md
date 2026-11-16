@@ -47,8 +47,9 @@ each login is meant to be found. The build seals every account's mail with
 AES-GCM under a PBKDF2 key derived from its login, uppercased because
 `ComputerScreenLogin.ProcessLogin` compares `Caps()` of both. The published
 files therefore contain neither the logins nor the text, but `story.mjs`
-does: keep the repository private, or move the file out, before it goes
-public.
+does, and it is public with this repository: the sealing hides the story only
+from someone who reads the deployed site. Keep a new story out of Git while
+its puzzle runs.
 
 Write mail in plain ASCII. The menu fonts cover Latin-1 only.
 

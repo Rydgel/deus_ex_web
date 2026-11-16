@@ -1,5 +1,8 @@
 .DS_Store
 .cache/
+.work/
+.claude/worktrees/
+.claude/settings.local.json
 __pycache__/
 node_modules/
 coverage/

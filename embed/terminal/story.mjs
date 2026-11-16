@@ -1,8 +1,9 @@
 /**
  * Chapter 1, "Ghost on the node": three chained accounts. Each account's
  * e-mails are sealed with its login at build time (story-crypto.mjs), so the
- * published site holds no logins or text. This file is the only plain copy:
- * keep the repository private, or move it out, before anything is public.
+ * published site holds no logins or text. This file is the plain copy, and it
+ * is public with the repository: the sealing hides the story only from someone
+ * who reads the deployed site. Keep a new story out of Git while its puzzle runs.
  *
  * The chain, and where each key is found:
  *   JCD / BIONICMAN  JC's own login in the original game (01/03/04_NYC_UNATCOHQ
