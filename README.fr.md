@@ -372,6 +372,7 @@ comportement sans preuve suffisante est marqué comme non pris en charge.
   les mêmes entrées et doit correspondre tick par tick.
 - **Images appariées.** Des captures de l'original et de la version navigateur, prises avec
   la même caméra au même temps de niveau, sont comparées : 26 cartes, 122 vues sur 130.
+  [Une vidéo de 18 secondes](https://youtu.be/GdNrMBXHkrQ) montre dix de ces paires, l'original au-dessus de la version navigateur.
 - **Enchaînements de campagne.** L'itinéraire scripté de chaque mission tourne dans les deux
   à partir de la même sauvegarde, et les drapeaux, l'état des portes et le texte de voyage
   sont comparés à chaque étape.

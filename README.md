@@ -351,6 +351,7 @@ evidence is marked unsupported.
   it tick by tick.
 - **Matched frames.** Screenshots of the original and of the browser version are taken
   with the same camera at the same level time, then compared: 26 maps, 122 of 130 views.
+  [An 18-second video](https://youtu.be/GdNrMBXHkrQ) shows ten of these pairs, the original above the browser version.
 - **Campaign chains.** Each mission's scripted route runs in both from the same save, and
   the flags, door states and travel text are compared at every step.
 
