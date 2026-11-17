@@ -10,7 +10,7 @@
 
 这是对《杀出重围》（**Deus Ex**，Ion Storm，2000 年）的独立重新实现，运行在桌面浏览器中，目标是在行为上与原版游戏完全一致。
 
-**[在浏览器中游玩](https://rydgel.github.io/deus_ex_web/)**，使用你自己的游戏副本。你选择游戏所在的文件夹，浏览器在本地读取，不会上传任何内容。
+**[在浏览器中游玩](https://rydgel.github.io/deus_ex_web/)**，使用你自己的游戏副本。你选择游戏所在的文件夹，浏览器在本地读取，不会上传任何内容。**[观看预告片](https://youtu.be/BfGpgGJvfi8)**（56 秒）。
 
 它不是重制版，也不是在浏览器里模拟 Windows 版游戏。地图、贴图、音效、音乐和编译后的 UnrealScript 都来自你自己的游戏副本。本项目用自己编写的虚拟机直接运行这些字节码，并通过分析原版 x86 二进制文件，重新实现引擎的原生代码。每一项行为都与原版对照检验：原版 DLL 在 CPU 模拟器中运行，逐个函数地比较；游戏本身则在 Wine 下运行，用来录制参考轨迹和参考画面。
 
@@ -18,6 +18,11 @@
 
 > [!IMPORTANT]
 > 本仓库**不包含任何游戏文件**。要游玩，你需要自己合法获得的 Deus Ex 副本，例如 GOG 或 Steam 上的 *Deus Ex: Game of the Year Edition*。详见[法律声明](#法律声明)。
+
+<p align="center">
+  <a href="https://youtu.be/BfGpgGJvfi8"><img src="docs/readme/trailer.jpg" alt="预告片：浏览器版本中自由岛上的一场战斗，画面中央有播放按钮" width="640"></a><br>
+  <sub><a href="https://youtu.be/BfGpgGJvfi8">观看预告片</a> （56 秒，YouTube）：浏览器版本，从启动到读取存档</sub>
+</p>
 
 <table>
   <tr>

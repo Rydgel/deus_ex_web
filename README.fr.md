@@ -12,7 +12,7 @@ Une réimplémentation indépendante de **Deus Ex** (Ion Storm, 2000) qui tourne
 navigateur de bureau et vise à se comporter exactement comme le jeu original.
 
 **[Jouer dans le navigateur](https://rydgel.github.io/deus_ex_web/)** avec votre propre copie du jeu. Vous choisissez son
-dossier, le navigateur le lit en local, et rien n'est envoyé.
+dossier, le navigateur le lit en local, et rien n'est envoyé. **[Voir la bande-annonce](https://youtu.be/BfGpgGJvfi8)** (56 secondes).
 
 Ce n'est pas un remake, et le jeu Windows n'est pas émulé. Votre propre copie du jeu
 fournit les cartes, les textures, les sons, la musique et l'UnrealScript compilé. Le projet
@@ -31,6 +31,11 @@ de la page.
 > Ce dépôt ne contient **aucun fichier du jeu**. Pour jouer, il vous faut votre propre
 > copie de Deus Ex, obtenue légalement, par exemple *Deus Ex: Game of the Year Edition*
 > sur GOG ou Steam. Voir les [mentions légales](#mentions-légales).
+
+<p align="center">
+  <a href="https://youtu.be/BfGpgGJvfi8"><img src="docs/readme/trailer.jpg" alt="La bande-annonce : un combat sur Liberty Island dans la version navigateur, avec un bouton de lecture" width="640"></a><br>
+  <sub><a href="https://youtu.be/BfGpgGJvfi8">Voir la bande-annonce</a> (56 secondes, sur YouTube) : la version navigateur, de son démarrage au chargement d'une sauvegarde</sub>
+</p>
 
 <table>
   <tr>

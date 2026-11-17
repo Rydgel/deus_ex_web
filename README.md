@@ -12,7 +12,7 @@ An independent reimplementation of **Deus Ex** (Ion Storm, 2000) that runs in a 
 browser and aims to behave exactly like the original game.
 
 **[Play it in your browser](https://rydgel.github.io/deus_ex_web/)** with your own copy of the game. You choose its folder,
-the browser reads it locally, and nothing is uploaded.
+the browser reads it locally, and nothing is uploaded. **[Watch the trailer](https://youtu.be/BfGpgGJvfi8)** (56 seconds).
 
 It is not a remake, and it does not emulate the Windows game. Your own copy of the game
 supplies the maps, textures, sounds, music and compiled UnrealScript. This project runs
@@ -29,6 +29,11 @@ and a **Web Worker** keeps the simulation off the page's main thread.
 > This repository contains **no game files**. To play, you need your own legally
 > obtained copy of Deus Ex, such as *Deus Ex: Game of the Year Edition* from GOG or
 > Steam. See [Legal](#legal).
+
+<p align="center">
+  <a href="https://youtu.be/BfGpgGJvfi8"><img src="docs/readme/trailer.jpg" alt="The trailer: a fight on Liberty Island in the browser version, with a play button" width="640"></a><br>
+  <sub><a href="https://youtu.be/BfGpgGJvfi8">Watch the trailer</a> (56 seconds, on YouTube): the browser version from its start to a save loading</sub>
+</p>
 
 <table>
   <tr>
