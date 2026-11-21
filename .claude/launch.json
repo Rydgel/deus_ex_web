@@ -18,6 +18,43 @@
         "5180"
       ],
       "port": 5180
+    },
+    {
+      "name": "checks-preview",
+      "runtimeExecutable": "systemd-run",
+      "runtimeArgs": [
+        "--user",
+        "--scope",
+        "-q",
+        "-p",
+        "MemoryMax=2G",
+        "-p",
+        "MemorySwapMax=0",
+        "npx",
+        "vite",
+        "preview",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5174",
+        "--strictPort"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "jeromem-check",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-I",
+        "-m",
+        "http.server",
+        "4010",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "/tmp/jm-check"
+      ],
+      "port": 4010
     }
   ]
 }
